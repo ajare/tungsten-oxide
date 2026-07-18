@@ -86,10 +86,15 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
+const BRANCH_CUT_SAMPLES = 12;         // max samples to cut road edges/walls back at branch junctions
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
+let junctionMeshes = [];               // filled branch/intersection surface patches
+let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
+let branchEndpointIds = new Set();     // endpoint IDs with 3+ incident curve ends (open rail gaps / junction fill)
+let branchClipZones = [];              // local no-wall zones around branch centers: { pos, radius }
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
 
@@ -104,7 +109,16 @@ function disposeObject(obj) {
 // track's surface normal at each point (NOT world-up) so the wall banks with
 // the road instead of always pointing straight up. `normals` is parallel to
 // `edge` (same indexing as the baked frames the edges came from).
-function buildRail(edge, normals, closed, height, color) {
+function inBranchClipZone(a, b) {
+  if (!branchClipZones.length) return false;
+  const x = (a.x + b.x) * 0.5, y = (a.y + b.y) * 0.5, z = (a.z + b.z) * 0.5;
+  for (const zone of branchClipZones) {
+    const dx = x - zone.pos.x, dy = y - zone.pos.y, dz = z - zone.pos.z;
+    if (dx * dx + dy * dy + dz * dz <= zone.radius * zone.radius) return true;
+  }
+  return false;
+}
+function buildRail(edge, normals, closed, height, color, skipStartCount, skipEndCount) {
   const count = edge.length;
   const positions = [], indices = [];
   for (let i = 0; i < count; i++) {
@@ -116,7 +130,9 @@ function buildRail(edge, normals, closed, height, color) {
   }
   const segCount = closed ? count : count - 1;
   for (let i = 0; i < segCount; i++) {
+    if (!closed && ((skipStartCount && i < skipStartCount) || (skipEndCount && i >= segCount - skipEndCount))) continue;
     const j = closed ? (i + 1) % count : i + 1;
+    if (inBranchClipZone(edge[i], edge[j])) continue;
     const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
     indices.push(a0, b0, a1, a1, b0, b1);
   }
@@ -148,6 +164,29 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
     applyCut('start', 0);
     applyCut('end', raw.length - 1);
   }
+  let branchCutStart = 0, branchCutEnd = 0;
+  if (!closed) {
+    // At branch intersections (3+ incident curve ends), remove each incident
+    // ribbon's geometry from the shared point up to a cut line. Collapsing the
+    // whole run (not just vertex 0) turns those triangles zero-area, so the old
+    // road/wall geometry no longer renders inside the junction patch.
+    if (controlPoints[0] && branchEndpointIds.has(controlPoints[0].id)) {
+      const cutN = branchCutIndex(raw, true);
+      branchCutStart = cutN;
+      const l = { x: edges.left[cutN].x, y: edges.left[cutN].y, z: edges.left[cutN].z };
+      const r = { x: edges.right[cutN].x, y: edges.right[cutN].y, z: edges.right[cutN].z };
+      for (let i = 0; i <= cutN; i++) { edges.left[i] = { ...l }; edges.right[i] = { ...r }; }
+    }
+    const lastCp = controlPoints.length - 1;
+    if (controlPoints[lastCp] && branchEndpointIds.has(controlPoints[lastCp].id)) {
+      const cutN = branchCutIndex(raw, false);
+      branchCutEnd = cutN;
+      const j = raw.length - 1 - cutN;
+      const l = { x: edges.left[j].x, y: edges.left[j].y, z: edges.left[j].z };
+      const r = { x: edges.right[j].x, y: edges.right[j].y, z: edges.right[j].z };
+      for (let i = j; i < raw.length; i++) { edges.left[i] = { ...l }; edges.right[i] = { ...r }; }
+    }
+  }
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
   // signed lateral offset (along edgeRight) of the TRIMMED left/right edges, so
@@ -174,6 +213,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
   }
   const segCount = closed ? N : N - 1;
   for (let i = 0; i < segCount; i++) {
+    if (!closed && ((branchCutStart && i < branchCutStart) || (branchCutEnd && i >= segCount - branchCutEnd))) continue;
     const j = closed ? (i + 1) % N : i + 1;
     const l0 = i * 2, r0 = i * 2 + 1, l1 = j * 2, r1 = j * 2 + 1;
     idx.push(l0, r0, l1, r0, r1, l1);
@@ -199,12 +239,184 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
   // surface normal so they bank with the road. `raw[i].normal` aligns with
   // edges.left[i]/edges.right[i] (both derived from the same baked frames).
   const railNormals = raw.map(f => f.normal);
-  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355);
-  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355);
+  const skipStartRail = branchCutStart;
+  const skipEndRail = branchCutEnd;
+  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355, skipStartRail, skipEndRail);
+  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355, skipStartRail, skipEndRail);
   scene.add(railR, railL);
 
   const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
-  return { closed, centerline, mesh, stripeLine, railR, railL, anchors };
+  const endpointIds = {
+    start: controlPoints[0] && controlPoints[0].id,
+    end: controlPoints[controlPoints.length - 1] && controlPoints[controlPoints.length - 1].id
+  };
+  return { closed, centerline, mesh, stripeLine, railR, railL, anchors, endpointIds };
+}
+
+function clonePointForRuntime(p) { return { ...p, pos: p.pos ? p.pos.slice() : p.pos }; }
+function runtimeScalarPoints(path) {
+  // Reuse authored roll/width controls for runtime-only branch topology
+  // normalization. The exact t-domain remap is less important than cutting the
+  // geometry correctly; editor-created tracks already remap more carefully.
+  return (path.points || []).filter(p => p.type === 'roll' || p.type === 'width').map(p => ({ ...p }));
+}
+function inferBranchPointIds(trackPaths, junctions) {
+  const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
+  const stats = new Map();
+  const stat = id => {
+    if (!stats.has(id)) stats.set(id, { total: 0, endpoints: 0, interior: 0, closed: 0 });
+    return stats.get(id);
+  };
+  for (const path of trackPaths || []) {
+    const cps = TrackCore.splitPoints(path.points || []).controlPoints;
+    const closed = path.closed !== false;
+    for (let i = 0; i < cps.length; i++) {
+      const p = cps[i];
+      if (!p || !p.id) continue;
+      const s = stat(p.id);
+      s.total++;
+      if (closed) s.closed++;
+      else if (i === 0 || i === cps.length - 1) s.endpoints++;
+      else s.interior++;
+    }
+  }
+  // Infer only true branch targets, not ordinary two-end disjoint/connected
+  // seams. A branch is an open endpoint sharing a point with a closed curve or
+  // interior vertex (which will be opened/split), or an already-split point with
+  // 3+ open endpoints.
+  for (const [id, s] of stats) {
+    if (s.endpoints >= 3) ids.add(id);
+    else if (s.endpoints >= 1 && (s.closed > 0 || s.interior > 0)) ids.add(id);
+  }
+  return ids;
+}
+function normalizeBranchTopologyForRuntime(trackPaths, junctions) {
+  const branchPointIds = inferBranchPointIds(trackPaths, junctions);
+  let out = (trackPaths || []).map(p => ({ ...p, points: (p.points || []).slice() }));
+  for (const pointId of branchPointIds) {
+    const next = [];
+    for (const path of out) {
+      const pp = TrackCore.splitPoints(path.points);
+      const cps = pp.controlPoints;
+      const idx = cps.findIndex(p => p.id === pointId);
+      if (idx < 0) { next.push(path); continue; }
+      if (path.closed !== false) {
+        // A branch into a closed loop must open the loop at the junction, or
+        // the loop's walls remain continuous through the intersection.
+        const rotated = cps.slice(idx).concat(cps.slice(0, idx), cps[idx]);
+        next.push({ ...path, closed: false, points: rotated.concat(runtimeScalarPoints(path)) });
+      } else if (idx > 0 && idx < cps.length - 1 && idx + 1 >= 4 && cps.length - idx >= 4) {
+        // Defensive runtime split for older/exported tracks whose editor did
+        // not split a middle-vertex branch target.
+        next.push(
+          { id: (path.id || '') + '_a_' + pointId, closed: false, points: cps.slice(0, idx + 1).concat(runtimeScalarPoints(path)) },
+          { id: (path.id || '') + '_b_' + pointId, closed: false, points: cps.slice(idx).concat(runtimeScalarPoints(path)) }
+        );
+      } else {
+        next.push(path);
+      }
+    }
+    out = next;
+  }
+  return out;
+}
+
+function endpointIncidentCounts(bakedPaths) {
+  const counts = new Map();
+  bakedPaths.forEach(bp => {
+    if (bp.closed || !bp.controlPoints.length) return;
+    const first = bp.controlPoints[0], last = bp.controlPoints[bp.controlPoints.length - 1];
+    if (first && first.id) counts.set(first.id, (counts.get(first.id) || 0) + 1);
+    if (last && last.id) counts.set(last.id, (counts.get(last.id) || 0) + 1);
+  });
+  return counts;
+}
+function branchIncidentEndpointIds(bakedPaths, authoredBranchPointIds) {
+  const counts = endpointIncidentCounts(bakedPaths);
+  const ids = new Set([...counts].filter(([, n]) => n >= 3).map(([id]) => id));
+  for (const id of authoredBranchPointIds || []) if ((counts.get(id) || 0) >= 2) ids.add(id);
+  return ids;
+}
+function branchCutIndex(frames, fromStart) {
+  const end = fromStart ? 0 : frames.length - 1;
+  const target = Math.max(3, (frames[end].halfW || 6) * 0.45);
+  let dist = 0;
+  const limit = Math.min(BRANCH_CUT_SAMPLES, Math.max(1, Math.floor(frames.length / 5)));
+  for (let step = 1; step <= limit; step++) {
+    const a = frames[fromStart ? step - 1 : frames.length - step];
+    const b = frames[fromStart ? step : frames.length - 1 - step];
+    dist += Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y, a.pos.z - b.pos.z);
+    if (dist >= target) return step;
+  }
+  return limit;
+}
+
+function buildBranchClipZones(bakedPaths, branchPointIds) {
+  const zones = [];
+  for (const pointId of branchPointIds || []) {
+    let pos = null, radius = 0;
+    bakedPaths.forEach(bp => {
+      bp.controlPoints.forEach(cp => {
+        if (cp && cp.id === pointId) pos = { x: cp.pos[0], y: cp.pos[1], z: cp.pos[2] };
+      });
+      bp.frames.forEach(f => {
+        if (!pos) return;
+        const dx = f.pos.x - pos.x, dy = f.pos.y - pos.y, dz = f.pos.z - pos.z;
+        if (dx * dx + dy * dy + dz * dz < Math.pow((f.halfW || 6) * 1.4, 2)) {
+          radius = Math.max(radius, (f.halfW || 6) * 1.15 + 0.75);
+        }
+      });
+    });
+    if (pos) zones.push({ pos, radius: radius || 8 });
+  }
+  return zones;
+}
+
+function convexHullXZ(points) {
+  const pts = points.slice().sort((a, b) => a.x === b.x ? a.z - b.z : a.x - b.x);
+  const cross = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+function buildBranchJunctionMeshes(bakedPaths, branchPointIds) {
+  const out = [];
+  const ids = branchIncidentEndpointIds(bakedPaths, branchPointIds);
+  for (const pointId of ids) {
+    const pts = [], normals = [];
+    bakedPaths.forEach(bp => {
+      if (bp.closed || !bp.controlPoints.length) return;
+      const lastCp = bp.controlPoints.length - 1;
+      const add = i => {
+        pts.push(bp.edges.left[i], bp.edges.right[i]);
+        normals.push(bp.frames[i].normal, bp.frames[i].normal);
+      };
+      if (bp.controlPoints[0] && bp.controlPoints[0].id === pointId) add(branchCutIndex(bp.frames, true));
+      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === pointId) add(bp.frames.length - 1 - branchCutIndex(bp.frames, false));
+    });
+    if (pts.length < 3) continue;
+    const hull = convexHullXZ(pts);
+    if (hull.length < 3) continue;
+    const center = hull.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
+    center.x /= hull.length; center.y /= hull.length; center.z /= hull.length;
+    const avgN = normals.reduce((s, n) => ({ x: s.x + n.x, y: s.y + n.y, z: s.z + n.z }), { x: 0, y: 0, z: 0 });
+    const nl = Math.hypot(avgN.x, avgN.y, avgN.z) || 1;
+    const n = { x: avgN.x / nl, y: avgN.y / nl, z: avgN.z / nl };
+    const pos = [center.x, center.y, center.z], nrm = [n.x, n.y, n.z], idx = [];
+    hull.forEach(p => { pos.push(p.x, p.y, p.z); nrm.push(n.x, n.y, n.z); });
+    for (let i = 0; i < hull.length; i++) idx.push(0, i + 1, ((i + 1) % hull.length) + 1);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+    scene.add(mesh);
+    out.push(mesh);
+  }
+  return out;
 }
 
 // At a disjoint corner the two incident path ends have different surface
@@ -245,11 +457,15 @@ function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
 // begins at and which way it faces. `track.disjointSeams` identifies hard
 // shared corners whose open endpoint edges should be cut.
 function buildTrack(track) {
-  const trackPaths = track.paths || [];
+  const authoredBranchPointIds = inferBranchPointIds(track.paths || [], track.junctions || []);
+  const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
+  connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
 
   // Drop any previously-built geometry before rebuilding.
+  for (const m of junctionMeshes) disposeObject(m);
+  junctionMeshes = [];
   for (const p of paths) {
     disposeObject(p.mesh); disposeObject(p.stripeLine);
     disposeObject(p.railR); disposeObject(p.railL);
@@ -262,11 +478,17 @@ function buildTrack(track) {
     const edges = TrackCore.buildEdges(frames, closed);
     return { id: p.id, closed, controlPoints, rollPoints, widthPoints, frames, edges };
   });
-  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
-  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, track.disjointSeams || []);
+  const hardJunctions = (track.disjointSeams || []).concat(track.junctions || []);
+  const incidentCounts = endpointIncidentCounts(bakedPaths);
+  for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
+  branchClipZones = buildBranchClipZones(bakedPaths, authoredBranchPointIds);
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, hardJunctions);
+  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, hardJunctions);
+  branchEndpointIds = branchIncidentEndpointIds(bakedPaths, authoredBranchPointIds);
   paths = bakedPaths.map((p, i) => buildPath(
     p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
   ));
+  junctionMeshes = buildBranchJunctionMeshes(bakedPaths, authoredBranchPointIds);
 
   resetShip();
   const label = document.getElementById('trackName');
@@ -321,10 +543,12 @@ function sampleTrack(x, z) {
     const M = bestPath.centerline.length;
     if (bestA === 0 && t <= 1e-4) {
       const e = bestPath.centerline[0];
-      _sample.offEnd = ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.start) &&
+        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
     } else if (bestB === M - 1 && t >= 1 - 1e-4) {
       const e = bestPath.centerline[M - 1];
-      _sample.offEnd = ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.end) &&
+        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
     }
   }
   return _sample;

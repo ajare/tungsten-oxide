@@ -377,8 +377,15 @@
         }
       });
       if (incs.length < 2) continue;
+      const center = fallback(incs[0]);
+      if (incs.length > 2) {
+        // Branch junction: leave each incident ribbon at full width so the
+        // overlapping road surfaces form a drivable merged junction. Pinching
+        // these to the center point creates a zero-width bottleneck that makes
+        // the ship pop or fall instead of choosing either branch.
+        continue;
+      }
       const a = incs[0], b = incs[1];
-      const center = fallback(a);
       const maxHalfW = Math.max(a.frames[a.idx].halfW || 1, b.frames[b.idx].halfW || 1);
       const sideCut = side => {
         const la = line(a, side), lb = line(b, side);
@@ -526,6 +533,7 @@
       samples: (data && data.samples) || N_DEFAULT,
       paths,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
+      junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       start: normalizeStart(data && data.start, paths)
     };
   }
@@ -546,6 +554,7 @@
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
+      '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
@@ -555,6 +564,7 @@
     name: 'Default Circuit',
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
+    junctions: [],
     paths: [{
       closed: true,
       points: [
@@ -597,6 +607,7 @@
     name: 'New Track',
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
+    junctions: [],
     paths: [{
       closed: true,
       points: [

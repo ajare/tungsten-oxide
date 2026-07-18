@@ -71,8 +71,14 @@
     <button id="newBtn">New</button>
     <button id="importBtn">Import JSON</button>
     <button id="exportBtn">Export JSON</button>
-    <button id="joinBtn" disabled>Join</button>
+    <button id="joinBtn" disabled>Connect</button>
     <button id="dirBtn">Direction: &#8635;</button>
+    <label>Mode
+      <select id="editModeSelect"><option value="edit">Edit</option><option value="create">Create</option></select>
+    </label>
+    <label>Curve
+      <select id="curveSelect" title="Current curve"></select>
+    </label>
     <select id="renderModeSelect" title="Top-down rendering mode">
       <option value="banked">Banked edges (lean tint)</option>
       <option value="flat">Flat width (roll colour)</option>
@@ -139,7 +145,9 @@ let track = TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK);
 let selectedPointId = null;       // selected POSITION control point identity
 let sel = { path: 0, point: 0 };  // compatibility cache for selected point occurrence
 let segSel = null;                // selected segment for deletion: { path, i }
-let joinSel = [];                 // up to 2 endpoints picked for Join: { path, end: 'start'|'end' }
+let joinSel = [];                 // up to 2 selected vertices for Connect: { path, point, end? }
+let editMode = 'edit';
+let createDraft = [];             // position point objects for a new curve draft
 // Roll/width points are selected by direct object reference (into
 // path.points), not index, so selection survives re-sorting while dragging.
 let rollSel = null;
@@ -203,6 +211,14 @@ function flatRollWidthDefaults() {
     { type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 }
   ];
 }
+function zeroElevationAndRoll(t) {
+  for (const path of t.paths || []) {
+    for (const p of path.points || []) {
+      if (p.type === 'position') p.pos[1] = 0;
+      else if (p.type === 'roll') p.roll = 0;
+    }
+  }
+}
 let nextGeneratedId = 1;
 let usedIds = new Set();
 function newId(prefix) {
@@ -213,7 +229,8 @@ function newId(prefix) {
 }
 function ensureTrackIds() {
   if (!track.disjointSeams) track.disjointSeams = [];
-  usedIds = new Set((track.disjointSeams || []).map(s => s.id).filter(Boolean));
+  if (!track.junctions) track.junctions = [];
+  usedIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(s => s.id).filter(Boolean));
   const pointById = new Map(), pathIds = new Set();
   for (const path of track.paths) {
     if (!path.id || pathIds.has(path.id) || usedIds.has(path.id)) path.id = newId('path');
@@ -383,11 +400,12 @@ function drawTop() {
     // Use the SAME baked frames the game uses, so the preview (including
     // sharp cut corners) matches exactly what you drive. Edges are either the
     // real banked geometry, or (flat mode) the unrolled width-only footprint.
-    const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, path.closed, pp.rollPoints, pp.widthPoints);
-    const edges = flat ? TrackCore.buildFlatEdges(frames, path.closed) : TrackCore.buildEdges(frames, path.closed);
-    return { id: path.id, closed: path.closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
+    const closed = path.closed !== false;
+    const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, closed, pp.rollPoints, pp.widthPoints);
+    const edges = flat ? TrackCore.buildFlatEdges(frames, closed) : TrackCore.buildEdges(frames, closed);
+    return { id: path.id, closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
   });
-  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, (track.disjointSeams || []).concat(track.junctions || []));
   pathPreviews = bakedPaths.map((bp, pathIndex) => {
     const pp = bp.parts, frames = bp.frames, edges = bp.edges;
     const cuts = edgeCuts[pathIndex] || {};
@@ -518,7 +536,7 @@ function drawTop() {
       const s = worldToScreen(p.pos[0], p.pos[2]);
       const isSel = p === curPoint() && !rollSel && !widthSel;
       const isEndpoint = !path.closed && (i === 0 || i === cps.length - 1);
-      const inJoinSel = joinSel.some(j => j.path === pi && j.end === (i === 0 ? 'start' : 'end') && isEndpoint);
+      const inJoinSel = joinSel.some(j => j.path === pi && j.point === i);
       const r = isSel ? 8 : 6;
       ctx.beginPath();
       if (isEndpoint) { ctx.rect(s.x - r, s.y - r, r * 2, r * 2); }
@@ -540,6 +558,23 @@ function drawTop() {
       ctx.fillText(`${pi}.${i} (y${p.pos[1].toFixed(0)})`, s.x + 9, s.y + 3);
     });
   });
+
+  // Draft curve being created.
+  if (createDraft.length) {
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    createDraft.forEach((p, i) => {
+      const s = worldToScreen(p.pos[0], p.pos[2]);
+      i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y);
+    });
+    ctx.stroke(); ctx.setLineDash([]);
+    createDraft.forEach((p, i) => {
+      const s = worldToScreen(p.pos[0], p.pos[2]);
+      ctx.beginPath(); ctx.arc(s.x, s.y, i === 0 ? 7 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? '#8dff9d' : '#ffffff'; ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.stroke();
+    });
+  }
 
   // roll control points of the currently-selected path (created in the
   // elevation strip or here) -- shown here too, at their position along the
@@ -827,14 +862,21 @@ function seamIsValid(seam) {
   }
   return false;
 }
+function junctionIsValid(j) {
+  if (!j) return false;
+  const exists = track.paths.some(path => parts(path).controlPoints.some(p => p.id === j.pointId));
+  return exists;
+}
 function removeStaleSeams() {
   const before = (track.disjointSeams || []).length;
   track.disjointSeams = (track.disjointSeams || []).filter(seamIsValid);
-  return before - track.disjointSeams.length;
+  const beforeJ = (track.junctions || []).length;
+  track.junctions = (track.junctions || []).filter(junctionIsValid);
+  return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length);
 }
 function assertNoStaleSeams() {
   const removed = removeStaleSeams();
-  if (removed) console.warn(`Removed ${removed} stale disjoint seam(s).`);
+  if (removed) console.warn(`Removed ${removed} stale disjoint/junction record(s).`);
 }
 function countPointOccurrences(point) {
   if (!point) return 0;
@@ -1194,15 +1236,26 @@ function renderProps() {
   });
 }
 
+function updateCurveSelect() {
+  const selEl = document.getElementById('curveSelect');
+  if (!selEl) return;
+  const old = String(sel.path);
+  selEl.innerHTML = track.paths.map((p, i) => `<option value="${i}"${i === sel.path ? ' selected' : ''}>Curve ${i}${p.closed ? ' (closed)' : ''}</option>`).join('');
+  if (selEl.value !== old && track.paths[sel.path]) selEl.value = String(sel.path);
+}
 function updateMeta() {
+  syncSelectionToId();
+  updateCurveSelect();
   const uniquePositions = new Set();
   track.paths.forEach(p => parts(p).controlPoints.forEach(cp => uniquePositions.add(cp.id || cp)));
   const total = uniquePositions.size;
   const seamCount = (track.disjointSeams || []).length;
-  const staleSeams = (track.disjointSeams || []).filter(s => !seamIsValid(s)).length;
+  const junctionCount = (track.junctions || []).length;
+  const staleSeams = (track.disjointSeams || []).filter(s => !seamIsValid(s)).length + (track.junctions || []).filter(j => !junctionIsValid(j)).length;
   document.getElementById('metaHint').innerHTML =
     `${track.paths.length} path(s), ${total} unique position control points total` +
     (seamCount ? `, ${seamCount} disjoint corner(s)` : '') +
+    (junctionCount ? `, ${junctionCount} junction(s)` : '') +
     (staleSeams ? ` <span style="color:#ff6677">(${staleSeams} stale)</span>` : '') + `<br>` +
     (staleSeams ? `<button id="cleanStaleSeamsBtn" style="margin:4px 0 6px;width:100%;background:#4a2630;border:1px solid #a34;color:#fbd;border-radius:5px;padding:5px;cursor:pointer">Remove stale disjoint metadata</button>` : '') +
     `Roll tint: cyan = right-lean, magenta = left-lean.<br>` +
@@ -1221,7 +1274,26 @@ function updateMeta() {
   updateDirBtn();
 }
 
-function refresh() { draw(); renderProps(); updateMeta(); }
+function syncVisualOptionsFromControls() {
+  const renderEl = document.getElementById('renderModeSelect');
+  if (renderEl) renderMode = renderEl.value;
+  const modeEl = document.getElementById('editModeSelect');
+  if (modeEl) editMode = modeEl.value;
+  const gridEl = document.getElementById('gridSizeSelect');
+  if (gridEl) gridSize = Number(gridEl.value) || gridSize;
+  const snapEl = document.getElementById('snapGridChk');
+  if (snapEl) snapToGrid = snapEl.checked;
+  const posEl = document.getElementById('showPositionChk');
+  const rollEl = document.getElementById('showRollChk');
+  const widthEl = document.getElementById('showWidthChk');
+  if (posEl && rollEl && widthEl) {
+    pointFilters = { position: posEl.checked, roll: rollEl.checked, width: widthEl.checked };
+    if (!pointFilters.roll) rollSel = null;
+    if (!pointFilters.width) widthSel = null;
+    if (!pointFilters.position) { segSel = null; joinSel = []; }
+  }
+}
+function refresh() { syncVisualOptionsFromControls(); draw(); renderProps(); updateMeta(); }
 
 // ---------- Hit testing ----------
 // Roll-point markers of the currently-selected path, drawn in the top-down
@@ -1516,30 +1588,64 @@ function deleteSegment(pi, i) {
 
 // ---------- Join two open-path endpoints: closes a path, or merges two paths
 // into one open path ----------
+function replacePositionOccurrence(path, pointIndex, replacement) {
+  const idxs = positionIndices(path);
+  path.points[idxs[pointIndex]] = replacement;
+}
+function splitTargetPathAt(pathIndex, pointIndex) {
+  const path = track.paths[pathIndex];
+  const cps = parts(path).controlPoints;
+  const pp = parts(path);
+  if (path.closed) {
+    // Branching into the middle of a closed loop must open the loop at the
+    // junction. Otherwise the closed loop's rails remain continuous through the
+    // branch intersection (the visual bug in the game screenshot).
+    const n = cps.length;
+    const rotated = cps.slice(pointIndex).concat(cps.slice(0, pointIndex), cps[pointIndex]);
+    const startT = pointIndex / n;
+    track.paths.splice(pathIndex, 1, {
+      id: path.id || newId('path'),
+      closed: false,
+      points: rotated.concat(rollWidthForSourceRange(pp, true, startT, startT + 1))
+    });
+    return true;
+  }
+  if (pointIndex <= 0 || pointIndex >= cps.length - 1) return;
+  if (pointIndex + 1 < 4 || cps.length - pointIndex < 4) { alert('Target split would leave a curve with fewer than 4 points.'); return false; }
+  const max = Math.max(1, cps.length - 1);
+  const left = cps.slice(0, pointIndex + 1);
+  const right = cps.slice(pointIndex);
+  track.paths.splice(pathIndex, 1,
+    { id: newId('path'), closed: false, points: left.concat(rollWidthForSourceRange(pp, false, 0, pointIndex / max)) },
+    { id: newId('path'), closed: false, points: right.concat(rollWidthForSourceRange(pp, false, pointIndex / max, 1)) }
+  );
+  return true;
+}
 function performJoin() {
   if (joinSel.length !== 2) return;
   const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
-  const [a, b] = joinSel;
+  let [a, b] = joinSel;
   if (pathHasDisjointSeam(track.paths[a.path]) || pathHasDisjointSeam(track.paths[b.path])) {
-    alert('Reconnect disjoint corners before joining paths.'); return;
+    alert('Reconnect disjoint corners before connecting paths.'); return;
   }
   if (a.path === b.path) {
-    if (a.end === b.end) { alert("Pick the two different ends of the path to close it."); return; }
+    if (!a.end || !b.end || a.end === b.end) { alert('Pick the two different open ends to close this curve.'); return; }
     track.paths[a.path].closed = true;
   } else {
-    const pathA = track.paths[a.path], pathB = track.paths[b.path];
-    const posA = positionIndices(pathA).map(k => pathA.points[k]);
-    const posB = positionIndices(pathB).map(k => pathB.points[k]);
-    let newPos;
-    if (a.end === 'end' && b.end === 'start') newPos = posA.concat(posB);
-    else if (a.end === 'start' && b.end === 'end') newPos = posB.concat(posA);
-    else if (a.end === 'end' && b.end === 'end') newPos = posA.concat(posB.slice().reverse());
-    else newPos = posA.slice().reverse().concat(posB);
-    const lo = Math.min(a.path, b.path), hi = Math.max(a.path, b.path);
-    track.paths.splice(hi, 1);
-    // Fresh (flat) roll/width points -- merging two paths' splines doesn't map
-    // cleanly onto the new combined domain, so this is redone by hand.
-    track.paths.splice(lo, 1, { id: newId('path'), closed: false, points: newPos.concat(flatRollWidthDefaults()) });
+    const aEndpoint = !!a.end, bEndpoint = !!b.end;
+    if (!aEndpoint && !bEndpoint) { alert('One selected point must be an open curve endpoint.'); return; }
+    const source = aEndpoint ? a : b;
+    const target = aEndpoint ? b : a;
+    const sourcePath = track.paths[source.path], targetPath = track.paths[target.path];
+    const targetPoint = parts(targetPath).controlPoints[target.point];
+    replacePositionOccurrence(sourcePath, source.point, targetPoint);
+    if (target.point > 0 && target.point < parts(targetPath).controlPoints.length - 1) {
+      const ok = splitTargetPathAt(target.path, target.point);
+      if (ok === false) return;
+    }
+    if (!track.junctions) track.junctions = [];
+    track.junctions.push({ id: newId('j'), pointId: targetPoint.id, sourcePathId: sourcePath.id, sourceEnd: source.end, targetPathId: targetPath.id });
+    selectedPointId = targetPoint.id;
   }
   preserveStartPoint(oldStartPoint, oldReverse);
   assertNoStaleSeams();
@@ -1573,6 +1679,34 @@ window.addEventListener('mousedown', (e) => {
   if (addPointMenu.style.display !== 'none' && !addPointMenu.contains(e.target)) hideAddPointMenu();
 }, true);
 
+// ---------- Create mode ----------
+function finishCreateDraft(closed) {
+  if (createDraft.length < 4) { alert('A curve needs at least 4 position points.'); return; }
+  const path = { id: newId('path'), closed, points: createDraft.slice().concat(flatRollWidthDefaults()) };
+  track.paths.push(path);
+  selectPosition(track.paths.length - 1, closed ? 0 : createDraft.length - 1);
+  createDraft = [];
+  editMode = 'edit';
+  const modeEl = document.getElementById('editModeSelect');
+  if (modeEl) modeEl.value = 'edit';
+  refresh();
+}
+function createModeClick(x, y) {
+  const hit = nodeAtTop(x, y);
+  let p = hit ? pathPreviews[hit.path].parts.controlPoints[hit.point] : null;
+  if (p && createDraft.length) {
+    if (p === createDraft[0]) { finishCreateDraft(true); return; }
+    if (p === createDraft[createDraft.length - 1]) { finishCreateDraft(false); return; }
+    if (createDraft.includes(p)) { alert('Repeated points are only allowed to finish the curve.'); return; }
+  }
+  if (!p) {
+    const w = snapWorldXZ(screenToWorld(x, y));
+    p = { type: 'position', id: newId('p'), pos: [Math.round(w.x * 10) / 10, 0, Math.round(w.z * 10) / 10], weight: 1 };
+  }
+  createDraft.push(p);
+  draw();
+}
+
 // ---------- Top-down mouse ----------
 function localPos(canvas, e) {
   const r = canvas.getBoundingClientRect();
@@ -1580,6 +1714,13 @@ function localPos(canvas, e) {
 }
 topCanvas.addEventListener('mousedown', (e) => {
   const { x, y } = localPos(topCanvas, e);
+  if (editMode === 'create') {
+    e.preventDefault();
+    hideAddPointMenu();
+    if (e.button === 2) { createDraft = []; draw(); return; }
+    if (e.button === 0) createModeClick(x, y);
+    return;
+  }
   if (e.button === 2) {
     e.preventDefault();
     const w = snapWorldXZ(screenToWorld(x, y));
@@ -1595,16 +1736,13 @@ topCanvas.addEventListener('mousedown', (e) => {
   if (rollHit && !e.shiftKey) { rollSel = rollHit; widthSel = null; segSel = null; refresh(); return; }
   const hit = nodeAtTop(x, y);
   if (hit && e.shiftKey) {
-    // shift-click an open path's endpoint to pick it for Join
     const path = track.paths[hit.path];
     const cps = pathPreviews[hit.path].parts.controlPoints;
     const isEndpoint = !path.closed && (hit.point === 0 || hit.point === cps.length - 1);
-    if (isEndpoint) {
-      const end = hit.point === 0 ? 'start' : 'end';
-      const already = joinSel.findIndex(j => j.path === hit.path && j.end === end);
-      if (already >= 0) joinSel.splice(already, 1);
-      else { joinSel.push({ path: hit.path, end }); if (joinSel.length > 2) joinSel.shift(); }
-    }
+    const end = isEndpoint ? (hit.point === 0 ? 'start' : 'end') : null;
+    const already = joinSel.findIndex(j => j.path === hit.path && j.point === hit.point);
+    if (already >= 0) joinSel.splice(already, 1);
+    else { joinSel.push({ path: hit.path, point: hit.point, end }); if (joinSel.length > 2) joinSel.shift(); }
     refresh();
     return;
   }
@@ -1724,6 +1862,7 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('nameInput').addEventListener('input', (e) => { track.name = e.target.value; });
 document.getElementById('newBtn').addEventListener('click', () => {
   track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
+  zeroElevationAndRoll(track);
   ensureTrackIds();
   assertNoStaleSeams();
   selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; topPan = { x: 0, y: 0 };
@@ -1740,17 +1879,23 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   URL.revokeObjectURL(a.href);
 });
 document.getElementById('joinBtn').addEventListener('click', performJoin);
-document.getElementById('renderModeSelect').addEventListener('change', (e) => {
-  renderMode = e.target.value;
+document.getElementById('editModeSelect').addEventListener('change', (e) => {
+  editMode = e.target.value;
+  createDraft = [];
+  hideAddPointMenu();
   draw();
 });
-document.getElementById('gridSizeSelect').addEventListener('change', (e) => {
-  gridSize = Number(e.target.value) || 16;
-  draw();
+document.getElementById('curveSelect').addEventListener('change', (e) => {
+  const pi = Number(e.target.value);
+  const p = track.paths[pi] && parts(track.paths[pi]).controlPoints[0];
+  if (p) selectedPointId = p.id;
+  syncSelectionToId();
+  rollSel = null; widthSel = null; segSel = null;
+  refresh();
 });
-document.getElementById('snapGridChk').addEventListener('change', (e) => {
-  snapToGrid = e.target.checked;
-});
+document.getElementById('renderModeSelect').addEventListener('change', refresh);
+document.getElementById('gridSizeSelect').addEventListener('change', refresh);
+document.getElementById('snapGridChk').addEventListener('change', refresh);
 const topZoomSlider = document.getElementById('topZoomSlider');
 let gestureStartZoomValue = 0;
 function setTopZoomSliderValue(value) {
@@ -1772,14 +1917,6 @@ topZoomSlider.addEventListener('input', (e) => {
   draw();
 });
 function updatePointFilters() {
-  pointFilters = {
-    position: document.getElementById('showPositionChk').checked,
-    roll: document.getElementById('showRollChk').checked,
-    width: document.getElementById('showWidthChk').checked
-  };
-  if (!pointFilters.roll) rollSel = null;
-  if (!pointFilters.width) widthSel = null;
-  if (!pointFilters.position) { segSel = null; joinSel = []; }
   refresh();
 }
 for (const id of ['showPositionChk', 'showRollChk', 'showWidthChk']) {
