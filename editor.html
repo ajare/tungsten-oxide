@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Track Editor</title>
+<style>
+  :root { --panel: #10202e; --line: #244358; --accent: #4fd6ff; --text: #cdeeff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #061119; color: var(--text);
+    font-family: system-ui, sans-serif; font-size: 13px; overflow: hidden; }
+  #app { display: grid; grid-template-columns: 1fr 240px; grid-template-rows: auto 1fr 150px;
+    grid-template-areas: "top top" "canvas props" "elev props"; height: 100vh; gap: 1px; }
+  #topbar { grid-area: top; display: flex; gap: 8px; align-items: center;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #topbar button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 5px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  #topbar button:hover { background: #1f4c6b; }
+  #topbar .spacer { flex: 1; }
+  #topbar input[type=text] { background: #0a1a26; color: var(--accent); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 8px; font: inherit; width: 180px; }
+  #canvasWrap { grid-area: canvas; position: relative; background: #08141d; }
+  #elevWrap { grid-area: elev; position: relative; background: #071019; border-top: 1px solid var(--line); }
+  canvas { display: block; width: 100%; height: 100%; }
+  #props { grid-area: props; background: var(--panel); border-left: 1px solid var(--line);
+    padding: 12px; overflow-y: auto; }
+  #props h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #7fb8d8; }
+  #props label { display: flex; justify-content: space-between; align-items: center;
+    margin: 6px 0; gap: 8px; }
+  #props input[type=number] { width: 90px; background: #0a1a26; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  #props .hint { color: #6f93a8; line-height: 1.5; margin-top: 10px; font-size: 12px; }
+  #props .none { color: #6f93a8; font-style: italic; }
+  .badge { position: absolute; top: 8px; left: 10px; color: #6f93a8; pointer-events: none; }
+  #elevWrap .badge { top: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <strong style="color:var(--accent)">Track Editor</strong>
+    <input id="nameInput" type="text" title="Track name">
+    <button id="newBtn">New</button>
+    <button id="importBtn">Import JSON</button>
+    <button id="exportBtn">Export JSON</button>
+    <span class="spacer"></span>
+    <a href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
+    <input id="fileInput" type="file" accept="application/json,.json" hidden>
+  </div>
+
+  <div id="canvasWrap">
+    <canvas id="topCanvas"></canvas>
+    <div class="badge">Top-down (X / Z) &mdash; click empty space to add a point, drag to move, Delete to remove</div>
+  </div>
+
+  <div id="elevWrap">
+    <canvas id="elevCanvas"></canvas>
+    <div class="badge">Elevation (Y) &mdash; drag a handle up/down to sculpt hills &nbsp;&middot;&nbsp; <span style="color:#ffaa3c">roll line</span>: above = right, below = left</div>
+  </div>
+
+  <div id="props">
+    <h3>Selected Point</h3>
+    <div id="propBody"><div class="none">No point selected.</div></div>
+    <div class="hint" id="metaHint"></div>
+  </div>
+</div>
+
+<script src="track-core.js"></script>
+<script>
+// ---------- Editor state ----------
+let track = TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK);
+let selected = 0;              // index of selected control point
+let dragging = null;          // 'top' | 'elev' | null
+
+const topCanvas = document.getElementById('topCanvas');
+const elevCanvas = document.getElementById('elevCanvas');
+const topCtx = topCanvas.getContext('2d');
+const elevCtx = elevCanvas.getContext('2d');
+
+// ---------- Canvas sizing (device-pixel aware) ----------
+function fitCanvas(canvas, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { w: r.width, h: r.height };
+}
+
+// ---------- World <-> screen mapping for the top-down view -------------------
+// Auto-fit the control-point bounds (with margin) into the canvas, preserving
+// aspect ratio. X -> screen x, Z -> screen y (top-down looking down -Y).
+let view = { scale: 1, ox: 0, oy: 0, w: 1, h: 1 };
+function computeView(w, h) {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of track.controlPoints) {
+    minX = Math.min(minX, p.pos[0]); maxX = Math.max(maxX, p.pos[0]);
+    minZ = Math.min(minZ, p.pos[2]); maxZ = Math.max(maxZ, p.pos[2]);
+  }
+  const margin = 30;
+  const spanX = (maxX - minX) || 1, spanZ = (maxZ - minZ) || 1;
+  const scale = Math.min((w - 2 * margin) / spanX, (h - 2 * margin) / spanZ);
+  const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+  view = { scale, ox: w / 2 - cx * scale, oy: h / 2 - cz * scale, w, h };
+}
+const worldToScreen = (x, z) => ({ x: x * view.scale + view.ox, y: z * view.scale + view.oy });
+const screenToWorld = (sx, sy) => ({ x: (sx - view.ox) / view.scale, z: (sy - view.oy) / view.scale });
+
+// ---------- Height color (shared by node shading and roll tint) --------------
+function heightColor(y) {
+  // blue (low) -> teal -> warm (high)
+  const t = Math.max(-1, Math.min(1, y / 8));
+  const r = Math.round(60 + 150 * Math.max(0, t));
+  const g = Math.round(150 + 60 * (1 - Math.abs(t)));
+  const b = Math.round(180 - 120 * Math.max(0, t) + 40 * Math.max(0, -t));
+  return `rgb(${r},${g},${b})`;
+}
+function rollTint(rollDeg) {
+  // right-lean (negative) -> cyan, left-lean (positive) -> magenta-ish
+  const t = Math.max(-1, Math.min(1, rollDeg / 25));
+  const r = Math.round(120 + 120 * Math.max(0, t));
+  const g = Math.round(150);
+  const b = Math.round(120 + 120 * Math.max(0, -t));
+  return `rgb(${r},${g},${b})`;
+}
+
+// ---------- Draw the top-down ribbon ----------
+function drawTop() {
+  const { w, h } = fitCanvas(topCanvas, topCtx);
+  computeView(w, h);
+  const ctx = topCtx;
+  ctx.clearRect(0, 0, w, h);
+
+  // faint grid
+  ctx.strokeStyle = 'rgba(40,70,95,0.35)';
+  ctx.lineWidth = 1;
+  const step = 20 * view.scale;
+  if (step > 6) {
+    for (let gx = view.ox % step; gx < w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
+    for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+  }
+
+  // Use the SAME baked frames + trimmed edges the game uses, so the preview
+  // (including sharp cut corners) matches exactly what you drive.
+  const frames = TrackCore.buildCenterline(track.controlPoints, TrackCore.N_DEFAULT);
+  const edges = TrackCore.buildEdges(frames);
+  const centerPts = [], leftPts = [], rightPts = [], rollAt = [];
+  for (let i = 0; i <= frames.length; i++) {
+    const f = frames[i % frames.length];
+    centerPts.push(worldToScreen(f.pos.x, f.pos.z));
+    leftPts.push(worldToScreen(edges.left[i % frames.length].x, edges.left[i % frames.length].z));
+    rightPts.push(worldToScreen(edges.right[i % frames.length].x, edges.right[i % frames.length].z));
+    rollAt.push(f.roll * 180 / Math.PI);
+  }
+
+  // filled ribbon
+  ctx.beginPath();
+  ctx.moveTo(leftPts[0].x, leftPts[0].y);
+  for (let i = 1; i < leftPts.length; i++) ctx.lineTo(leftPts[i].x, leftPts[i].y);
+  for (let i = rightPts.length - 1; i >= 0; i--) ctx.lineTo(rightPts[i].x, rightPts[i].y);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(42,55,75,0.55)';
+  ctx.fill();
+
+  // edges tinted by roll
+  for (const edge of [leftPts, rightPts]) {
+    for (let i = 0; i < edge.length - 1; i++) {
+      ctx.strokeStyle = rollTint(rollAt[i]);
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(edge[i].x, edge[i].y); ctx.lineTo(edge[i + 1].x, edge[i + 1].y); ctx.stroke();
+    }
+  }
+  // centerline
+  ctx.strokeStyle = 'rgba(79,214,255,0.9)';
+  ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(centerPts[0].x, centerPts[0].y);
+  for (let i = 1; i < centerPts.length; i++) ctx.lineTo(centerPts[i].x, centerPts[i].y);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // start marker (control point 0)
+  const p0 = worldToScreen(track.controlPoints[0].pos[0], track.controlPoints[0].pos[2]);
+  ctx.fillStyle = '#8dff9d';
+  ctx.font = '11px system-ui'; ctx.fillText('START', p0.x + 10, p0.y - 10);
+
+  // control-point nodes
+  track.controlPoints.forEach((p, i) => {
+    const s = worldToScreen(p.pos[0], p.pos[2]);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, i === selected ? 8 : 6, 0, Math.PI * 2);
+    ctx.fillStyle = heightColor(p.pos[1]);
+    ctx.fill();
+    ctx.lineWidth = i === selected ? 3 : 1.5;
+    ctx.strokeStyle = i === selected ? '#ffffff' : 'rgba(0,0,0,0.6)';
+    ctx.stroke();
+    ctx.fillStyle = '#bfe6f7'; ctx.font = '10px system-ui';
+    ctx.fillText(`${i} (y${p.pos[1].toFixed(0)})`, s.x + 9, s.y + 3);
+  });
+}
+
+// ---------- Draw the elevation strip (one handle per control point) ----------
+let elevGeom = { padX: 30, top: 20, bottom: 20, yScale: 1, yMid: 0 };
+function drawElev() {
+  const { w, h } = fitCanvas(elevCanvas, elevCtx);
+  const ctx = elevCtx;
+  ctx.clearRect(0, 0, w, h);
+  const n = track.controlPoints.length;
+
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of track.controlPoints) { minY = Math.min(minY, p.pos[1]); maxY = Math.max(maxY, p.pos[1]); }
+  const pad = Math.max(4, (maxY - minY) * 0.3 + 2);
+  minY -= pad; maxY += pad;
+  const top = 20, bottom = h - 20, padX = 34;
+  const yScale = (bottom - top) / ((maxY - minY) || 1);
+  elevGeom = { padX, top, bottom, minY, maxY, yScale, w, h };
+
+  // zero line
+  const zeroY = bottom - (0 - minY) * yScale;
+  ctx.strokeStyle = 'rgba(70,110,140,0.5)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padX, zeroY); ctx.lineTo(w - padX, zeroY); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = '#6f93a8'; ctx.font = '10px system-ui'; ctx.fillText('y=0', 4, zeroY + 3);
+
+  // The loop is closed, so we plot n+1 slots: index i maps to point i % n, and
+  // the extra slot on the right echoes point 0 to show the profile is continuous.
+  const hx = i => padX + (i / n) * (w - 2 * padX);
+  const hy = y => bottom - (y - minY) * yScale;
+
+  // profile polyline (through the echoed point 0 at the end)
+  ctx.strokeStyle = 'rgba(79,214,255,0.8)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const p = track.controlPoints[i % n];
+    const x = hx(i), y = hy(p.pos[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+
+  // Roll indicator: a line offset from the elevation profile — drawn ABOVE the
+  // track for roll to the right (+roll), BELOW for roll to the left (-roll).
+  const ROLL_K = 0.8; // pixels of offset per degree of roll
+  // vertical ticks from the track line to the roll line
+  ctx.strokeStyle = 'rgba(255,170,60,0.35)'; ctx.lineWidth = 1;
+  for (let i = 0; i <= n; i++) {
+    const p = track.controlPoints[i % n];
+    const x = hx(i), trackY = hy(p.pos[1]);
+    ctx.beginPath(); ctx.moveTo(x, trackY); ctx.lineTo(x, trackY - p.roll * ROLL_K); ctx.stroke();
+  }
+  // the roll line itself
+  ctx.strokeStyle = 'rgba(255,170,60,0.95)'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const p = track.controlPoints[i % n];
+    const x = hx(i), rollY = hy(p.pos[1]) - p.roll * ROLL_K; // +roll (right) -> up
+    i ? ctx.lineTo(x, rollY) : ctx.moveTo(x, rollY);
+  }
+  ctx.stroke();
+
+  // handles (the last one is a faded echo of point 0)
+  for (let i = 0; i <= n; i++) {
+    const idx = i % n;
+    const p = track.controlPoints[idx];
+    const x = hx(i), y = hy(p.pos[1]);
+    const echo = i === n;
+    ctx.globalAlpha = echo ? 0.45 : 1;
+    ctx.beginPath(); ctx.arc(x, y, idx === selected ? 7 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = heightColor(p.pos[1]); ctx.fill();
+    ctx.lineWidth = idx === selected ? 3 : 1.5;
+    ctx.strokeStyle = idx === selected ? '#fff' : 'rgba(0,0,0,0.6)'; ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#7fb8d8'; ctx.font = '9px system-ui';
+    ctx.fillText(echo ? '0↺' : String(i), x - 4, bottom + 14);
+  }
+}
+
+function draw() { drawTop(); drawElev(); }
+
+// ---------- Properties panel ----------
+function renderProps() {
+  const body = document.getElementById('propBody');
+  const p = track.controlPoints[selected];
+  if (!p) { body.innerHTML = '<div class="none">No point selected.</div>'; return; }
+  const row = (key, label, val, stepv) =>
+    `<label>${label}<input type="number" data-key="${key}" value="${val}" step="${stepv}"></label>`;
+  body.innerHTML =
+    `<div style="margin-bottom:6px;color:#7fb8d8">Point #${selected}</div>` +
+    row('x', 'X', p.pos[0], 1) +
+    row('z', 'Z', p.pos[2], 1) +
+    row('y', 'Y (elev)', p.pos[1], 0.5) +
+    row('roll', 'Roll&deg;', p.roll, 1) +
+    row('width', 'Width', p.width, 1) +
+    row('weight', 'Weight', p.weight, 0.1) +
+    `<button id="delBtn" style="margin-top:10px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete point (min 4)</button>`;
+
+  body.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const v = parseFloat(inp.value);
+      if (!isFinite(v)) return;
+      const key = inp.dataset.key;
+      if (key === 'x') p.pos[0] = v;
+      else if (key === 'y') p.pos[1] = v;
+      else if (key === 'z') p.pos[2] = v;
+      else if (key === 'width') p.width = Math.max(1, v);
+      else if (key === 'weight') p.weight = Math.max(0.01, v);
+      else p.roll = v;
+      draw();
+    });
+  });
+  document.getElementById('delBtn').addEventListener('click', deleteSelected);
+}
+
+function updateMeta() {
+  document.getElementById('metaHint').innerHTML =
+    `${track.controlPoints.length} control points<br>` +
+    `Roll tint: cyan = right-lean, magenta = left-lean.<br>` +
+    `Node color = elevation.`;
+  document.getElementById('nameInput').value = track.name || '';
+}
+
+function refresh() { draw(); renderProps(); updateMeta(); }
+
+// ---------- Hit testing ----------
+function nodeAtTop(sx, sy) {
+  for (let i = 0; i < track.controlPoints.length; i++) {
+    const p = track.controlPoints[i];
+    const s = worldToScreen(p.pos[0], p.pos[2]);
+    if (Math.hypot(sx - s.x, sy - s.y) <= 10) return i;
+  }
+  return -1;
+}
+function handleAtElev(sx, sy) {
+  const n = track.controlPoints.length;
+  const hx = i => elevGeom.padX + (i / n) * (elevGeom.w - 2 * elevGeom.padX);
+  // Check n+1 slots; the echoed slot (i === n) maps back to point 0.
+  for (let i = 0; i <= n; i++) {
+    const idx = i % n;
+    const x = hx(i), y = elevGeom.bottom - (track.controlPoints[idx].pos[1] - elevGeom.minY) * elevGeom.yScale;
+    if (Math.hypot(sx - x, sy - y) <= 12) return idx;
+  }
+  return -1;
+}
+
+// ---------- Insert a point into the nearest segment at a clicked position ----
+function insertNear(worldX, worldZ) {
+  const { evalTrack, CP_N } = TrackCore.makeEvaluator(track.controlPoints);
+  let bestG = 0, bestD = Infinity;
+  const STEPS = CP_N * 24;
+  for (let i = 0; i <= STEPS; i++) {
+    const g = (i / STEPS) * CP_N;
+    const s = evalTrack(g % CP_N);
+    const d = (s.pos.x - worldX) ** 2 + (s.pos.z - worldZ) ** 2;
+    if (d < bestD) { bestD = d; bestG = g; }
+  }
+  const s = evalTrack(bestG % CP_N);
+  const insertAt = (Math.floor(bestG) + 1) % (track.controlPoints.length + 1);
+  const np = { pos: [worldX, s.pos.y, worldZ], roll: +(s.roll * 180 / Math.PI).toFixed(1),
+    width: +s.width.toFixed(1), weight: 1 };
+  track.controlPoints.splice(insertAt, 0, np);
+  selected = insertAt;
+}
+
+function deleteSelected() {
+  if (track.controlPoints.length <= 4) { alert('A closed cubic track needs at least 4 points.'); return; }
+  track.controlPoints.splice(selected, 1);
+  selected = Math.max(0, selected - 1);
+  refresh();
+}
+
+// ---------- Top-down mouse ----------
+function localPos(canvas, e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+topCanvas.addEventListener('mousedown', (e) => {
+  const { x, y } = localPos(topCanvas, e);
+  const hit = nodeAtTop(x, y);
+  if (hit >= 0) { selected = hit; dragging = 'top'; }
+  else { const w = screenToWorld(x, y); insertNear(w.x, w.z); dragging = 'top'; }
+  refresh();
+});
+window.addEventListener('mousemove', (e) => {
+  if (dragging === 'top') {
+    const { x, y } = localPos(topCanvas, e);
+    const w = screenToWorld(x, y);
+    track.controlPoints[selected].pos[0] = Math.round(w.x * 10) / 10;
+    track.controlPoints[selected].pos[2] = Math.round(w.z * 10) / 10;
+    refresh();
+  } else if (dragging === 'elev') {
+    const { y } = localPos(elevCanvas, e);
+    const val = elevGeom.minY + (elevGeom.bottom - y) / elevGeom.yScale;
+    track.controlPoints[selected].pos[1] = Math.round(val * 10) / 10;
+    refresh();
+  }
+});
+window.addEventListener('mouseup', () => { dragging = null; });
+
+// ---------- Elevation mouse ----------
+elevCanvas.addEventListener('mousedown', (e) => {
+  const { x, y } = localPos(elevCanvas, e);
+  const hit = handleAtElev(x, y);
+  if (hit >= 0) { selected = hit; dragging = 'elev'; refresh(); }
+});
+
+// ---------- Keyboard ----------
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
+});
+
+// ---------- File controls ----------
+document.getElementById('nameInput').addEventListener('input', (e) => { track.name = e.target.value; });
+document.getElementById('newBtn').addEventListener('click', () => {
+  track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK); selected = 0; refresh();
+});
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const json = TrackCore.serializeTrack(track);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (track.name || 'track').replace(/[^\w.-]+/g, '_') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+const fileInput = document.getElementById('fileInput');
+document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    track = TrackCore.parseTrack(await file.text());
+    selected = 0; refresh();
+  } catch (err) { alert('Could not load track: ' + err.message); }
+  e.target.value = '';
+});
+
+window.addEventListener('resize', draw);
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wipeout-Style Oval Track — Three.js</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: absolute; top: 12px; left: 12px; color: #cdeeff;
+    text-shadow: 0 0 6px rgba(0,180,255,0.8);
+    font-size: 14px; line-height: 1.5; pointer-events: none;
+    user-select: none;
+  }
+  #hud b { color: #fff; }
+  #speed {
+    position: absolute; bottom: 16px; right: 20px; color: #7fe7ff;
+    text-shadow: 0 0 10px rgba(0,200,255,0.9);
+    font-size: 34px; font-weight: bold; pointer-events: none; user-select: none;
+  }
+  #speed span { font-size: 14px; color: #9cd; }
+  #controls {
+    position: absolute; top: 12px; right: 16px; display: flex; gap: 8px;
+    align-items: center; font-size: 13px; color: #cdeeff;
+  }
+  #controls button, #controls a {
+    background: rgba(20,40,64,0.85); color: #cdeeff; border: 1px solid #2c6a9e;
+    border-radius: 5px; padding: 6px 10px; font: inherit; cursor: pointer;
+    text-decoration: none;
+  }
+  #controls button:hover, #controls a:hover { background: rgba(40,80,120,0.95); }
+  #trackName { color: #7fe7ff; text-shadow: 0 0 6px rgba(0,200,255,0.7); }
+</style>
+</head>
+<body>
+<div id="hud">
+  <b>Controls</b><br>
+  Accelerate: W / &uarr;<br>
+  Brake / Reverse: S / &darr;<br>
+  Steer: A/D or &larr;/&rarr;
+</div>
+<div id="speed">0 <span>km/h</span></div>
+<div id="controls">
+  <span id="trackName"></span>
+  <button id="importBtn">Import JSON</button>
+  <a id="editorLink" href="editor.html" target="_blank">Open Editor</a>
+  <input id="fileInput" type="file" accept="application/json,.json" hidden>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="track-core.js"></script>
+<script>
+// ---------- Scene setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x02040a);
+scene.fog = new THREE.Fog(0x02040a, 60, 220);
+
+const camera = new THREE.PerspectiveCamera(
+  65, window.innerWidth / window.innerHeight, 0.1, 1000
+);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- Lighting ----------
+scene.add(new THREE.HemisphereLight(0x88bbff, 0x080810, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(50, 80, 30);
+scene.add(sun);
+
+// ---------- Track: built from control points via shared TrackCore ------------
+// The track is authored data (control points with position, roll, width, weight)
+// interpolated by a rational cubic B-spline. TrackCore holds the shared math so
+// the editor's preview and this geometry can never drift apart. buildTrack()
+// (re)generates everything from a control-point array, so importing new JSON at
+// runtime just calls it again.
+const N = TrackCore.N_DEFAULT;         // centerline samples around the loop
+const UP = new THREE.Vector3(0, 1, 0);
+const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
+
+let centerline = [];                   // baked frames (THREE vectors) for physics
+let startIndex = 0;                    // centerline sample nearest control point 0
+let trackName = '';
+let trackMesh = null, stripeLine = null, railR = null, railL = null;
+
+function disposeObject(obj) {
+  if (!obj) return;
+  scene.remove(obj);
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) obj.material.dispose();
+}
+
+// A thin vertical guard rail rising from one (already trimmed) track edge.
+function buildRail(edge, height, color) {
+  const positions = [], indices = [];
+  for (let i = 0; i < N; i++) {
+    const base = edge[i];
+    positions.push(base.x, base.y, base.z, base.x, base.y + height, base.z);
+  }
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
+    indices.push(a0, b0, a1, a1, b0, b1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.4, side: THREE.DoubleSide });
+  return new THREE.Mesh(geo, mat);
+}
+
+// (Re)build the entire track from a control-point array, then reset the ship.
+function buildTrack(controlPoints, name) {
+  trackName = name || '';
+
+  // Bake the centerline via the shared core, then derive the two track edges
+  // with self-intersections trimmed to sharp corners.
+  const raw = TrackCore.buildCenterline(controlPoints, N);
+  const edges = TrackCore.buildEdges(raw);
+
+  // Wrap frames into THREE vectors for the physics. Also record each sample's
+  // signed lateral offset (along edgeRight) of the TRIMMED left/right edges, so
+  // the collision corridor follows the cut corners, not just centerline +/- halfW.
+  centerline = raw.map((f, i) => {
+    const er = f.edgeRight, p = f.pos;
+    const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
+    return {
+      pos: toVec(f.pos), tangent: toVec(f.tangent), h: toVec(f.h),
+      edgeRight: toVec(f.edgeRight), normal: toVec(f.normal),
+      roll: f.roll, width: f.width, halfW: f.halfW,
+      sLeft: off(edges.left[i]), sRight: off(edges.right[i])
+    };
+  });
+
+  // The ship starts at the track's centre nearest control point 0. Because the
+  // spline doesn't pass exactly through its control points, find the closest
+  // baked sample rather than assuming sample 0.
+  const cp0 = controlPoints[0].pos;
+  startIndex = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < centerline.length; i++) {
+    const p = centerline[i].pos;
+    const d = (p.x - cp0[0]) ** 2 + (p.y - cp0[1]) ** 2 + (p.z - cp0[2]) ** 2;
+    if (d < bestD) { bestD = d; startIndex = i; }
+  }
+
+  // Drop any previously-built geometry before rebuilding.
+  disposeObject(trackMesh); disposeObject(stripeLine);
+  disposeObject(railR); disposeObject(railL);
+
+  // Ribbon surface as a closed triangle strip between the two (trimmed) edges.
+  // Collapsed vertices at a sharp corner make zero-area triangles there.
+  const pos = [], nrm = [], idx = [];
+  for (let i = 0; i < N; i++) {
+    const left = edges.left[i], right = edges.right[i], nml = raw[i].normal;
+    pos.push(left.x, left.y, left.z, right.x, right.y, right.z);
+    nrm.push(nml.x, nml.y, nml.z, nml.x, nml.y, nml.z);
+  }
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    const l0 = i * 2, r0 = i * 2 + 1, l1 = j * 2, r1 = j * 2 + 1;
+    idx.push(l0, r0, l1, r0, r1, l1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setIndex(idx);
+  trackMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+  scene.add(trackMesh);
+
+  // Dashed racing stripe riding just above the banked centerline.
+  const sg = new THREE.BufferGeometry().setFromPoints(
+    centerline.map(c => c.pos.clone().addScaledVector(c.normal, 0.05))
+  );
+  stripeLine = new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }));
+  stripeLine.computeLineDistances();
+  scene.add(stripeLine);
+
+  // Glowing guard rails rising from both trimmed edges.
+  railR = buildRail(edges.right, 1.4, 0xff3355);
+  railL = buildRail(edges.left, 1.4, 0xff3355);
+  scene.add(railR, railL);
+
+  resetShip();
+  const label = document.getElementById('trackName');
+  if (label) label.textContent = trackName;
+}
+
+// Sample a smooth, interpolated track frame at a horizontal position.
+// Returns the frame ON the banked cross-section that passes through the ship's
+// longitudinal location, so surface height / normal are continuous (no snapping
+// to discrete samples) and always match the rendered ribbon.
+const _sample = {
+  pos: new THREE.Vector3(),
+  tangent: new THREE.Vector3(),
+  edgeRight: new THREE.Vector3(),
+  normal: new THREE.Vector3(),
+  halfW: 0, sLeft: 0, sRight: 0
+};
+function sampleTrack(x, z) {
+  // nearest centerline sample by horizontal distance
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < N; i++) {
+    const p = centerline[i].pos;
+    const dx = x - p.x, dz = z - p.z;
+    const d = dx * dx + dz * dz;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  const c0 = centerline[best];
+  // pick the neighbouring segment we're actually over, based on along-track sign
+  const along = (x - c0.pos.x) * c0.tangent.x + (z - c0.pos.z) * c0.tangent.z;
+  const iA = along >= 0 ? best : (best - 1 + N) % N;
+  const iB = (iA + 1) % N;
+  const a = centerline[iA], b = centerline[iB];
+
+  // fractional position t along segment A->B (projection onto the segment)
+  const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
+  const segLen2 = sx * sx + sz * sz;
+  const t = segLen2 > 0
+    ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (z - a.pos.z) * sz) / segLen2, 0, 1)
+    : 0;
+
+  _sample.pos.copy(a.pos).lerp(b.pos, t);
+  _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
+  _sample.edgeRight.copy(a.edgeRight).lerp(b.edgeRight, t).normalize();
+  _sample.normal.copy(a.normal).lerp(b.normal, t).normalize();
+  _sample.halfW = a.halfW + (b.halfW - a.halfW) * t;
+  _sample.sLeft = a.sLeft + (b.sLeft - a.sLeft) * t;
+  _sample.sRight = a.sRight + (b.sRight - a.sRight) * t;
+  return _sample;
+}
+
+// ---------- Player vehicle ----------
+const shipGroup = new THREE.Group();
+const bodyGeo = new THREE.BoxGeometry(1.2, 0.4, 2.0);
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7a1a, metalness: 0.4, roughness: 0.3, emissive: 0x552200, emissiveIntensity: 0.3 });
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.position.y = 0.3;
+shipGroup.add(body);
+
+// nose accent so orientation is obvious
+const noseGeo = new THREE.ConeGeometry(0.35, 0.8, 4);
+const noseMat = new THREE.MeshStandardMaterial({ color: 0x00d4ff, emissive: 0x0077aa, emissiveIntensity: 0.6 });
+const nose = new THREE.Mesh(noseGeo, noseMat);
+nose.rotation.x = Math.PI / 2;
+nose.rotation.y = Math.PI / 4;
+nose.position.set(0, 0.3, 1.25);
+shipGroup.add(nose);
+
+scene.add(shipGroup);
+
+// Place the ship at control point 0's region, facing along the track, and clear
+// its motion. Called by buildTrack() on load and on every JSON import.
+function resetShip() {
+  const s = centerline[startIndex];
+  // Centre of the track (on the centerline, no lateral offset), hovering above it.
+  shipGroup.position.set(s.pos.x, s.pos.y + 0.5, s.pos.z);
+  const heading = Math.atan2(s.tangent.x, s.tangent.z);
+  physics.heading = heading;
+  physics.velocityAngle = heading;
+  physics.speed = 0;
+  physics.visualBank = 0;
+  physics.visualPitch = 0;
+  physics.up.set(0, 1, 0);
+}
+
+// ---------- Input ----------
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+function isDown(...codes) { return codes.some(c => keys[c]); }
+
+// ---------- Wipeout-style hover physics ----------
+const physics = {
+  heading: 0,        // facing direction (radians) — set by resetShip()
+  velocityAngle: 0,  // direction the vehicle is actually moving
+  speed: 0,                // signed scalar speed (units/sec)
+  maxSpeed: 34,
+  maxReverse: -12,
+  accel: 26,
+  brakeDecel: 42,
+  friction: 6,
+  turnRate: 2.4,           // rad/sec at low speed
+  grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
+  bobTime: 0,
+  visualBank: 0,           // smoothed steer-lean (rad)
+  visualPitch: 0,          // smoothed accel-pitch (rad)
+  up: new THREE.Vector3(0, 1, 0) // current road surface normal
+};
+
+function lerpAngle(a, b, t) {
+  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * t;
+}
+
+function updatePhysics(dt) {
+  const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
+  const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
+  const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+
+  // Longitudinal speed control
+  if (throttle) {
+    physics.speed += physics.accel * dt;
+  } else if (brake) {
+    physics.speed -= physics.brakeDecel * dt;
+  } else {
+    // natural friction bleeds speed toward 0
+    const decay = physics.friction * dt;
+    if (physics.speed > 0) physics.speed = Math.max(0, physics.speed - decay);
+    else physics.speed = Math.min(0, physics.speed + decay);
+  }
+  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, physics.maxSpeed);
+
+  // Steering: turn rate scales down slightly at top speed for stability,
+  // and inverts naturally when reversing.
+  const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
+  const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
+  physics.heading += steer * effectiveTurn * dt;
+
+  // Hover "grip": velocity direction chases heading, but lags behind under
+  // hard turns at speed -> gives the classic wipeout slide/drift feel.
+  const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
+  physics.velocityAngle = lerpAngle(physics.velocityAngle, physics.heading, Math.min(gripThisFrame * dt, 1));
+
+  // Integrate position in the horizontal plane
+  const vx = Math.sin(physics.velocityAngle) * physics.speed;
+  const vz = Math.cos(physics.velocityAngle) * physics.speed;
+  let px = shipGroup.position.x + vx * dt;
+  let pz = shipGroup.position.z + vz * dt;
+
+  // Project the ship onto the banked cross-section at its longitudinal spot.
+  // `s` is the signed offset along the (banked) edge direction; placing the ship
+  // as pos + edgeRight*s puts it exactly ON the ribbon surface, so it can never
+  // sink under the track no matter how steeply the corner rolls.
+  const c = sampleTrack(px, pz);
+  const er = c.edgeRight;
+  const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
+  let s = ((px - c.pos.x) * er.x + (pz - c.pos.z) * er.z) / cosR2;
+
+  // Drivable corridor is bounded by the TRIMMED edges per side, so cut corners
+  // pinch the collision exactly like the visual mesh (walls you see = walls you hit).
+  const margin = 0.9;
+  let loS = c.sLeft + margin;    // inner limit of the left edge (negative side)
+  let hiS = c.sRight - margin;   // inner limit of the right edge (positive side)
+  if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
+
+  let hitSign = 0;
+  if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
+  if (hitSign) {
+    s = THREE.MathUtils.clamp(s, loS, hiS);
+    // Slide along the wall we hit: cancel only the velocity component pushing
+    // into it (with light scrub), so the ship glides instead of stopping dead.
+    const nl = Math.hypot(er.x, er.z) || 1;
+    const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
+    let vX = Math.sin(physics.velocityAngle) * physics.speed;
+    let vZ = Math.cos(physics.velocityAngle) * physics.speed;
+    const into = vX * wnx + vZ * wnz;
+    if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
+    physics.speed = Math.hypot(vX, vZ) * 0.98;
+    physics.velocityAngle = Math.atan2(vX, vZ);
+  }
+
+  // Sit on the surface, hovering a little along the surface normal.
+  physics.bobTime += dt;
+  const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03;
+  shipGroup.position.set(
+    c.pos.x + er.x * s + c.normal.x * hover,
+    c.pos.y + er.y * s + c.normal.y * hover,
+    c.pos.z + er.z * s + c.normal.z * hover
+  );
+  physics.up.copy(c.normal);
+
+  // Orient the ship to the road: nose along heading, "up" along surface normal.
+  const up = c.normal;
+  const fwd = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
+  fwd.addScaledVector(up, -fwd.dot(up)).normalize();
+  const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
+  const forward = new THREE.Vector3().crossVectors(right, up).normalize();
+  shipGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
+
+  // Extra hover flair: lean into the steer, pitch back under acceleration.
+  const targetBank = THREE.MathUtils.clamp(-steer * speedRatio * 0.5, -0.5, 0.5);
+  physics.visualBank = THREE.MathUtils.lerp(physics.visualBank, targetBank, dt * 6);
+  physics.visualPitch = THREE.MathUtils.lerp(physics.visualPitch, physics.speed * 0.004, dt * 6);
+  shipGroup.quaternion.multiply(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(physics.visualPitch, 0, physics.visualBank, 'XYZ'))
+  );
+
+  // HUD
+  const kmh = Math.round(Math.abs(physics.speed) * 9);
+  document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>';
+}
+
+// ---------- Chase camera (rigidly fixed behind and above the ship) ----------
+const CAM_BACK = 6.5;   // distance behind the ship
+const CAM_UP = 3.2;     // height above the ship
+function updateCamera(dt) {
+  const dir = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
+  // Lift the camera along the road's surface normal so on banked corners it
+  // rises above the track rather than dipping into (and behind) it.
+  const up = physics.up;
+  camera.position.copy(shipGroup.position)
+    .addScaledVector(dir, -CAM_BACK)
+    .addScaledVector(up, CAM_UP);
+  const lookAt = shipGroup.position.clone()
+    .addScaledVector(dir, 6)
+    .addScaledVector(up, 0.8);
+  camera.lookAt(lookAt);
+}
+
+// ---------- Track loading: built-in default + JSON import --------------------
+buildTrack(TrackCore.DEFAULT_TRACK.controlPoints, TrackCore.DEFAULT_TRACK.name);
+
+const fileInput = document.getElementById('fileInput');
+document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const track = TrackCore.parseTrack(await file.text());
+    buildTrack(track.controlPoints, track.name);
+  } catch (err) {
+    alert('Could not load track: ' + err.message);
+  }
+  e.target.value = '';   // allow re-importing the same file
+});
+
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  updatePhysics(dt);
+  updateCamera(dt);
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
