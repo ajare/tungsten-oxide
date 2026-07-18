@@ -82,14 +82,13 @@ scene.add(sun);
 // the editor's preview and this geometry can never drift apart. buildTrack()
 // (re)generates everything from a control-point array, so importing new JSON at
 // runtime just calls it again.
-const N = TrackCore.N_DEFAULT;         // centerline samples around the loop
+const N = TrackCore.N_DEFAULT;         // centerline samples per path
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 
-let centerline = [];                   // baked frames (THREE vectors) for physics
-let startIndex = 0;                    // centerline sample nearest control point 0
+let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let trackName = '';
-let trackMesh = null, stripeLine = null, railR = null, railL = null;
+let trackStart = { path: 0, point: 0, reverse: false };
 
 function disposeObject(obj) {
   if (!obj) return;
@@ -99,14 +98,16 @@ function disposeObject(obj) {
 }
 
 // A thin vertical guard rail rising from one (already trimmed) track edge.
-function buildRail(edge, height, color) {
+function buildRail(edge, closed, height, color) {
+  const count = edge.length;
   const positions = [], indices = [];
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < count; i++) {
     const base = edge[i];
     positions.push(base.x, base.y, base.z, base.x, base.y + height, base.z);
   }
-  for (let i = 0; i < N; i++) {
-    const j = (i + 1) % N;
+  const segCount = closed ? count : count - 1;
+  for (let i = 0; i < segCount; i++) {
+    const j = closed ? (i + 1) % count : i + 1;
     const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
     indices.push(a0, b0, a1, a1, b0, b1);
   }
@@ -118,19 +119,18 @@ function buildRail(edge, height, color) {
   return new THREE.Mesh(geo, mat);
 }
 
-// (Re)build the entire track from a control-point array, then reset the ship.
-function buildTrack(controlPoints, name) {
-  trackName = name || '';
-
+// Compile a single path (closed loop or open curve) into renderable geometry
+// and a physics-ready centerline.
+function buildPath(controlPoints, closed) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
-  const raw = TrackCore.buildCenterline(controlPoints, N);
-  const edges = TrackCore.buildEdges(raw);
+  const raw = TrackCore.buildCenterline(controlPoints, N, closed);
+  const edges = TrackCore.buildEdges(raw, closed);
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
   // signed lateral offset (along edgeRight) of the TRIMMED left/right edges, so
   // the collision corridor follows the cut corners, not just centerline +/- halfW.
-  centerline = raw.map((f, i) => {
+  const centerline = raw.map((f, i) => {
     const er = f.edgeRight, p = f.pos;
     const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
     return {
@@ -141,32 +141,18 @@ function buildTrack(controlPoints, name) {
     };
   });
 
-  // The ship starts at the track's centre nearest control point 0. Because the
-  // spline doesn't pass exactly through its control points, find the closest
-  // baked sample rather than assuming sample 0.
-  const cp0 = controlPoints[0].pos;
-  startIndex = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < centerline.length; i++) {
-    const p = centerline[i].pos;
-    const d = (p.x - cp0[0]) ** 2 + (p.y - cp0[1]) ** 2 + (p.z - cp0[2]) ** 2;
-    if (d < bestD) { bestD = d; startIndex = i; }
-  }
-
-  // Drop any previously-built geometry before rebuilding.
-  disposeObject(trackMesh); disposeObject(stripeLine);
-  disposeObject(railR); disposeObject(railL);
-
-  // Ribbon surface as a closed triangle strip between the two (trimmed) edges.
-  // Collapsed vertices at a sharp corner make zero-area triangles there.
+  // Ribbon surface between the two (trimmed) edges. Collapsed vertices at a
+  // sharp corner make zero-area triangles there. Closed paths wrap the strip
+  // back to the start; open paths leave the two ends capped-off (open).
   const pos = [], nrm = [], idx = [];
   for (let i = 0; i < N; i++) {
     const left = edges.left[i], right = edges.right[i], nml = raw[i].normal;
     pos.push(left.x, left.y, left.z, right.x, right.y, right.z);
     nrm.push(nml.x, nml.y, nml.z, nml.x, nml.y, nml.z);
   }
-  for (let i = 0; i < N; i++) {
-    const j = (i + 1) % N;
+  const segCount = closed ? N : N - 1;
+  for (let i = 0; i < segCount; i++) {
+    const j = closed ? (i + 1) % N : i + 1;
     const l0 = i * 2, r0 = i * 2 + 1, l1 = j * 2, r1 = j * 2 + 1;
     idx.push(l0, r0, l1, r0, r1, l1);
   }
@@ -174,31 +160,54 @@ function buildTrack(controlPoints, name) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setIndex(idx);
-  trackMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
-  scene.add(trackMesh);
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+  scene.add(mesh);
 
   // Dashed racing stripe riding just above the banked centerline.
   const sg = new THREE.BufferGeometry().setFromPoints(
     centerline.map(c => c.pos.clone().addScaledVector(c.normal, 0.05))
   );
-  stripeLine = new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }));
+  const stripeLine = closed
+    ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }))
+    : new THREE.Line(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }));
   stripeLine.computeLineDistances();
   scene.add(stripeLine);
 
   // Glowing guard rails rising from both trimmed edges.
-  railR = buildRail(edges.right, 1.4, 0xff3355);
-  railL = buildRail(edges.left, 1.4, 0xff3355);
+  const railR = buildRail(edges.right, closed, 1.4, 0xff3355);
+  const railL = buildRail(edges.left, closed, 1.4, 0xff3355);
   scene.add(railR, railL);
+
+  const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
+  return { closed, centerline, mesh, stripeLine, railR, railL, anchors };
+}
+
+// (Re)build the entire track (all paths) from a track's path list, then reset
+// the ship. `trackPaths` is [{ closed, controlPoints }, ...]. `start` is
+// { path, point, reverse } picking which control point the ship begins at and
+// which way it faces.
+function buildTrack(trackPaths, name, start) {
+  trackName = name || '';
+  trackStart = start || { path: 0, point: 0, reverse: false };
+
+  // Drop any previously-built geometry before rebuilding.
+  for (const p of paths) {
+    disposeObject(p.mesh); disposeObject(p.stripeLine);
+    disposeObject(p.railR); disposeObject(p.railL);
+  }
+
+  paths = trackPaths.map(p => buildPath(p.controlPoints, p.closed !== false));
 
   resetShip();
   const label = document.getElementById('trackName');
   if (label) label.textContent = trackName;
 }
 
-// Sample a smooth, interpolated track frame at a horizontal position.
-// Returns the frame ON the banked cross-section that passes through the ship's
-// longitudinal location, so surface height / normal are continuous (no snapping
-// to discrete samples) and always match the rendered ribbon.
+// Sample a smooth, interpolated track frame at a horizontal position. Searches
+// ALL paths for the nearest centerline point, then interpolates smoothly
+// within that path (wrapping across the seam for closed paths, clamped at the
+// ends for open ones) so surface height / normal stay continuous and always
+// match the rendered ribbon.
 const _sample = {
   pos: new THREE.Vector3(),
   tangent: new THREE.Vector3(),
@@ -207,20 +216,31 @@ const _sample = {
   halfW: 0, sLeft: 0, sRight: 0
 };
 function sampleTrack(x, z) {
-  // nearest centerline sample by horizontal distance
-  let best = 0, bestD = Infinity;
-  for (let i = 0; i < N; i++) {
-    const p = centerline[i].pos;
-    const dx = x - p.x, dz = z - p.z;
-    const d = dx * dx + dz * dz;
-    if (d < bestD) { bestD = d; best = i; }
+  // nearest centerline sample across every path
+  let bestPath = paths[0], best = 0, bestD = Infinity;
+  for (const path of paths) {
+    const cl = path.centerline;
+    for (let i = 0; i < cl.length; i++) {
+      const p = cl[i].pos;
+      const dx = x - p.x, dz = z - p.z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = i; bestPath = path; }
+    }
   }
-  const c0 = centerline[best];
+  const cl = bestPath.centerline, M = cl.length, closed = bestPath.closed;
+  const c0 = cl[best];
   // pick the neighbouring segment we're actually over, based on along-track sign
   const along = (x - c0.pos.x) * c0.tangent.x + (z - c0.pos.z) * c0.tangent.z;
-  const iA = along >= 0 ? best : (best - 1 + N) % N;
-  const iB = (iA + 1) % N;
-  const a = centerline[iA], b = centerline[iB];
+  let iA, iB;
+  if (closed) {
+    iA = along >= 0 ? best : (best - 1 + M) % M;
+    iB = (iA + 1) % M;
+  } else {
+    iA = along >= 0 ? best : Math.max(0, best - 1);
+    iA = Math.min(iA, M - 2);
+    iB = Math.min(iA + 1, M - 1);
+  }
+  const a = cl[iA], b = cl[iB];
 
   // fractional position t along segment A->B (projection onto the segment)
   const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
@@ -261,10 +281,25 @@ scene.add(shipGroup);
 // Place the ship at control point 0's region, facing along the track, and clear
 // its motion. Called by buildTrack() on load and on every JSON import.
 function resetShip() {
-  const s = centerline[startIndex];
+  // Start at the chosen control point (the spline doesn't pass exactly through
+  // its control points, so find the closest baked sample rather than assuming
+  // it's sample `point`), on the chosen path, facing its natural tangent
+  // direction or the reverse of it.
+  const pathIndex = THREE.MathUtils.clamp(trackStart.path, 0, paths.length - 1);
+  const startPath = paths[pathIndex];
+  const pointIndex = THREE.MathUtils.clamp(trackStart.point, 0, startPath.anchors.length - 1);
+  const anchor = startPath.anchors[pointIndex];
+  const cl = startPath.centerline;
+  let startIndex = 0, bestD = Infinity;
+  for (let i = 0; i < cl.length; i++) {
+    const d = cl[i].pos.distanceToSquared(anchor);
+    if (d < bestD) { bestD = d; startIndex = i; }
+  }
+  const s = cl[startIndex];
   // Centre of the track (on the centerline, no lateral offset), hovering above it.
   shipGroup.position.set(s.pos.x, s.pos.y + 0.5, s.pos.z);
-  const heading = Math.atan2(s.tangent.x, s.tangent.z);
+  let heading = Math.atan2(s.tangent.x, s.tangent.z);
+  if (trackStart.reverse) heading += Math.PI;
   physics.heading = heading;
   physics.velocityAngle = heading;
   physics.speed = 0;
@@ -420,7 +455,7 @@ function updateCamera(dt) {
 }
 
 // ---------- Track loading: built-in default + JSON import --------------------
-buildTrack(TrackCore.DEFAULT_TRACK.controlPoints, TrackCore.DEFAULT_TRACK.name);
+buildTrack(TrackCore.DEFAULT_TRACK.paths, TrackCore.DEFAULT_TRACK.name, TrackCore.DEFAULT_TRACK.start);
 
 const fileInput = document.getElementById('fileInput');
 document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
@@ -429,7 +464,7 @@ fileInput.addEventListener('change', async (e) => {
   if (!file) return;
   try {
     const track = TrackCore.parseTrack(await file.text());
-    buildTrack(track.controlPoints, track.name);
+    buildTrack(track.paths, track.name, track.start);
   } catch (err) {
     alert('Could not load track: ' + err.message);
   }

@@ -1,18 +1,28 @@
 /* track-core.js — shared track math for the game (track.html) and the editor
  * (editor.html). Dependency-free (no three.js) so the 2D editor can use it too.
  *
- * A track is a closed loop of control points. Each control point carries a 3D
- * position AND the roll (banking) and width of the track there:
+ * A track is composed of one or more PATHS. Each path is either a closed loop
+ * or an open curve, and holds an ordered array of control points. Each control
+ * point carries a 3D position AND the roll (banking) and width of the track
+ * there:
  *
  *   { pos: [x, y, z], roll: <degrees>, width: <full width>, weight: <NURBS w> }
  *
- * A rational, uniformly-knotted, closed cubic B-spline (NURBS) interpolates all
- * of these. +roll lifts the LEFT edge (banks into a right-hand turn).
+ * A rational, uniformly-knotted cubic B-spline (NURBS) interpolates all of
+ * these along each path (wrapping for closed paths, clamped at the ends for
+ * open ones). +roll lifts the LEFT edge (banks into a right-hand turn).
+ *
+ * track = { version, name, samples, paths: [ { closed, controlPoints } ],
+ *            start: { path, point, reverse } }
+ * `start` picks which control point the player begins at (nearest baked
+ * sample to it) and whether they face along the path's natural (parametric)
+ * direction or the reverse of it.
  *
  * Public API (window.TrackCore):
  *   basis(u), basisDeriv(u)          - uniform cubic B-spline basis + derivative
- *   makeEvaluator(controlPoints)     - { evalTrack(g), CP_N }
- *   buildCenterline(cps, N)          - array of baked frames (plain {x,y,z})
+ *   makeEvaluator(cps, closed)       - { evalTrack(g), CP_N, closed }
+ *   buildCenterline(cps, N, closed)  - array of baked frames (plain {x,y,z})
+ *   buildEdges(frames, closed)       - trimmed { left, right } edge polylines
  *   parseTrack(text)                 - JSON string -> validated track object
  *   serializeTrack(track)            - track object -> pretty JSON string
  *   DEFAULT_TRACK, STARTER_TRACK     - built-in tracks
@@ -57,21 +67,32 @@
     ];
   }
 
-  // --- rational closed cubic B-spline evaluator ------------------------------
-  // Returns evalTrack(g), g in [0, CP_N): { pos, tangent(normalized), roll, width }.
-  // pos/tangent are plain {x,y,z}; roll is in RADIANS; the whole cross-section
-  // (pos, roll, width) shares the same rational basis (weights included).
-  function makeEvaluator(controlPoints) {
+  // --- rational cubic B-spline evaluator --------------------------------------
+  // Returns evalTrack(g), g in [0, CP_N) for closed paths or [0, CP_N-1] for
+  // open ones: { pos, tangent(normalized), roll, width }. pos/tangent are
+  // plain {x,y,z}; roll is in RADIANS; the whole cross-section (pos, roll,
+  // width) shares the same rational basis (weights included).
+  //
+  // Open paths use the same uniform basis matrix but CLAMP the control-point
+  // index at each end instead of wrapping. That isn't a textbook clamped
+  // B-spline (it doesn't pass exactly through the endpoints), but it keeps a
+  // single code path for both cases and the curve still starts/ends right at
+  // the first/last control point's neighbourhood, consistent with how this
+  // engine already treats control points as approximate, not interpolated.
+  function makeEvaluator(controlPoints, closed) {
+    closed = closed !== false;
     const CP_N = controlPoints.length;
     const cpVec = controlPoints.map(c => ({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }));
     const cpRoll = controlPoints.map(c => (c.roll || 0) * DEG2RAD);
     const cpWidth = controlPoints.map(c => c.width);
     const cpW = controlPoints.map(c => (c.weight == null ? 1 : c.weight));
-    const wrap = i => ((i % CP_N) + CP_N) % CP_N;
+    const wrap = closed
+      ? i => ((i % CP_N) + CP_N) % CP_N
+      : i => Math.max(0, Math.min(CP_N - 1, i));
 
     function evalTrack(g) {
-      const seg = Math.floor(g) % CP_N;
-      const u = g - Math.floor(g);
+      const seg = Math.floor(g);
+      const u = g - seg;
       const b = basis(u), db = basisDeriv(u);
       const idx = [wrap(seg - 1), wrap(seg), wrap(seg + 1), wrap(seg + 2)];
 
@@ -92,19 +113,22 @@
       const tangent = vnorm(vscale(vaddScaled(vscale(dnum, den), num, -dden), 1 / (den * den)));
       return { pos, tangent, roll: rollNum / den, width: widthNum / den };
     }
-    return { evalTrack, CP_N };
+    return { evalTrack, CP_N, closed };
   }
 
-  // --- bake N frames around the loop -----------------------------------------
+  // --- bake N frames along a path ---------------------------------------------
   // Each frame: { pos, tangent, h, roll, width, halfW, edgeRight, normal }, all
   // vectors plain {x,y,z}. Consumers wrap these in their own vector type.
-  function buildCenterline(controlPoints, N) {
+  // Closed paths bake N samples spanning the full loop [0, CP_N); open paths
+  // bake N samples spanning [0, CP_N-1] inclusive of both endpoints.
+  function buildCenterline(controlPoints, N, closed) {
+    closed = closed !== false;
     N = N || N_DEFAULT;
-    const { evalTrack, CP_N } = makeEvaluator(controlPoints);
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed);
     const UP = { x: 0, y: 1, z: 0 };
     const out = [];
     for (let i = 0; i < N; i++) {
-      const g = (i / N) * CP_N;
+      const g = closed ? (i / N) * CP_N : (N > 1 ? (i / (N - 1)) * (CP_N - 1) : 0);
       const { pos, tangent, roll, width } = evalTrack(g);
 
       const h = vnorm(vcross(UP, tangent));
@@ -138,40 +162,51 @@
     return { x: p1.x + t * (p2.x - p1.x), y: (p2.y + p3.y) / 2, z: p1.z + t * (p2.z - p1.z) };
   }
 
-  // Collapse each folded run of a closed edge polyline to a sharp miter point.
-  function trimEdge(pts, frames) {
+  // Collapse each folded run of an edge polyline to a sharp miter point.
+  // For a closed path the polyline wraps (segment N-1 -> 0 exists and the scan
+  // may start anywhere); for an open path it doesn't (only N-1 segments, and
+  // the scan must start at index 0).
+  function trimEdge(pts, frames, closed) {
+    closed = closed !== false;
     const N = pts.length;
-    const fwd = new Array(N);
-    for (let i = 0; i < N; i++) fwd[i] = segForward(pts[i], pts[(i + 1) % N], frames[i].tangent);
+    const segCount = closed ? N : N - 1;
+    if (segCount <= 0) return pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    const nextIdx = i => closed ? (i + 1) % N : i + 1;
+
+    const fwd = new Array(segCount);
+    for (let i = 0; i < segCount; i++) fwd[i] = segForward(pts[i], pts[nextIdx(i)], frames[i].tangent);
     const out = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
 
-    const startFwd = fwd.indexOf(true);
+    let startFwd = closed ? fwd.indexOf(true) : 0;
     if (startFwd < 0) return out; // no forward segment at all (degenerate) -> leave
 
     let i = 0;
-    while (i < N) {
-      const seg = (startFwd + i) % N;
+    while (i < segCount) {
+      const seg = closed ? (startFwd + i) % segCount : i;
       if (fwd[seg]) { i++; continue; }
 
       // maximal run of backward (folded) segments starting at `seg`
       let len = 0;
-      while (len < N && !fwd[(startFwd + i + len) % N]) len++;
-      const s = seg;                          // first folded segment (vertex s -> s+1)
-      const e = (startFwd + i + len - 1) % N;  // last folded segment
+      while (len < segCount && !fwd[closed ? (startFwd + i + len) % segCount : i + len]) len++;
+      const s = seg;                                            // first folded segment (vertex s -> s+1)
+      const e = closed ? (startFwd + i + len - 1) % segCount : i + len - 1; // last folded segment
 
       // sharp corner = intersection of the segment entering the fold and the one leaving it
-      const enterA = pts[(s - 1 + N) % N], enterB = pts[s];
-      const leaveA = pts[(e + 1) % N], leaveB = pts[(e + 2) % N];
+      const prevIdx = closed ? (s - 1 + N) % N : Math.max(0, s - 1);
+      const afterIdx = closed ? (e + 2) % N : Math.min(N - 1, e + 2);
+      const enterA = pts[prevIdx], enterB = pts[s];
+      const leaveA = pts[nextIdx(e)], leaveB = pts[afterIdx];
       const mid = {
         x: (enterB.x + leaveA.x) / 2, y: (enterB.y + leaveA.y) / 2, z: (enterB.z + leaveA.z) / 2
       };
       let X = lineIntersectXZ(enterA, enterB, leaveA, leaveB) || mid;
-      // guard against runaway miters from near-parallel edges
+      // guard against runaway miters from near-parallel (or degenerate, open-end) edges
       if (Math.hypot(X.x - mid.x, X.z - mid.z) > 6 * frames[s].halfW) X = mid;
 
       // collapse vertices s .. e+1 onto the miter point (zero-area strip there)
-      let v = s; const last = (e + 1) % N;
-      while (true) { out[v] = { x: X.x, y: X.y, z: X.z }; if (v === last) break; v = (v + 1) % N; }
+      const last = nextIdx(e);
+      let v = s;
+      while (true) { out[v] = { x: X.x, y: X.y, z: X.z }; if (v === last) break; v = closed ? (v + 1) % N : v + 1; }
       i += len;
     }
     return out;
@@ -179,14 +214,15 @@
 
   // Build both trimmed edges from baked centerline frames.
   // Returns { left: [{x,y,z}...], right: [...] }, each length frames.length.
-  function buildEdges(frames) {
+  function buildEdges(frames, closed) {
+    closed = closed !== false;
     const left = [], right = [];
     for (let i = 0; i < frames.length; i++) {
       const c = frames[i];
       left.push(vaddScaled(c.pos, c.edgeRight, -c.halfW));
       right.push(vaddScaled(c.pos, c.edgeRight, c.halfW));
     }
-    return { left: trimEdge(left, frames), right: trimEdge(right, frames) };
+    return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
   // --- JSON schema: parse / validate / serialize -----------------------------
@@ -203,64 +239,103 @@
     };
   }
 
+  function normalizePath(rawPath, i) {
+    const rawPoints = Array.isArray(rawPath) ? rawPath : rawPath && rawPath.controlPoints;
+    if (!Array.isArray(rawPoints)) throw new Error('path ' + i + ': no controlPoints array found');
+    if (rawPoints.length < 4) throw new Error('path ' + i + ': a track path needs at least 4 control points');
+    return {
+      closed: !(rawPath && rawPath.closed === false),
+      controlPoints: rawPoints.map(normalizePoint)
+    };
+  }
+
+  // Clamp a start descriptor to valid path/point indices for the given paths.
+  function normalizeStart(rawStart, paths) {
+    let path = (rawStart && Number.isInteger(rawStart.path)) ? rawStart.path : 0;
+    path = Math.max(0, Math.min(paths.length - 1, path));
+    let point = (rawStart && Number.isInteger(rawStart.point)) ? rawStart.point : 0;
+    point = Math.max(0, Math.min(paths[path].controlPoints.length - 1, point));
+    const reverse = !!(rawStart && rawStart.reverse);
+    return { path, point, reverse };
+  }
+
+  // Accepts either the current { paths: [{closed, controlPoints}, ...] } schema
+  // or the legacy single-closed-loop { controlPoints: [...] } schema.
   function parseTrack(text) {
     const data = JSON.parse(text);
-    const rawPoints = Array.isArray(data) ? data : data.controlPoints;
-    if (!Array.isArray(rawPoints)) throw new Error('no controlPoints array found');
-    if (rawPoints.length < 4) throw new Error('a closed cubic track needs at least 4 control points');
-    const controlPoints = rawPoints.map(normalizePoint);
+    let rawPaths;
+    if (Array.isArray(data)) rawPaths = [{ closed: true, controlPoints: data }];
+    else if (Array.isArray(data.paths)) rawPaths = data.paths;
+    else if (Array.isArray(data.controlPoints)) rawPaths = [{ closed: true, controlPoints: data.controlPoints }];
+    else throw new Error('no paths or controlPoints array found');
+    if (rawPaths.length < 1) throw new Error('a track needs at least one path');
+    const paths = rawPaths.map(normalizePath);
     return {
-      version: (data && data.version) || 1,
+      version: (data && data.version) || 2,
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
-      controlPoints
+      paths,
+      start: normalizeStart(data && data.start, paths)
     };
   }
 
   function serializeTrack(track) {
     // Compact one-line-per-point formatting for readability.
-    const pts = track.controlPoints.map(p =>
-      '    { "pos": [' + p.pos.join(', ') + '], "roll": ' + p.roll +
-      ', "width": ' + p.width + ', "weight": ' + p.weight + ' }'
-    ).join(',\n');
+    const pathsJson = track.paths.map(path => {
+      const pts = path.controlPoints.map(p =>
+        '      { "pos": [' + p.pos.join(', ') + '], "roll": ' + p.roll +
+        ', "width": ' + p.width + ', "weight": ' + p.weight + ' }'
+      ).join(',\n');
+      return '    { "closed": ' + (path.closed !== false) + ', "controlPoints": [\n' + pts + '\n    ] }';
+    }).join(',\n');
+    const start = normalizeStart(track.start, track.paths);
     return '{\n' +
-      '  "version": 1,\n' +
+      '  "version": 2,\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
-      '  "controlPoints": [\n' + pts + '\n  ]\n}\n';
+      '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
+      '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
   // --- built-in tracks --------------------------------------------------------
   const DEFAULT_TRACK = {
-    version: 1,
+    version: 2,
     name: 'Default Circuit',
-    controlPoints: [
-      { pos: [90, 0, 0], roll: 0, width: 22, weight: 1 },
-      { pos: [70, 4, 46], roll: -14, width: 18, weight: 1 },
-      { pos: [18, 8, 60], roll: -22, width: 14, weight: 1 },
-      { pos: [-34, 5, 54], roll: -18, width: 13, weight: 1 },
-      { pos: [-74, 0, 30], roll: -10, width: 16, weight: 1 },
-      { pos: [-92, -4, -6], roll: 16, width: 12, weight: 1 },
-      { pos: [-66, -3, -40], roll: 20, width: 12, weight: 1 },
-      { pos: [-16, 1, -56], roll: 8, width: 20, weight: 1 },
-      { pos: [40, 3, -48], roll: -12, width: 24, weight: 1 },
-      { pos: [80, 1, -22], roll: -6, width: 22, weight: 1 }
-    ]
+    start: { path: 0, point: 0, reverse: false },
+    paths: [{
+      closed: true,
+      controlPoints: [
+        { pos: [90, 0, 0], roll: 0, width: 22, weight: 1 },
+        { pos: [70, 4, 46], roll: -14, width: 18, weight: 1 },
+        { pos: [18, 8, 60], roll: -22, width: 14, weight: 1 },
+        { pos: [-34, 5, 54], roll: -18, width: 13, weight: 1 },
+        { pos: [-74, 0, 30], roll: -10, width: 16, weight: 1 },
+        { pos: [-92, -4, -6], roll: 16, width: 12, weight: 1 },
+        { pos: [-66, -3, -40], roll: 20, width: 12, weight: 1 },
+        { pos: [-16, 1, -56], roll: 8, width: 20, weight: 1 },
+        { pos: [40, 3, -48], roll: -12, width: 24, weight: 1 },
+        { pos: [80, 1, -22], roll: -6, width: 22, weight: 1 }
+      ]
+    }]
   };
 
   const STARTER_TRACK = {
-    version: 1,
+    version: 2,
     name: 'New Track',
-    controlPoints: [
-      { pos: [40, 0, 0], roll: 0, width: 18, weight: 1 },
-      { pos: [0, 0, 40], roll: 0, width: 18, weight: 1 },
-      { pos: [-40, 0, 0], roll: 0, width: 18, weight: 1 },
-      { pos: [0, 0, -40], roll: 0, width: 18, weight: 1 }
-    ]
+    start: { path: 0, point: 0, reverse: false },
+    paths: [{
+      closed: true,
+      controlPoints: [
+        { pos: [40, 0, 0], roll: 0, width: 18, weight: 1 },
+        { pos: [0, 0, 40], roll: 0, width: 18, weight: 1 },
+        { pos: [-40, 0, 0], roll: 0, width: 18, weight: 1 },
+        { pos: [0, 0, -40], roll: 0, width: 18, weight: 1 }
+      ]
+    }]
   };
 
   global.TrackCore = {
     basis, basisDeriv, makeEvaluator, buildCenterline, buildEdges,
-    parseTrack, serializeTrack,
+    parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))
