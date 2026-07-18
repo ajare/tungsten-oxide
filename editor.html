@@ -83,6 +83,15 @@
       <label style="color:#ffaa3c"><input id="showRollChk" type="checkbox" checked> Roll</label>
       <label style="color:#b6ff3c"><input id="showWidthChk" type="checkbox" checked> Width</label>
     </div>
+    <label title="Top-down grid size">Grid
+      <select id="gridSizeSelect">
+        <option value="4">4</option>
+        <option value="8">8</option>
+        <option value="16" selected>16</option>
+        <option value="32">32</option>
+      </select>
+    </label>
+    <label title="Snap position control points to the top-down grid"><input id="snapGridChk" type="checkbox"> Snap</label>
     <span class="spacer"></span>
     <a href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
     <input id="fileInput" type="file" accept="application/json,.json" hidden>
@@ -127,7 +136,8 @@
 // functions consume. curParts()/parts(path) are the editor's own shorthand
 // for that call.
 let track = TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK);
-let sel = { path: 0, point: 0 };  // selected POSITION control point (index within its type)
+let selectedPointId = null;       // selected POSITION control point identity
+let sel = { path: 0, point: 0 };  // compatibility cache for selected point occurrence
 let segSel = null;                // selected segment for deletion: { path, i }
 let joinSel = [];                 // up to 2 endpoints picked for Join: { path, end: 'start'|'end' }
 // Roll/width points are selected by direct object reference (into
@@ -142,15 +152,36 @@ const WIDTH_COLOR = '#b6ff3c';    // distinct from roll's lean tint and position
 let renderMode = 'banked';
 let pointFilters = { position: true, roll: true, width: true };
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
+let gridSize = 16;
+let snapToGrid = false;
 let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit center
 let panLast = null;               // last mouse position while right-drag panning
 let topPanned = false;            // suppresses the context menu after a pan drag
 const ROLL_HANDLE_MARGIN = 6;     // keeps roll handles from rendering off the top/bottom edge
 
 function parts(path) { return TrackCore.splitPoints(path.points); }
-function curPath() { return track.paths[sel.path]; }
+function syncSelectionToId() {
+  if (!selectedPointId) {
+    const first = track.paths[0] && parts(track.paths[0]).controlPoints[0];
+    selectedPointId = first && first.id;
+  }
+  for (let pi = 0; pi < track.paths.length; pi++) {
+    const cps = parts(track.paths[pi]).controlPoints;
+    const idx = cps.findIndex(p => p.id === selectedPointId);
+    if (idx >= 0) { sel = { path: pi, point: idx }; return; }
+  }
+  const fallback = track.paths[0] && parts(track.paths[0]).controlPoints[0];
+  selectedPointId = fallback && fallback.id;
+  sel = { path: 0, point: 0 };
+}
+function selectPosition(pathIndex, pointIndex) {
+  const p = track.paths[pathIndex] && parts(track.paths[pathIndex]).controlPoints[pointIndex];
+  if (p) selectedPointId = p.id;
+  syncSelectionToId();
+}
+function curPath() { syncSelectionToId(); return track.paths[sel.path]; }
 function curParts() { const p = curPath(); return p ? parts(p) : { controlPoints: [], rollPoints: [], widthPoints: [] }; }
-function curPoint() { return curParts().controlPoints[sel.point]; }
+function curPoint() { syncSelectionToId(); return curParts().controlPoints[sel.point]; }
 
 // ---------- Structural helpers on the unified `points` array ----------
 // Array indices (into path.points) of the 'position'-type entries, in order
@@ -172,6 +203,31 @@ function flatRollWidthDefaults() {
     { type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 }
   ];
 }
+let nextGeneratedId = 1;
+let usedIds = new Set();
+function newId(prefix) {
+  let id;
+  do { id = prefix + (nextGeneratedId++); } while (usedIds.has(id));
+  usedIds.add(id);
+  return id;
+}
+function ensureTrackIds() {
+  if (!track.disjointSeams) track.disjointSeams = [];
+  usedIds = new Set((track.disjointSeams || []).map(s => s.id).filter(Boolean));
+  const pointById = new Map(), pathIds = new Set();
+  for (const path of track.paths) {
+    if (!path.id || pathIds.has(path.id) || usedIds.has(path.id)) path.id = newId('path');
+    pathIds.add(path.id); usedIds.add(path.id);
+    for (let i = 0; i < path.points.length; i++) {
+      const p = path.points[i];
+      if (p.type !== 'position') continue;
+      if (!p.id) p.id = newId('p');
+      if (pointById.has(p.id)) path.points[i] = pointById.get(p.id);
+      else { pointById.set(p.id, p); usedIds.add(p.id); }
+    }
+  }
+}
+ensureTrackIds();
 
 // Keep track.start's indices valid after paths are added/removed/resized by
 // editing operations. This only clamps bounds -- it doesn't try to track the
@@ -257,6 +313,13 @@ function computeView(w, h) {
 }
 const worldToScreen = (x, z) => ({ x: x * view.scale + view.ox, y: z * view.scale + view.oy });
 const screenToWorld = (sx, sy) => ({ x: (sx - view.ox) / view.scale, z: (sy - view.oy) / view.scale });
+function snapWorldXZ(w) {
+  if (!snapToGrid) return w;
+  return {
+    x: Math.round(w.x / gridSize) * gridSize,
+    z: Math.round(w.z / gridSize) * gridSize
+  };
+}
 
 // ---------- Height color (shared by node shading and roll tint) --------------
 function heightColor(y) {
@@ -307,7 +370,7 @@ function drawTop() {
   // faint grid
   ctx.strokeStyle = 'rgba(40,70,95,0.35)';
   ctx.lineWidth = 1;
-  const step = 20 * view.scale;
+  const step = gridSize * view.scale;
   if (step > 6) {
     for (let gx = view.ox % step; gx < w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
     for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
@@ -315,14 +378,29 @@ function drawTop() {
 
   const flat = renderMode === 'flat' || renderMode === 'elevation';
   const elevationMode = renderMode === 'elevation';
-  pathPreviews = track.paths.map(path => {
+  const bakedPaths = track.paths.map(path => {
     const pp = parts(path);
     // Use the SAME baked frames the game uses, so the preview (including
     // sharp cut corners) matches exactly what you drive. Edges are either the
     // real banked geometry, or (flat mode) the unrolled width-only footprint.
     const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, path.closed, pp.rollPoints, pp.widthPoints);
     const edges = flat ? TrackCore.buildFlatEdges(frames, path.closed) : TrackCore.buildEdges(frames, path.closed);
-    const count = path.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
+    return { id: path.id, closed: path.closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
+  });
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
+  pathPreviews = bakedPaths.map((bp, pathIndex) => {
+    const pp = bp.parts, frames = bp.frames, edges = bp.edges;
+    const cuts = edgeCuts[pathIndex] || {};
+    if (cuts.start) {
+      if (cuts.start.left) edges.left[0] = cuts.start.left;
+      if (cuts.start.right) edges.right[0] = cuts.start.right;
+    }
+    if (cuts.end) {
+      const i = frames.length - 1;
+      if (cuts.end.left) edges.left[i] = cuts.end.left;
+      if (cuts.end.right) edges.right[i] = cuts.end.right;
+    }
+    const count = bp.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
     const centerPts = [], leftPts = [], rightPts = [], rollAt = [], yAt = [];
     for (let i = 0; i < count; i++) {
       const j = i % frames.length;
@@ -411,21 +489,34 @@ function drawTop() {
   ctx.fillStyle = '#8dff9d';
   ctx.font = '11px system-ui'; ctx.fillText('START', p0.x + 10, p0.y - 10);
 
-  // selected segment highlight
-  if (segSel && pointFilters.position) {
-    const cps = pathPreviews[segSel.path].parts.controlPoints;
-    const a = cps[segSel.i], b = cps[(segSel.i + 1) % cps.length];
-    const sa = worldToScreen(a.pos[0], a.pos[2]), sb = worldToScreen(b.pos[0], b.pos[2]);
-    ctx.strokeStyle = '#ff5566'; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y); ctx.stroke();
+  // selected segment highlights. Selecting a position point shows the previous
+  // centerline segment in green and the next centerline segment in solid red.
+  // Delete / the props button target the red segment by default.
+  if (pointFilters.position) {
+    const drawSegmentHighlight = (highlight, color) => {
+      if (!highlight) return;
+      const cps = pathPreviews[highlight.path].parts.controlPoints;
+      const a = cps[highlight.i], b = cps[(highlight.i + 1) % cps.length];
+      const sa = worldToScreen(a.pos[0], a.pos[2]), sb = worldToScreen(b.pos[0], b.pos[2]);
+      ctx.strokeStyle = color; ctx.lineWidth = 4;
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y); ctx.stroke();
+    };
+    drawSegmentHighlight(selectedIncomingSegment(), '#31d66b');
+    drawSegmentHighlight(segSel || selectedOutgoingSegment(), '#ff3344');
   }
 
-  // control-point nodes (square = open-path endpoint, eligible for Join)
+  // control-point nodes (square = open-path endpoint, eligible for Join).
+  // Shared disjoint points may appear more than once as path endpoints; draw
+  // each logical point once so the UI matches the shared-object model.
+  const drawnPositionIds = new Set();
   if (pointFilters.position) track.paths.forEach((path, pi) => {
     const cps = pathPreviews[pi].parts.controlPoints;
     cps.forEach((p, i) => {
+      if (p.id && drawnPositionIds.has(p.id)) return;
+      if (p.id) drawnPositionIds.add(p.id);
       const s = worldToScreen(p.pos[0], p.pos[2]);
-      const isSel = pi === sel.path && i === sel.point && !rollSel && !widthSel;
+      const isSel = p === curPoint() && !rollSel && !widthSel;
       const isEndpoint = !path.closed && (i === 0 || i === cps.length - 1);
       const inJoinSel = joinSel.some(j => j.path === pi && j.end === (i === 0 ? 'start' : 'end') && isEndpoint);
       const r = isSel ? 8 : 6;
@@ -434,9 +525,17 @@ function drawTop() {
       else { ctx.arc(s.x, s.y, r, 0, Math.PI * 2); }
       ctx.fillStyle = inJoinSel ? '#ffd23c' : heightColor(p.pos[1]);
       ctx.fill();
-      ctx.lineWidth = isSel ? 3 : 1.5;
-      ctx.strokeStyle = isSel ? '#ffffff' : 'rgba(0,0,0,0.6)';
+      const isDisjoint = !!seamForPoint(p);
+      ctx.lineWidth = isSel || isDisjoint ? 3 : 1.5;
+      ctx.strokeStyle = isSel ? '#ffffff' : (isDisjoint ? '#ffcc44' : 'rgba(0,0,0,0.6)');
       ctx.stroke();
+      if (isDisjoint) {
+        ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(s.x - r - 4, s.y - r - 4); ctx.lineTo(s.x + r + 4, s.y + r + 4);
+        ctx.moveTo(s.x + r + 4, s.y - r - 4); ctx.lineTo(s.x - r - 4, s.y + r + 4);
+        ctx.stroke();
+      }
       ctx.fillStyle = '#bfe6f7'; ctx.font = '10px system-ui';
       ctx.fillText(`${pi}.${i} (y${p.pos[1].toFixed(0)})`, s.x + 9, s.y + 3);
     });
@@ -609,17 +708,21 @@ function drawElev() {
   // from the top-down view so this panel stays focused on elevation.
 
   // height handles (circles; closed: the last one is a faded echo of point 0)
+  const drawnElevIds = new Set();
   if (pointFilters.position) for (let i = 0; i < slots; i++) {
     const idx = i % n;
     const p = cps[idx];
-    const x = xs[i], y = hy(p.pos[1]);
+    if (!closed && p.id && drawnElevIds.has(p.id)) continue;
     const echo = closed && i === n;
+    if (!echo && p.id) drawnElevIds.add(p.id);
+    const x = xs[i], y = hy(p.pos[1]);
     const isSel = idx === sel.point && !rollSel && !widthSel;
     ctx.globalAlpha = echo ? 0.45 : 1;
     ctx.beginPath(); ctx.arc(x, y, isSel ? 7 : 5, 0, Math.PI * 2);
     ctx.fillStyle = heightColor(p.pos[1]); ctx.fill();
-    ctx.lineWidth = isSel ? 3 : 1.5;
-    ctx.strokeStyle = isSel ? '#fff' : 'rgba(0,0,0,0.6)'; ctx.stroke();
+    const isDisjoint = !!seamForPoint(p);
+    ctx.lineWidth = isSel || isDisjoint ? 3 : 1.5;
+    ctx.strokeStyle = isSel ? '#fff' : (isDisjoint ? '#ffcc44' : 'rgba(0,0,0,0.6)'); ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#7fb8d8'; ctx.font = '9px system-ui';
     ctx.fillText(echo ? '0↺' : String(i), x - 4, bottom + 14);
@@ -654,6 +757,9 @@ function convertSelectedPoint(newType) {
   }
   if (curType === newType) return;
 
+  if (curType === 'position' && countPointOccurrences(curObj) > 1) {
+    alert('Reconnect this shared/disjoint point before converting it.'); return;
+  }
   if (curType === 'position' && pp.controlPoints.length <= 4) {
     alert('A track path needs at least 4 position control points.'); return;
   }
@@ -672,7 +778,7 @@ function convertSelectedPoint(newType) {
     const { evalTrack, CP_N } = TrackCore.makeEvaluator(remaining.controlPoints, path.closed, remaining.rollPoints, remaining.widthPoints);
     const gMax = path.closed ? CP_N : CP_N - 1;
     const s = evalTrack(t * gMax);
-    created = { type: 'position', pos: [+s.pos.x.toFixed(1), +s.pos.y.toFixed(1), +s.pos.z.toFixed(1)], weight: 1 };
+    created = { type: 'position', id: newId('p'), pos: [+s.pos.x.toFixed(1), +s.pos.y.toFixed(1), +s.pos.z.toFixed(1)], weight: 1 };
     const insertIdx = Math.round(t * (path.closed ? remaining.controlPoints.length : Math.max(1, remaining.controlPoints.length - 1)));
     insertPositionAt(path, Math.max(0, Math.min(remaining.controlPoints.length, insertIdx)), created);
   } else if (newType === 'roll') {
@@ -688,7 +794,269 @@ function convertSelectedPoint(newType) {
   rollSel = null; widthSel = null;
   if (newType === 'roll') rollSel = created;
   else if (newType === 'width') widthSel = created;
-  else sel = { path: sel.path, point: positionIndices(path).indexOf(path.points.indexOf(created)) };
+  else selectPosition(sel.path, positionIndices(path).indexOf(path.points.indexOf(created)));
+  assertNoStaleSeams();
+  refresh();
+}
+
+// ---------- Disjoint corner topology ----------
+function seamForPoint(point) {
+  return point && track.disjointSeams && track.disjointSeams.find(s => s.pointId === point.id);
+}
+function pathHasDisjointSeam(path) {
+  if (!path || !track.disjointSeams) return false;
+  return track.disjointSeams.some(s =>
+    s.pathId === path.id || s.leftPathId === path.id || s.rightPathId === path.id
+  );
+}
+function seamIsValid(seam) {
+  if (!seam) return false;
+  if (!track.paths.some(path => parts(path).controlPoints.some(p => p.id === seam.pointId))) return false;
+  if (seam.kind === 'opened-closed') {
+    const path = track.paths.find(p => p.id === seam.pathId);
+    if (!path) return false;
+    const pos = parts(path).controlPoints;
+    return pos.length >= 2 && pos[0].id === seam.pointId && pos[pos.length - 1].id === seam.pointId;
+  }
+  if (seam.kind === 'split-open') {
+    const leftPath = track.paths.find(p => p.id === seam.leftPathId);
+    const rightPath = track.paths.find(p => p.id === seam.rightPathId);
+    if (!leftPath || !rightPath) return false;
+    const left = parts(leftPath).controlPoints, right = parts(rightPath).controlPoints;
+    return !!left.length && !!right.length && left[left.length - 1].id === seam.pointId && right[0].id === seam.pointId;
+  }
+  return false;
+}
+function removeStaleSeams() {
+  const before = (track.disjointSeams || []).length;
+  track.disjointSeams = (track.disjointSeams || []).filter(seamIsValid);
+  return before - track.disjointSeams.length;
+}
+function assertNoStaleSeams() {
+  const removed = removeStaleSeams();
+  if (removed) console.warn(`Removed ${removed} stale disjoint seam(s).`);
+}
+function countPointOccurrences(point) {
+  if (!point) return 0;
+  let count = 0;
+  for (const path of track.paths) {
+    for (const p of parts(path).controlPoints) if (p === point || p.id === point.id) count++;
+  }
+  return count;
+}
+function findPointOccurrence(point) {
+  if (!point) return null;
+  for (let pi = 0; pi < track.paths.length; pi++) {
+    const cps = parts(track.paths[pi]).controlPoints;
+    const idx = cps.findIndex(p => p === point || p.id === point.id);
+    if (idx >= 0) return { path: pi, point: idx };
+  }
+  return null;
+}
+function startPointObject() {
+  if (!track.start || !track.paths[track.start.path]) return null;
+  return parts(track.paths[track.start.path]).controlPoints[track.start.point] || null;
+}
+function preserveStartPoint(startPoint, reverse) {
+  const occ = findPointOccurrence(startPoint);
+  if (occ) track.start = { path: occ.path, point: occ.point, reverse: !!reverse };
+  else clampStart();
+}
+const round1 = n => Math.round(n * 10) / 10;
+const roundT = n => Math.round(n * 1000) / 1000;
+const rollDegAt = (partsObj, closed, t) => round1(TrackCore.evalRoll(partsObj.rollPoints, closed, t) * 180 / Math.PI);
+const widthAt = (partsObj, closed, t) => round1(TrackCore.evalWidth(partsObj.widthPoints, closed, t));
+function averageRollDeg(a, b) {
+  const ar = a * Math.PI / 180, br = b * Math.PI / 180;
+  return round1(Math.atan2(Math.sin(ar) + Math.sin(br), Math.cos(ar) + Math.cos(br)) * 180 / Math.PI);
+}
+function uniqueScalarPoints(points, key) {
+  points.sort((a, b) => a.t - b.t);
+  const out = [];
+  for (const p of points) {
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(prev.t - p.t) < 1e-5) prev[key] = p[key];
+    else out.push(p);
+  }
+  return out;
+}
+function rollWidthForSourceRange(sourceParts, sourceClosed, startT, endT) {
+  // Preserve authored roll/width points that lie inside the source range,
+  // remapping their t values, and synthesize exact range endpoints. For closed
+  // paths `endT` may be > 1 to represent a wrapped one-cycle interval.
+  const span = endT - startT || 1;
+  const inRange = t => t > startT + 1e-5 && t < endT - 1e-5;
+  const mapT = t => Math.max(0, Math.min(1, (t - startT) / span));
+  const sourceT = t => sourceClosed ? ((t % 1) + 1) % 1 : Math.max(0, Math.min(1, t));
+  const rollPoints = [
+    { type: 'roll', t: 0, roll: rollDegAt(sourceParts, sourceClosed, sourceT(startT)) },
+    { type: 'roll', t: 1, roll: rollDegAt(sourceParts, sourceClosed, sourceT(endT)) }
+  ];
+  const widthPoints = [
+    { type: 'width', t: 0, width: widthAt(sourceParts, sourceClosed, sourceT(startT)) },
+    { type: 'width', t: 1, width: widthAt(sourceParts, sourceClosed, sourceT(endT)) }
+  ];
+  for (const rp of sourceParts.rollPoints) {
+    let t = rp.t;
+    if (sourceClosed && endT > 1 && t < startT) t += 1;
+    if (inRange(t)) rollPoints.push({ type: 'roll', t: roundT(mapT(t)), roll: rp.roll });
+  }
+  for (const wp of sourceParts.widthPoints) {
+    let t = wp.t;
+    if (sourceClosed && endT > 1 && t < startT) t += 1;
+    if (inRange(t)) widthPoints.push({ type: 'width', t: roundT(mapT(t)), width: wp.width });
+  }
+  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'));
+}
+function sampleRollWidthFromPath(path, startT, endT) {
+  return rollWidthForSourceRange(parts(path), path.closed, startT, endT);
+}
+function sampleRollWidthForClosedReconnect(openPath) {
+  const pp = parts(openPath);
+  const seamRoll = averageRollDeg(rollDegAt(pp, false, 0), rollDegAt(pp, false, 1));
+  const seamWidth = round1((widthAt(pp, false, 0) + widthAt(pp, false, 1)) / 2);
+  const rollPoints = [
+    { type: 'roll', t: 0, roll: seamRoll },
+    { type: 'roll', t: 1, roll: seamRoll }
+  ];
+  const widthPoints = [
+    { type: 'width', t: 0, width: seamWidth },
+    { type: 'width', t: 1, width: seamWidth }
+  ];
+  for (const rp of pp.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: rp.t, roll: rp.roll });
+  for (const wp of pp.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: wp.t, width: wp.width });
+  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'));
+}
+function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCount) {
+  const leftParts = parts(leftPath), rightParts = parts(rightPath);
+  const maxG = Math.max(1, mergedCount - 1);
+  const rightSpan = Math.max(1, mergedCount - 1 - seamIndex);
+  const seamT = roundT(seamIndex / maxG);
+  const leftRollAtSeam = rollDegAt(leftParts, false, 1);
+  const rightRollAtSeam = rollDegAt(rightParts, false, 0);
+  const leftWidthAtSeam = widthAt(leftParts, false, 1);
+  const rightWidthAtSeam = widthAt(rightParts, false, 0);
+  const rollPoints = [
+    { type: 'roll', t: 0, roll: rollDegAt(leftParts, false, 0) },
+    { type: 'roll', t: 1, roll: rollDegAt(rightParts, false, 1) }
+  ];
+  const widthPoints = [
+    { type: 'width', t: 0, width: widthAt(leftParts, false, 0) },
+    { type: 'width', t: 1, width: widthAt(rightParts, false, 1) }
+  ];
+  if (seamT > 1e-5 && seamT < 1 - 1e-5) {
+    // Preserve the seam as an explicit scalar control. If the two sides were
+    // edited differently while split, reconcile them with a local average so
+    // reconnecting doesn't let Catmull-Rom smear a discontinuity far away.
+    rollPoints.push({ type: 'roll', t: seamT, roll: averageRollDeg(leftRollAtSeam, rightRollAtSeam) });
+    widthPoints.push({ type: 'width', t: seamT, width: round1((leftWidthAtSeam + rightWidthAtSeam) / 2) });
+  }
+  for (const rp of leftParts.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: roundT((rp.t * seamIndex) / maxG), roll: rp.roll });
+  for (const rp of rightParts.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: roundT((seamIndex + rp.t * rightSpan) / maxG), roll: rp.roll });
+  for (const wp of leftParts.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: roundT((wp.t * seamIndex) / maxG), width: wp.width });
+  for (const wp of rightParts.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: roundT((seamIndex + wp.t * rightSpan) / maxG), width: wp.width });
+  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'));
+}
+function disjointDisabledReason(path, pointIndex) {
+  const cps = parts(path).controlPoints;
+  if (!path.closed && (pointIndex === 0 || pointIndex === cps.length - 1)) return 'Open endpoints are already disjoint.';
+  if (!path.closed) {
+    const leftCount = pointIndex + 1;
+    const rightCount = cps.length - pointIndex;
+    if (leftCount < 4 || rightCount < 4) return 'Need at least 4 position points on both sides.';
+  }
+  return '';
+}
+function makeDisjoint() {
+  const path = curPath(), pp = curParts(), point = curPoint();
+  if (!path || !point || seamForPoint(point)) return;
+  const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
+  const reason = disjointDisabledReason(path, sel.point);
+  if (reason) { alert(reason); return; }
+  const posObjs = pp.controlPoints;
+  const seam = { id: newId('seam'), pointId: point.id };
+  if (path.closed) {
+    const splitIndex = sel.point;
+    const originalCount = posObjs.length;
+    const rotated = posObjs.slice(splitIndex).concat(posObjs.slice(0, splitIndex), point);
+    const startT = splitIndex / originalCount;
+    const rollWidth = rollWidthForSourceRange(pp, true, startT, startT + 1);
+    path.points = rotated.concat(rollWidth);
+    path.closed = false;
+    seam.kind = 'opened-closed';
+    seam.pathId = path.id;
+    selectedPointId = point.id;
+    syncSelectionToId();
+  } else {
+    const splitIndex = sel.point;
+    const originalMax = Math.max(1, posObjs.length - 1);
+    const left = posObjs.slice(0, splitIndex + 1);
+    const right = posObjs.slice(splitIndex);
+    const leftPath = {
+      id: newId('path'), closed: false,
+      points: left.concat(rollWidthForSourceRange(pp, false, 0, splitIndex / originalMax))
+    };
+    const rightPath = {
+      id: newId('path'), closed: false,
+      points: right.concat(rollWidthForSourceRange(pp, false, splitIndex / originalMax, 1))
+    };
+    track.paths.splice(sel.path, 1, leftPath, rightPath);
+    seam.kind = 'split-open';
+    seam.leftPathId = leftPath.id;
+    seam.rightPathId = rightPath.id;
+    selectedPointId = point.id;
+    syncSelectionToId();
+  }
+  track.disjointSeams.push(seam);
+  preserveStartPoint(oldStartPoint, oldReverse);
+  assertNoStaleSeams();
+  segSel = null; joinSel = []; rollSel = null; widthSel = null;
+  refresh();
+}
+function reconnectDisjoint() {
+  const point = curPoint();
+  const seam = seamForPoint(point);
+  if (!point || !seam) return;
+  if (!seamIsValid(seam)) { alert('Cannot reconnect: this disjoint seam is stale.'); return; }
+  const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
+  if (seam.kind === 'opened-closed') {
+    const pi = track.paths.findIndex(p => p.id === seam.pathId);
+    if (pi < 0) { alert('Cannot reconnect: original path is gone.'); return; }
+    const path = track.paths[pi];
+    const pos = parts(path).controlPoints;
+    if (pos.length < 2 || pos[0].id !== seam.pointId || pos[pos.length - 1].id !== seam.pointId) {
+      alert('Cannot reconnect: seam endpoints no longer match.'); return;
+    }
+    const closedPositions = pos.slice(0, -1);
+    path.points = closedPositions.concat(sampleRollWidthForClosedReconnect(path));
+    path.closed = true;
+    selectedPointId = point.id;
+    syncSelectionToId();
+  } else if (seam.kind === 'split-open') {
+    const li = track.paths.findIndex(p => p.id === seam.leftPathId);
+    const ri = track.paths.findIndex(p => p.id === seam.rightPathId);
+    if (li < 0 || ri < 0) { alert('Cannot reconnect: split paths are gone.'); return; }
+    const leftPath = track.paths[li], rightPath = track.paths[ri];
+    const left = parts(leftPath).controlPoints;
+    const right = parts(rightPath).controlPoints;
+    if (!left.length || !right.length || left[left.length - 1].id !== seam.pointId || right[0].id !== seam.pointId) {
+      alert('Cannot reconnect: seam endpoints no longer match.'); return;
+    }
+    const merged = left.concat(right.slice(1));
+    const mergedPath = {
+      id: leftPath.id, closed: false,
+      points: merged.concat(sampleRollWidthFromJoinedPaths(leftPath, rightPath, left.length - 1, merged.length))
+    };
+    const lo = Math.min(li, ri), hi = Math.max(li, ri);
+    track.paths.splice(hi, 1);
+    track.paths.splice(lo, 1, mergedPath);
+    selectedPointId = point.id;
+    syncSelectionToId();
+  }
+  track.disjointSeams.splice(track.disjointSeams.indexOf(seam), 1);
+  preserveStartPoint(oldStartPoint, oldReverse);
+  assertNoStaleSeams();
+  segSel = null; joinSel = []; rollSel = null; widthSel = null;
   refresh();
 }
 
@@ -772,8 +1140,21 @@ function renderProps() {
   const path = curPath();
   clampStart();
   const isStart = track.start.path === sel.path && track.start.point === sel.point;
+  const seam = seamForPoint(p);
+  const disjointReason = seam ? '' : disjointDisabledReason(path, sel.point);
   const row = (key, label, val, stepv) =>
     `<label>${label}<input type="number" data-key="${key}" value="${val}" step="${stepv}"></label>`;
+  const disjointHelp = seam
+    ? 'Hard corner is active. Uncheck to reconnect this editor-created seam.'
+    : (disjointReason || 'Split/open this path here to create a hard shared corner.');
+  const incomingSeg = selectedIncomingSegment();
+  const outgoingSeg = selectedOutgoingSegment();
+  const greenBtn = incomingSeg
+    ? `<button id="delPrevSegmentBtn" style="margin-top:6px;width:100%;background:#1f4f2d;border:1px solid #3b7;color:#caffd8;border-radius:5px;padding:6px;cursor:pointer">Delete green segment (previous)</button>`
+    : '';
+  const redBtn = outgoingSeg
+    ? `<button id="delSegmentBtn" style="margin-top:6px;width:100%;background:#5a2f1f;border:1px solid #c64;color:#ffd7bd;border-radius:5px;padding:6px;cursor:pointer">Delete red segment (next)</button>`
+    : '';
   body.innerHTML =
     `<div style="margin-bottom:6px;color:#7fb8d8">Path ${sel.path} (${path.closed ? 'closed' : 'open'}), point #${sel.point}</div>` +
     typeSelectRow('position') +
@@ -781,9 +1162,13 @@ function renderProps() {
     row('z', 'Z', p.pos[2], 1) +
     row('y', 'Y (elev)', p.pos[1], 0.5) +
     row('weight', 'Weight', p.weight, 0.1) +
+    `<label title="${disjointHelp}">Disjoint corner<input id="disjointChk" type="checkbox" ${seam ? 'checked' : ''} ${disjointReason ? 'disabled' : ''}></label>` +
+    `<div style="color:${disjointReason ? '#ff99aa' : '#6f93a8'};font-size:11px;line-height:1.35;margin:-2px 0 8px">${disjointHelp}</div>` +
     `<button id="startBtn" style="margin-top:10px;width:100%;background:#123a26;border:1px solid #2c9e5a;color:#bdf7d4;border-radius:5px;padding:6px;cursor:pointer">${isStart ? 'This is the start point' : 'Set as start point'}</button>` +
-    `<button id="delBtn" style="margin-top:6px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete point (min 4)</button>`;
+    `<button id="delBtn" style="margin-top:6px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete point (min 4)</button>` +
+    greenBtn + redBtn;
   wireTypeSelect();
+  if (countPointOccurrences(p) > 1) document.getElementById('typeSelect').disabled = true;
 
   body.querySelectorAll('input').forEach(inp => {
     inp.addEventListener('input', () => {
@@ -798,6 +1183,11 @@ function renderProps() {
     });
   });
   document.getElementById('delBtn').addEventListener('click', deleteSelected);
+  if (outgoingSeg) document.getElementById('delSegmentBtn').addEventListener('click', () => deleteSelectedSegment('outgoing'));
+  if (incomingSeg) document.getElementById('delPrevSegmentBtn').addEventListener('click', () => deleteSelectedSegment('incoming'));
+  document.getElementById('disjointChk').addEventListener('change', (e) => {
+    if (e.target.checked) makeDisjoint(); else reconnectDisjoint();
+  });
   document.getElementById('startBtn').addEventListener('click', () => {
     track.start = { path: sel.path, point: sel.point, reverse: !!(track.start && track.start.reverse) };
     refresh();
@@ -805,13 +1195,26 @@ function renderProps() {
 }
 
 function updateMeta() {
-  const total = track.paths.reduce((s, p) => s + parts(p).controlPoints.length, 0);
+  const uniquePositions = new Set();
+  track.paths.forEach(p => parts(p).controlPoints.forEach(cp => uniquePositions.add(cp.id || cp)));
+  const total = uniquePositions.size;
+  const seamCount = (track.disjointSeams || []).length;
+  const staleSeams = (track.disjointSeams || []).filter(s => !seamIsValid(s)).length;
   document.getElementById('metaHint').innerHTML =
-    `${track.paths.length} path(s), ${total} position control points total<br>` +
+    `${track.paths.length} path(s), ${total} unique position control points total` +
+    (seamCount ? `, ${seamCount} disjoint corner(s)` : '') +
+    (staleSeams ? ` <span style="color:#ff6677">(${staleSeams} stale)</span>` : '') + `<br>` +
+    (staleSeams ? `<button id="cleanStaleSeamsBtn" style="margin:4px 0 6px;width:100%;background:#4a2630;border:1px solid #a34;color:#fbd;border-radius:5px;padding:5px;cursor:pointer">Remove stale disjoint metadata</button>` : '') +
     `Roll tint: cyan = right-lean, magenta = left-lean.<br>` +
     `Node color = elevation. Square node = open-path endpoint.<br>` +
     `<span style="color:#b6ff3c">Width points</span> (top-down only) set the track's width independently of position/roll points.<br>` +
     `Change a selected point's "Type" in the panel above to convert it, interpolating from its neighbours.`;
+  if (staleSeams) {
+    document.getElementById('cleanStaleSeamsBtn').addEventListener('click', () => {
+      removeStaleSeams();
+      refresh();
+    });
+  }
   document.getElementById('nameInput').value = track.name || '';
   document.getElementById('joinBtn').disabled = joinSel.length !== 2;
   clampStart();
@@ -859,10 +1262,14 @@ function widthHandleAtTop(sx, sy) {
 }
 function nodeAtTop(sx, sy) {
   if (!pointFilters.position) return null;
+  const seen = new Set();
   for (let pi = 0; pi < track.paths.length; pi++) {
     const cps = pathPreviews[pi].parts.controlPoints;
     for (let i = 0; i < cps.length; i++) {
-      const s = worldToScreen(cps[i].pos[0], cps[i].pos[2]);
+      const p = cps[i];
+      if (p.id && seen.has(p.id)) continue;
+      if (p.id) seen.add(p.id);
+      const s = worldToScreen(p.pos[0], p.pos[2]);
       if (Math.hypot(sx - s.x, sy - s.y) <= 10) return { path: pi, point: i };
     }
   }
@@ -895,9 +1302,13 @@ function handleAtElev(sx, sy) {
   const cps = curParts().controlPoints;
   const n = elevGeom.n, closed = elevGeom.closed;
   const slots = closed ? n + 1 : n;
+  const seen = new Set();
   for (let i = 0; i < slots; i++) {
     const idx = i % n;
-    const x = elevGeom.xs[i], y = elevGeom.bottom - (cps[idx].pos[1] - elevGeom.minY) * elevGeom.yScale;
+    const p = cps[idx];
+    if (p.id && seen.has(p.id)) continue;
+    if (p.id) seen.add(p.id);
+    const x = elevGeom.xs[i], y = elevGeom.bottom - (p.pos[1] - elevGeom.minY) * elevGeom.yScale;
     if (Math.hypot(sx - x, sy - y) <= 12) return idx;
   }
   return -1;
@@ -989,9 +1400,9 @@ function insertPositionAtSide(sx, sy) {
   const insertAt = path.closed
     ? (Math.floor(g) + 1) % (pp.controlPoints.length + 1)
     : Math.min(pp.controlPoints.length, Math.floor(g) + 1);
-  const np = { type: 'position', pos: [+s.pos.x.toFixed(1), +y.toFixed(1), +s.pos.z.toFixed(1)], weight: 1 };
+  const np = { type: 'position', id: newId('p'), pos: [+s.pos.x.toFixed(1), +y.toFixed(1), +s.pos.z.toFixed(1)], weight: 1 };
   insertPositionAt(path, insertAt, np);
-  sel = { path: sel.path, point: insertAt };
+  selectPosition(sel.path, insertAt);
   segSel = null; rollSel = null; widthSel = null;
   refresh();
 }
@@ -1017,20 +1428,48 @@ function insertNear(worldX, worldZ) {
   const insertAt = path.closed
     ? (Math.floor(bestG) + 1) % (pp.controlPoints.length + 1)
     : Math.min(pp.controlPoints.length, Math.floor(bestG) + 1);
-  const np = { type: 'position', pos: [worldX, s.pos.y, worldZ], weight: 1 };
+  const np = { type: 'position', id: newId('p'), pos: [worldX, s.pos.y, worldZ], weight: 1 };
   insertPositionAt(path, insertAt, np);
-  sel = { path: bestPath, point: insertAt };
+  selectPosition(bestPath, insertAt);
   rollSel = null; widthSel = null;
 }
 
+function selectedOutgoingSegment() {
+  if (rollSel || widthSel) return null;
+  const path = curPath();
+  if (!path) return null;
+  const cps = curParts().controlPoints;
+  if (path.closed) return { path: sel.path, i: sel.point };
+  if (sel.point < cps.length - 1) return { path: sel.path, i: sel.point };
+  return null;
+}
+function selectedIncomingSegment() {
+  if (rollSel || widthSel) return null;
+  const path = curPath();
+  if (!path) return null;
+  const cps = curParts().controlPoints;
+  if (path.closed) return { path: sel.path, i: (sel.point - 1 + cps.length) % cps.length };
+  if (sel.point > 0) return { path: sel.path, i: sel.point - 1 };
+  return null;
+}
+function deleteSelectedSegment(which = 'outgoing') {
+  const seg = segSel || (which === 'incoming' ? selectedIncomingSegment() : selectedOutgoingSegment());
+  if (!seg) { alert(which === 'incoming' ? 'Select a point with a previous segment to delete.' : 'Select a point with a following segment to delete.'); return; }
+  deleteSegment(seg.path, seg.i);
+}
+
 function deleteSelected() {
+  const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   const path = curPath();
   if (!path) return;
   const pp = parts(path);
+  if (countPointOccurrences(curPoint()) > 1) { alert('Reconnect this shared/disjoint point before deleting it.'); return; }
   if (pp.controlPoints.length <= 4) { alert('A track path needs at least 4 points.'); return; }
   const idxs = positionIndices(path);
   path.points.splice(idxs[sel.point], 1);
-  sel = { path: sel.path, point: Math.max(0, sel.point - 1) };
+  selectPosition(sel.path, Math.max(0, sel.point - 1));
+  preserveStartPoint(oldStartPoint, oldReverse);
+  assertNoStaleSeams();
   segSel = null;
   refresh();
 }
@@ -1038,7 +1477,9 @@ function deleteSelected() {
 // ---------- Delete a segment: breaks a closed path open, shrinks/splits an
 // open one ----------
 function deleteSegment(pi, i) {
+  const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   const path = track.paths[pi];
+  if (pathHasDisjointSeam(path)) { alert('Reconnect disjoint corners on this path before deleting segments.'); return; }
   const idxs = positionIndices(path);
   const n = idxs.length;
   if (path.closed) {
@@ -1064,10 +1505,12 @@ function deleteSegment(pi, i) {
     // Fresh (flat) roll/width points for both halves -- the old splines don't
     // map cleanly onto the split domains, so this is redone by hand.
     track.paths.splice(pi, 1,
-      { closed: false, points: left.concat(flatRollWidthDefaults()) },
-      { closed: false, points: right.concat(flatRollWidthDefaults()) });
+      { id: newId('path'), closed: false, points: left.concat(flatRollWidthDefaults()) },
+      { id: newId('path'), closed: false, points: right.concat(flatRollWidthDefaults()) });
   }
-  segSel = null; joinSel = []; rollSel = null; widthSel = null; sel = { path: 0, point: 0 };
+  preserveStartPoint(oldStartPoint, oldReverse);
+  assertNoStaleSeams();
+  segSel = null; joinSel = []; rollSel = null; widthSel = null; syncSelectionToId();
   refresh();
 }
 
@@ -1075,7 +1518,11 @@ function deleteSegment(pi, i) {
 // into one open path ----------
 function performJoin() {
   if (joinSel.length !== 2) return;
+  const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   const [a, b] = joinSel;
+  if (pathHasDisjointSeam(track.paths[a.path]) || pathHasDisjointSeam(track.paths[b.path])) {
+    alert('Reconnect disjoint corners before joining paths.'); return;
+  }
   if (a.path === b.path) {
     if (a.end === b.end) { alert("Pick the two different ends of the path to close it."); return; }
     track.paths[a.path].closed = true;
@@ -1092,9 +1539,11 @@ function performJoin() {
     track.paths.splice(hi, 1);
     // Fresh (flat) roll/width points -- merging two paths' splines doesn't map
     // cleanly onto the new combined domain, so this is redone by hand.
-    track.paths.splice(lo, 1, { closed: false, points: newPos.concat(flatRollWidthDefaults()) });
+    track.paths.splice(lo, 1, { id: newId('path'), closed: false, points: newPos.concat(flatRollWidthDefaults()) });
   }
-  joinSel = []; segSel = null; rollSel = null; widthSel = null; sel = { path: 0, point: 0 };
+  preserveStartPoint(oldStartPoint, oldReverse);
+  assertNoStaleSeams();
+  joinSel = []; segSel = null; rollSel = null; widthSel = null; syncSelectionToId();
   refresh();
 }
 
@@ -1133,7 +1582,7 @@ topCanvas.addEventListener('mousedown', (e) => {
   const { x, y } = localPos(topCanvas, e);
   if (e.button === 2) {
     e.preventDefault();
-    const w = screenToWorld(x, y);
+    const w = snapWorldXZ(screenToWorld(x, y));
     showAddPointMenu(e.clientX, e.clientY, w.x, w.z);
     return;
   }
@@ -1159,7 +1608,7 @@ topCanvas.addEventListener('mousedown', (e) => {
     refresh();
     return;
   }
-  if (hit) { sel = hit; segSel = null; rollSel = null; widthSel = null; dragging = 'top'; refresh(); return; }
+  if (hit) { selectPosition(hit.path, hit.point); segSel = null; rollSel = null; widthSel = null; dragging = 'top'; refresh(); return; }
   hideAddPointMenu();
   dragging = 'panTop';
   panLast = { x, y };
@@ -1180,7 +1629,7 @@ window.addEventListener('mousemove', (e) => {
     }
   } else if (dragging === 'top') {
     const { x, y } = localPos(topCanvas, e);
-    const w = screenToWorld(x, y);
+    const w = snapWorldXZ(screenToWorld(x, y));
     curPoint().pos[0] = Math.round(w.x * 10) / 10;
     curPoint().pos[2] = Math.round(w.z * 10) / 10;
     refresh();
@@ -1245,7 +1694,7 @@ elevCanvas.addEventListener('mousedown', (e) => {
   const rollHit = rollHandleAtElev(x, y);
   if (rollHit) { rollSel = rollHit; widthSel = null; dragging = 'rollElev'; refresh(); return; }
   const hit = handleAtElev(x, y);
-  if (hit >= 0) { sel = { path: sel.path, point: hit }; rollSel = null; widthSel = null; dragging = 'elev'; refresh(); return; }
+  if (hit >= 0) { selectPosition(sel.path, hit); rollSel = null; widthSel = null; dragging = 'elev'; refresh(); return; }
   // Roll control points are edited from the top-down view, not the side view.
 });
 elevCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
@@ -1267,8 +1716,7 @@ window.addEventListener('keydown', (e) => {
       path.points.splice(path.points.indexOf(rollSel), 1);
       rollSel = null;
       refresh();
-    } else if (segSel) deleteSegment(segSel.path, segSel.i);
-    else deleteSelected();
+    } else deleteSelectedSegment();
   }
 });
 
@@ -1276,10 +1724,13 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('nameInput').addEventListener('input', (e) => { track.name = e.target.value; });
 document.getElementById('newBtn').addEventListener('click', () => {
   track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
-  sel = { path: 0, point: 0 }; segSel = null; joinSel = []; rollSel = null; widthSel = null; topPan = { x: 0, y: 0 };
+  ensureTrackIds();
+  assertNoStaleSeams();
+  selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; topPan = { x: 0, y: 0 };
   refresh();
 });
 document.getElementById('exportBtn').addEventListener('click', () => {
+  assertNoStaleSeams();
   const json = TrackCore.serializeTrack(track);
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
@@ -1292,6 +1743,13 @@ document.getElementById('joinBtn').addEventListener('click', performJoin);
 document.getElementById('renderModeSelect').addEventListener('change', (e) => {
   renderMode = e.target.value;
   draw();
+});
+document.getElementById('gridSizeSelect').addEventListener('change', (e) => {
+  gridSize = Number(e.target.value) || 16;
+  draw();
+});
+document.getElementById('snapGridChk').addEventListener('change', (e) => {
+  snapToGrid = e.target.checked;
 });
 const topZoomSlider = document.getElementById('topZoomSlider');
 let gestureStartZoomValue = 0;
@@ -1362,7 +1820,9 @@ fileInput.addEventListener('change', async (e) => {
   if (!file) return;
   try {
     track = TrackCore.parseTrack(await file.text());
-    sel = { path: 0, point: 0 }; segSel = null; joinSel = []; rollSel = null; widthSel = null; topPan = { x: 0, y: 0 };
+    ensureTrackIds();
+    assertNoStaleSeams();
+    selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; topPan = { x: 0, y: 0 };
     refresh();
   } catch (err) { alert('Could not load track: ' + err.message); }
   e.target.value = '';

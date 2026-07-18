@@ -130,11 +130,24 @@ function buildRail(edge, normals, closed, height, color) {
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
-  const raw = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
-  const edges = TrackCore.buildEdges(raw, closed);
+  const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
+  const edges = prebuiltEdges || TrackCore.buildEdges(raw, closed);
+  if (endpointNormals) {
+    if (endpointNormals.start) raw[0].normal = endpointNormals.start;
+    if (endpointNormals.end) raw[raw.length - 1].normal = endpointNormals.end;
+  }
+  if (endpointCuts) {
+    const applyCut = (end, i) => {
+      if (!endpointCuts[end]) return;
+      if (endpointCuts[end].left) edges.left[i] = endpointCuts[end].left;
+      if (endpointCuts[end].right) edges.right[i] = endpointCuts[end].right;
+    };
+    applyCut('start', 0);
+    applyCut('end', raw.length - 1);
+  }
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
   // signed lateral offset (along edgeRight) of the TRIMMED left/right edges, so
@@ -194,14 +207,47 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints) {
   return { closed, centerline, mesh, stripeLine, railR, railL, anchors };
 }
 
-// (Re)build the entire track (all paths) from a track's path list, then reset
-// the ship. `trackPaths` is [{ closed, points }, ...] (points: typed
-// position/roll/width control points, see track-core.js). `start` is
+// At a disjoint corner the two incident path ends have different surface
+// normals. If each rail used its own normal, the wall bases would meet (edge
+// cuts) but the tops would split apart. Average the endpoint normals per seam
+// and use that shared normal at both incident ends so the rail tops meet too.
+function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
+  const out = bakedPaths.map(() => ({}));
+  const norm = v => {
+    const l = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
+  };
+  for (const seam of disjointSeams || []) {
+    const incs = [];
+    bakedPaths.forEach((bp, pathIndex) => {
+      if (bp.closed || !bp.controlPoints.length || !bp.frames.length) return;
+      const lastCp = bp.controlPoints.length - 1;
+      if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'start', normal: bp.frames[0].normal });
+      }
+      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'end', normal: bp.frames[bp.frames.length - 1].normal });
+      }
+    });
+    if (incs.length < 2) continue;
+    const avg = norm(incs.reduce((s, inc) => ({
+      x: s.x + inc.normal.x, y: s.y + inc.normal.y, z: s.z + inc.normal.z
+    }), { x: 0, y: 0, z: 0 }));
+    for (const inc of incs) out[inc.pathIndex][inc.end] = avg;
+  }
+  return out;
+}
+
+// (Re)build the entire track from a normalized track object, then reset the
+// ship. `track.paths` is [{ closed, points }, ...] (points: typed
+// position/roll/width control points, see track-core.js). `track.start` is
 // { path, point, reverse } picking which position control point the ship
-// begins at and which way it faces.
-function buildTrack(trackPaths, name, start) {
-  trackName = name || '';
-  trackStart = start || { path: 0, point: 0, reverse: false };
+// begins at and which way it faces. `track.disjointSeams` identifies hard
+// shared corners whose open endpoint edges should be cut.
+function buildTrack(track) {
+  const trackPaths = track.paths || [];
+  trackName = track.name || '';
+  trackStart = track.start || { path: 0, point: 0, reverse: false };
 
   // Drop any previously-built geometry before rebuilding.
   for (const p of paths) {
@@ -209,10 +255,18 @@ function buildTrack(trackPaths, name, start) {
     disposeObject(p.railR); disposeObject(p.railL);
   }
 
-  paths = trackPaths.map(p => {
+  const bakedPaths = trackPaths.map(p => {
     const { controlPoints, rollPoints, widthPoints } = TrackCore.splitPoints(p.points);
-    return buildPath(controlPoints, p.closed !== false, rollPoints, widthPoints);
+    const closed = p.closed !== false;
+    const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
+    const edges = TrackCore.buildEdges(frames, closed);
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, frames, edges };
   });
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
+  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, track.disjointSeams || []);
+  paths = bakedPaths.map((p, i) => buildPath(
+    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
+  ));
 
   resetShip();
   const label = document.getElementById('trackName');
@@ -220,50 +274,40 @@ function buildTrack(trackPaths, name, start) {
 }
 
 // Sample a smooth, interpolated track frame at a horizontal position. Searches
-// ALL paths for the nearest centerline point, then interpolates smoothly
-// within that path (wrapping across the seam for closed paths, clamped at the
-// ends for open ones) so surface height / normal stay continuous and always
-// match the rendered ribbon.
+// ALL path segments for the nearest projected point, then interpolates within
+// that segment. Segment-based selection avoids endpoint ambiguity at disjoint
+// shared control points, where nearest-sample selection can briefly stick to
+// the old path end and then jump to the new path.
 const _sample = {
   pos: new THREE.Vector3(),
   tangent: new THREE.Vector3(),
   edgeRight: new THREE.Vector3(),
   normal: new THREE.Vector3(),
-  halfW: 0, sLeft: 0, sRight: 0
+  halfW: 0, sLeft: 0, sRight: 0,
+  offEnd: false
 };
 function sampleTrack(x, z) {
-  // nearest centerline sample across every path
-  let bestPath = paths[0], best = 0, bestD = Infinity;
+  let bestPath = paths[0], bestA = 0, bestB = 1, bestT = 0, bestD = Infinity;
   for (const path of paths) {
-    const cl = path.centerline;
-    for (let i = 0; i < cl.length; i++) {
-      const p = cl[i].pos;
-      const dx = x - p.x, dz = z - p.z;
+    const cl = path.centerline, M = cl.length;
+    const segCount = path.closed ? M : M - 1;
+    for (let i = 0; i < segCount; i++) {
+      const j = path.closed ? (i + 1) % M : i + 1;
+      const a = cl[i], b = cl[j];
+      const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
+      const segLen2 = sx * sx + sz * sz;
+      const t = segLen2 > 0
+        ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (z - a.pos.z) * sz) / segLen2, 0, 1)
+        : 0;
+      const px = a.pos.x + sx * t, pz = a.pos.z + sz * t;
+      const dx = x - px, dz = z - pz;
       const d = dx * dx + dz * dz;
-      if (d < bestD) { bestD = d; best = i; bestPath = path; }
+      if (d < bestD) { bestD = d; bestPath = path; bestA = i; bestB = j; bestT = t; }
     }
   }
-  const cl = bestPath.centerline, M = cl.length, closed = bestPath.closed;
-  const c0 = cl[best];
-  // pick the neighbouring segment we're actually over, based on along-track sign
-  const along = (x - c0.pos.x) * c0.tangent.x + (z - c0.pos.z) * c0.tangent.z;
-  let iA, iB;
-  if (closed) {
-    iA = along >= 0 ? best : (best - 1 + M) % M;
-    iB = (iA + 1) % M;
-  } else {
-    iA = along >= 0 ? best : Math.max(0, best - 1);
-    iA = Math.min(iA, M - 2);
-    iB = Math.min(iA + 1, M - 1);
-  }
-  const a = cl[iA], b = cl[iB];
-
-  // fractional position t along segment A->B (projection onto the segment)
-  const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
-  const segLen2 = sx * sx + sz * sz;
-  const t = segLen2 > 0
-    ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (z - a.pos.z) * sz) / segLen2, 0, 1)
-    : 0;
+  const cl = bestPath.centerline;
+  const a = cl[bestA], b = cl[bestB];
+  const t = bestT;
 
   _sample.pos.copy(a.pos).lerp(b.pos, t);
   _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
@@ -272,6 +316,17 @@ function sampleTrack(x, z) {
   _sample.halfW = a.halfW + (b.halfW - a.halfW) * t;
   _sample.sLeft = a.sLeft + (b.sLeft - a.sLeft) * t;
   _sample.sRight = a.sRight + (b.sRight - a.sRight) * t;
+  _sample.offEnd = false;
+  if (!bestPath.closed) {
+    const M = bestPath.centerline.length;
+    if (bestA === 0 && t <= 1e-4) {
+      const e = bestPath.centerline[0];
+      _sample.offEnd = ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+    } else if (bestB === M - 1 && t >= 1 - 1e-4) {
+      const e = bestPath.centerline[M - 1];
+      _sample.offEnd = ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+    }
+  }
   return _sample;
 }
 
@@ -322,7 +377,13 @@ function resetShip() {
   physics.speed = 0;
   physics.visualBank = 0;
   physics.visualPitch = 0;
+  physics.airborne = false;
+  physics.verticalVel = 0;
+  physics.landingBounce = 0;
+  physics.landingBounceVel = 0;
   physics.up.set(0, 1, 0);
+  physics.visualGroundPos.copy(physics.groundPos);
+  physics.visualUp.copy(physics.up);
   physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
   physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
 }
@@ -359,7 +420,18 @@ const physics = {
   // into X/Z. Feeding that back into next frame's lateral (s) projection
   // compounds into a slow one-directional drift on any banked section, even
   // at a dead stop. groundPos sidesteps that by staying bob-free.
-  groundPos: new THREE.Vector3()
+  groundPos: new THREE.Vector3(),
+  // Smoothed render-only surface position/up. Physics integrates against
+  // groundPos directly, but the rendered ship/camera can ease over tiny
+  // projection discontinuities (notably at disjoint path seams) instead of
+  // visibly popping.
+  visualGroundPos: new THREE.Vector3(),
+  visualUp: new THREE.Vector3(0, 1, 0),
+  airborne: false,
+  verticalVel: 0,
+  gravity: 30,
+  landingBounce: 0,
+  landingBounceVel: 0
 };
 
 function lerpAngle(a, b, t) {
@@ -372,7 +444,7 @@ function updatePhysics(dt) {
   const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
   const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
   const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
-  const hasInput = !!(throttle || brake || steer);
+  const hasTranslation = !!(throttle || brake || Math.abs(physics.speed) > 0.001);
 
   // Longitudinal speed control
   if (throttle) {
@@ -405,67 +477,116 @@ function updatePhysics(dt) {
   const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
   physics.velocityAngle = lerpAngle(physics.velocityAngle, physics.heading, Math.min(gripThisFrame * dt, 1));
 
-  // Integrate/reproject the hover-free ground reference only while the player
-  // is actively giving input. Reprojecting a stationary point onto a banked or
-  // sloped cross-section can introduce tiny X/Z corrections that accumulate as
-  // visible drift; with no input, keep groundPos fixed and only update the
-  // visual hover from the current surface sample.
+  // Integrate/reproject the hover-free ground reference only while the ship is
+  // translating (throttle/brake/coasting). Steering in place should rotate the
+  // ship without reprojecting groundPos: reprojecting a stationary point onto a
+  // banked/sloped cross-section can introduce tiny X/Z corrections that look
+  // like movement while turning on the spot.
   let c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
-  if (hasInput) {
-    const vx = Math.sin(physics.velocityAngle) * physics.speed;
-    const vz = Math.cos(physics.velocityAngle) * physics.speed;
-    let px = physics.groundPos.x + vx * dt;
-    let pz = physics.groundPos.z + vz * dt;
+  const vx = Math.sin(physics.velocityAngle) * physics.speed;
+  const vz = Math.cos(physics.velocityAngle) * physics.speed;
 
-    // Project the ship onto the banked cross-section at its longitudinal spot.
-    // `s` is the signed offset along the (banked) edge direction; placing the ship
-    // as pos + edgeRight*s puts it exactly ON the ribbon surface, so it can never
-    // sink under the track no matter how steeply the corner rolls.
-    c = sampleTrack(px, pz);
-    const er = c.edgeRight;
+  const projectToSurface = (sample, px, pz) => {
+    const er = sample.edgeRight;
     const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
-    let s = ((px - c.pos.x) * er.x + (pz - c.pos.z) * er.z) / cosR2;
+    let s = ((px - sample.pos.x) * er.x + (pz - sample.pos.z) * er.z) / cosR2;
 
     // Drivable corridor is bounded by the TRIMMED edges per side, so cut corners
     // pinch the collision exactly like the visual mesh (walls you see = walls you hit).
     const margin = 0.9;
-    let loS = c.sLeft + margin;    // inner limit of the left edge (negative side)
-    let hiS = c.sRight - margin;   // inner limit of the right edge (positive side)
+    let loS = sample.sLeft + margin;    // inner limit of the left edge (negative side)
+    let hiS = sample.sRight - margin;   // inner limit of the right edge (positive side)
     if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
+    return { er, s, loS, hiS };
+  };
 
-    let hitSign = 0;
-    if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
-    if (hitSign) {
-      s = THREE.MathUtils.clamp(s, loS, hiS);
-      // Slide along the wall we hit: cancel only the velocity component pushing
-      // into it (with light scrub), so the ship glides instead of stopping dead.
-      const nl = Math.hypot(er.x, er.z) || 1;
-      const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
-      let vX = Math.sin(physics.velocityAngle) * physics.speed;
-      let vZ = Math.cos(physics.velocityAngle) * physics.speed;
-      const into = vX * wnx + vZ * wnz;
-      if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
-      physics.speed = Math.hypot(vX, vZ) * 0.98;
-      physics.velocityAngle = Math.atan2(vX, vZ);
+  if (physics.airborne) {
+    const px = physics.groundPos.x + vx * dt;
+    const pz = physics.groundPos.z + vz * dt;
+    physics.verticalVel -= physics.gravity * dt;
+    physics.groundPos.set(px, physics.groundPos.y + physics.verticalVel * dt, pz);
+
+    c = sampleTrack(px, pz);
+    const { er, s, loS, hiS } = projectToSurface(c, px, pz);
+    const surfaceY = c.pos.y + er.y * s;
+    if (!c.offEnd && s >= loS && s <= hiS && physics.groundPos.y <= surfaceY) {
+      const impactSpeed = Math.max(0, -physics.verticalVel);
+      physics.airborne = false;
+      physics.verticalVel = 0;
+      physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
+      physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
+      physics.groundPos.set(c.pos.x + er.x * s, surfaceY, c.pos.z + er.z * s);
     }
+  } else if (hasTranslation) {
+    let px = physics.groundPos.x + vx * dt;
+    let pz = physics.groundPos.z + vz * dt;
 
-    physics.groundPos.set(c.pos.x + er.x * s, c.pos.y + er.y * s, c.pos.z + er.z * s);
+    c = sampleTrack(px, pz);
+    if (c.offEnd) {
+      // Leaving an open curve: stop projecting to the clamped endpoint and let
+      // the craft continue ballistically until its X/Z is over a curve again.
+      physics.airborne = true;
+      physics.verticalVel = 0;
+      physics.groundPos.set(px, physics.groundPos.y, pz);
+    } else {
+      const { er, s, loS, hiS } = projectToSurface(c, px, pz);
+
+      let hitSign = 0;
+      if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
+      let finalS = s;
+      if (hitSign) {
+        finalS = THREE.MathUtils.clamp(s, loS, hiS);
+        // Slide along the wall we hit: cancel only the velocity component pushing
+        // into it (with light scrub), so the ship glides instead of stopping dead.
+        const nl = Math.hypot(er.x, er.z) || 1;
+        const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
+        let vX = Math.sin(physics.velocityAngle) * physics.speed;
+        let vZ = Math.cos(physics.velocityAngle) * physics.speed;
+        const into = vX * wnx + vZ * wnz;
+        if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
+        physics.speed = Math.hypot(vX, vZ) * 0.98;
+        physics.velocityAngle = Math.atan2(vX, vZ);
+      }
+
+      physics.groundPos.set(c.pos.x + er.x * finalS, c.pos.y + er.y * finalS, c.pos.z + er.z * finalS);
+    }
   }
 
   // Sit on the surface, hovering a little along the surface normal. groundPos
   // (bob-free) is what next frame's integration reads from; shipGroup's
-  // actual rendered position adds the hover bob on top of it.
+  // actual rendered position adds the hover bob on top of it. At disjoint
+  // seams the nearest path segment can switch, producing a small projection
+  // correction in groundPos; smooth only unexpectedly-large render deltas so
+  // normal movement stays responsive while seam pops are eased out.
+  const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.08;
+  const renderDelta = physics.visualGroundPos.distanceTo(physics.groundPos);
+  if (renderDelta > expectedStep) {
+    physics.visualGroundPos.lerp(physics.groundPos, Math.min(1, dt * 18));
+  } else {
+    physics.visualGroundPos.copy(physics.groundPos);
+  }
+  physics.visualUp.lerp(c.normal, Math.min(1, dt * 18)).normalize();
+
+  // Damped spring for landing impacts: a harder fall creates a larger, quick
+  // hover rebound after re-contacting the track.
+  physics.landingBounceVel += -55 * physics.landingBounce * dt;
+  physics.landingBounceVel *= Math.exp(-7 * dt);
+  physics.landingBounce += physics.landingBounceVel * dt;
+  if (Math.abs(physics.landingBounce) < 0.001 && Math.abs(physics.landingBounceVel) < 0.001) {
+    physics.landingBounce = 0; physics.landingBounceVel = 0;
+  }
+
   physics.bobTime += dt;
-  const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03;
+  const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03 + physics.landingBounce;
   shipGroup.position.set(
-    physics.groundPos.x + c.normal.x * hover,
-    physics.groundPos.y + c.normal.y * hover,
-    physics.groundPos.z + c.normal.z * hover
+    physics.visualGroundPos.x + physics.visualUp.x * hover,
+    physics.visualGroundPos.y + physics.visualUp.y * hover,
+    physics.visualGroundPos.z + physics.visualUp.z * hover
   );
-  physics.up.copy(c.normal);
+  physics.up.copy(physics.visualUp);
 
   // Orient the ship to the road: nose along heading, "up" along surface normal.
-  const up = c.normal;
+  const up = physics.visualUp;
   const fwd = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
   fwd.addScaledVector(up, -fwd.dot(up)).normalize();
   const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
@@ -503,7 +624,7 @@ function updateCamera(dt) {
   // offset. Setting camera.up to the track's own up keeps the camera locked
   // directly behind/above the ship at any roll, including past 90 degrees.
   const up = physics.up, fwd = physics.forward;
-  const base = physics.groundPos.clone().addScaledVector(up, 0.5);
+  const base = physics.visualGroundPos.clone().addScaledVector(up, 0.5);
   camera.up.copy(up);
   camera.position.copy(base)
     .addScaledVector(fwd, -CAM_BACK)
@@ -515,7 +636,7 @@ function updateCamera(dt) {
 }
 
 // ---------- Track loading: built-in default + JSON import --------------------
-buildTrack(TrackCore.DEFAULT_TRACK.paths, TrackCore.DEFAULT_TRACK.name, TrackCore.DEFAULT_TRACK.start);
+buildTrack(TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK));
 
 const fileInput = document.getElementById('fileInput');
 document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
@@ -524,7 +645,7 @@ fileInput.addEventListener('change', async (e) => {
   if (!file) return;
   try {
     const track = TrackCore.parseTrack(await file.text());
-    buildTrack(track.paths, track.name, track.start);
+    buildTrack(track);
   } catch (err) {
     alert('Could not load track: ' + err.message);
   }

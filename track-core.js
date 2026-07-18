@@ -5,7 +5,7 @@
  * or an open curve, and holds a single ordered array of TYPED control points:
  *
  *   points: [
- *     { type: 'position', pos: [x, y, z], weight: <NURBS weight> },
+ *     { type: 'position', id: 'p1', pos: [x, y, z], weight: <NURBS weight> },
  *     { type: 'roll',     t: 0..1, roll: <degrees> },
  *     { type: 'width',    t: 0..1, width: <full width> },
  *     ...
@@ -22,8 +22,14 @@
  * right-hand turn). Use splitPoints(path.points) to get the three filtered,
  * t-sorted arrays the math functions below actually consume.
  *
- * track = { version, name, samples, paths: [ { closed, points } ],
+ * track = { version, name, samples, paths: [ { id, closed, points } ],
+ *            disjointSeams: [{ id, pointId, kind, ... }],
  *            start: { path, point, reverse } }
+ * Position point IDs are stable editor identities. If the same position ID
+ * appears in multiple path occurrences, parseTrack() makes them the same
+ * in-memory object so editing that point moves every occurrence. The editor
+ * uses disjointSeams metadata to reverse hard-corner split/open operations;
+ * the game only needs point IDs plus the seam pointIds to cut disjoint edges.
  * `start` picks which position control point the player begins at (nearest
  * baked sample to it) and whether they face along the path's natural
  * (parametric) direction or the reverse of it.
@@ -32,6 +38,8 @@
  *   basis(u), basisDeriv(u)          - uniform cubic B-spline basis + derivative
  *   splitPoints(points)              - { controlPoints, rollPoints, widthPoints }
  *   makeEvaluator(cps, closed)       - { evalTrack(g), CP_N, closed }
+ *                                      open endpoints evaluate exactly at the
+ *                                      first/last position control point
  *   buildCenterline(cps, N, closed)  - array of baked frames (plain {x,y,z})
  *   buildEdges(frames, closed)       - trimmed { left, right } edge polylines
  *   parseTrack(text)                 - JSON string -> validated track object
@@ -179,6 +187,18 @@
       : i => Math.max(0, Math.min(CP_N - 1, i));
 
     function evalTrack(g) {
+      if (!closed && CP_N > 0) {
+        if (g <= 0) {
+          const pos = cpVec[0];
+          const tangent = vnorm(CP_N > 1 ? vsub(cpVec[1], cpVec[0]) : { x: 0, y: 0, z: 1 });
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 0), width: evalWidthSpline(wp, closed, 0) };
+        }
+        if (g >= CP_N - 1) {
+          const pos = cpVec[CP_N - 1];
+          const tangent = vnorm(CP_N > 1 ? vsub(cpVec[CP_N - 1], cpVec[CP_N - 2]) : { x: 0, y: 0, z: 1 });
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 1), width: evalWidthSpline(wp, closed, 1) };
+        }
+      }
       const seg = Math.floor(g);
       const u = g - seg;
       const b = basis(u), db = basisDeriv(u);
@@ -329,6 +349,53 @@
     return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
+  // Compute hard-corner edge cuts for disjoint shared endpoints. `bakedPaths`
+  // entries are { id, closed, controlPoints, frames, edges }. Returns an array
+  // parallel to bakedPaths: each entry may contain { start:{left,right},
+  // end:{left,right} } endpoint overrides. Boundary lines from the two incident
+  // path ends are intersected in XZ; far/parallel intersections fall back to the
+  // shared center point, producing a deliberate hard cut instead of folded edge
+  // overhangs.
+  function computeDisjointEdgeCuts(bakedPaths, disjointSeams) {
+    const cuts = bakedPaths.map(() => ({}));
+    const centerOf = inc => inc.frames[inc.idx].pos;
+    const fallback = inc => {
+      const p = centerOf(inc);
+      return { x: p.x, y: p.y, z: p.z };
+    };
+    const line = (inc, side) => ({ p: inc.edges[side][inc.idx], q: inc.edges[side][inc.neighbor] });
+    for (const seam of disjointSeams || []) {
+      const incs = [];
+      bakedPaths.forEach((bp, pathIndex) => {
+        if (bp.closed || !bp.controlPoints.length || bp.frames.length < 2) return;
+        const last = bp.controlPoints.length - 1;
+        if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
+          incs.push({ pathIndex, end: 'start', idx: 0, neighbor: 1, frames: bp.frames, edges: bp.edges });
+        }
+        if (bp.controlPoints[last] && bp.controlPoints[last].id === seam.pointId) {
+          incs.push({ pathIndex, end: 'end', idx: bp.frames.length - 1, neighbor: bp.frames.length - 2, frames: bp.frames, edges: bp.edges });
+        }
+      });
+      if (incs.length < 2) continue;
+      const a = incs[0], b = incs[1];
+      const center = fallback(a);
+      const maxHalfW = Math.max(a.frames[a.idx].halfW || 1, b.frames[b.idx].halfW || 1);
+      const sideCut = side => {
+        const la = line(a, side), lb = line(b, side);
+        let x = lineIntersectXZ(la.p, la.q, lb.p, lb.q) || center;
+        if (Math.hypot(x.x - center.x, x.z - center.z) > 6 * maxHalfW) x = center;
+        return x;
+      };
+      const left = sideCut('left'), right = sideCut('right');
+      for (const inc of [a, b]) {
+        if (!cuts[inc.pathIndex][inc.end]) cuts[inc.pathIndex][inc.end] = {};
+        cuts[inc.pathIndex][inc.end].left = { x: left.x, y: left.y, z: left.z };
+        cuts[inc.pathIndex][inc.end].right = { x: right.x, y: right.y, z: right.z };
+      }
+    }
+    return cuts;
+  }
+
   // --- JSON schema: parse / validate / serialize -----------------------------
   function normalizePoint(p, i) {
     if (!p || !Array.isArray(p.pos) || p.pos.length !== 3 || p.pos.some(n => typeof n !== 'number')) {
@@ -337,6 +404,7 @@
     const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
     return {
       type: 'position',
+      id: (p.id && typeof p.id === 'string') ? p.id : null,
       pos: [p.pos[0], p.pos[1], p.pos[2]],
       weight: Math.max(0.01, num(p.weight, 1))
     };
@@ -392,7 +460,7 @@
       if (posCount < 4) throw new Error('path ' + i + ': a track path needs at least 4 position control points');
       if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 });
       if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 });
-      return { closed, points };
+      return { id: rawPath.id || null, closed, points };
     }
 
     const rawPoints = Array.isArray(rawPath) ? rawPath : rawPath && rawPath.controlPoints;
@@ -408,6 +476,7 @@
       ? rawWidth.map(normalizeWidthPoint)
       : defaultWidthPoints(rawPoints, closed);
     return {
+      id: rawPath && rawPath.id || null,
       closed,
       points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints)
     };
@@ -436,11 +505,27 @@
     else throw new Error('no paths or controlPoints array found');
     if (rawPaths.length < 1) throw new Error('a track needs at least one path');
     const paths = rawPaths.map(normalizePath);
+    // Assign/stabilize position-point identities and make duplicate IDs share
+    // the same object reference in memory. Old tracks without IDs get fresh IDs.
+    const byId = new Map();
+    let nextPointId = 1;
+    for (const path of paths) {
+      for (let i = 0; i < path.points.length; i++) {
+        const p = path.points[i];
+        if (p.type !== 'position') continue;
+        if (!p.id) {
+          do { p.id = 'p' + (nextPointId++); } while (byId.has(p.id));
+        }
+        if (byId.has(p.id)) path.points[i] = byId.get(p.id);
+        else byId.set(p.id, p);
+      }
+    }
     return {
-      version: (data && data.version) || 2,
+      version: (data && data.version) || 3,
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
       paths,
+      disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       start: normalizeStart(data && data.start, paths)
     };
   }
@@ -451,15 +536,16 @@
       const lines = path.points.map(p => {
         if (p.type === 'roll') return '      { "type": "roll", "t": ' + p.t + ', "roll": ' + p.roll + ' }';
         if (p.type === 'width') return '      { "type": "width", "t": ' + p.t + ', "width": ' + p.width + ' }';
-        return '      { "type": "position", "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
+        return '      { "type": "position", "id": ' + JSON.stringify(p.id || '') + ', "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
       }).join(',\n');
-      return '    { "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
+      return '    { "id": ' + JSON.stringify(path.id || '') + ', "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
     }).join(',\n');
     const start = normalizeStart(track.start, track.paths);
     return '{\n' +
-      '  "version": 2,\n' +
+      '  "version": 3,\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
+      '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
@@ -468,6 +554,7 @@
     version: 2,
     name: 'Default Circuit',
     start: { path: 0, point: 0, reverse: false },
+    disjointSeams: [],
     paths: [{
       closed: true,
       points: [
@@ -509,6 +596,7 @@
     version: 2,
     name: 'New Track',
     start: { path: 0, point: 0, reverse: false },
+    disjointSeams: [],
     paths: [{
       closed: true,
       points: [
@@ -526,6 +614,7 @@
 
   global.TrackCore = {
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
+    computeDisjointEdgeCuts,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
