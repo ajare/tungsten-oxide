@@ -20,6 +20,9 @@
     border-radius: 5px; padding: 6px 8px; font: inherit; width: 180px; }
   #topbar select { background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
     border-radius: 5px; padding: 6px 8px; font: inherit; cursor: pointer; }
+  #pointFilters { display: flex; gap: 8px; align-items: center; color: #9fc6dc; }
+  #pointFilters label { display: flex; gap: 3px; align-items: center; cursor: pointer; }
+  #pointFilters input { accent-color: var(--accent); }
   #canvasWrap { grid-area: canvas; position: relative; background: #08141d; }
   #elevWrap { grid-area: elev; position: relative; background: #071019; border-top: 1px solid var(--line); }
   canvas { display: block; width: 100%; height: 100%; }
@@ -73,7 +76,13 @@
     <select id="renderModeSelect" title="Top-down rendering mode">
       <option value="banked">Banked edges (lean tint)</option>
       <option value="flat">Flat width (roll colour)</option>
+      <option value="elevation">Flat with elevation colour</option>
     </select>
+    <div id="pointFilters" title="Show/hide editable control point overlays">
+      <label><input id="showPositionChk" type="checkbox" checked> Position</label>
+      <label style="color:#ffaa3c"><input id="showRollChk" type="checkbox" checked> Roll</label>
+      <label style="color:#b6ff3c"><input id="showWidthChk" type="checkbox" checked> Width</label>
+    </div>
     <span class="spacer"></span>
     <a href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
     <input id="fileInput" type="file" accept="application/json,.json" hidden>
@@ -81,7 +90,7 @@
 
   <div id="canvasWrap">
     <canvas id="topCanvas"></canvas>
-    <div class="badge" id="topBadge">Top-down (X / Z) &mdash; click empty space to choose a control point type to add, drag a node to move it, Delete to remove &middot; right-click a segment to select it for deletion &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it</div>
+    <div class="badge" id="topBadge">Top-down (X / Z) &mdash; left-click a control point to select/drag, left-drag empty space to pan, right-click empty space to add &middot; Delete to remove &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it</div>
     <div id="topZoomControl" title="Top-down zoom">
       <div class="zoomLabel">+</div>
       <input id="topZoomSlider" type="range" min="-100" max="100" value="0" step="1" aria-label="Top-down zoom">
@@ -131,6 +140,7 @@ const WIDTH_COLOR = '#b6ff3c';    // distinct from roll's lean tint and position
 // by lean, as before); 'flat' ignores roll for edge shape (width only, as if
 // roll were always 0) and instead colours the ribbon itself by roll value.
 let renderMode = 'banked';
+let pointFilters = { position: true, roll: true, width: true };
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
 let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit center
 let panLast = null;               // last mouse position while right-drag panning
@@ -275,6 +285,13 @@ function rollColor(rollDeg) {
   const b = 55;
   return `rgb(${r},${g},${b})`;
 }
+function elevationColor(y, minY, maxY) {
+  const t = Math.max(0, Math.min(1, (y - minY) / ((maxY - minY) || 1)));
+  const r = Math.round(40 + (220 - 40) * t);
+  const g = Math.round(210 + (55 - 210) * t);
+  const b = 55;
+  return `rgb(${r},${g},${b})`;
+}
 
 // Per-path baked preview data, cached each draw so hit-testing (segments,
 // nodes) can reuse it without re-evaluating the spline.
@@ -296,7 +313,8 @@ function drawTop() {
     for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
   }
 
-  const flat = renderMode === 'flat';
+  const flat = renderMode === 'flat' || renderMode === 'elevation';
+  const elevationMode = renderMode === 'elevation';
   pathPreviews = track.paths.map(path => {
     const pp = parts(path);
     // Use the SAME baked frames the game uses, so the preview (including
@@ -305,7 +323,7 @@ function drawTop() {
     const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, path.closed, pp.rollPoints, pp.widthPoints);
     const edges = flat ? TrackCore.buildFlatEdges(frames, path.closed) : TrackCore.buildEdges(frames, path.closed);
     const count = path.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
-    const centerPts = [], leftPts = [], rightPts = [], rollAt = [];
+    const centerPts = [], leftPts = [], rightPts = [], rollAt = [], yAt = [];
     for (let i = 0; i < count; i++) {
       const j = i % frames.length;
       const f = frames[j];
@@ -313,12 +331,16 @@ function drawTop() {
       leftPts.push(worldToScreen(edges.left[j].x, edges.left[j].z));
       rightPts.push(worldToScreen(edges.right[j].x, edges.right[j].z));
       rollAt.push(f.roll * 180 / Math.PI);
+      yAt.push(f.pos.y);
     }
-    return { parts: pp, frames, edges, centerPts, leftPts, rightPts, rollAt };
+    return { parts: pp, frames, edges, centerPts, leftPts, rightPts, rollAt, yAt };
   });
 
+  const allY = pathPreviews.flatMap(p => p.yAt);
+  const minElev = Math.min(...allY), maxElev = Math.max(...allY);
+
   for (const prev of pathPreviews) {
-    const { leftPts, rightPts, rollAt, centerPts } = prev;
+    const { leftPts, rightPts, rollAt, centerPts, yAt } = prev;
     if (flat) {
       // ribbon filled per-segment, coloured by interpolated roll (the edge
       // geometry carries no banking cue in this mode, so colour does instead)
@@ -329,7 +351,9 @@ function drawTop() {
         ctx.lineTo(rightPts[i + 1].x, rightPts[i + 1].y);
         ctx.lineTo(rightPts[i].x, rightPts[i].y);
         ctx.closePath();
-        ctx.fillStyle = rollColor(rollAt[i]);
+        ctx.fillStyle = elevationMode
+          ? elevationColor((yAt[i] + yAt[i + 1]) / 2, minElev, maxElev)
+          : rollColor(rollAt[i]);
         ctx.fill();
       }
       // plain edge outlines (no lean tint -- colour is on the fill now)
@@ -388,7 +412,7 @@ function drawTop() {
   ctx.font = '11px system-ui'; ctx.fillText('START', p0.x + 10, p0.y - 10);
 
   // selected segment highlight
-  if (segSel) {
+  if (segSel && pointFilters.position) {
     const cps = pathPreviews[segSel.path].parts.controlPoints;
     const a = cps[segSel.i], b = cps[(segSel.i + 1) % cps.length];
     const sa = worldToScreen(a.pos[0], a.pos[2]), sb = worldToScreen(b.pos[0], b.pos[2]);
@@ -397,7 +421,7 @@ function drawTop() {
   }
 
   // control-point nodes (square = open-path endpoint, eligible for Join)
-  track.paths.forEach((path, pi) => {
+  if (pointFilters.position) track.paths.forEach((path, pi) => {
     const cps = pathPreviews[pi].parts.controlPoints;
     cps.forEach((p, i) => {
       const s = worldToScreen(p.pos[0], p.pos[2]);
@@ -425,7 +449,7 @@ function drawTop() {
   const curP = track.paths[sel.path];
   if (curPrev && curP) {
     const frames = curPrev.frames;
-    curPrev.parts.rollPoints.forEach(rp => {
+    if (pointFilters.roll) curPrev.parts.rollPoints.forEach(rp => {
       const f = frameAtT(frames, curP.closed, rp.t);
       const s = worldToScreen(f.pos.x, f.pos.z);
       const isSel = rp === rollSel;
@@ -437,14 +461,6 @@ function drawTop() {
       const e = worldToScreen(end.x, end.z);
       ctx.strokeStyle = rollTint(rp.roll); ctx.lineWidth = isSel ? 3 : 2;
       ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
-
-      const r = isSel ? 8 : 6;
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y - r); ctx.lineTo(s.x + r, s.y); ctx.lineTo(s.x, s.y + r); ctx.lineTo(s.x - r, s.y); ctx.closePath();
-      ctx.fillStyle = rollTint(rp.roll); ctx.fill();
-      ctx.lineWidth = isSel ? 3 : 1.5;
-      ctx.strokeStyle = isSel ? '#ffffff' : 'rgba(0,0,0,0.6)';
-      ctx.stroke();
 
       // draggable handle at the line's end -- drag to change roll
       const hr = isDraggingThis ? 7 : 5;
@@ -459,7 +475,7 @@ function drawTop() {
     // width control points of the currently-selected path -- a line spanning
     // the full track width at that point (both edges, symmetric about the
     // centerline) -- just the line and its two edge handles, no center dot.
-    curPrev.parts.widthPoints.forEach(wp => {
+    if (pointFilters.width) curPrev.parts.widthPoints.forEach(wp => {
       const f = frameAtT(frames, curP.closed, wp.t);
       const isSel = wp === widthSel;
       const isDraggingThis = isSel && dragging === 'widthTop';
@@ -589,41 +605,11 @@ function drawElev() {
   });
   ctx.stroke();
 
-  // Roll indicator: a line offset from the INTERPOLATED height profile at
-  // every sample — drawn ABOVE the track for roll to the right (+roll),
-  // BELOW for roll to the left (-roll). Driven by the path's roll-type
-  // points, its own independent set of control points (ticks below mark
-  // those, not the height control points).
-  ctx.strokeStyle = 'rgba(255,170,60,0.95)'; ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  profile.forEach((p, i) => {
-    const x = px(p.arc), rollY = clampY(hy(p.y) - p.roll * rollK); // +roll (right) -> up
-    i ? ctx.lineTo(x, rollY) : ctx.moveTo(x, rollY);
-  });
-  ctx.stroke();
-
-  // roll control points: ticks + diamond handles, positioned by their own `t`
-  const rollPoints = pp.rollPoints;
-  ctx.strokeStyle = 'rgba(255,170,60,0.35)'; ctx.lineWidth = 1;
-  rollPoints.forEach(rp => {
-    const s = sampleAtT(rp.t);
-    const x = px(s.arc), trackY = hy(s.y);
-    ctx.beginPath(); ctx.moveTo(x, trackY); ctx.lineTo(x, clampY(trackY - rp.roll * rollK)); ctx.stroke();
-  });
-  rollPoints.forEach(rp => {
-    const s = sampleAtT(rp.t);
-    const x = px(s.arc), y = clampY(hy(s.y) - rp.roll * rollK);
-    const isSel = rp === rollSel;
-    const r = isSel ? 7 : 5;
-    ctx.beginPath();
-    ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
-    ctx.fillStyle = rollTint(rp.roll); ctx.fill();
-    ctx.lineWidth = isSel ? 3 : 1.5;
-    ctx.strokeStyle = isSel ? '#fff' : 'rgba(0,0,0,0.6)'; ctx.stroke();
-  });
+  // Roll is intentionally not drawn in the side view; edit roll control points
+  // from the top-down view so this panel stays focused on elevation.
 
   // height handles (circles; closed: the last one is a faded echo of point 0)
-  for (let i = 0; i < slots; i++) {
+  if (pointFilters.position) for (let i = 0; i < slots; i++) {
     const idx = i % n;
     const p = cps[idx];
     const x = xs[i], y = hy(p.pos[1]);
@@ -838,18 +824,11 @@ function refresh() { draw(); renderProps(); updateMeta(); }
 // Roll-point markers of the currently-selected path, drawn in the top-down
 // view alongside the position control-point nodes.
 function rollNodeAtTop(sx, sy) {
-  const curPrev = pathPreviews[sel.path];
-  const curP = track.paths[sel.path];
-  if (!curPrev || !curP) return null;
-  for (const rp of curPrev.parts.rollPoints) {
-    const f = frameAtT(curPrev.frames, curP.closed, rp.t);
-    const s = worldToScreen(f.pos.x, f.pos.z);
-    if (Math.hypot(sx - s.x, sy - s.y) <= 10) return rp;
-  }
   return null;
 }
 // The draggable handle at the end of a roll point's perpendicular line.
 function rollHandleAtTop(sx, sy) {
+  if (!pointFilters.roll) return null;
   const curPrev = pathPreviews[sel.path];
   const curP = track.paths[sel.path];
   if (!curPrev || !curP) return null;
@@ -864,6 +843,7 @@ function rollHandleAtTop(sx, sy) {
 // The draggable handles at either edge of a width point's line (no separate
 // center marker -- the line + its two edge handles ARE the control point).
 function widthHandleAtTop(sx, sy) {
+  if (!pointFilters.width) return null;
   const curPrev = pathPreviews[sel.path];
   const curP = track.paths[sel.path];
   if (!curPrev || !curP) return null;
@@ -878,6 +858,7 @@ function widthHandleAtTop(sx, sy) {
   return null;
 }
 function nodeAtTop(sx, sy) {
+  if (!pointFilters.position) return null;
   for (let pi = 0; pi < track.paths.length; pi++) {
     const cps = pathPreviews[pi].parts.controlPoints;
     for (let i = 0; i < cps.length; i++) {
@@ -908,6 +889,7 @@ function segmentAtTop(sx, sy) {
   return best;
 }
 function handleAtElev(sx, sy) {
+  if (!pointFilters.position) return -1;
   const path = curPath();
   if (!path) return -1;
   const cps = curParts().controlPoints;
@@ -931,17 +913,6 @@ function sampleAtArc(sx) {
   return { sample: best, t: elevGeom.totalSamples ? bestI / elevGeom.totalSamples : 0 };
 }
 function rollHandleAtElev(sx, sy) {
-  const path = curPath();
-  if (!path || !elevGeom.profile) return null;
-  const { padX, w, top, bottom, totalArc, totalSamples, profile, minY, yScale, rollK } = elevGeom;
-  for (const rp of curParts().rollPoints) {
-    const i = Math.max(0, Math.min(totalSamples, Math.round(rp.t * totalSamples)));
-    const s = profile[i];
-    const x = padX + (s.arc / totalArc) * (w - 2 * padX);
-    const rawY = (bottom - (s.y - minY) * yScale) - rp.roll * rollK;
-    const y = Math.max(top + ROLL_HANDLE_MARGIN, Math.min(bottom - ROLL_HANDLE_MARGIN, rawY));
-    if (Math.hypot(sx - x, sy - y) <= 10) return rp;
-  }
   return null;
 }
 // Add a new roll control point at the clicked elevation-strip screen position.
@@ -1004,6 +975,27 @@ function insertRollPointAtWorld(worldX, worldZ) {
 
 // ---------- Insert a position point into the nearest segment (of the nearest
 // path) at a clicked position ----------
+function insertPositionAtSide(sx, sy) {
+  const path = curPath();
+  if (!path || !elevGeom.profile) return;
+  const hit = sampleAtArc(sx);
+  if (!hit) return;
+  const pp = curParts();
+  const { evalTrack, CP_N } = TrackCore.makeEvaluator(pp.controlPoints, path.closed, pp.rollPoints, pp.widthPoints);
+  const gMax = path.closed ? CP_N : CP_N - 1;
+  const g = hit.t * gMax;
+  const s = evalTrack(Math.min(g, path.closed ? CP_N - 1e-6 : CP_N - 1));
+  const y = elevGeom.minY + (elevGeom.bottom - sy) / elevGeom.yScale;
+  const insertAt = path.closed
+    ? (Math.floor(g) + 1) % (pp.controlPoints.length + 1)
+    : Math.min(pp.controlPoints.length, Math.floor(g) + 1);
+  const np = { type: 'position', pos: [+s.pos.x.toFixed(1), +y.toFixed(1), +s.pos.z.toFixed(1)], weight: 1 };
+  insertPositionAt(path, insertAt, np);
+  sel = { path: sel.path, point: insertAt };
+  segSel = null; rollSel = null; widthSel = null;
+  refresh();
+}
+
 function insertNear(worldX, worldZ) {
   let bestPath = 0, bestG = 0, bestD = Infinity;
   track.paths.forEach((path, pi) => {
@@ -1244,13 +1236,19 @@ window.addEventListener('mouseup', () => { dragging = null; panLast = null; });
 // ---------- Elevation mouse ----------
 elevCanvas.addEventListener('mousedown', (e) => {
   const { x, y } = localPos(elevCanvas, e);
+  if (e.button === 2) {
+    e.preventDefault();
+    if (pointFilters.position && x >= elevGeom.padX && x <= elevGeom.w - elevGeom.padX) insertPositionAtSide(x, y);
+    return;
+  }
+  if (e.button !== 0) return;
   const rollHit = rollHandleAtElev(x, y);
   if (rollHit) { rollSel = rollHit; widthSel = null; dragging = 'rollElev'; refresh(); return; }
   const hit = handleAtElev(x, y);
   if (hit >= 0) { sel = { path: sel.path, point: hit }; rollSel = null; widthSel = null; dragging = 'elev'; refresh(); return; }
-  // empty space inside the plot area: add a new roll control point there
-  if (x >= elevGeom.padX && x <= elevGeom.w - elevGeom.padX) insertRollPoint(x, y);
+  // Roll control points are edited from the top-down view, not the side view.
 });
+elevCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
 // ---------- Keyboard ----------
 window.addEventListener('keydown', (e) => {
@@ -1315,6 +1313,20 @@ topZoomSlider.addEventListener('input', (e) => {
   setTopZoomSliderValue(Number(e.target.value));
   draw();
 });
+function updatePointFilters() {
+  pointFilters = {
+    position: document.getElementById('showPositionChk').checked,
+    roll: document.getElementById('showRollChk').checked,
+    width: document.getElementById('showWidthChk').checked
+  };
+  if (!pointFilters.roll) rollSel = null;
+  if (!pointFilters.width) widthSel = null;
+  if (!pointFilters.position) { segSel = null; joinSel = []; }
+  refresh();
+}
+for (const id of ['showPositionChk', 'showRollChk', 'showWidthChk']) {
+  document.getElementById(id).addEventListener('change', updatePointFilters);
+}
 function pointInTopCanvas(e) {
   const r = topCanvas.getBoundingClientRect();
   return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
