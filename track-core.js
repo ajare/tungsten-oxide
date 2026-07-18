@@ -2,24 +2,35 @@
  * (editor.html). Dependency-free (no three.js) so the 2D editor can use it too.
  *
  * A track is composed of one or more PATHS. Each path is either a closed loop
- * or an open curve, and holds an ordered array of control points. Each control
- * point carries a 3D position AND the roll (banking) and width of the track
- * there:
+ * or an open curve, and holds a single ordered array of TYPED control points:
  *
- *   { pos: [x, y, z], roll: <degrees>, width: <full width>, weight: <NURBS w> }
+ *   points: [
+ *     { type: 'position', pos: [x, y, z], weight: <NURBS weight> },
+ *     { type: 'roll',     t: 0..1, roll: <degrees> },
+ *     { type: 'width',    t: 0..1, width: <full width> },
+ *     ...
+ *   ]
  *
- * A rational, uniformly-knotted cubic B-spline (NURBS) interpolates all of
- * these along each path (wrapping for closed paths, clamped at the ends for
- * open ones). +roll lifts the LEFT edge (banks into a right-hand turn).
+ * Each type is independent (its own count, its own spacing) and only
+ * interacts with points of its own type: 'position' points interpolate with
+ * a rational, uniformly-knotted cubic B-spline (NURBS) and their order in the
+ * array (relative to other 'position' points) IS the path's shape sequence;
+ * 'roll'/'width' points each interpolate with their own non-uniform
+ * Catmull-Rom/Hermite spline over their own `t` (a fraction of the path's
+ * parameter domain, independent of array order). All wrap for closed paths,
+ * clamp at the ends for open ones. +roll lifts the LEFT edge (banks into a
+ * right-hand turn). Use splitPoints(path.points) to get the three filtered,
+ * t-sorted arrays the math functions below actually consume.
  *
- * track = { version, name, samples, paths: [ { closed, controlPoints } ],
+ * track = { version, name, samples, paths: [ { closed, points } ],
  *            start: { path, point, reverse } }
- * `start` picks which control point the player begins at (nearest baked
- * sample to it) and whether they face along the path's natural (parametric)
- * direction or the reverse of it.
+ * `start` picks which position control point the player begins at (nearest
+ * baked sample to it) and whether they face along the path's natural
+ * (parametric) direction or the reverse of it.
  *
  * Public API (window.TrackCore):
  *   basis(u), basisDeriv(u)          - uniform cubic B-spline basis + derivative
+ *   splitPoints(points)              - { controlPoints, rollPoints, widthPoints }
  *   makeEvaluator(cps, closed)       - { evalTrack(g), CP_N, closed }
  *   buildCenterline(cps, N, closed)  - array of baked frames (plain {x,y,z})
  *   buildEdges(frames, closed)       - trimmed { left, right } edge polylines
@@ -47,6 +58,26 @@
   const vlen = a => Math.hypot(a.x, a.y, a.z);
   const vnorm = a => { const l = vlen(a) || 1; return { x: a.x / l, y: a.y / l, z: a.z / l }; };
 
+  // Split a path's unified typed `points` array into the three plain arrays
+  // the math functions below consume. These are FILTERED views, not copies --
+  // each entry is the exact same object that lives in `points` (extra fields
+  // like `type` are simply ignored by the math) -- so callers can hold onto
+  // one (e.g. a UI selection) and mutate or splice it out of `points` later.
+  // Position points keep their array-order (that order IS the path shape);
+  // roll/width points are extracted and sorted by their own `t` (their array
+  // position doesn't matter).
+  function splitPoints(points) {
+    const controlPoints = [], rollPoints = [], widthPoints = [];
+    for (const p of points) {
+      if (p.type === 'roll') rollPoints.push(p);
+      else if (p.type === 'width') widthPoints.push(p);
+      else controlPoints.push(p);
+    }
+    rollPoints.sort((a, b) => a.t - b.t);
+    widthPoints.sort((a, b) => a.t - b.t);
+    return { controlPoints, rollPoints, widthPoints };
+  }
+
   // --- uniform cubic B-spline basis (1/6 matrix) and its derivative ----------
   function basis(u) {
     const u2 = u * u, u3 = u2 * u;
@@ -67,6 +98,62 @@
     ];
   }
 
+  // --- generic scalar spline (used by both roll and width) -------------------
+  // Both roll (banking) and width have their OWN set of control points,
+  // independent of the position control points: points = [{ t, <key> }], t in
+  // [0,1] is a fraction of the path's own parameter domain (0 = start, 1 =
+  // end/wrap-back-to-start). Interpolated with a non-uniform Catmull-Rom/
+  // Hermite spline over the real t spacing (so unevenly-placed points still
+  // behave sensibly), circular for closed paths, clamped at the ends for open
+  // ones.
+  function evalScalarSpline(points, closed, tQuery, key) {
+    const m = points.length;
+    if (m === 1) return points[0][key];
+    let t = tQuery;
+    if (closed) t = ((t % 1) + 1) % 1;
+    else t = Math.max(points[0].t, Math.min(points[m - 1].t, t));
+
+    // idxT(i): the (t, value) of point i, extended outside [0, m) by wrapping
+    // (closed) or clamping (open). For closed, wrapping index by m shifts t
+    // by a whole cycle (+-1), since i - (i mod m) is always an exact multiple
+    // of m.
+    const idxT = i => {
+      if (closed) {
+        const k = ((i % m) + m) % m;
+        const cyc = (i - k) / m;
+        return { t: points[k].t + cyc, v: points[k][key] };
+      }
+      const k = Math.max(0, Math.min(m - 1, i));
+      return { t: points[k].t, v: points[k][key] };
+    };
+
+    let i = closed ? m - 1 : m - 2; // default: wraparound segment (closed) or last segment (open)
+    for (let k = 0; k < m - 1; k++) {
+      if (t >= points[k].t && t < points[k + 1].t) { i = k; break; }
+    }
+
+    const p1 = idxT(i), p2 = idxT(i + 1);
+    let tt = t;
+    if (tt < p1.t) tt += 1; // query fell just after the wrap point
+    const dt = (p2.t - p1.t) || 1e-6;
+    const u = (tt - p1.t) / dt;
+
+    const p0 = idxT(i - 1), p3 = idxT(i + 2);
+    const m1 = ((p2.v - p0.v) / ((p2.t - p0.t) || 1e-6)) * dt;
+    const m2 = ((p3.v - p1.v) / ((p3.t - p1.t) || 1e-6)) * dt;
+
+    const u2 = u * u, u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+    return h00 * p1.v + h10 * m1 + h01 * p2.v + h11 * m2;
+  }
+  // roll in degrees in, radians out; width is left as-is (floor applied by callers)
+  function evalRollSpline(rollPoints, closed, tQuery) {
+    return evalScalarSpline(rollPoints, closed, tQuery, 'roll') * DEG2RAD;
+  }
+  function evalWidthSpline(widthPoints, closed, tQuery) {
+    return Math.max(1, evalScalarSpline(widthPoints, closed, tQuery, 'width'));
+  }
+
   // --- rational cubic B-spline evaluator --------------------------------------
   // Returns evalTrack(g), g in [0, CP_N) for closed paths or [0, CP_N-1] for
   // open ones: { pos, tangent(normalized), roll, width }. pos/tangent are
@@ -79,13 +166,14 @@
   // single code path for both cases and the curve still starts/ends right at
   // the first/last control point's neighbourhood, consistent with how this
   // engine already treats control points as approximate, not interpolated.
-  function makeEvaluator(controlPoints, closed) {
+  function makeEvaluator(controlPoints, closed, rollPoints, widthPoints) {
     closed = closed !== false;
     const CP_N = controlPoints.length;
     const cpVec = controlPoints.map(c => ({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }));
-    const cpRoll = controlPoints.map(c => (c.roll || 0) * DEG2RAD);
-    const cpWidth = controlPoints.map(c => c.width);
     const cpW = controlPoints.map(c => (c.weight == null ? 1 : c.weight));
+    const rp = (rollPoints && rollPoints.length >= 1) ? rollPoints : [{ t: 0, roll: 0 }, { t: 1, roll: 0 }];
+    const wp = (widthPoints && widthPoints.length >= 1) ? widthPoints : [{ t: 0, width: 12 }, { t: 1, width: 12 }];
+    const gMax = (closed ? CP_N : CP_N - 1) || 1;
     const wrap = closed
       ? i => ((i % CP_N) + CP_N) % CP_N
       : i => Math.max(0, Math.min(CP_N - 1, i));
@@ -97,7 +185,7 @@
       const idx = [wrap(seg - 1), wrap(seg), wrap(seg + 1), wrap(seg + 2)];
 
       let num = { x: 0, y: 0, z: 0 }, dnum = { x: 0, y: 0, z: 0 };
-      let den = 0, dden = 0, rollNum = 0, widthNum = 0;
+      let den = 0, dden = 0;
       for (let k = 0; k < 4; k++) {
         const j = idx[k];
         const w = cpW[j];
@@ -105,13 +193,14 @@
         num = vaddScaled(num, cpVec[j], bw);
         dnum = vaddScaled(dnum, cpVec[j], dbw);
         den += bw; dden += dbw;
-        rollNum += bw * cpRoll[j];
-        widthNum += bw * cpWidth[j];
       }
       const pos = vscale(num, 1 / den);
       // rational derivative via quotient rule: (N'D - N D') / D^2, normalized
       const tangent = vnorm(vscale(vaddScaled(vscale(dnum, den), num, -dden), 1 / (den * den)));
-      return { pos, tangent, roll: rollNum / den, width: widthNum / den };
+      const t = g / gMax;
+      const roll = evalRollSpline(rp, closed, t);
+      const width = evalWidthSpline(wp, closed, t);
+      return { pos, tangent, roll, width };
     }
     return { evalTrack, CP_N, closed };
   }
@@ -121,10 +210,10 @@
   // vectors plain {x,y,z}. Consumers wrap these in their own vector type.
   // Closed paths bake N samples spanning the full loop [0, CP_N); open paths
   // bake N samples spanning [0, CP_N-1] inclusive of both endpoints.
-  function buildCenterline(controlPoints, N, closed) {
+  function buildCenterline(controlPoints, N, closed, rollPoints, widthPoints) {
     closed = closed !== false;
     N = N || N_DEFAULT;
-    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed);
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints);
     const UP = { x: 0, y: 1, z: 0 };
     const out = [];
     for (let i = 0; i < N; i++) {
@@ -225,6 +314,21 @@
     return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
+  // Same as buildEdges, but offsets by the UNROLLED horizontal direction (`h`,
+  // i.e. as if roll were always 0) instead of the banked `edgeRight`. Used by
+  // preview/editor views that want the track's plan-view footprint (width
+  // only) without banking distorting the top-down shape.
+  function buildFlatEdges(frames, closed) {
+    closed = closed !== false;
+    const left = [], right = [];
+    for (let i = 0; i < frames.length; i++) {
+      const c = frames[i];
+      left.push(vaddScaled(c.pos, c.h, -c.halfW));
+      right.push(vaddScaled(c.pos, c.h, c.halfW));
+    }
+    return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
+  }
+
   // --- JSON schema: parse / validate / serialize -----------------------------
   function normalizePoint(p, i) {
     if (!p || !Array.isArray(p.pos) || p.pos.length !== 3 || p.pos.some(n => typeof n !== 'number')) {
@@ -232,20 +336,80 @@
     }
     const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
     return {
+      type: 'position',
       pos: [p.pos[0], p.pos[1], p.pos[2]],
-      roll: num(p.roll, 0),
-      width: Math.max(1, num(p.width, 12)),
       weight: Math.max(0.01, num(p.weight, 1))
     };
   }
 
+  function normalizeRollPoint(rp) {
+    const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+    return { type: 'roll', t: Math.max(0, Math.min(1, num(rp && rp.t, 0))), roll: Math.max(-180, Math.min(180, num(rp && rp.roll, 0))) };
+  }
+  function normalizeWidthPoint(wp) {
+    const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+    return { type: 'width', t: Math.max(0, Math.min(1, num(wp && wp.t, 0))), width: Math.max(1, num(wp && wp.width, 12)) };
+  }
+
+  // Legacy per-point `roll`/`width` migration: evenly spaces one point per
+  // control point across the path's parameter domain.
+  function defaultRollPoints(rawPoints, closed) {
+    const n = rawPoints.length;
+    if (n === 0) return [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 }];
+    const denom = closed ? n : Math.max(1, n - 1);
+    return rawPoints.map((p, i) => ({
+      type: 'roll',
+      t: closed ? i / n : i / denom,
+      roll: (p && typeof p.roll === 'number') ? Math.max(-180, Math.min(180, p.roll)) : 0
+    }));
+  }
+  function defaultWidthPoints(rawPoints, closed) {
+    const n = rawPoints.length;
+    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 }];
+    const denom = closed ? n : Math.max(1, n - 1);
+    return rawPoints.map((p, i) => ({
+      type: 'width',
+      t: closed ? i / n : i / denom,
+      width: (p && typeof p.width === 'number') ? Math.max(1, p.width) : 12
+    }));
+  }
+
+  // Accepts three input shapes per path, all normalized to the current
+  // unified { closed, points: [{type, ...}, ...] } schema:
+  //   1. current:  { closed, points: [{type, ...}, ...] }
+  //   2. pre-refactor: { closed, controlPoints, rollPoints, widthPoints }
+  //   3. legacy:   [{pos, roll, width, weight}, ...] or { controlPoints: [...] }
+  //                (per-point roll/width), migrated via defaultRoll/WidthPoints
   function normalizePath(rawPath, i) {
+    if (rawPath && !Array.isArray(rawPath) && Array.isArray(rawPath.points)) {
+      const closed = !(rawPath.closed === false);
+      const points = rawPath.points.map(p => {
+        if (p && p.type === 'roll') return normalizeRollPoint(p);
+        if (p && p.type === 'width') return normalizeWidthPoint(p);
+        return normalizePoint(p, i);
+      });
+      const posCount = points.filter(p => p.type === 'position').length;
+      if (posCount < 4) throw new Error('path ' + i + ': a track path needs at least 4 position control points');
+      if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 });
+      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 });
+      return { closed, points };
+    }
+
     const rawPoints = Array.isArray(rawPath) ? rawPath : rawPath && rawPath.controlPoints;
-    if (!Array.isArray(rawPoints)) throw new Error('path ' + i + ': no controlPoints array found');
+    if (!Array.isArray(rawPoints)) throw new Error('path ' + i + ': no points/controlPoints array found');
     if (rawPoints.length < 4) throw new Error('path ' + i + ': a track path needs at least 4 control points');
+    const closed = !(rawPath && rawPath.closed === false);
+    const rawRoll = rawPath && Array.isArray(rawPath.rollPoints) ? rawPath.rollPoints : null;
+    const rollPoints = (rawRoll && rawRoll.length >= 1)
+      ? rawRoll.map(normalizeRollPoint)
+      : defaultRollPoints(rawPoints, closed);
+    const rawWidth = rawPath && Array.isArray(rawPath.widthPoints) ? rawPath.widthPoints : null;
+    const widthPoints = (rawWidth && rawWidth.length >= 1)
+      ? rawWidth.map(normalizeWidthPoint)
+      : defaultWidthPoints(rawPoints, closed);
     return {
-      closed: !(rawPath && rawPath.closed === false),
-      controlPoints: rawPoints.map(normalizePoint)
+      closed,
+      points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints)
     };
   }
 
@@ -253,14 +417,16 @@
   function normalizeStart(rawStart, paths) {
     let path = (rawStart && Number.isInteger(rawStart.path)) ? rawStart.path : 0;
     path = Math.max(0, Math.min(paths.length - 1, path));
+    const posCount = splitPoints(paths[path].points).controlPoints.length;
     let point = (rawStart && Number.isInteger(rawStart.point)) ? rawStart.point : 0;
-    point = Math.max(0, Math.min(paths[path].controlPoints.length - 1, point));
+    point = Math.max(0, Math.min(posCount - 1, point));
     const reverse = !!(rawStart && rawStart.reverse);
     return { path, point, reverse };
   }
 
-  // Accepts either the current { paths: [{closed, controlPoints}, ...] } schema
-  // or the legacy single-closed-loop { controlPoints: [...] } schema.
+  // Accepts either the current { paths: [{closed, points}, ...] } schema, the
+  // pre-refactor three-array schema, or the legacy single-closed-loop
+  // { controlPoints: [...] } schema (see normalizePath).
   function parseTrack(text) {
     const data = JSON.parse(text);
     let rawPaths;
@@ -282,11 +448,12 @@
   function serializeTrack(track) {
     // Compact one-line-per-point formatting for readability.
     const pathsJson = track.paths.map(path => {
-      const pts = path.controlPoints.map(p =>
-        '      { "pos": [' + p.pos.join(', ') + '], "roll": ' + p.roll +
-        ', "width": ' + p.width + ', "weight": ' + p.weight + ' }'
-      ).join(',\n');
-      return '    { "closed": ' + (path.closed !== false) + ', "controlPoints": [\n' + pts + '\n    ] }';
+      const lines = path.points.map(p => {
+        if (p.type === 'roll') return '      { "type": "roll", "t": ' + p.t + ', "roll": ' + p.roll + ' }';
+        if (p.type === 'width') return '      { "type": "width", "t": ' + p.t + ', "width": ' + p.width + ' }';
+        return '      { "type": "position", "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
+      }).join(',\n');
+      return '    { "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
     }).join(',\n');
     const start = normalizeStart(track.start, track.paths);
     return '{\n' +
@@ -303,17 +470,37 @@
     start: { path: 0, point: 0, reverse: false },
     paths: [{
       closed: true,
-      controlPoints: [
-        { pos: [90, 0, 0], roll: 0, width: 22, weight: 1 },
-        { pos: [70, 4, 46], roll: -14, width: 18, weight: 1 },
-        { pos: [18, 8, 60], roll: -22, width: 14, weight: 1 },
-        { pos: [-34, 5, 54], roll: -18, width: 13, weight: 1 },
-        { pos: [-74, 0, 30], roll: -10, width: 16, weight: 1 },
-        { pos: [-92, -4, -6], roll: 16, width: 12, weight: 1 },
-        { pos: [-66, -3, -40], roll: 20, width: 12, weight: 1 },
-        { pos: [-16, 1, -56], roll: 8, width: 20, weight: 1 },
-        { pos: [40, 3, -48], roll: -12, width: 24, weight: 1 },
-        { pos: [80, 1, -22], roll: -6, width: 22, weight: 1 }
+      points: [
+        { type: 'position', pos: [90, 0, 0], weight: 1 },
+        { type: 'position', pos: [70, 4, 46], weight: 1 },
+        { type: 'position', pos: [18, 8, 60], weight: 1 },
+        { type: 'position', pos: [-34, 5, 54], weight: 1 },
+        { type: 'position', pos: [-74, 0, 30], weight: 1 },
+        { type: 'position', pos: [-92, -4, -6], weight: 1 },
+        { type: 'position', pos: [-66, -3, -40], weight: 1 },
+        { type: 'position', pos: [-16, 1, -56], weight: 1 },
+        { type: 'position', pos: [40, 3, -48], weight: 1 },
+        { type: 'position', pos: [80, 1, -22], weight: 1 },
+        { type: 'roll', t: 0.0, roll: 0 },
+        { type: 'roll', t: 0.1, roll: -14 },
+        { type: 'roll', t: 0.2, roll: -22 },
+        { type: 'roll', t: 0.3, roll: -18 },
+        { type: 'roll', t: 0.4, roll: -10 },
+        { type: 'roll', t: 0.5, roll: 16 },
+        { type: 'roll', t: 0.6, roll: 20 },
+        { type: 'roll', t: 0.7, roll: 8 },
+        { type: 'roll', t: 0.8, roll: -12 },
+        { type: 'roll', t: 0.9, roll: -6 },
+        { type: 'width', t: 0.0, width: 22 },
+        { type: 'width', t: 0.1, width: 18 },
+        { type: 'width', t: 0.2, width: 14 },
+        { type: 'width', t: 0.3, width: 13 },
+        { type: 'width', t: 0.4, width: 16 },
+        { type: 'width', t: 0.5, width: 12 },
+        { type: 'width', t: 0.6, width: 12 },
+        { type: 'width', t: 0.7, width: 20 },
+        { type: 'width', t: 0.8, width: 24 },
+        { type: 'width', t: 0.9, width: 22 }
       ]
     }]
   };
@@ -324,17 +511,22 @@
     start: { path: 0, point: 0, reverse: false },
     paths: [{
       closed: true,
-      controlPoints: [
-        { pos: [40, 0, 0], roll: 0, width: 18, weight: 1 },
-        { pos: [0, 0, 40], roll: 0, width: 18, weight: 1 },
-        { pos: [-40, 0, 0], roll: 0, width: 18, weight: 1 },
-        { pos: [0, 0, -40], roll: 0, width: 18, weight: 1 }
+      points: [
+        { type: 'position', pos: [40, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, 40], weight: 1 },
+        { type: 'position', pos: [-40, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, -40], weight: 1 },
+        { type: 'roll', t: 0, roll: 0 },
+        { type: 'roll', t: 1, roll: 0 },
+        { type: 'width', t: 0, width: 18 },
+        { type: 'width', t: 1, width: 18 }
       ]
     }]
   };
 
   global.TrackCore = {
-    basis, basisDeriv, makeEvaluator, buildCenterline, buildEdges,
+    basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
+    evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
     // expose a deep-clone helper so callers never share point references

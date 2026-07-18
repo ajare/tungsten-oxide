@@ -77,11 +77,14 @@ sun.position.set(50, 80, 30);
 scene.add(sun);
 
 // ---------- Track: built from control points via shared TrackCore ------------
-// The track is authored data (control points with position, roll, width, weight)
-// interpolated by a rational cubic B-spline. TrackCore holds the shared math so
-// the editor's preview and this geometry can never drift apart. buildTrack()
-// (re)generates everything from a control-point array, so importing new JSON at
-// runtime just calls it again.
+// The track is authored data: each path holds a single array of TYPED control
+// points (type: 'position' | 'roll' | 'width', see track-core.js), split via
+// TrackCore.splitPoints() into the three point sets buildPath() consumes.
+// Position points interpolate with a rational cubic B-spline; roll/width each
+// interpolate with their own independent spline. TrackCore holds the shared
+// math so the editor's preview and this geometry can never drift apart.
+// buildTrack() (re)generates everything from a path list, so importing new
+// JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
@@ -97,13 +100,19 @@ function disposeObject(obj) {
   if (obj.material) obj.material.dispose();
 }
 
-// A thin vertical guard rail rising from one (already trimmed) track edge.
-function buildRail(edge, closed, height, color) {
+// A thin guard rail rising from one (already trimmed) track edge, along the
+// track's surface normal at each point (NOT world-up) so the wall banks with
+// the road instead of always pointing straight up. `normals` is parallel to
+// `edge` (same indexing as the baked frames the edges came from).
+function buildRail(edge, normals, closed, height, color) {
   const count = edge.length;
   const positions = [], indices = [];
   for (let i = 0; i < count; i++) {
-    const base = edge[i];
-    positions.push(base.x, base.y, base.z, base.x, base.y + height, base.z);
+    const base = edge[i], n = normals[i];
+    positions.push(
+      base.x, base.y, base.z,
+      base.x + n.x * height, base.y + n.y * height, base.z + n.z * height
+    );
   }
   const segCount = closed ? count : count - 1;
   for (let i = 0; i < segCount; i++) {
@@ -121,10 +130,10 @@ function buildRail(edge, closed, height, color) {
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
-  const raw = TrackCore.buildCenterline(controlPoints, N, closed);
+  const raw = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
   const edges = TrackCore.buildEdges(raw, closed);
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
@@ -173,9 +182,12 @@ function buildPath(controlPoints, closed) {
   stripeLine.computeLineDistances();
   scene.add(stripeLine);
 
-  // Glowing guard rails rising from both trimmed edges.
-  const railR = buildRail(edges.right, closed, 1.4, 0xff3355);
-  const railL = buildRail(edges.left, closed, 1.4, 0xff3355);
+  // Glowing guard rails rising from both trimmed edges, along the track's
+  // surface normal so they bank with the road. `raw[i].normal` aligns with
+  // edges.left[i]/edges.right[i] (both derived from the same baked frames).
+  const railNormals = raw.map(f => f.normal);
+  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355);
+  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355);
   scene.add(railR, railL);
 
   const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
@@ -183,9 +195,10 @@ function buildPath(controlPoints, closed) {
 }
 
 // (Re)build the entire track (all paths) from a track's path list, then reset
-// the ship. `trackPaths` is [{ closed, controlPoints }, ...]. `start` is
-// { path, point, reverse } picking which control point the ship begins at and
-// which way it faces.
+// the ship. `trackPaths` is [{ closed, points }, ...] (points: typed
+// position/roll/width control points, see track-core.js). `start` is
+// { path, point, reverse } picking which position control point the ship
+// begins at and which way it faces.
 function buildTrack(trackPaths, name, start) {
   trackName = name || '';
   trackStart = start || { path: 0, point: 0, reverse: false };
@@ -196,7 +209,10 @@ function buildTrack(trackPaths, name, start) {
     disposeObject(p.railR); disposeObject(p.railL);
   }
 
-  paths = trackPaths.map(p => buildPath(p.controlPoints, p.closed !== false));
+  paths = trackPaths.map(p => {
+    const { controlPoints, rollPoints, widthPoints } = TrackCore.splitPoints(p.points);
+    return buildPath(controlPoints, p.closed !== false, rollPoints, widthPoints);
+  });
 
   resetShip();
   const label = document.getElementById('trackName');
@@ -297,6 +313,7 @@ function resetShip() {
   }
   const s = cl[startIndex];
   // Centre of the track (on the centerline, no lateral offset), hovering above it.
+  physics.groundPos.copy(s.pos);
   shipGroup.position.set(s.pos.x, s.pos.y + 0.5, s.pos.z);
   let heading = Math.atan2(s.tangent.x, s.tangent.z);
   if (trackStart.reverse) heading += Math.PI;
@@ -306,6 +323,8 @@ function resetShip() {
   physics.visualBank = 0;
   physics.visualPitch = 0;
   physics.up.set(0, 1, 0);
+  physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
+  physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
 }
 
 // ---------- Input ----------
@@ -324,13 +343,23 @@ const physics = {
   maxReverse: -12,
   accel: 26,
   brakeDecel: 42,
-  friction: 6,
+  friction: 20,      // decel when neither throttle nor brake held -- stops quickly when let go
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
   bobTime: 0,
   visualBank: 0,           // smoothed steer-lean (rad)
   visualPitch: 0,          // smoothed accel-pitch (rad)
-  up: new THREE.Vector3(0, 1, 0) // current road surface normal
+  up: new THREE.Vector3(0, 1, 0),      // current road surface normal
+  forward: new THREE.Vector3(0, 0, 1), // ship's actual (banked) forward, orthogonal to `up`
+  right: new THREE.Vector3(1, 0, 0),   // ship's actual (banked) right, orthogonal to both
+  // Hover-free reference position (on the ribbon surface, no bob offset).
+  // Velocity is integrated from THIS, not from shipGroup.position -- the
+  // rendered position has the hover bob added along `normal`, and once the
+  // track is banked `normal` isn't purely vertical, so its bob offset leaks
+  // into X/Z. Feeding that back into next frame's lateral (s) projection
+  // compounds into a slow one-directional drift on any banked section, even
+  // at a dead stop. groundPos sidesteps that by staying bob-free.
+  groundPos: new THREE.Vector3()
 };
 
 function lerpAngle(a, b, t) {
@@ -343,6 +372,7 @@ function updatePhysics(dt) {
   const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
   const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
   const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+  const hasInput = !!(throttle || brake || steer);
 
   // Longitudinal speed control
   if (throttle) {
@@ -359,60 +389,78 @@ function updatePhysics(dt) {
 
   // Steering: turn rate scales down slightly at top speed for stability,
   // and inverts naturally when reversing.
+  // `heading` is a WORLD-space yaw, but the driver's frame of reference is the
+  // road surface. Once the track banks past vertical (roll > 90deg, up to
+  // ~180deg inverted) the surface normal points downward and the ship/camera
+  // are upside down, so a fixed world-yaw turn reads as reversed to the
+  // driver. Flip the steer by the sign of the surface normal's vertical
+  // component so "left" stays the driver's left through inverted sections.
+  const upSign = physics.up.y < 0 ? -1 : 1;
   const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
   const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
-  physics.heading += steer * effectiveTurn * dt;
+  physics.heading += steer * effectiveTurn * dt * upSign;
 
   // Hover "grip": velocity direction chases heading, but lags behind under
   // hard turns at speed -> gives the classic wipeout slide/drift feel.
   const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
   physics.velocityAngle = lerpAngle(physics.velocityAngle, physics.heading, Math.min(gripThisFrame * dt, 1));
 
-  // Integrate position in the horizontal plane
-  const vx = Math.sin(physics.velocityAngle) * physics.speed;
-  const vz = Math.cos(physics.velocityAngle) * physics.speed;
-  let px = shipGroup.position.x + vx * dt;
-  let pz = shipGroup.position.z + vz * dt;
+  // Integrate/reproject the hover-free ground reference only while the player
+  // is actively giving input. Reprojecting a stationary point onto a banked or
+  // sloped cross-section can introduce tiny X/Z corrections that accumulate as
+  // visible drift; with no input, keep groundPos fixed and only update the
+  // visual hover from the current surface sample.
+  let c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+  if (hasInput) {
+    const vx = Math.sin(physics.velocityAngle) * physics.speed;
+    const vz = Math.cos(physics.velocityAngle) * physics.speed;
+    let px = physics.groundPos.x + vx * dt;
+    let pz = physics.groundPos.z + vz * dt;
 
-  // Project the ship onto the banked cross-section at its longitudinal spot.
-  // `s` is the signed offset along the (banked) edge direction; placing the ship
-  // as pos + edgeRight*s puts it exactly ON the ribbon surface, so it can never
-  // sink under the track no matter how steeply the corner rolls.
-  const c = sampleTrack(px, pz);
-  const er = c.edgeRight;
-  const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
-  let s = ((px - c.pos.x) * er.x + (pz - c.pos.z) * er.z) / cosR2;
+    // Project the ship onto the banked cross-section at its longitudinal spot.
+    // `s` is the signed offset along the (banked) edge direction; placing the ship
+    // as pos + edgeRight*s puts it exactly ON the ribbon surface, so it can never
+    // sink under the track no matter how steeply the corner rolls.
+    c = sampleTrack(px, pz);
+    const er = c.edgeRight;
+    const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
+    let s = ((px - c.pos.x) * er.x + (pz - c.pos.z) * er.z) / cosR2;
 
-  // Drivable corridor is bounded by the TRIMMED edges per side, so cut corners
-  // pinch the collision exactly like the visual mesh (walls you see = walls you hit).
-  const margin = 0.9;
-  let loS = c.sLeft + margin;    // inner limit of the left edge (negative side)
-  let hiS = c.sRight - margin;   // inner limit of the right edge (positive side)
-  if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
+    // Drivable corridor is bounded by the TRIMMED edges per side, so cut corners
+    // pinch the collision exactly like the visual mesh (walls you see = walls you hit).
+    const margin = 0.9;
+    let loS = c.sLeft + margin;    // inner limit of the left edge (negative side)
+    let hiS = c.sRight - margin;   // inner limit of the right edge (positive side)
+    if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
 
-  let hitSign = 0;
-  if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
-  if (hitSign) {
-    s = THREE.MathUtils.clamp(s, loS, hiS);
-    // Slide along the wall we hit: cancel only the velocity component pushing
-    // into it (with light scrub), so the ship glides instead of stopping dead.
-    const nl = Math.hypot(er.x, er.z) || 1;
-    const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
-    let vX = Math.sin(physics.velocityAngle) * physics.speed;
-    let vZ = Math.cos(physics.velocityAngle) * physics.speed;
-    const into = vX * wnx + vZ * wnz;
-    if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
-    physics.speed = Math.hypot(vX, vZ) * 0.98;
-    physics.velocityAngle = Math.atan2(vX, vZ);
+    let hitSign = 0;
+    if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
+    if (hitSign) {
+      s = THREE.MathUtils.clamp(s, loS, hiS);
+      // Slide along the wall we hit: cancel only the velocity component pushing
+      // into it (with light scrub), so the ship glides instead of stopping dead.
+      const nl = Math.hypot(er.x, er.z) || 1;
+      const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
+      let vX = Math.sin(physics.velocityAngle) * physics.speed;
+      let vZ = Math.cos(physics.velocityAngle) * physics.speed;
+      const into = vX * wnx + vZ * wnz;
+      if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
+      physics.speed = Math.hypot(vX, vZ) * 0.98;
+      physics.velocityAngle = Math.atan2(vX, vZ);
+    }
+
+    physics.groundPos.set(c.pos.x + er.x * s, c.pos.y + er.y * s, c.pos.z + er.z * s);
   }
 
-  // Sit on the surface, hovering a little along the surface normal.
+  // Sit on the surface, hovering a little along the surface normal. groundPos
+  // (bob-free) is what next frame's integration reads from; shipGroup's
+  // actual rendered position adds the hover bob on top of it.
   physics.bobTime += dt;
   const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03;
   shipGroup.position.set(
-    c.pos.x + er.x * s + c.normal.x * hover,
-    c.pos.y + er.y * s + c.normal.y * hover,
-    c.pos.z + er.z * s + c.normal.z * hover
+    physics.groundPos.x + c.normal.x * hover,
+    physics.groundPos.y + c.normal.y * hover,
+    physics.groundPos.z + c.normal.z * hover
   );
   physics.up.copy(c.normal);
 
@@ -423,6 +471,11 @@ function updatePhysics(dt) {
   const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
   const forward = new THREE.Vector3().crossVectors(right, up).normalize();
   shipGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
+  // Keep this exact orthonormal basis around for the chase camera, so it
+  // always sits directly behind/above the ship using the SAME up/forward --
+  // not a separately-computed (and potentially non-orthogonal) pair.
+  physics.right.copy(right);
+  physics.forward.copy(forward);
 
   // Extra hover flair: lean into the steer, pitch back under acceleration.
   const targetBank = THREE.MathUtils.clamp(-steer * speedRatio * 0.5, -0.5, 0.5);
@@ -441,15 +494,22 @@ function updatePhysics(dt) {
 const CAM_BACK = 6.5;   // distance behind the ship
 const CAM_UP = 3.2;     // height above the ship
 function updateCamera(dt) {
-  const dir = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
-  // Lift the camera along the road's surface normal so on banked corners it
-  // rises above the track rather than dipping into (and behind) it.
-  const up = physics.up;
-  camera.position.copy(shipGroup.position)
-    .addScaledVector(dir, -CAM_BACK)
+  // Use the ship's own orthonormal (forward, up) basis -- the same one its
+  // quaternion was built from -- rather than a flat heading-only forward.
+  // Mixing a flat forward with the fully-banked `up` (as before) isn't even
+  // orthogonal once the track rolls, so the camera would drift out from
+  // directly behind the ship; and leaving camera.up at world Y meant the
+  // rendered horizon didn't bank with the track, fighting the position
+  // offset. Setting camera.up to the track's own up keeps the camera locked
+  // directly behind/above the ship at any roll, including past 90 degrees.
+  const up = physics.up, fwd = physics.forward;
+  const base = physics.groundPos.clone().addScaledVector(up, 0.5);
+  camera.up.copy(up);
+  camera.position.copy(base)
+    .addScaledVector(fwd, -CAM_BACK)
     .addScaledVector(up, CAM_UP);
-  const lookAt = shipGroup.position.clone()
-    .addScaledVector(dir, 6)
+  const lookAt = base.clone()
+    .addScaledVector(fwd, 6)
     .addScaledVector(up, 0.8);
   camera.lookAt(lookAt);
 }
