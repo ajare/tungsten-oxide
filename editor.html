@@ -476,7 +476,8 @@ function drawTop() {
   });
   const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
   pathPreviews = bakedPaths.map((bp, pathIndex) => {
-    const pp = bp.parts, frames = bp.frames, edges = bp.edges;
+    const pp = bp.parts, frames = bp.frames;
+    let edges = bp.edges;
     const cuts = edgeCuts[pathIndex] || {};
     if (cuts.start) {
       if (cuts.start.left) edges.left[0] = cuts.start.left;
@@ -487,6 +488,9 @@ function drawTop() {
       if (cuts.end.left) edges.left[i] = cuts.end.left;
       if (cuts.end.right) edges.right[i] = cuts.end.right;
     }
+    const wrapsAtDisjointSeam = !bp.closed && !!cuts.start && !!cuts.end &&
+      bp.controlPoints[0] && bp.controlPoints[bp.controlPoints.length - 1] && bp.controlPoints[0].id === bp.controlPoints[bp.controlPoints.length - 1].id;
+    edges = TrackCore.removeLocalEdgeSelfIntersections(edges, bp.closed, wrapsAtDisjointSeam);
     // Where the SAME side of this SAME curve's edge crosses itself elsewhere
     // along its length (e.g. a wiggly chicane), the wall drawn there should
     // collapse to the crossing point -- matching track.html's buildRail. Kept

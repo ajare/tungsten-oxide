@@ -379,6 +379,64 @@
     const t = ((a1.x - b1.x) * (b1.z - b2.z) - (a1.z - b1.z) * (b1.x - b2.x)) / den;
     return { x: a1.x + t * (a2.x - a1.x), y: (a1.y + a2.y) / 2, z: a1.z + t * (a2.z - a1.z) };
   }
+  function removeLocalSelfIntersectionLoops(pts, closed, wrapOpen) {
+    closed = closed !== false;
+    const circular = closed || !!wrapOpen;
+    const N = pts.length;
+    const segCount = circular ? N : N - 1;
+    if (segCount < 4) return pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    const nextIdx = i => circular ? (i + 1) % N : i + 1;
+    const out = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    const MAX_LOCAL_SPAN = 100;
+    const MAX_PASSES = segCount;
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      let found = null;
+      for (let i = 0; i < segCount && !found; i++) {
+        const a1 = out[i], a2 = out[nextIdx(i)];
+        for (let j = i + 2; j < segCount; j++) {
+          if (circular && i === 0 && j === segCount - 1) continue;
+          const forwardSpan = j - i;
+          const wrappedSpan = circular ? segCount - forwardSpan : Infinity;
+          if (Math.min(forwardSpan, wrappedSpan) > MAX_LOCAL_SPAN) continue;
+          if (segmentsCrossXZ(a1, a2, out[j], out[nextIdx(j)])) {
+            found = { i, j, useWrappedInterval: wrappedSpan < forwardSpan };
+            break;
+          }
+        }
+      }
+      if (!found) break;
+      const { i, j, useWrappedInterval } = found;
+      const a1 = out[i], a2 = out[nextIdx(i)], b1 = out[j], b2 = out[nextIdx(j)];
+      const mid = {
+        x: (a2.x + b1.x) / 2,
+        y: (a2.y + b1.y) / 2,
+        z: (a2.z + b1.z) / 2
+      };
+      let X = segCrossPointXZ(a1, a2, b1, b2);
+      const localScale = Math.max(
+        Math.hypot(a2.x - a1.x, a2.z - a1.z),
+        Math.hypot(b2.x - b1.x, b2.z - b1.z),
+        1
+      );
+      if (Math.hypot(X.x - mid.x, X.z - mid.z) > 8 * localScale) X = mid;
+      let v = useWrappedInterval ? nextIdx(j) : nextIdx(i);
+      const stop = useWrappedInterval ? i : j;
+      while (true) {
+        out[v] = { x: X.x, y: X.y, z: X.z };
+        if (v === stop) break;
+        v = nextIdx(v);
+      }
+    }
+    return out;
+  }
+
+  function removeLocalEdgeSelfIntersections(edges, closed, wrapOpen) {
+    return {
+      left: removeLocalSelfIntersectionLoops(edges.left, closed, wrapOpen),
+      right: removeLocalSelfIntersectionLoops(edges.right, closed, wrapOpen)
+    };
+  }
+
   // Collapse LOCAL self-intersections of a single polyline (typically a wall/
   // rail's edge line) -- segments that aren't adjacent (so trimEdge's
   // consecutive-backward-segment fold detection above misses them) but are
@@ -757,7 +815,7 @@
 
   global.TrackCore = {
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
-    computeDisjointEdgeCuts, collapseSelfIntersections,
+    computeDisjointEdgeCuts, collapseSelfIntersections, removeLocalEdgeSelfIntersections,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     parseTrack, serializeTrack, normalizeStart,
