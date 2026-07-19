@@ -1977,7 +1977,19 @@ function renderProps() {
         armHistory();
         if (inp.dataset.mesh) meshPlacement[inp.dataset.mesh] = val;
         else if (inp.dataset.asset && asset) asset.railHeight = Math.max(0, val);
-        refresh();
+        // draw(), NOT refresh() -- refresh() calls renderProps(), which rebuilds
+        // this panel via innerHTML and so destroys the very input being typed
+        // into: the field lost focus after a single character, and the fresh
+        // render reset armHistory's flag, so every keystroke also pushed its own
+        // undo entry and 30 characters evicted the whole history. Every sibling
+        // handler below (roll, width, cross-section, position) already calls
+        // draw() for exactly this reason. persistEditorTrack() is kept so the
+        // game's live preview still follows along, which is the only other part
+        // of refresh() a mesh edit affects -- updateMeta() and
+        // renderTexturePanel() read nothing that a placement or rail height can
+        // change.
+        draw();
+        persistEditorTrack();
       });
     });
     document.getElementById('delMeshBtn').addEventListener('click', deleteSelectedMesh);

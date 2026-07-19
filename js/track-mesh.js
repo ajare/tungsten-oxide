@@ -265,6 +265,19 @@ export function segmentCrossing(ax, az, bx, bz, cx, cz, dx, dz) {
  * along a rail rather than stopping dead -- the same behaviour the spline
  * corridor's wall clamp already produces. Repeats a few times so running into a
  * concave corner resolves against both walls instead of jittering between them.
+ *
+ * A rail blocks from BOTH sides, which is what `side` below is for. `rail.nx/nz`
+ * points out of the drivable area, and this used to resolve every hit to
+ * `hit - n * margin` and cancel velocity only when it pointed outward -- both of
+ * which silently assume the mover started inside. They hold for a ship driving
+ * on the region, but not for an airborne one flying at the region's flank below
+ * rail height, which track-game.js sweeps through here too (it even pads
+ * withinBounds by the collision margin to catch exactly that approach). Such a
+ * ship was pushed to the far side of the wall it had just hit -- deposited
+ * INSIDE the region and then landed on it, rather than bounced off a wall the
+ * schema documents as solid. Backing off toward the side the crossing came from
+ * makes the rail symmetric, and costs the inside case nothing: `side` is +1
+ * there, which is the arithmetic that was already running.
  */
 export function slideAlongRails(compiled, from, to, velocity, margin) {
   let cur = { x: from.x, z: from.z };
@@ -280,15 +293,24 @@ export function slideAlongRails(compiled, from, to, velocity, margin) {
     if (!nearest) break;
     hit = true;
     const { rail, t } = nearest;
-    const hx = cur.x + (target.x - cur.x) * t;
-    const hz = cur.z + (target.z - cur.z) * t;
-    // Stop just inside the wall, then carry the remaining motion along it.
-    cur = { x: hx - rail.nx * margin, z: hz - rail.nz * margin };
+    // Which way through the wall are we going? Taken from the whole step rather
+    // than the leftover past the hit, so it stays well defined when the hit
+    // lands on the very end of the step and the remainder is ~0.
+    const dirX = target.x - cur.x, dirZ = target.z - cur.z;
+    const side = (dirX * rail.nx + dirZ * rail.nz) >= 0 ? 1 : -1;   // +1 leaving, -1 arriving
+    const hx = cur.x + dirX * t;
+    const hz = cur.z + dirZ * t;
+    // Stop just short of the wall on the side we came from, then carry the
+    // remaining motion along it.
+    cur = { x: hx - rail.nx * margin * side, z: hz - rail.nz * margin * side };
     const remX = target.x - hx, remZ = target.z - hz;
     const into = remX * rail.nx + remZ * rail.nz;
     target = { x: cur.x + remX - rail.nx * into, z: cur.z + remZ - rail.nz * into };
+    // Cancel the component driving into the wall. Which sign that is depends on
+    // the approach, hence `* side`; the tangential component always survives, so
+    // the ship keeps sliding either way.
     const vInto = velocity.x * rail.nx + velocity.z * rail.nz;
-    if (vInto > 0) { velocity.x -= rail.nx * vInto; velocity.z -= rail.nz * vInto; }
+    if (vInto * side > 0) { velocity.x -= rail.nx * vInto; velocity.z -= rail.nz * vInto; }
   }
   return { x: target.x, z: target.z, hit };
 }

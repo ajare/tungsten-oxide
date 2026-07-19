@@ -364,9 +364,21 @@
       const seg = closed ? (startFwd + i) % segCount : i;
       if (fwd[seg]) { i++; continue; }
 
-      // maximal run of backward (folded) segments starting at `seg`
+      // Maximal run of backward (folded) segments starting at `seg`.
+      //
+      // The bound differs by case because the INDEX differs. Closed paths read
+      // fwd[] modulo segCount, so any `len` is a valid index and `len` itself is
+      // the right thing to cap (one full lap). Open paths read fwd[i + len]
+      // straight, so the cap has to be on `i + len`: past the end fwd[] yields
+      // undefined, `!undefined` is true, and the scan would run on to
+      // len === segCount. `e` then overshoots the last segment and pts[nextIdx(e)]
+      // is undefined, which threw out of buildEdges. That fires whenever an open
+      // curve's inner edge is still folded at its FINAL segment -- e.g. a wide
+      // road whose last two control points nearly coincide -- and it took the
+      // game's startup and the editor's draw loop down with it.
       let len = 0;
-      while (len < segCount && !fwd[closed ? (startFwd + i + len) % segCount : i + len]) len++;
+      while ((closed ? len < segCount : i + len < segCount) &&
+             !fwd[closed ? (startFwd + i + len) % segCount : i + len]) len++;
       const s = seg;                                            // first folded segment (vertex s -> s+1)
       const e = closed ? (startFwd + i + len - 1) % segCount : i + len - 1; // last folded segment
 

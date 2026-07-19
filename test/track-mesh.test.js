@@ -169,6 +169,56 @@ test('crossing a bare edge is a ledge, not a wall', () => {
   assert.equal(TM.containsWorldPoint(c, r.x, r.z), false, 'ship has left the region and should fall');
 });
 
+/* A rail is documented as a solid wall, which means solid from both sides. The
+ * ship meets one from outside whenever it is airborne below rail height and
+ * flying at the region's flank -- track-game.js sweeps that case through
+ * slideAlongRails too, and pads withinBounds by the collision margin precisely
+ * to catch it. Resolving every hit to `hit - normal * margin` assumed the mover
+ * started inside, so an outside approach was pushed through to the far face:
+ * deposited INSIDE the region, then landed on it, instead of bouncing off. */
+// railedPad(true) is fully enclosed, which is what an actual import produces
+// (railBoundaryEdges walls every rim edge). Its north wall is the z=30 edge,
+// so "outside" below means z > 30, approaching southward.
+test('a rail blocks a ship arriving from outside the region', () => {
+  const c = TM.compile(railedPad(true), flatPlacement());
+  const vel = { x: 0, z: -20 };
+  const r = TM.slideAlongRails(c, { x: 15, z: 40 }, { x: 15, z: 20 }, vel, SHIP_MARGIN);
+  assert.equal(r.hit, true);
+  assert.equal(TM.containsWorldPoint(c, r.x, r.z), false, `must stay outside, got ${r.x},${r.z}`);
+  assert.ok(r.z >= 30 - 1e-6, `held on the outside face, got z=${r.z}`);
+  assert.ok(Math.abs(vel.z) < 1e-9, 'into-wall component cancelled from this side too');
+});
+
+test('glancing a rail from outside slides along it and keeps tangential speed', () => {
+  const c = TM.compile(railedPad(true), flatPlacement());
+  const vel = { x: 20, z: -5 };
+  const r = TM.slideAlongRails(c, { x: 5, z: 33 }, { x: 12, z: 28 }, vel, SHIP_MARGIN);
+  assert.equal(r.hit, true);
+  assert.equal(TM.containsWorldPoint(c, r.x, r.z), false, `must stay outside, got ${r.x},${r.z}`);
+  assert.ok(r.x > 5, 'still travelling along the wall');
+  assert.ok(Math.abs(vel.x - 20) < 1e-9, 'tangential speed untouched');
+});
+
+test('a fast move cannot tunnel through a rail from outside either', () => {
+  const c = TM.compile(railedPad(true), flatPlacement());
+  const vel = { x: 0, z: -500 };
+  const r = TM.slideAlongRails(c, { x: 15, z: 400 }, { x: 15, z: 20 }, vel, SHIP_MARGIN);
+  assert.equal(r.hit, true);
+  assert.equal(TM.containsWorldPoint(c, r.x, r.z), false, `swept test must catch it, got ${r.x},${r.z}`);
+});
+
+/* The drivable side is what the rest of these tests pin; this states the other
+ * half of the invariant directly. Sitting on a wall and pushing outward must
+ * still be turned back INWARD -- `side` is +1 there, which is exactly the
+ * arithmetic that ran before the fix, so this behaviour is unchanged. */
+test('being on a rail and pushing outward is still blocked inward', () => {
+  const c = TM.compile(railedPad(true), flatPlacement());
+  const vel = { x: 0, z: 20 };
+  const r = TM.slideAlongRails(c, { x: 15, z: 30 }, { x: 15, z: 40 }, vel, SHIP_MARGIN);
+  assert.equal(r.hit, true);
+  assert.equal(TM.containsWorldPoint(c, r.x, r.z), true, `held inside, got ${r.x},${r.z}`);
+});
+
 test('a concave corner resolves against both walls', () => {
   const c = TM.compile(railedPad(true), flatPlacement());
   const vel = { x: -20, z: -20 };
