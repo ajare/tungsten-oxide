@@ -37,6 +37,7 @@ const fmt = n => {
   return Number.isFinite(v) ? Number(v.toFixed(6)).toString() : '0';
 };
 const pointText = p => `(${fmt(p[0])}, ${fmt(p[1])}, ${fmt(p[2])})`;
+const texCoordText = uv => `(${fmt(uv[0])}, ${fmt(uv[1])})`;
 
 function uniqueName(base, used) {
   const clean = sanitizeUsdIdentifier(base, 'Prim');
@@ -92,11 +93,23 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
   }
 
   const points = [];
+  const uvs = [];
   const ringSize = crossSectionSegments + 1;
+  const chordWidths = raw.map((_, i) => {
+    const left = edges.left[i], right = edges.right[i];
+    return Math.hypot(right.x - left.x, right.y - left.y, right.z - left.z) || 1;
+  });
+  const representativeWidth = chordWidths.reduce((sum, w) => sum + w, 0) / Math.max(1, chordWidths.length);
+  const distances = [0];
+  for (let i = 1; i < raw.length; i++) {
+    const a = raw[i - 1].pos, b = raw[i].pos;
+    distances[i] = distances[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
   for (let i = 0; i < raw.length; i++) {
     const left = edges.left[i], right = edges.right[i], f = raw[i];
     const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
-    const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
+    const chordWidth = chordWidths[i];
+    const texV = distances[i] / representativeWidth;
     for (let j = 0; j <= crossSectionSegments; j++) {
       const v = j / crossSectionSegments;
       const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
@@ -105,6 +118,7 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
         left.y + chord.y * v + f.normal.y * h,
         left.z + chord.z * v + f.normal.z * h
       ]);
+      uvs.push([v, texV]);
     }
   }
 
@@ -121,7 +135,7 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
     }
   }
   orientFacesUp(points, faces);
-  return { name: `Path_${pathIndex}`, material: ROAD_MATERIAL, points, faces };
+  return { name: `Path_${pathIndex}`, material: ROAD_MATERIAL, points, faces, uvs };
 }
 
 function buildMeshRegionMesh(track, placement, placementIndex, warnings) {
@@ -163,6 +177,10 @@ function writeMeshPrim(lines, mesh, usedNames) {
   lines.push(`        point3f[] points = [${mesh.points.map(pointText).join(', ')}]`);
   lines.push(`        int[] faceVertexCounts = [${mesh.faces.map(() => '3').join(', ')}]`);
   lines.push(`        int[] faceVertexIndices = [${mesh.faces.flat().join(', ')}]`);
+  if (mesh.uvs && mesh.uvs.length === mesh.points.length) {
+    lines.push(`        texCoord2f[] primvars:st = [${mesh.uvs.map(texCoordText).join(', ')}]`);
+    lines.push('        uniform token primvars:st:interpolation = "vertex"');
+  }
   lines.push('        uniform token subdivisionScheme = "none"');
   lines.push('    }');
 }

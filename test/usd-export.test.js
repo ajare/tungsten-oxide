@@ -39,8 +39,8 @@ test('closed curve export shares the seam ring instead of duplicating it', () =>
   assert.equal(scene.meshes[0].faces.length, 12 * 4 * 2);
 });
 
-test('open curve export has no end caps', () => {
-  const track = TrackCore.parseTrack(JSON.stringify({
+function openStraightTrack() {
+  return TrackCore.parseTrack(JSON.stringify({
     version: 5,
     name: 'Open',
     samples: 8,
@@ -56,9 +56,23 @@ test('open curve export has no end caps', () => {
       ]
     }]
   }));
-  const scene = buildUsdScene(track, { TrackCore, crossSectionSegments: 2 });
+}
+
+test('open curve export has no end caps', () => {
+  const scene = buildUsdScene(openStraightTrack(), { TrackCore, crossSectionSegments: 2 });
   assert.equal(scene.meshes[0].points.length, 8 * 3);
   assert.equal(scene.meshes[0].faces.length, 7 * 2 * 2);
+});
+
+test('curve export includes generated square-ish texture coordinates', () => {
+  const scene = buildUsdScene(openStraightTrack(), { TrackCore, crossSectionSegments: 2 });
+  const mesh = scene.meshes[0];
+  assert.equal(mesh.uvs.length, mesh.points.length);
+  assert.deepEqual(mesh.uvs.slice(0, 3).map(uv => uv[0]), [0, 0.5, 1]);
+  assert.equal(mesh.uvs[0][1], 0);
+  assert.ok(mesh.uvs.at(-1)[1] > 8 && mesh.uvs.at(-1)[1] < 10, `expected path length / width scale, got ${mesh.uvs.at(-1)[1]}`);
+  assert.match(scene.text, /texCoord2f\[\] primvars:st/);
+  assert.match(scene.text, /uniform token primvars:st:interpolation = "vertex"/);
 });
 
 test('mesh placements are exported as separate baked Mesh prims', () => {

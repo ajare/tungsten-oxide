@@ -155,6 +155,118 @@ function compiledMeshes() {
 
 function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; }
 
+// ---------- Texture assets ----------
+let texturePanelOpen = false;
+let textureTileEditArmed = null;
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function textureAssets() { if (!track.textureAssets || typeof track.textureAssets !== 'object') track.textureAssets = {}; return track.textureAssets; }
+function textureAssetEntries() { return Object.entries(textureAssets()); }
+function textureGrid(asset) {
+  const cols = Math.floor(asset.width / asset.tileWidth);
+  const rows = Math.floor(asset.height / asset.tileHeight);
+  return { cols, rows, count: cols * rows };
+}
+function uniqueTextureAssetId(filename) {
+  return TrackMesh.uniqueAssetId(filename || 'texture', new Set(Object.keys(textureAssets())));
+}
+function clampTextureTileSize(asset, key, value) {
+  const max = key === 'tileWidth' ? asset.width : asset.height;
+  return Math.max(1, Math.min(max, Math.floor(Number(value) || max)));
+}
+function clearInvalidTextureAssignments(assetId) {
+  const asset = textureAssets()[assetId];
+  if (!asset) return;
+  const count = textureGrid(asset).count;
+  for (const path of track.paths || []) {
+    if (path.texture && path.texture.asset === assetId && path.texture.tile >= count) path.texture = null;
+  }
+}
+function currentCurve() { return track.paths && track.paths[sel.path] ? track.paths[sel.path] : null; }
+function assignCurrentCurveTexture(assetId, tile) {
+  const path = currentCurve();
+  if (!path) return;
+  if (path.texture && path.texture.asset === assetId && path.texture.tile === tile) return;
+  pushUndo();
+  path.texture = { asset: assetId, tile };
+  refresh();
+}
+function clearCurrentCurveTexture() {
+  const path = currentCurve();
+  if (!path || !path.texture) return;
+  pushUndo();
+  path.texture = null;
+  refresh();
+}
+function deleteTextureAsset(assetId) {
+  const asset = textureAssets()[assetId];
+  if (!asset) return;
+  if (!confirm(`Delete texture image "${asset.name}" and clear curves using it?`)) return;
+  pushUndo();
+  delete textureAssets()[assetId];
+  for (const path of track.paths || []) if (path.texture && path.texture.asset === assetId) path.texture = null;
+  refresh();
+}
+function imageSizeFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+    img.onerror = () => reject(new Error('image could not be decoded'));
+    img.src = dataUrl;
+  });
+}
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+async function loadTextureImageFile(file) {
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const size = await imageSizeFromDataUrl(dataUrl);
+    pushUndo();
+    const id = uniqueTextureAssetId(file.name);
+    textureAssets()[id] = { name: file.name || id, dataUrl, width: size.width, height: size.height, tileWidth: size.width, tileHeight: size.height };
+    texturePanelOpen = true;
+    refresh();
+  } catch (err) {
+    alert('Could not load image: ' + (err.message || err));
+  }
+}
+function renderTexturePanel() {
+  const panel = document.getElementById('texturePanel');
+  if (!panel) return;
+  panel.style.display = texturePanelOpen ? 'block' : 'none';
+  if (!texturePanelOpen) return;
+  const list = document.getElementById('textureAssetList');
+  const cur = currentCurve();
+  const selected = cur && cur.texture;
+  const entries = textureAssetEntries();
+  if (!entries.length) {
+    list.innerHTML = '<div class="hint" style="margin-top:10px">No texture images loaded.</div>';
+    return;
+  }
+  list.innerHTML = entries.map(([id, asset]) => {
+    const { cols, rows, count } = textureGrid(asset);
+    const tiles = Array.from({ length: count }, (_, tile) => {
+      const x = tile % cols, y = Math.floor(tile / cols);
+      const selectedClass = selected && selected.asset === id && selected.tile === tile ? ' selected' : '';
+      const bgSize = `${asset.width / asset.tileWidth * 48}px ${asset.height / asset.tileHeight * 48}px`;
+      const bgPos = `-${x * 48}px -${y * 48}px`;
+      return `<button class="tile${selectedClass}" data-asset="${id}" data-tile="${tile}" title="Texture ${tile}" style="background-image:url(${asset.dataUrl});background-size:${bgSize};background-position:${bgPos}"></button>`;
+    }).join('');
+    return `<div class="asset" data-asset="${id}">
+      <div class="assetTitle"><span class="name">${escapeHtml(asset.name)}</span><span class="spacer"></span><button data-action="deleteTexture" data-asset="${id}">Delete</button></div>
+      <div class="assetMeta">Image: ${asset.width} × ${asset.height} px<br>Textures: ${count} (${cols} × ${rows})</div>
+      <label>Tile W <input type="number" min="1" max="${asset.width}" value="${asset.tileWidth}" data-action="tileSize" data-asset="${id}" data-key="tileWidth"></label>
+      <label>Tile H <input type="number" min="1" max="${asset.height}" value="${asset.tileHeight}" data-action="tileSize" data-asset="${id}" data-key="tileHeight"></label>
+      <div class="tiles">${tiles}</div>
+    </div>`;
+  }).join('');
+}
+
 // Hit-test a world point against placements, nearest-last so the topmost drawn
 // region wins the click.
 function meshAtWorld(wx, wz) {
@@ -2003,7 +2115,7 @@ function persistEditorTrack() {
   try { localStorage.setItem('web3d.currentTrack', TrackCore.serializeTrack(track)); }
   catch (err) { console.warn('Could not persist track for game preview:', err); }
 }
-function refresh() { syncVisualOptionsFromControls(); draw(); renderProps(); updateMeta(); persistEditorTrack(); }
+function refresh() { syncVisualOptionsFromControls(); draw(); renderProps(); updateMeta(); renderTexturePanel(); persistEditorTrack(); }
 
 // ---------- Hit testing ----------
 // Roll-point markers of the currently-selected path, drawn in the top-down
@@ -3087,6 +3199,42 @@ meshFileInput.addEventListener('change', async (e) => {
 // Arrow, not a bare reference: the handler would otherwise receive the click
 // MouseEvent as `centreOn` and try to centre the region on event.x/event.z.
 document.getElementById('pasteMeshBtn').addEventListener('click', () => importMeshFromClipboard());
+
+const textureFileInput = document.getElementById('textureFileInput');
+document.getElementById('texturesBtn').addEventListener('click', () => { texturePanelOpen = true; renderTexturePanel(); });
+document.getElementById('closeTexturePanelBtn').addEventListener('click', () => { texturePanelOpen = false; renderTexturePanel(); });
+document.getElementById('loadTextureBtn').addEventListener('click', () => textureFileInput.click());
+document.getElementById('clearCurveTextureBtn').addEventListener('click', clearCurrentCurveTexture);
+textureFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (file) await loadTextureImageFile(file);
+  e.target.value = '';
+});
+document.getElementById('textureAssetList').addEventListener('click', (e) => {
+  const tile = e.target.closest('.tile');
+  if (tile) {
+    assignCurrentCurveTexture(tile.dataset.asset, Number(tile.dataset.tile));
+    return;
+  }
+  const del = e.target.closest('[data-action="deleteTexture"]');
+  if (del) deleteTextureAsset(del.dataset.asset);
+});
+document.getElementById('textureAssetList').addEventListener('input', (e) => {
+  if (e.target.dataset.action !== 'tileSize') return;
+  const asset = textureAssets()[e.target.dataset.asset];
+  if (!asset) return;
+  const armedKey = `${e.target.dataset.asset}:${e.target.dataset.key}`;
+  if (textureTileEditArmed !== armedKey) { pushUndo(); textureTileEditArmed = armedKey; updateUndoRedoButtons(); }
+  asset[e.target.dataset.key] = clampTextureTileSize(asset, e.target.dataset.key, e.target.value);
+  clearInvalidTextureAssignments(e.target.dataset.asset);
+  persistEditorTrack();
+});
+document.getElementById('textureAssetList').addEventListener('change', (e) => {
+  if (e.target.dataset.action === 'tileSize') renderTexturePanel();
+});
+document.getElementById('textureAssetList').addEventListener('blur', (e) => {
+  if (e.target.dataset.action === 'tileSize') { textureTileEditArmed = null; renderTexturePanel(); }
+}, true);
 
 // Modules export nothing to the page, so expose a small read-only handle for
 // debugging from the console and for browser smoke tests.

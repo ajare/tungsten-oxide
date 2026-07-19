@@ -331,6 +331,27 @@ test('mesh asset geometry and rail height scale with the track', () => {
   assert.equal(migrated.meshes[0].rotation, 37, 'rotation unchanged');
 });
 
+test('texture assets and curve assignments survive track round trip', () => {
+  const t = TrackCore.parseTrack(trackFixture());
+  t.textureAssets = {
+    asphalt: { name: 'asphalt.png', dataUrl: 'data:image/png;base64,abc', width: 64, height: 32, tileWidth: 16, tileHeight: 16 }
+  };
+  t.paths[0].texture = { asset: 'asphalt', tile: 3 };
+  const reloaded = TrackCore.parseTrack(TrackCore.serializeTrack(t));
+  assert.deepEqual(reloaded.textureAssets, t.textureAssets);
+  assert.deepEqual(reloaded.paths[0].texture, { asset: 'asphalt', tile: 3 });
+});
+
+test('invalid curve texture assignments are cleared on load', () => {
+  const raw = JSON.parse(trackFixture());
+  raw.textureAssets = {
+    atlas: { name: 'atlas.png', dataUrl: 'data:image/png;base64,abc', width: 32, height: 32, tileWidth: 16, tileHeight: 16 }
+  };
+  raw.paths[0].texture = { asset: 'atlas', tile: 4 };
+  const t = TrackCore.parseTrack(JSON.stringify(raw));
+  assert.equal(t.paths[0].texture, null);
+});
+
 test('built-in tracks are authored in current units', () => {
   for (const name of ['DEFAULT_TRACK', 'STARTER_TRACK']) {
     const t = TrackCore[name];

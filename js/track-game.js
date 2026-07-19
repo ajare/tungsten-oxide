@@ -69,16 +69,63 @@ let showWireframe = false;
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
 
+function textureGrid(asset) {
+  if (!asset) return { cols: 0, rows: 0, count: 0 };
+  const cols = Math.floor(asset.width / asset.tileWidth);
+  const rows = Math.floor(asset.height / asset.tileHeight);
+  return { cols, rows, count: cols * rows };
+}
+
+function extractTileTexture(asset, tile) {
+  return new Promise((resolve, reject) => {
+    const grid = textureGrid(asset);
+    if (!asset || tile < 0 || tile >= grid.count) return reject(new Error('invalid texture tile'));
+    const img = new Image();
+    img.onload = () => {
+      const sx = (tile % grid.cols) * asset.tileWidth;
+      const sy = Math.floor(tile / grid.cols) * asset.tileHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = asset.tileWidth;
+      canvas.height = asset.tileHeight;
+      canvas.getContext('2d').drawImage(img, sx, sy, asset.tileWidth, asset.tileHeight, 0, 0, asset.tileWidth, asset.tileHeight);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+      else if (THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
+      tex.needsUpdate = true;
+      resolve(tex);
+    };
+    img.onerror = () => reject(new Error('could not load texture image'));
+    img.src = asset.dataUrl;
+  });
+}
+
+function applyPathTexture(mesh, pathTexture, textureAsset) {
+  if (!pathTexture || !textureAsset) return;
+  extractTileTexture(textureAsset, pathTexture.tile).then((tex) => {
+    if (!mesh.parent) { tex.dispose(); return; }
+    const old = mesh.material;
+    mesh.material = new THREE.MeshBasicMaterial({
+      map: tex, color: 0xffffff, side: THREE.DoubleSide
+    });
+    if (old) old.dispose();
+  }).catch(err => console.warn('Could not apply track texture:', err));
+}
+
 function disposeObject(obj) {
   if (!obj) return;
   scene.remove(obj);
   if (obj.geometry) obj.geometry.dispose();
-  if (obj.material) obj.material.dispose();
+  if (obj.material) {
+    if (obj.material.map) obj.material.map.dispose();
+    obj.material.dispose();
+  }
 }
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals, deciders, skipSelfIntersectionCleanup) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals, deciders, skipSelfIntersectionCleanup, pathTexture, textureAsset) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
   const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
@@ -133,7 +180,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   // the start; open paths leave the two ends unconnected. A global cross-
   // section curvature subdivides the strip across its width: 0 keeps the old
   // flat chord, 1 raises the center to a semicircular arc with the same edges.
-  const roadMaterial = () => new THREE.MeshStandardMaterial({ color: 0x7fb4d4, emissive: 0x31566a, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide, flatShading: true });
+  const roadMaterial = () => new THREE.MeshBasicMaterial({ color: 0x7fb4d4, side: THREE.DoubleSide });
   const surfacePoint = (frameIndex, v) => {
     const left = edges.left[frameIndex], right = edges.right[frameIndex], f = raw[frameIndex];
     const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
@@ -146,8 +193,15 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     ];
   };
   // Fixed cross-section resolution: 24 segments across every longitudinal strip.
-  const pos = [];
+  const pos = [], uv = [];
   const pushPoint = p => pos.push(p[0], p[1], p[2]);
+  const pushUv = (u, v) => uv.push(u, v);
+  const distances = [0];
+  for (let i = 1; i < raw.length; i++) {
+    const a = raw[i - 1].pos, b = raw[i].pos;
+    distances[i] = distances[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
+  const avgWidth = raw.reduce((sum, f) => sum + Math.max(1, f.width || 1), 0) / Math.max(1, raw.length);
   const segCount = closed ? N : N - 1;
   for (let i = 0; i < segCount; i++) {
     const ni = closed ? (i + 1) % N : i + 1;
@@ -155,14 +209,18 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
       const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
       const a = surfacePoint(i, v0), b = surfacePoint(i, v1);
       const c = surfacePoint(ni, v0), d = surfacePoint(ni, v1);
-      pushPoint(a); pushPoint(b); pushPoint(c);
-      pushPoint(b); pushPoint(d); pushPoint(c);
+      const t0 = distances[i] / avgWidth;
+      const t1 = (closed && ni === 0) ? ((distances[i] + Math.hypot(raw[ni].pos.x - raw[i].pos.x, raw[ni].pos.y - raw[i].pos.y, raw[ni].pos.z - raw[i].pos.z)) / avgWidth) : distances[ni] / avgWidth;
+      pushPoint(a); pushUv(v0, t0); pushPoint(b); pushUv(v1, t0); pushPoint(c); pushUv(v0, t1);
+      pushPoint(b); pushUv(v1, t0); pushPoint(d); pushUv(v1, t1); pushPoint(c); pushUv(v0, t1);
     }
   }
   const flatG = new THREE.BufferGeometry();
   flatG.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  flatG.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   flatG.computeVertexNormals();
   const mesh = new THREE.Mesh(flatG, roadMaterial());
+  applyPathTexture(mesh, pathTexture, textureAsset);
   scene.add(mesh);
 
   const wireLine = new THREE.LineSegments(
@@ -173,15 +231,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   wireLine.renderOrder = 10;
   scene.add(wireLine);
 
-  // Dashed racing stripe riding just above the banked centerline.
-  const sg = new THREE.BufferGeometry().setFromPoints(
-    centerline.map(c => c.pos.clone().addScaledVector(c.normal, crossSectionHeight(c.crossSectionCurvature, c.crossSectionTightness, 0.5, c.width) + 0.05))
-  );
-  const stripeLine = closed
-    ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }))
-    : new THREE.Line(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }));
-  stripeLine.computeLineDistances();
-  scene.add(stripeLine);
+  const stripeLine = null;
 
   // Optional guard rails, toggled with G. Collision remains driven by
   // centerline.sLeft/sRight; these meshes are visual only.
@@ -333,7 +383,7 @@ function buildTrack(track) {
     const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
     const edges = TrackCore.buildEdges(frames, closed);
     const hasBranchConnection = controlPoints.some(cp => cp && branchPointIds.has(cp.id));
-    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection };
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection, texture: p.texture || null };
   });
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
@@ -343,7 +393,8 @@ function buildTrack(track) {
   const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
   paths = bakedPaths.map((p, i) => buildPath(
     p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
-    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides), p.hasBranchConnection
+    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides), p.hasBranchConnection,
+    p.texture, p.texture && (track.textureAssets || {})[p.texture.asset]
   ));
   // Anything below every drivable surface by this much has clearly fallen off
   // and is never coming back, so it triggers an automatic respawn.

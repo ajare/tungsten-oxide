@@ -752,7 +752,7 @@
       if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 });
       if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: DEFAULT_WIDTH }, { type: 'width', t: endT, width: DEFAULT_WIDTH });
       if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: endT, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
-      return { id: rawPath.id || null, closed, points };
+      return { id: rawPath.id || null, closed, points, texture: normalizePathTexture(rawPath.texture) };
     }
 
     const rawPoints = Array.isArray(rawPath) ? rawPath : rawPath && rawPath.controlPoints;
@@ -774,8 +774,14 @@
     return {
       id: rawPath && rawPath.id || null,
       closed,
-      points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints, crossSectionPoints)
+      points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints, crossSectionPoints),
+      texture: normalizePathTexture(rawPath && rawPath.texture)
     };
+  }
+
+  function normalizePathTexture(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.asset !== 'string' || !raw.asset) return null;
+    return { asset: raw.asset, tile: Number.isInteger(raw.tile) && raw.tile >= 0 ? raw.tile : 0 };
   }
 
   // Per-crossing keep/collapse override: { side:'left'|'right', a, b, action }.
@@ -830,6 +836,38 @@
       };
     }
     return out;
+  }
+
+  function normalizeTextureAssets(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const [id, entry] of Object.entries(raw)) {
+      if (!id || !entry || typeof entry !== 'object' || typeof entry.dataUrl !== 'string' || !entry.dataUrl) continue;
+      const width = Math.max(1, Math.floor(finiteOr(entry.width, 1, 1)));
+      const height = Math.max(1, Math.floor(finiteOr(entry.height, 1, 1)));
+      out[id] = {
+        name: typeof entry.name === 'string' && entry.name ? entry.name : id,
+        dataUrl: entry.dataUrl,
+        width,
+        height,
+        tileWidth: Math.max(1, Math.min(width, Math.floor(finiteOr(entry.tileWidth, width, 1)))),
+        tileHeight: Math.max(1, Math.min(height, Math.floor(finiteOr(entry.tileHeight, height, 1))))
+      };
+    }
+    return out;
+  }
+
+  function textureTileCount(asset) {
+    if (!asset) return 0;
+    return Math.floor(asset.width / asset.tileWidth) * Math.floor(asset.height / asset.tileHeight);
+  }
+
+  function pruneInvalidPathTextures(paths, textureAssets) {
+    for (const path of paths) {
+      if (!path.texture) continue;
+      const asset = textureAssets[path.texture.asset];
+      if (!asset || path.texture.tile >= textureTileCount(asset)) path.texture = null;
+    }
   }
 
   function normalizeMeshPlacement(raw, i) {
@@ -951,6 +989,9 @@
         else byId.set(p.id, p);
       }
     }
+    const textureAssets = normalizeTextureAssets(data && data.textureAssets);
+    pruneInvalidPathTextures(paths, textureAssets);
+
     // Mesh regions are optional: tracks written before schema 4 simply have
     // none, and placements whose asset went missing are dropped rather than
     // left dangling for the game to trip over.
@@ -965,6 +1006,7 @@
       paths,
       meshAssets,
       meshes,
+      textureAssets,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
@@ -982,7 +1024,8 @@
         if (p.type === 'crossSection') return '      { "type": "crossSection", "t": ' + p.t + ', "curvature": ' + p.curvature + ', "tightness": ' + clampTightness(p.tightness) + ' }';
         return '      { "type": "position", "id": ' + JSON.stringify(p.id || '') + ', "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
       }).join(',\n');
-      return '    { "id": ' + JSON.stringify(path.id || '') + ', "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
+      const textureJson = path.texture ? ', "texture": ' + JSON.stringify(path.texture) : '';
+      return '    { "id": ' + JSON.stringify(path.id || '') + ', "closed": ' + (path.closed !== false) + textureJson + ', "points": [\n' + lines + '\n    ] }';
     }).join(',\n');
     const start = normalizeStart(track.start, track.paths);
     const assets = referencedMeshAssets(track);
@@ -1002,6 +1045,7 @@
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
       '  "meshAssets": {' + (assetsJson ? '\n' + assetsJson + '\n  ' : '') + '},\n' +
       '  "meshes": [' + (meshesJson ? '\n' + meshesJson + '\n  ' : '') + '],\n' +
+      '  "textureAssets": ' + JSON.stringify(track.textureAssets || {}, null, 2).replace(/\n/g, '\n  ') + ',\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
@@ -1014,6 +1058,7 @@
     junctions: [],
     meshAssets: {},
     meshes: [],
+    textureAssets: {},
     paths: [{
       closed: true,
       points: [
@@ -1061,6 +1106,7 @@
     junctions: [],
     meshAssets: {},
     meshes: [],
+    textureAssets: {},
     paths: [{
       closed: true,
       points: [
@@ -1086,7 +1132,7 @@
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     parseTrack, serializeTrack, normalizeStart,
-    normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets,
+    normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))

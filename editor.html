@@ -69,6 +69,27 @@
     width: 24px; height: 130px; margin: 0;
     writing-mode: vertical-rl; direction: rtl; accent-color: var(--accent);
   }
+  #texturePanel {
+    position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
+    width: 360px; max-height: calc(100vh - 90px); overflow: auto;
+    background: #10202e; border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.55); padding: 10px;
+  }
+  #texturePanel .panelHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #texturePanel .panelHead strong { color: var(--accent); }
+  #texturePanel .panelHead .spacer { flex: 1; }
+  #texturePanel button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  #texturePanel button:hover { background: #1f4c6b; }
+  #texturePanel .asset { border-top: 1px solid #244358; padding-top: 9px; margin-top: 9px; }
+  #texturePanel .assetTitle { display: flex; gap: 8px; align-items: center; }
+  #texturePanel .assetTitle .name { color: #fff; font-weight: 600; overflow-wrap: anywhere; }
+  #texturePanel .assetMeta, #texturePanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; }
+  #texturePanel label { display: inline-flex; align-items: center; gap: 4px; margin: 6px 8px 6px 0; color: #b8d8e8; }
+  #texturePanel input[type=number] { width: 72px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #texturePanel .tiles { display: grid; grid-template-columns: repeat(auto-fill, 48px); gap: 6px; margin-top: 6px; }
+  #texturePanel .tile { width: 48px; height: 48px; border: 2px solid #244358; border-radius: 4px; background-repeat: no-repeat; background-color: #061119; cursor: pointer; image-rendering: pixelated; }
+  #texturePanel .tile:hover { border-color: var(--accent); }
+  #texturePanel .tile.selected { border-color: #ffdd00; box-shadow: 0 0 8px rgba(255,221,0,0.75); }
 </style>
 </head>
 <body>
@@ -82,6 +103,7 @@
     <button id="importBtn">Import JSON</button>
     <button id="importMeshBtn" title="Import a geometry-js mesh JSON as a drivable region">Import Mesh</button>
     <button id="pasteMeshBtn" title="Paste a geometry-js mesh JSON from the clipboard, placed at the origin">Paste Mesh</button>
+    <button id="texturesBtn" title="Load texture atlases and assign texture tiles to curves">Textures</button>
     <button id="exportBtn">Export JSON</button>
     <button id="exportUsdBtn" title="Export the current curves and mesh regions as an ASCII USD scene">Export USD</button>
     <span class="spacer" aria-hidden="true"></span>
@@ -122,6 +144,19 @@
     <a href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
     <input id="fileInput" type="file" accept="application/json,.json" hidden>
     <input id="meshFileInput" type="file" accept="application/json,.json" hidden>
+    <input id="textureFileInput" type="file" accept="image/*" hidden>
+  </div>
+
+  <div id="texturePanel">
+    <div class="panelHead">
+      <strong>Textures</strong>
+      <span class="spacer"></span>
+      <button id="loadTextureBtn">Load image</button>
+      <button id="closeTexturePanelBtn" title="Close">&times;</button>
+    </div>
+    <div class="hint">Click a thumbnail to assign it to the current curve. Textures render in the game preview, not on the editor canvas.</div>
+    <button id="clearCurveTextureBtn" style="margin-top:8px">Clear current curve texture</button>
+    <div id="textureAssetList"></div>
   </div>
 
   <div id="canvasWrap">
