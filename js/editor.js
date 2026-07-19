@@ -1,4 +1,6 @@
 
+import * as TrackMesh from './track-mesh.js';
+
 // ---------- Editor state ----------
 // track.paths: [{ closed, points }, ...] — a track is one or more paths, each
 // either a closed loop or an open curve. `points` is a single array of TYPED
@@ -36,6 +38,10 @@ function applyHistoryState(t) {
   segSel = null; joinSel = []; rollSel = null; widthSel = null; crossSectionSel = null;
   joinDragFrom = null; joinDragTarget = null; joinDragScreen = null; joinDragStartScreen = null;
   dragging = null;
+  // Restored assets may differ from the ones cached, so drop the live meshes
+  // and let them rebuild from the snapshot's JSON.
+  clearMeshSelection();
+  invalidateMeshCache();
   refresh();
 }
 function undo() {
@@ -89,6 +95,145 @@ let topPanned = false;            // suppresses the context menu after a pan dra
 const ROLL_HANDLE_MARGIN = 6;     // keeps roll handles from rendering off the top/bottom edge
 
 function parts(path) { return TrackCore.splitPoints(path.points); }
+
+// ---------- Mesh regions ----------
+// track.meshAssets holds pristine geometry-js mesh JSON; track.meshes holds
+// rigid placements of it. The JSON in `track` stays authoritative (it is what
+// undo snapshots and export read), and `meshCache` is just a live geometry-js
+// Mesh per asset so we are not reparsing on every frame. Any edit that changes
+// geometry -- only rail flags do -- mutates the live Mesh and then writes it
+// straight back to the asset JSON, so the two never drift.
+const MESH_EDGE_PICK_PX = 8;        // click tolerance when picking rail edges
+const MESH_ELEV_PICK_PX = 6;        // grab tolerance for the elevation line
+let meshCache = new Map();          // assetId -> geometry-js Mesh
+let selectedMeshId = null;          // placement id
+let railSel = null;                 // { meshId, edgeId } in Rails mode
+let meshDragOffset = null;
+
+function invalidateMeshCache() { meshCache = new Map(); }
+
+function assetMesh(assetId) {
+  if (meshCache.has(assetId)) return meshCache.get(assetId);
+  const asset = (track.meshAssets || {})[assetId];
+  if (!asset) return null;
+  let mesh = null;
+  try {
+    mesh = TrackMesh.meshFromJSON(asset.mesh);
+  } catch (err) {
+    console.warn(`editor: mesh asset "${assetId}" failed to load`, err);
+  }
+  meshCache.set(assetId, mesh);
+  return mesh;
+}
+
+// Persist rail-flag edits back into the asset JSON so they land in undo
+// snapshots and exports.
+function writeBackAsset(assetId) {
+  const mesh = meshCache.get(assetId);
+  const asset = (track.meshAssets || {})[assetId];
+  if (mesh && asset) asset.mesh = TrackMesh.meshToJSON(mesh);
+}
+
+function meshPlacements() { return track.meshes || []; }
+function findPlacement(id) { return meshPlacements().find(m => m.id === id) || null; }
+function selectedPlacement() { return selectedMeshId ? findPlacement(selectedMeshId) : null; }
+
+// Compiled (world-space) form of every placement, rebuilt per draw. Cheap:
+// geometry-js caches each polygon's triangulation, so this is mostly the rigid
+// transform, and a rigid transform never invalidates a triangulation.
+function compiledMeshes() {
+  const out = [];
+  for (const placement of meshPlacements()) {
+    const mesh = assetMesh(placement.asset);
+    if (!mesh) continue;
+    out.push({ placement, mesh, compiled: TrackMesh.compile(mesh, placement) });
+  }
+  return out;
+}
+
+function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; }
+
+// Hit-test a world point against placements, nearest-last so the topmost drawn
+// region wins the click.
+function meshAtWorld(wx, wz) {
+  const all = compiledMeshes();
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (TrackMesh.containsWorldPoint(all[i].compiled, wx, wz)) return all[i];
+  }
+  return null;
+}
+
+// Nearest mesh edge to a world point, within a screen-space tolerance.
+function meshEdgeAtWorld(wx, wz, tolWorld) {
+  let best = null;
+  for (const { placement, mesh } of compiledMeshes()) {
+    for (const seg of TrackMesh.edgeSegments(mesh, placement)) {
+      const c = TrackMesh.closestPointOnSegment(seg.a.x, seg.a.z, seg.b.x, seg.b.z, wx, wz);
+      const d2 = (wx - c.x) ** 2 + (wz - c.z) ** 2;
+      if (d2 <= tolWorld * tolWorld && (!best || d2 < best.d2)) {
+        best = { meshId: placement.id, assetId: placement.asset, edgeId: seg.edgeId, d2 };
+      }
+    }
+  }
+  return best;
+}
+
+function newMeshPlacementId() {
+  const taken = new Set(meshPlacements().map(m => m.id));
+  for (let i = 1; ; i++) if (!taken.has('m' + i)) return 'm' + i;
+}
+
+// Import a geometry-js mesh JSON as a new asset, always under a fresh id so an
+// existing placement is never disturbed by a re-import, and drop one placement
+// of it at the centre of the current view.
+function importMeshFile(filename, text) {
+  let data;
+  try { data = JSON.parse(text); } catch (err) { alert('Mesh import failed: ' + err.message); return; }
+  const wrapped = TrackCore.normalizeMeshAssets({ probe: data });
+  if (!wrapped.probe) { alert('Mesh import failed: no vertices/polygons array found'); return; }
+  let mesh;
+  try { mesh = TrackMesh.meshFromJSON(wrapped.probe.mesh); }
+  catch (err) { alert('Mesh import failed: ' + err.message); return; }
+
+  pushUndo();
+  if (!track.meshAssets) track.meshAssets = {};
+  if (!track.meshes) track.meshes = [];
+  const assetId = TrackMesh.uniqueAssetId(filename, new Set(Object.keys(track.meshAssets)));
+  track.meshAssets[assetId] = {
+    name: assetId,
+    railHeight: TrackCore.DEFAULT_RAIL_HEIGHT,
+    mesh: TrackMesh.meshToJSON(mesh)
+  };
+  // Centre the shape on the view rather than its own origin, so an asset
+  // authored far from (0,0) still lands where you can see it.
+  const bounds = TrackMesh.assetBounds(mesh);
+  const centre = screenToWorld(view.w / 2, view.h / 2);
+  const placement = {
+    id: newMeshPlacementId(),
+    asset: assetId,
+    x: Math.round((centre.x - bounds.cx) * 10) / 10,
+    z: Math.round((centre.z - bounds.cy) * 10) / 10,
+    rotation: 0,
+    elevation: 0
+  };
+  track.meshes.push(placement);
+  invalidateMeshCache();
+  selectedMeshId = placement.id;
+  railSel = null;
+  updateUndoRedoButtons();
+  refresh();
+}
+
+function deleteSelectedMesh() {
+  const placement = selectedPlacement();
+  if (!placement) return;
+  pushUndo();
+  track.meshes = meshPlacements().filter(m => m.id !== placement.id);
+  clearMeshSelection();
+  invalidateMeshCache();
+  updateUndoRedoButtons();
+  refresh();
+}
 function branchPointIdsForPaths(paths, junctions) {
   const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
   const stats = new Map();
@@ -131,6 +276,9 @@ function syncSelectionToId() {
 function selectPosition(pathIndex, pointIndex) {
   const p = track.paths[pathIndex] && parts(track.paths[pathIndex]).controlPoints[pointIndex];
   if (p) selectedPointId = p.id;
+  // Path points and mesh regions share one props panel, so selecting either
+  // clears the other.
+  clearMeshSelection();
   syncSelectionToId();
 }
 function curPath() { syncSelectionToId(); return track.paths[sel.path]; }
@@ -179,6 +327,8 @@ function ensureTrackIds() {
   if (!track.disjointSeams) track.disjointSeams = [];
   if (!track.junctions) track.junctions = [];
   if (!track.selfIntersectionOverrides) track.selfIntersectionOverrides = [];
+  if (!track.meshAssets) track.meshAssets = {};
+  if (!track.meshes) track.meshes = [];
   usedIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(s => s.id).filter(Boolean));
   const pointById = new Map(), pathIds = new Set();
   for (const path of track.paths) {
@@ -271,6 +421,10 @@ function computeTrackBounds() {
       minX = Math.min(minX, p.pos[0]); maxX = Math.max(maxX, p.pos[0]);
       minZ = Math.min(minZ, p.pos[2]); maxZ = Math.max(maxZ, p.pos[2]);
     }
+  }
+  for (const { compiled } of compiledMeshes()) {
+    minX = Math.min(minX, compiled.bounds.minX); maxX = Math.max(maxX, compiled.bounds.maxX);
+    minZ = Math.min(minZ, compiled.bounds.minZ); maxZ = Math.max(maxZ, compiled.bounds.maxZ);
   }
   if (!isFinite(minX)) return { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
   return { minX, maxX, minZ, maxZ };
@@ -417,6 +571,84 @@ function cycleCrossingOverride(cr) {
 }
 
 // ---------- Draw the top-down ribbon(s) ----------
+// Mesh regions in the top-down view. Drawn in every render mode (they are
+// track surface regardless of how the ribbon is being visualised): a tinted
+// fill for the drivable area, railed edges as thick solid walls, bare edges as
+// dashed ledges, and in Rails mode every edge is highlighted as a click target.
+function drawMeshes(ctx) {
+  const railsMode = editMode === 'rails';
+  const tracePath = (loop) => {
+    ctx.beginPath();
+    loop.forEach((p, i) => {
+      const s = worldToScreen(p.x, p.z);
+      if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+    });
+    ctx.closePath();
+  };
+
+  for (const { placement, mesh, compiled } of compiledMeshes()) {
+    const selected = placement.id === selectedMeshId;
+
+    // Fill drivable area, punching out holes via even-odd winding.
+    ctx.beginPath();
+    for (const poly of compiled.polygons) {
+      poly.outer.forEach((p, i) => {
+        const s = worldToScreen(p.x, p.z);
+        if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      });
+      ctx.closePath();
+      for (const hole of poly.holes) {
+        hole.forEach((p, i) => {
+          const s = worldToScreen(p.x, p.z);
+          if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+        });
+        ctx.closePath();
+      }
+    }
+    ctx.fillStyle = selected ? 'rgba(150,110,220,0.34)' : 'rgba(120,90,180,0.22)';
+    ctx.fill('evenodd');
+
+    // Show the triangulation the game will actually render, so a bad import is
+    // visible here rather than only once you drive on it.
+    if (selected) {
+      ctx.strokeStyle = 'rgba(190,160,255,0.22)';
+      ctx.lineWidth = 1;
+      for (const tri of compiled.triangles) { tracePath(tri); ctx.stroke(); }
+    }
+
+    for (const seg of TrackMesh.edgeSegments(mesh, placement)) {
+      const a = worldToScreen(seg.a.x, seg.a.z);
+      const b = worldToScreen(seg.b.x, seg.b.z);
+      const isRailSel = railSel && railSel.meshId === placement.id && railSel.edgeId === seg.edgeId;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      if (seg.rail) {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = isRailSel ? '#fff2a8' : '#d8b400';
+        ctx.lineWidth = isRailSel ? 5 : 3.5;
+      } else {
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = railsMode ? 'rgba(210,180,255,0.85)' : 'rgba(180,150,230,0.55)';
+        ctx.lineWidth = isRailSel ? 3 : 1.5;
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (selected) {
+      ctx.strokeStyle = '#e6d8ff';
+      ctx.lineWidth = 1.5;
+      for (const poly of compiled.polygons) { tracePath(poly.outer); ctx.stroke(); }
+      // Origin handle doubles as a rotation readout anchor.
+      const o = worldToScreen(placement.x, placement.z);
+      ctx.fillStyle = '#e6d8ff';
+      ctx.beginPath(); ctx.arc(o.x, o.y, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '11px system-ui';
+      ctx.fillText(`${placement.asset}  y ${placement.elevation.toFixed(1)}  ${placement.rotation.toFixed(0)}°`, o.x + 8, o.y - 6);
+    }
+  }
+}
+
 function drawTop() {
   const { w, h } = fitCanvas(topCanvas, topCtx);
   computeView(w, h);
@@ -431,6 +663,10 @@ function drawTop() {
     for (let gx = view.ox % step; gx < w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
     for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
   }
+
+  // Mesh regions draw beneath the paths: they are backdrop surfaces, and path
+  // control points must stay visible and clickable on top of them.
+  drawMeshes(ctx);
 
   const flat = renderMode === 'flat' || renderMode === 'elevation';
   const elevationMode = renderMode === 'elevation';
@@ -792,6 +1028,14 @@ function drawElev() {
 
   let minY = Infinity, maxY = -Infinity;
   for (const p of cps) { minY = Math.min(minY, p.pos[1]); maxY = Math.max(maxY, p.pos[1]); }
+  // Keep the selected mesh's height inside the plotted range, so its line stays
+  // on-panel even when it sits well above or below this curve -- the whole
+  // point of showing it here is judging it against the curve's profile.
+  const selectedMeshPlacement = selectedPlacement();
+  if (selectedMeshPlacement) {
+    minY = Math.min(minY, selectedMeshPlacement.elevation);
+    maxY = Math.max(maxY, selectedMeshPlacement.elevation);
+  }
   const pad = Math.max(4, (maxY - minY) * 0.3 + 2);
   minY -= pad; maxY += pad;
   const top = 20, bottom = h - 20, padX = 34;
@@ -842,6 +1086,19 @@ function drawElev() {
   ctx.strokeStyle = 'rgba(70,110,140,0.5)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(padX, zeroY); ctx.lineTo(w - padX, zeroY); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle = '#6f93a8'; ctx.font = '10px system-ui'; ctx.fillText('y=0', 4, zeroY + 3);
+
+  // Selected mesh region: one draggable horizontal line at its elevation. A
+  // mesh has no path parameter, so it spans the full width rather than being
+  // positioned along the x-axis; drag it to line the region up with the part
+  // of this curve's profile you want it to meet.
+  if (selectedMeshPlacement) {
+    const my = bottom - (selectedMeshPlacement.elevation - minY) * yScale;
+    ctx.strokeStyle = dragging === 'meshElev' ? '#f0e4ff' : '#b98cff';
+    ctx.lineWidth = dragging === 'meshElev' ? 3 : 2;
+    ctx.beginPath(); ctx.moveTo(padX, my); ctx.lineTo(w - padX, my); ctx.stroke();
+    ctx.fillStyle = '#d8bcff'; ctx.font = '10px system-ui';
+    ctx.fillText(`${selectedMeshPlacement.asset}  y ${selectedMeshPlacement.elevation.toFixed(1)}`, padX + 4, my - 4);
+  }
 
   const hy = y => bottom - (y - minY) * yScale;
   // Roll offsets (rollY = track height +/- roll*rollK) are unrelated to the
@@ -1425,6 +1682,41 @@ function renderProps() {
   const wireTypeSelect = () => {
     document.getElementById('typeSelect').addEventListener('change', (e) => convertSelectedPoint(e.target.value));
   };
+
+  // Mesh regions own the panel whenever one is selected. Rail height is a
+  // property of the ASSET, so editing it here changes every placement of that
+  // shape -- matching where the rail flags themselves live.
+  const meshPlacement = selectedPlacement();
+  if (meshPlacement) {
+    const asset = (track.meshAssets || {})[meshPlacement.asset];
+    const mesh = assetMesh(meshPlacement.asset);
+    const railCount = mesh ? [...mesh.edges.values()].filter(edge => edge.attributes?.rail).length : 0;
+    const edgeCount = mesh ? mesh.edges.size : 0;
+    const placedTwice = meshPlacements().filter(m => m.asset === meshPlacement.asset).length;
+    body.innerHTML =
+      `<div style="margin-bottom:6px;color:#b98cff">Mesh region <b>${meshPlacement.id}</b></div>` +
+      `<div style="margin-bottom:8px;color:#6f93a8;font-size:11px">asset <b>${meshPlacement.asset}</b>` +
+      (placedTwice > 1 ? ` &middot; placed ${placedTwice}&times;` : '') + `</div>` +
+      `<label>X<input type="number" data-mesh="x" value="${meshPlacement.x}" step="0.5"></label>` +
+      `<label>Z<input type="number" data-mesh="z" value="${meshPlacement.z}" step="0.5"></label>` +
+      `<label>Elevation<input type="number" data-mesh="elevation" value="${meshPlacement.elevation}" step="0.5"></label>` +
+      `<label>Rotation&deg;<input type="number" data-mesh="rotation" value="${meshPlacement.rotation}" step="5"></label>` +
+      `<label title="Applies to every placement of this asset">Rail height<input type="number" data-asset="railHeight" value="${asset ? asset.railHeight : TrackCore.DEFAULT_RAIL_HEIGHT}" step="0.5" min="0"></label>` +
+      `<div class="hint">${railCount} of ${edgeCount} edges railed. Switch to <b>Rails</b> mode to click edges: railed edges are solid walls, bare edges are ledges you drive off.</div>` +
+      `<button id="delMeshBtn" style="margin-top:10px;width:100%;background:#3d2a5a;border:1px solid #b98cff;color:#efe2ff;border-radius:5px;padding:6px;cursor:pointer">Delete mesh region</button>`;
+    body.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const val = parseFloat(inp.value);
+        if (!isFinite(val)) return;
+        armHistory();
+        if (inp.dataset.mesh) meshPlacement[inp.dataset.mesh] = val;
+        else if (inp.dataset.asset && asset) asset.railHeight = Math.max(0, val);
+        refresh();
+      });
+    });
+    document.getElementById('delMeshBtn').addEventListener('click', deleteSelectedMesh);
+    return;
+  }
 
   if (crossSectionSel) {
     const path = curPath();
@@ -2198,6 +2490,32 @@ function endpointEndFor(hit) {
 }
 topCanvas.addEventListener('mousedown', (e) => {
   const { x, y } = localPos(topCanvas, e);
+  // Rails mode is modal on purpose: only mesh edges are pickable, so flagging
+  // a rail can never be confused with selecting or dragging anything else.
+  if (editMode === 'rails') {
+    e.preventDefault();
+    hideAddPointMenu();
+    if (e.button !== 0) return;
+    const w = screenToWorld(x, y);
+    const edgeHit = meshEdgeAtWorld(w.x, w.z, MESH_EDGE_PICK_PX / view.scale);
+    if (edgeHit) {
+      const mesh = assetMesh(edgeHit.assetId);
+      if (mesh) {
+        pushUndo();
+        TrackMesh.toggleRailEdge(mesh, edgeHit.edgeId);
+        writeBackAsset(edgeHit.assetId);
+        selectedMeshId = edgeHit.meshId;
+        railSel = { meshId: edgeHit.meshId, edgeId: edgeHit.edgeId };
+        updateUndoRedoButtons();
+        refresh();
+        return;
+      }
+    }
+    railSel = null;
+    dragging = 'panTop'; panLast = { x, y }; topPanned = false;
+    refresh();
+    return;
+  }
   if (editMode === 'create') {
     e.preventDefault();
     hideAddPointMenu();
@@ -2246,6 +2564,23 @@ topCanvas.addEventListener('mousedown', (e) => {
     return;
   }
   if (hit) { dragMutated = false; selectPosition(hit.path, hit.point); segSel = null; rollSel = null; widthSel = null; crossSectionSel = null; dragging = 'top'; refresh(); return; }
+  // Mesh regions are picked last, after every path handle: they are large
+  // targets and must never steal a click from a control point drawn on top.
+  {
+    const w = screenToWorld(x, y);
+    const meshHit = meshAtWorld(w.x, w.z);
+    if (meshHit) {
+      dragMutated = false;
+      selectedPointId = null; segSel = null; rollSel = null; widthSel = null; crossSectionSel = null;
+      selectedMeshId = meshHit.placement.id;
+      railSel = null;
+      meshDragOffset = { dx: meshHit.placement.x - w.x, dz: meshHit.placement.z - w.z };
+      dragging = 'meshTop';
+      hideAddPointMenu();
+      refresh();
+      return;
+    }
+  }
   hideAddPointMenu();
   dragging = 'panTop';
   panLast = { x, y };
@@ -2263,6 +2598,27 @@ window.addEventListener('mousemove', (e) => {
       topPan.x += dx; topPan.y += dy;
       panLast = { x, y };
       draw();
+    }
+  } else if (dragging === 'meshTop') {
+    const placement = selectedPlacement();
+    if (placement && meshDragOffset) {
+      freezeTopViewForDrag();
+      if (!dragMutated) { pushUndo(); dragMutated = true; updateUndoRedoButtons(); }
+      const { x, y } = localPos(topCanvas, e);
+      const w = screenToWorld(x, y);
+      const moved = snapWorldXZ({ x: w.x + meshDragOffset.dx, z: w.z + meshDragOffset.dz });
+      placement.x = Math.round(moved.x * 10) / 10;
+      placement.z = Math.round(moved.z * 10) / 10;
+      refresh();
+    }
+  } else if (dragging === 'meshElev') {
+    const placement = selectedPlacement();
+    if (placement) {
+      if (!dragMutated) { pushUndo(); dragMutated = true; updateUndoRedoButtons(); }
+      const { y } = localPos(elevCanvas, e);
+      const val = elevGeom.minY + (elevGeom.bottom - y) / elevGeom.yScale;
+      placement.elevation = Math.round(val * 10) / 10;
+      refresh();
     }
   } else if (dragging === 'top') {
     freezeTopViewForDrag();
@@ -2358,7 +2714,7 @@ window.addEventListener('mouseup', () => {
     draw();
   }
   releaseTopViewFreeze();
-  dragging = null; panLast = null; dragMutated = false;
+  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null;
 });
 
 // ---------- Elevation mouse ----------
@@ -2370,6 +2726,18 @@ elevCanvas.addEventListener('mousedown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  // The selected mesh's elevation line spans the full panel width, so grab it
+  // on vertical proximity alone.
+  const meshPlacement = selectedPlacement();
+  if (meshPlacement) {
+    const my = elevGeom.bottom - (meshPlacement.elevation - elevGeom.minY) * elevGeom.yScale;
+    if (Math.abs(y - my) <= MESH_ELEV_PICK_PX) {
+      dragMutated = false; rollSel = null; widthSel = null; crossSectionSel = null;
+      dragging = 'meshElev';
+      refresh();
+      return;
+    }
+  }
   const rollHit = rollHandleAtElev(x, y);
   if (rollHit) { dragMutated = false; rollSel = rollHit; widthSel = null; dragging = 'rollElev'; refresh(); return; }
   const hit = handleAtElev(x, y);
@@ -2385,6 +2753,7 @@ window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
+    if (selectedMeshId) { deleteSelectedMesh(); return; }
     if (crossSectionSel) {
       const path = curPath();
       if (parts(path).crossSectionPoints.length <= 2) { alert('A path needs at least 2 cross-section points.'); return; }
@@ -2428,6 +2797,8 @@ document.getElementById('newBtn').addEventListener('click', () => {
   ensureTrackIds();
   assertNoStaleSeams();
   selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; crossSectionSel = null; topPan = { x: 0, y: 0 };
+  clearMeshSelection();
+  invalidateMeshCache();
   refresh();
 });
 document.getElementById('exportBtn').addEventListener('click', () => {
@@ -2447,6 +2818,8 @@ document.getElementById('redoBtn').addEventListener('click', redo);
 document.getElementById('editModeSelect').addEventListener('change', (e) => {
   editMode = e.target.value;
   createDraft = [];
+  // The picked-edge highlight only means anything inside Rails mode.
+  if (editMode !== 'rails') railSel = null;
   hideAddPointMenu();
   draw();
 });
@@ -2528,10 +2901,35 @@ fileInput.addEventListener('change', async (e) => {
     ensureTrackIds();
     assertNoStaleSeams();
     selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; crossSectionSel = null; topPan = { x: 0, y: 0 };
+    clearMeshSelection();
+    invalidateMeshCache();
     refresh();
   } catch (err) { alert('Could not load track: ' + err.message); }
   e.target.value = '';
 });
+
+const meshFileInput = document.getElementById('meshFileInput');
+document.getElementById('importMeshBtn').addEventListener('click', () => meshFileInput.click());
+meshFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  importMeshFile(file.name, await file.text());
+  e.target.value = '';
+});
+
+// Modules export nothing to the page, so expose a small read-only handle for
+// debugging from the console and for browser smoke tests.
+window.__editor = {
+  get track() { return track; },
+  get selectedMeshId() { return selectedMeshId; },
+  worldToScreen,
+  compiledMeshes,
+  assetMesh,
+  railCount: (assetId) => {
+    const mesh = assetMesh(assetId);
+    return mesh ? [...mesh.edges.values()].filter(e => e.attributes?.rail).length : 0;
+  }
+};
 
 window.addEventListener('resize', draw);
 refresh();

@@ -1,4 +1,6 @@
 
+import * as TrackMesh from './track-mesh.js';
+
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x02040a);
@@ -55,7 +57,14 @@ function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
-let showGuardRails = false;
+// Mesh regions: flat drivable areas imported from the geometry-js editor. Each
+// is { compiled, elevation, railHeight, surface, railMesh } where `compiled` is
+// the world-space bake from track-mesh.js that physics queries every frame.
+let meshRegions = [];
+let trackFloorY = -1e9;                // auto-respawn threshold, set by buildTrack()
+// Rails are collision geometry everywhere now, so they are visible by default;
+// G is purely a rendering toggle and never changes what stops the ship.
+let showGuardRails = true;
 let showWireframe = false;
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
@@ -317,6 +326,7 @@ function buildTrack(track) {
     disposeObject(p.mesh); disposeObject(p.wireLine); disposeObject(p.stripeLine);
     disposeObject(p.railR); disposeObject(p.railL);
   }
+  buildMeshRegions(track);
   const bakedPaths = trackPaths.map(p => {
     const { controlPoints, rollPoints, widthPoints, crossSectionPoints } = TrackCore.splitPoints(p.points);
     const closed = p.closed !== false;
@@ -335,10 +345,159 @@ function buildTrack(track) {
     p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
     TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides), p.hasBranchConnection
   ));
+  // Anything below every drivable surface by this much has clearly fallen off
+  // and is never coming back, so it triggers an automatic respawn.
+  let lowest = Infinity;
+  for (const p of paths) for (const f of p.centerline) lowest = Math.min(lowest, f.pos.y);
+  for (const region of meshRegions) lowest = Math.min(lowest, region.elevation);
+  trackFloorY = (isFinite(lowest) ? lowest : 0) - RESPAWN_FALL_DEPTH;
+
   resetShip();
   const label = document.getElementById('trackName');
   if (label) label.textContent = trackName;
 }
+
+// ---------- Mesh regions ----------
+// Flat drivable areas. A region is horizontal, so its surface is just a plane
+// at `elevation` with a +Y normal -- no banking, no cross-section. Railed edges
+// become finite-height walls; every other boundary edge is a ledge, and driving
+// over one drops the ship into the same ballistic code an open curve's end uses.
+const MESH_SURFACE_COLOR = 0x6a4f96;
+const MESH_RAIL_COLOR = 0xd8b400;
+
+function buildMeshRegions(track) {
+  for (const region of meshRegions) { disposeObject(region.surface); disposeObject(region.railMesh); }
+  meshRegions = [];
+
+  const assets = track.meshAssets || {};
+  for (const placement of track.meshes || []) {
+    const asset = assets[placement.asset];
+    if (!asset) continue;
+    let mesh;
+    try { mesh = TrackMesh.meshFromJSON(asset.mesh); }
+    catch (err) { console.warn(`mesh asset "${placement.asset}" failed to load`, err); continue; }
+
+    const compiled = TrackMesh.compile(mesh, placement);
+    const elevation = placement.elevation || 0;
+    const railHeight = asset.railHeight == null ? TrackMesh.DEFAULT_RAIL_HEIGHT : asset.railHeight;
+
+    // Surface: one flat triangle soup at the region's elevation.
+    const surfacePositions = [];
+    for (const tri of compiled.triangles) {
+      for (const p of tri) surfacePositions.push(p.x, elevation, p.z);
+    }
+    let surface = null;
+    if (surfacePositions.length) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(surfacePositions, 3));
+      geom.computeVertexNormals();
+      surface = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+        color: MESH_SURFACE_COLOR, roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide
+      }));
+      scene.add(surface);
+    }
+
+    // Rails: an upright quad per flagged edge, drawn double-sided so they read
+    // from both approaches.
+    const railPositions = [];
+    for (const rail of compiled.rails) {
+      const top = elevation + railHeight;
+      const { a, b } = rail;
+      railPositions.push(
+        a.x, elevation, a.z, b.x, elevation, b.z, b.x, top, b.z,
+        a.x, elevation, a.z, b.x, top, b.z, a.x, top, a.z
+      );
+    }
+    let railMesh = null;
+    if (railPositions.length) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(railPositions, 3));
+      geom.computeVertexNormals();
+      railMesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+        color: MESH_RAIL_COLOR, roughness: 0.5, metalness: 0.3, side: THREE.DoubleSide
+      }));
+      railMesh.visible = showGuardRails;
+      scene.add(railMesh);
+    }
+
+    meshRegions.push({ compiled, elevation, railHeight, surface, railMesh });
+  }
+}
+
+/* The mesh region under X/Z whose surface sits nearest the ship's current Y,
+ * or null. Surfaces above the ship are strongly penalised so a flyover never
+ * steals the ship driving underneath it. */
+function meshRegionAt(x, z, shipY) {
+  let best = null;
+  for (const region of meshRegions) {
+    if (!TrackMesh.withinBounds(region.compiled, x, z)) continue;
+    if (!TrackMesh.containsWorldPoint(region.compiled, x, z)) continue;
+    const above = region.elevation - shipY;
+    const score = Math.abs(above) + (above > SURFACE_SNAP_UP ? 1e6 : 0);
+    if (!best || score < best.score) best = { region, score };
+  }
+  return best;
+}
+
+// A surface more than this far ABOVE the ship is treated as overhead geometry
+// rather than something to snap up onto.
+const SURFACE_SNAP_UP = 1.5;
+// How far below the lowest drivable surface counts as "fallen off for good".
+const RESPAWN_FALL_DEPTH = 50;
+
+// Project a horizontal position onto a corridor sample's cross-section,
+// returning the lateral offset `s` and the drivable range bounded by the
+// rendered physical walls (the trimmed edge offsets, inset by the ship margin).
+function projectToSurface(sample, px, pz) {
+  const er = sample.edgeRight;
+  const cosR2 = er.x * er.x + er.z * er.z || 1;          // = cos^2(roll)
+  const s = ((px - sample.pos.x) * er.x + (pz - sample.pos.z) * er.z) / cosR2;
+  let loS = sample.sLeft + TrackCore.COLLISION_WALL_MARGIN;    // inner limit of the left edge (negative side)
+  let hiS = sample.sRight - TrackCore.COLLISION_WALL_MARGIN;   // inner limit of the right edge (positive side)
+  if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
+  return { er, s, loS, hiS };
+}
+
+// How far along the tangent a point may sit from its sampled centerline frame
+// and still count as "over the ribbon". Generous relative to the spacing
+// between baked samples, but far smaller than any real gap.
+const CORRIDOR_ALONG_TOL = 4;
+
+/* Is X/Z genuinely over a corridor sample's drivable surface?
+ *
+ * The lateral bounds alone are NOT containment. `s` measures only the offset
+ * along edgeRight, so a point far beyond the END of a segment projects onto
+ * that segment's clamped endpoint and can report a small, perfectly in-range
+ * `s` while actually being hundreds of units away down the track's axis. That
+ * matters now that mesh regions let the ship be somewhere with no ribbon
+ * anywhere near it: without the along-tangent check, leaving a mesh ledge
+ * teleports the ship onto whichever distant ribbon happened to be nearest. */
+function corridorContains(sample, x, z, proj) {
+  if (sample.offEnd || proj.s < proj.loS || proj.s > proj.hiS) return false;
+  const along = (x - sample.pos.x) * sample.tangent.x + (z - sample.pos.z) * sample.tangent.z;
+  return Math.abs(along) <= CORRIDOR_ALONG_TOL;
+}
+
+const _meshSurfacePos = new THREE.Vector3();
+
+/* Decide which surface owns a horizontal position: the mesh region under it, or
+ * the spline corridor. Containment in a region is necessary but not sufficient
+ * -- when the ship is also inside a corridor, the surface nearest it in Y wins,
+ * which is what makes flyovers and stacked plazas behave. Returns the winning
+ * region, or null to mean "the corridor owns this". */
+function surfaceOwnerAt(x, z, shipY, corridorSample) {
+  const meshHit = meshRegionAt(x, z, shipY);
+  if (!meshHit) return null;
+  const proj = projectToSurface(corridorSample, x, z);
+  if (!corridorContains(corridorSample, x, z, proj)) return meshHit.region;
+  const corridorY = curvedSurfaceFrame(corridorSample, proj.s).pos.y;
+  return Math.abs(meshHit.region.elevation - shipY) <= Math.abs(corridorY - shipY) ? meshHit.region : null;
+}
+
+// Swept rail collision lives in track-mesh.js (pure geometry, shared and
+// testable); this just binds it to the ship's collision margin.
+const slideAlongRails = (region, from, to, velocity) =>
+  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN);
 
 // Sample a smooth, interpolated track frame at a horizontal position. Searches
 // ALL path segments for the nearest projected point, then interpolates within
@@ -478,6 +637,26 @@ scene.add(shipGroup);
 
 // Place the ship at control point 0's region, facing along the track, and clear
 // its motion. Called by buildTrack() on load and on every JSON import.
+// Last position with solid ground under it, used by respawn().
+const lastGrounded = { pos: new THREE.Vector3(), heading: 0, valid: false };
+
+/* Put the ship back on solid ground after a fall: at the spot it last had
+ * ground under it, or at the start line if it has never been grounded. */
+function respawn() {
+  if (!lastGrounded.valid) { resetShip(); return; }
+  physics.groundPos.copy(lastGrounded.pos);
+  physics.heading = lastGrounded.heading;
+  physics.velocityAngle = lastGrounded.heading;
+  physics.speed = 0;
+  physics.airborne = false;
+  physics.verticalVel = 0;
+  physics.landingBounce = 0;
+  physics.landingBounceVel = 0;
+  physics.visualGroundPos.copy(lastGrounded.pos);
+  physics.forward.set(Math.sin(lastGrounded.heading), 0, Math.cos(lastGrounded.heading));
+  physics.right.set(Math.cos(lastGrounded.heading), 0, -Math.sin(lastGrounded.heading));
+}
+
 function resetShip() {
   // Start at the chosen control point (the spline doesn't pass exactly through
   // its control points, so find the closest baked sample rather than assuming
@@ -514,23 +693,32 @@ function resetShip() {
   physics.visualUp.copy(physics.up);
   physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
   physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
+  lastGrounded.pos.copy(physics.groundPos);
+  lastGrounded.heading = heading;
+  lastGrounded.valid = true;
 }
 
 // ---------- Input ----------
 const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  // G is a pure rendering toggle: rails are solid collision either way.
   if (e.code === 'KeyG' && !e.repeat) {
     showGuardRails = !showGuardRails;
     for (const p of paths) {
       if (p.railL) p.railL.visible = showGuardRails;
       if (p.railR) p.railR.visible = showGuardRails;
     }
+    for (const region of meshRegions) if (region.railMesh) region.railMesh.visible = showGuardRails;
   }
   if (e.code === 'KeyH' && !e.repeat) {
     showWireframe = !showWireframe;
     for (const p of paths) if (p.wireLine) p.wireLine.visible = showWireframe;
+    // Regions have no separate wire overlay; flip their surface material instead,
+    // which also exposes the imported mesh's triangulation.
+    for (const region of meshRegions) if (region.surface) region.surface.material.wireframe = showWireframe;
   }
+  if (e.code === 'KeyR' && !e.repeat) respawn();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -629,37 +817,94 @@ function updatePhysics(dt) {
   const vx = Math.sin(physics.velocityAngle) * physics.speed;
   const vz = Math.cos(physics.velocityAngle) * physics.speed;
 
-  const projectToSurface = (sample, px, pz) => {
-    const er = sample.edgeRight;
-    const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
-    let s = ((px - sample.pos.x) * er.x + (pz - sample.pos.z) * er.z) / cosR2;
-
-    // Drivable corridor is bounded by the rendered physical walls: the trimmed
-    // edge offsets inset by the ship margin.
-    let loS = sample.sLeft + TrackCore.COLLISION_WALL_MARGIN;    // inner limit of the left edge (negative side)
-    let hiS = sample.sRight - TrackCore.COLLISION_WALL_MARGIN;   // inner limit of the right edge (positive side)
-    if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
-    return { er, s, loS, hiS };
-  };
+  // Which surface owns the ship right now -- a flat mesh region, or the spline
+  // corridor? Whichever sits nearer in Y wins, so a mesh bridge passing over a
+  // ribbon never hijacks the ship driving underneath it.
+  const meshRegion = surfaceOwnerAt(physics.groundPos.x, physics.groundPos.z, physics.groundPos.y, c);
 
   if (physics.airborne) {
-    const px = physics.groundPos.x + vx * dt;
-    const pz = physics.groundPos.z + vz * dt;
+    let ax = vx, az = vz;
+    let px = physics.groundPos.x + ax * dt;
+    let pz = physics.groundPos.z + az * dt;
+
+    // Rails are finite-height walls: they still block an airborne ship that has
+    // not cleared their top, and are simply absent above it.
+    for (const region of meshRegions) {
+      if (physics.groundPos.y >= region.elevation + region.railHeight) continue;
+      if (!TrackMesh.withinBounds(region.compiled, px, pz, TrackCore.COLLISION_WALL_MARGIN)) continue;
+      const velocity = { x: ax, z: az };
+      const moved = slideAlongRails(region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
+      if (!moved.hit) continue;
+      px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
+      physics.speed = Math.hypot(ax, az) * 0.98;
+      if (Math.abs(physics.speed) > 1e-6) physics.velocityAngle = Math.atan2(ax, az);
+    }
+
     physics.verticalVel -= physics.gravity * dt;
     physics.groundPos.set(px, physics.groundPos.y + physics.verticalVel * dt, pz);
 
-    c = sampleTrack(px, pz);
-    const { er, s, loS, hiS } = projectToSurface(c, px, pz);
-    const surface = curvedSurfaceFrame(c, s);
-    if (!c.offEnd && s >= loS && s <= hiS && physics.groundPos.y <= surface.pos.y) {
+    const landing = meshRegionAt(px, pz, physics.groundPos.y);
+    if (landing && physics.groundPos.y <= landing.region.elevation) {
       const impactSpeed = Math.max(0, -physics.verticalVel);
       physics.airborne = false;
       physics.verticalVel = 0;
       physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
       physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
-      physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
-      surfaceRenderPos = surface.pos;
-      surfaceNormal = surface.normal;
+      physics.groundPos.set(px, landing.region.elevation, pz);
+      surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
+      surfaceNormal = UP;
+    } else {
+      c = sampleTrack(px, pz);
+      const proj = projectToSurface(c, px, pz);
+      const { er, s } = proj;
+      const surface = curvedSurfaceFrame(c, s);
+      if (corridorContains(c, px, pz, proj) && physics.groundPos.y <= surface.pos.y) {
+        const impactSpeed = Math.max(0, -physics.verticalVel);
+        physics.airborne = false;
+        physics.verticalVel = 0;
+        physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
+        physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
+        physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+        surfaceRenderPos = surface.pos;
+        surfaceNormal = surface.normal;
+      }
+    }
+  } else if (meshRegion && hasTranslation) {
+    // Free 2D motion across a flat region, bounded only by railed edges. There
+    // is no lateral parameter to clamp here -- the corridor's clamp(s) has no
+    // meaning on an arbitrary polygon.
+    const from = { x: physics.groundPos.x, z: physics.groundPos.z };
+    const velocity = { x: vx, z: vz };
+    const moved = slideAlongRails(meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
+    if (moved.hit) {
+      physics.speed = Math.hypot(velocity.x, velocity.z) * 0.98;
+      if (Math.abs(physics.speed) > 1e-6) physics.velocityAngle = Math.atan2(velocity.x, velocity.z);
+    }
+
+    const stillOn = TrackMesh.containsWorldPoint(meshRegion.compiled, moved.x, moved.z)
+      ? meshRegion
+      : (meshRegionAt(moved.x, moved.z, meshRegion.elevation) || {}).region || null;
+
+    if (stillOn) {
+      physics.groundPos.set(moved.x, stillOn.elevation, moved.z);
+      surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
+      surfaceNormal = UP;
+    } else {
+      // Left the region across a bare edge. Drive onto the corridor if one
+      // meets this region at a compatible height, otherwise it was a ledge.
+      c = sampleTrack(moved.x, moved.z);
+      const proj = projectToSurface(c, moved.x, moved.z);
+      const { er, s } = proj;
+      const surface = corridorContains(c, moved.x, moved.z, proj) ? curvedSurfaceFrame(c, s) : null;
+      if (surface && Math.abs(surface.pos.y - meshRegion.elevation) <= SURFACE_SNAP_UP) {
+        physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+        surfaceRenderPos = surface.pos;
+        surfaceNormal = surface.normal;
+      } else {
+        physics.airborne = true;
+        physics.verticalVel = 0;
+        physics.groundPos.set(moved.x, meshRegion.elevation, moved.z);
+      }
     }
   } else if (hasTranslation) {
     let px = physics.groundPos.x + vx * dt;
@@ -712,7 +957,12 @@ function updatePhysics(dt) {
     }
   }
 
-  if (!physics.airborne && !hasTranslation) {
+  if (!physics.airborne && !hasTranslation && meshRegion) {
+    // Parked on a flat region: nothing to reproject, just sit on the plane.
+    physics.groundPos.y = meshRegion.elevation;
+    surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
+    surfaceNormal = UP;
+  } else if (!physics.airborne && !hasTranslation) {
     c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
     const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.z);
     const finalS = THREE.MathUtils.clamp(s, loS, hiS);
@@ -728,6 +978,18 @@ function updatePhysics(dt) {
   // seams the nearest path segment can switch, producing a small projection
   // correction in groundPos; smooth only unexpectedly-large render deltas so
   // normal movement stays responsive while seam pops are eased out.
+  // Remember where the ship last had solid ground under it. Falling off a bare
+  // mesh edge is routine, so recovery returns you to where you fell rather than
+  // all the way back to the start line.
+  if (!physics.airborne) {
+    lastGrounded.pos.copy(physics.groundPos);
+    lastGrounded.heading = physics.heading;
+    lastGrounded.valid = true;
+  } else if (physics.groundPos.y < trackFloorY) {
+    respawn();
+    return;
+  }
+
   const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.08;
   const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
   if (renderDelta > expectedStep) {
@@ -835,6 +1097,16 @@ fileInput.addEventListener('change', async (e) => {
   }
   e.target.value = '';   // allow re-importing the same file
 });
+
+// Modules export nothing to the page, so expose a small read-only handle for
+// debugging from the console and for browser smoke tests.
+window.__game = {
+  get meshRegions() { return meshRegions; },
+  get paths() { return paths; },
+  get physics() { return physics; },
+  get trackFloorY() { return trackFloorY; },
+  respawn
+};
 
 // ---------- Main loop ----------
 const clock = new THREE.Clock();

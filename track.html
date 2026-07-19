@@ -48,7 +48,12 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- track-core.js stays a classic script: it is dependency-free and sets
+     window.TrackCore before the deferred module below runs. -->
 <script src="track-core.js"></script>
-<script src="js/track-game.js"></script>
+<script type="importmap">
+{ "imports": { "@willpower/geometry": "./ext/geoemetry-js/src/index.js" } }
+</script>
+<script type="module" src="js/track-game.js"></script>
 </body>
 </html>

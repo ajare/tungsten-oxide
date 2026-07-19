@@ -24,7 +24,13 @@
  *
  * track = { version, name, samples, paths: [ { id, closed, points } ],
  *            disjointSeams: [{ id, pointId, kind, ... }],
+ *            meshAssets: { <assetId>: { name, railHeight, mesh } },
+ *            meshes: [ { id, asset, x, z, rotation, elevation } ],
  *            start: { path, point, reverse } }
+ * meshAssets/meshes carry flat drivable MESH REGIONS imported from the
+ * geometry-js editor (schema 4+; older tracks simply have none). track-core.js
+ * only validates and carries them -- js/track-mesh.js owns the geometry and the
+ * geometry-js dependency, keeping this file dependency-free.
  * Position point IDs are stable editor identities. If the same position ID
  * appears in multiple path occurrences, parseTrack() makes them the same
  * in-memory object so editing that point moves every occurrence. The editor
@@ -55,6 +61,11 @@
   const DEFAULT_CROSS_SECTION_CURVATURE = 0;
   const DEFAULT_CROSS_SECTION_TIGHTNESS = 1;
   const COLLISION_WALL_MARGIN = 0.9;
+  const DEFAULT_RAIL_HEIGHT = 3;
+  const finiteOr = (n, fallback, min) => {
+    if (typeof n !== 'number' || !isFinite(n)) return fallback;
+    return typeof min === 'number' ? Math.max(min, n) : n;
+  };
   const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
   const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
 
@@ -784,6 +795,57 @@
     return { path, point, reverse };
   }
 
+  // --- mesh regions -----------------------------------------------------------
+  // Flat drivable areas imported from the geometry-js editor. track-core.js
+  // stays dependency-free, so it only validates and carries this data; all the
+  // geometry lives in js/track-mesh.js, which owns the geometry-js dependency.
+  //
+  // An asset record wraps the pristine geometry-js mesh JSON alongside settings
+  // that are not part of that format (geometry-js's toJSON() does not serialize
+  // a mesh's root attributes, so per-asset settings need their own home). A
+  // bare mesh JSON is also accepted and treated as an asset with defaults.
+  function normalizeMeshAssets(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const [id, entry] of Object.entries(raw)) {
+      if (!id || !entry || typeof entry !== 'object') continue;
+      const mesh = entry.mesh && typeof entry.mesh === 'object' ? entry.mesh : entry;
+      if (!Array.isArray(mesh.polygons) || !Array.isArray(mesh.vertices)) continue;
+      out[id] = {
+        name: typeof entry.name === 'string' ? entry.name : id,
+        railHeight: finiteOr(entry.railHeight, DEFAULT_RAIL_HEIGHT, 0),
+        mesh: {
+          vertices: mesh.vertices,
+          edges: Array.isArray(mesh.edges) ? mesh.edges : [],
+          polygons: mesh.polygons
+        }
+      };
+    }
+    return out;
+  }
+
+  function normalizeMeshPlacement(raw, i) {
+    if (!raw || typeof raw !== 'object' || typeof raw.asset !== 'string' || !raw.asset) return null;
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : 'm' + (i + 1),
+      asset: raw.asset,
+      x: finiteOr(raw.x, 0),
+      z: finiteOr(raw.z, 0),
+      rotation: finiteOr(raw.rotation, 0),
+      elevation: finiteOr(raw.elevation, 0)
+    };
+  }
+
+  // Assets nothing refers to are dropped on the way out, so deleting the last
+  // placement of a shape eventually removes its geometry from the file too.
+  function referencedMeshAssets(track) {
+    const assets = track.meshAssets || {};
+    const used = new Set((track.meshes || []).map(m => m.asset));
+    const out = {};
+    for (const id of Object.keys(assets)) if (used.has(id)) out[id] = assets[id];
+    return out;
+  }
+
   // Accepts either the current { paths: [{closed, points}, ...] } schema, the
   // pre-refactor three-array schema, or the legacy single-closed-loop
   // { controlPoints: [...] } schema (see normalizePath).
@@ -820,11 +882,20 @@
         else byId.set(p.id, p);
       }
     }
+    // Mesh regions are optional: tracks written before schema 4 simply have
+    // none, and placements whose asset went missing are dropped rather than
+    // left dangling for the game to trip over.
+    const meshAssets = normalizeMeshAssets(data && data.meshAssets);
+    const meshes = (Array.isArray(data && data.meshes) ? data.meshes : [])
+      .map(normalizeMeshPlacement)
+      .filter(m => m && Object.prototype.hasOwnProperty.call(meshAssets, m.asset));
     return {
       version: (data && data.version) || 3,
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
       paths,
+      meshAssets,
+      meshes,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
@@ -845,13 +916,23 @@
       return '    { "id": ' + JSON.stringify(path.id || '') + ', "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
     }).join(',\n');
     const start = normalizeStart(track.start, track.paths);
+    const assets = referencedMeshAssets(track);
+    const meshesJson = (track.meshes || [])
+      .map(m => '    { "id": ' + JSON.stringify(m.id) + ', "asset": ' + JSON.stringify(m.asset) +
+        ', "x": ' + m.x + ', "z": ' + m.z + ', "rotation": ' + m.rotation + ', "elevation": ' + m.elevation + ' }')
+      .join(',\n');
+    const assetsJson = Object.keys(assets)
+      .map(id => '    ' + JSON.stringify(id) + ': ' + JSON.stringify(assets[id]))
+      .join(',\n');
     return '{\n' +
-      '  "version": 3,\n' +
+      '  "version": 4,\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
+      '  "meshAssets": {' + (assetsJson ? '\n' + assetsJson + '\n  ' : '') + '},\n' +
+      '  "meshes": [' + (meshesJson ? '\n' + meshesJson + '\n  ' : '') + '],\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
@@ -862,6 +943,8 @@
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
+    meshAssets: {},
+    meshes: [],
     paths: [{
       closed: true,
       points: [
@@ -907,6 +990,8 @@
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
+    meshAssets: {},
+    meshes: [],
     paths: [{
       closed: true,
       points: [
@@ -932,7 +1017,8 @@
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     parseTrack, serializeTrack, normalizeStart,
-    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN,
+    normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets,
+    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))
   };

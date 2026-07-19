@@ -78,13 +78,14 @@
     <span class="spacer" aria-hidden="true"></span>
     <button id="newBtn">New</button>
     <button id="importBtn">Import JSON</button>
+    <button id="importMeshBtn" title="Import a geometry-js mesh JSON as a drivable region">Import Mesh</button>
     <button id="exportBtn">Export JSON</button>
     <span class="spacer" aria-hidden="true"></span>
     <button id="undoBtn" disabled title="Undo (Ctrl+Z)">&#8630; Undo</button>
     <button id="redoBtn" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z)">&#8631; Redo</button>
     <span class="spacer" aria-hidden="true"></span>
-    <label>Curve Mode
-      <select id="editModeSelect"><option value="edit">Edit</option><option value="create">Create</option></select>
+    <label>Mode
+      <select id="editModeSelect"><option value="edit">Edit</option><option value="create">Create</option><option value="rails">Rails</option></select>
     </label>
     <label>Curve
       <select id="curveSelect" title="Current curve"></select>
@@ -116,11 +117,12 @@
     <span class="spacer"></span>
     <a href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
     <input id="fileInput" type="file" accept="application/json,.json" hidden>
+    <input id="meshFileInput" type="file" accept="application/json,.json" hidden>
   </div>
 
   <div id="canvasWrap">
     <canvas id="topCanvas"></canvas>
-    <div class="badge" id="topBadge">Top-down (X / Z) &mdash; left-click a control point to select/drag, left-drag empty space to pan, right-click empty space to add &middot; Delete to remove &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it</div>
+    <div class="badge" id="topBadge">Top-down (X / Z) &mdash; left-click a control point to select/drag, left-drag empty space to pan, right-click empty space to add &middot; Delete to remove &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it &middot; <span style="color:#b98cff">mesh regions: click to select, drag to move; switch to Rails mode to click edges (solid = wall, dashed = ledge)</span></div>
     <div id="topZoomControl" title="Top-down zoom">
       <div class="zoomLabel">+</div>
       <input id="topZoomSlider" type="range" min="-100" max="100" value="0" step="1" aria-label="Top-down zoom">
@@ -148,7 +150,12 @@
   <button data-type="crossSection" style="color:#d58cff">Cross-section</button>
 </div>
 
+<!-- track-core.js stays a classic script: it is dependency-free and sets
+     window.TrackCore before the deferred module below runs. -->
 <script src="track-core.js"></script>
-<script src="js/editor.js"></script>
+<script type="importmap">
+{ "imports": { "@willpower/geometry": "./ext/geoemetry-js/src/index.js" } }
+</script>
+<script type="module" src="js/editor.js"></script>
 </body>
 </html>

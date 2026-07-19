@@ -12,13 +12,19 @@ A browser-based, dependency-free (aside from three.js via CDN) racing track edit
 - `track-core.js` — shared track math, used by both the game and the editor (see architecture below).
 - `js/track-game.js` — three.js scene, track mesh generation/rendering, car physics/controls, collisions.
 - `js/editor.js` — editor state, undo/redo, canvas rendering/interaction for authoring tracks.
+- `js/track-mesh.js` — shared mesh-region math (see below). The mesh-world counterpart to `track-core.js`, split out because it depends on geometry-js while `track-core.js` stays dependency-free.
 - `ext/geoemetry-js/` — a git submodule (`@willpower/geometry`, https://github.com/ajare/geoemetry-js), a separate self-contained ES-module mesh/geometry library with its own `package.json`, tests, and a React/Vite editor. It's linked into the root project as a local npm dependency (root `package.json` -> `"@willpower/geometry": "file:ext/geoemetry-js"`, installed via `npm install`, resolved as a symlink at `node_modules/@willpower/geometry`) so track code can `import` it as `@willpower/geometry`. See `ext/geoemetry-js/README.md` for its own commands (`npm test`, `npm --prefix editor/ui run dev`, etc.) and its own codebase map.
 
 ## Running / testing
 
-No build step for the main app: open `track.html` or `editor.html` directly in a browser (or serve the repo root with any static file server). Run `npm install` once (after `git submodule update --init --recursive`) to link the `@willpower/geometry` local dependency. There is no lint or test command for the root project itself — verify changes manually in the browser.
+No build step: open `track.html` or `editor.html` directly, or serve the repo root statically. Run `npm install` once (after `git submodule update --init --recursive`) to link the `@willpower/geometry` local dependency.
 
-For the `geoemetry-js` submodule specifically, its own commands apply (`npm test`, `npm --prefix ext/geoemetry-js/editor/ui ci/run dev/build`) — see `ext/geoemetry-js/README.md`. Don't assume those apply to the outer project.
+- `npm test` — Node's built-in runner over `test/*.test.js` (pure logic: mesh geometry, rail collision, schema round trips). Fast, no browser.
+- `node tools/browser-smoke.mjs` — drives the real pages in headless Chromium. Catches ESM/import-map breakage, runtime errors and physics regressions the unit tests can't see. Needs `npm install --no-save playwright && npx playwright install chromium`. Deliberately outside `test/` so `node --test` doesn't try to run it.
+
+For the `geoemetry-js` submodule, its own commands apply (`npm test`, `npm --prefix ext/geoemetry-js/editor/ui run dev`) — see `ext/geoemetry-js/README.md`.
+
+**The `.js` files are ES modules** (root `package.json` has `"type": "module"`), except `track-core.js`, which is deliberately a classic browser script — an IIFE assigning `window.TrackCore`. Tests load it by evaluating its source with a stand-in `window`, not by importing it.
 
 ## Architecture: track data model (`track-core.js`)
 
@@ -47,10 +53,35 @@ Public API exposed as `window.TrackCore`: `basis`/`basisDeriv` (B-spline basis +
 
 Both `js/track-game.js` (3D mesh/physics) and `js/editor.js` (2D authoring UI) build on top of this same shared math so the editor's preview and the game's actual track geometry can never drift apart — if you change interpolation/eval behavior, change it once in `track-core.js`.
 
+## Architecture: mesh regions (`js/track-mesh.js`)
+
+Flat, drivable areas imported from the geometry-js editor — plazas, junction pads, arenas — for shapes a swept spline ribbon cannot express. Schema 4 adds:
+
+```
+meshAssets: { <assetId>: { name, railHeight, mesh } }   // mesh = pristine geometry-js JSON
+meshes:     [ { id, asset, x, z, rotation, elevation } ] // rigid placements
+```
+
+Design rules, all of which the code depends on:
+
+- **Assets are geometry, placements are transforms.** A placement is rigid: X/Z translation, yaw rotation, and one `elevation`. There is no scale, and a region is always horizontal (normal `+Y`, no banking or cross-section). Because the transform is rigid, **a triangulation computed in asset space stays valid for every placement** — assets are triangulated once, never per frame.
+- **Rail flags live on the asset**, as `attributes.rail` on geometry-js edges, so every placement of a shape is railed identically. Need different railing? Import the file again — imports always mint a new asset id (`pad`, `pad-2`), never disturbing existing placements.
+- **A railed edge is a solid, finite-height wall**; an unflagged boundary edge is a **ledge** you drive off into the existing ballistic code. Holes follow exactly the same rules, so a bare hole is a pit you fall through.
+- **Rails are collision everywhere now.** `G` is a pure rendering toggle and never changes what stops the ship.
+- **Surface precedence is nearest-in-Y**, not simple containment. `surfaceOwnerAt()` picks whichever of the mesh region and the spline corridor sits closer to the ship's current Y, which is what lets a mesh flyover pass over a ribbon without hijacking the ship underneath.
+- **`corridorContains()` is the real containment test, not `projectToSurface()`.** `projectToSurface` returns only a *lateral* offset `s`; a point far off the *end* of a segment projects onto that segment's clamped endpoint and reports a small, in-range `s` while being hundreds of units away. Ignoring this teleports the ship onto a distant ribbon when it leaves a mesh ledge. Always pair the lateral bounds with the along-tangent check.
+
+Physics on a region is genuinely different code from the corridor: free 2D integration plus swept segment collision (`slideAlongRails`), because there is no lateral parameter to clamp on an arbitrary polygon. Collision is swept, not positional, so a fast ship cannot tunnel through a wall.
+
+**Known limitation, by design:** a region is flat, so it only meets a ribbon cleanly where that ribbon is level and unbanked. Every other join is a visible step. Place regions accordingly.
+
 ## Editor conventions (`js/editor.js`)
 
 - Editor state lives in a single mutable `track` object (`TrackCore.cloneTrack(TrackCore.STARTER_TRACK)` initially).
 - Undo/redo uses whole-track deep-clone snapshots (`undoStack`/`redoStack`, capped at `MAX_HISTORY`), not diffs. Every discrete mutation calls `pushUndo()` once *before* mutating, capturing pre-edit state. Continuous gestures (dragging a point, typing in a field) call `pushUndo()` once at gesture start, not per-tick, so one drag = one undo step — see `dragMutated` for how point-selection-without-dragging avoids recording a no-op step.
+- Mesh regions: the JSON in `track` is authoritative (it is what undo snapshots and export read); `meshCache` holds a live geometry-js `Mesh` per asset purely to avoid reparsing. Rail edits mutate the live mesh and then `writeBackAsset()` immediately re-serializes it, so the two never drift. Undo/redo drops the cache entirely, since restored assets may differ.
+- The mode dropdown is `edit | create | rails`. Rails mode is modal on purpose: only mesh edges are pickable, so flagging a rail can't be confused with selecting anything else. Mesh regions are hit-tested *last* in edit mode, after every path handle, so a large region never steals a click from a control point drawn on top of it.
+- Both modules expose a read-only `window.__editor` / `window.__game` handle for console debugging and the browser smoke tests, since ES modules leak nothing to the page.
 
 ## Game conventions (`js/track-game.js`)
 
