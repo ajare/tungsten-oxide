@@ -107,12 +107,15 @@ function disposeObject(obj) {
 // of always pointing straight up. `normals` is parallel to `edge` (same
 // indexing as the baked frames the edges came from). Open paths leave the
 // rail's two ends unconnected (no cap segment), so ribbons sharing a control
-// point simply meet there without needing any join-specific cutting.
+// point simply meet there without needing any join-specific cutting. Where
+// this same edge crosses itself elsewhere along its length, that loop's wall
+// segments are collapsed away first (see collapseSelfIntersections).
 function buildRail(edge, normals, closed, height, color) {
-  const count = edge.length;
+  const line = TrackCore.collapseSelfIntersections(edge, closed);
+  const count = line.length;
   const positions = [], indices = [];
   for (let i = 0; i < count; i++) {
-    const base = edge[i], n = normals[i];
+    const base = line[i], n = normals[i];
     positions.push(
       base.x, base.y, base.z,
       base.x + n.x * height, base.y + n.y * height, base.z + n.z * height
@@ -134,15 +137,36 @@ function buildRail(edge, normals, closed, height, color) {
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
   const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
   const edges = prebuiltEdges || TrackCore.buildEdges(raw, closed);
 
+  // At a DISJOINT seam (editor-authored hard corner) override the shared
+  // endpoint's normal/edges so the two incident ribbons mitre into a clean
+  // corner instead of just meeting/overlapping at the raw shared point.
+  // Branch junctions (3+ incident ends, or 2-incident but not a disjoint
+  // seam) are NOT touched here -- those still freely overlap, see
+  // buildOverlapMesh.
+  if (endpointNormals) {
+    if (endpointNormals.start) raw[0].normal = endpointNormals.start;
+    if (endpointNormals.end) raw[raw.length - 1].normal = endpointNormals.end;
+  }
+  if (endpointCuts) {
+    const applyCut = (end, i) => {
+      if (!endpointCuts[end]) return;
+      if (endpointCuts[end].left) edges.left[i] = endpointCuts[end].left;
+      if (endpointCuts[end].right) edges.right[i] = endpointCuts[end].right;
+    };
+    applyCut('start', 0);
+    applyCut('end', raw.length - 1);
+  }
+
   // Wrap frames into THREE vectors for the physics. Also record each sample's
   // signed lateral offset (along edgeRight) of the left/right edges, so the
-  // collision corridor follows the actual road edge, not just centerline +/- halfW.
+  // collision corridor follows the actual (possibly mitred) road edge, not
+  // just centerline +/- halfW.
   const centerline = raw.map((f, i) => {
     const er = f.edgeRight, p = f.pos;
     const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
@@ -441,12 +465,14 @@ function overlapPolysAtSharedPoint(bakedPaths, incidences) {
 }
 // One merged mesh of all overlap patches, lifted slightly above the road
 // surface (along the blended local surface normal, so it hugs banked track
-// too) to avoid z-fighting.
-function buildOverlapMesh(bakedPaths, color) {
+// too) to avoid z-fighting. `disjointSeamPointIds` are skipped -- those get a
+// clean mitre from computeDisjointEdgeCuts instead of being left to overlap.
+function buildOverlapMesh(bakedPaths, color, disjointSeamPointIds) {
   const groups = sharedEndpointGroups(bakedPaths);
   const allPolys = [];
-  for (const [, incidences] of groups) {
+  for (const [id, incidences] of groups) {
     if (incidences.length < 2) continue;
+    if (disjointSeamPointIds && disjointSeamPointIds.has(id)) continue;
     allPolys.push(...overlapPolysAtSharedPoint(bakedPaths, incidences));
   }
   if (!allPolys.length) return null;
@@ -468,12 +494,42 @@ function buildOverlapMesh(bakedPaths, color) {
   const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
   return new THREE.Mesh(geo, mat);
 }
+// At a disjoint seam the two incident path ends generally have different
+// surface normals (the two curves approach the hard corner from different
+// directions/banking). If each rail used its own normal, the wall bases
+// would meet (via computeDisjointEdgeCuts) but the tops would still splay
+// apart. Average the endpoint normals per seam and use that shared normal at
+// BOTH incident ends so the rail tops meet too, not just the bases.
+function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
+  const out = bakedPaths.map(() => ({}));
+  const norm = v => { const l = Math.hypot(v.x, v.y, v.z) || 1; return { x: v.x / l, y: v.y / l, z: v.z / l }; };
+  for (const seam of disjointSeams || []) {
+    const incs = [];
+    bakedPaths.forEach((bp, pathIndex) => {
+      if (bp.closed || !bp.controlPoints.length || !bp.frames.length) return;
+      const lastCp = bp.controlPoints.length - 1;
+      if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'start', normal: bp.frames[0].normal });
+      }
+      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'end', normal: bp.frames[bp.frames.length - 1].normal });
+      }
+    });
+    if (incs.length < 2) continue;
+    const avg = norm(incs.reduce((s, inc) => ({
+      x: s.x + inc.normal.x, y: s.y + inc.normal.y, z: s.z + inc.normal.z
+    }), { x: 0, y: 0, z: 0 }));
+    for (const inc of incs) out[inc.pathIndex][inc.end] = avg;
+  }
+  return out;
+}
 // (Re)build the entire track from a normalized track object, then reset the
 // ship. `track.paths` is [{ closed, points }, ...] (points: typed
 // position/roll/width control points, see track-core.js). `track.start` is
 // { path, point, reverse } picking which position control point the ship
 // begins at and which way it faces. Paths that share a control point simply
-// meet there -- their ribbons/walls are not cut or clipped against each other.
+// meet there and overlap -- EXCEPT disjoint seams (editor-authored hard
+// corners), whose edges are cut to a clean mitre instead.
 function buildTrack(track) {
   const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
   trackName = track.name || '';
@@ -497,10 +553,14 @@ function buildTrack(track) {
   });
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
-  paths = bakedPaths.map(p => buildPath(
-    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges
+  const disjointSeams = track.disjointSeams || [];
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, disjointSeams);
+  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
+  paths = bakedPaths.map((p, i) => buildPath(
+    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
   ));
-  overlapMesh = buildOverlapMesh(bakedPaths, 0x0a2a66);
+  const disjointSeamPointIds = new Set(disjointSeams.map(s => s.pointId));
+  overlapMesh = buildOverlapMesh(bakedPaths, 0x0a2a66, disjointSeamPointIds);
   if (overlapMesh) scene.add(overlapMesh);
 
   resetShip();

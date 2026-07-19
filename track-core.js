@@ -349,6 +349,144 @@
     return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
+  // Proper segment-segment crossing test in the XZ plane (strict: sharing an
+  // endpoint does NOT count, so adjacent polyline segments never false-positive).
+  function segmentsCrossXZ(a1, a2, b1, b2) {
+    const cross = (o, a, p) => (a.x - o.x) * (p.z - o.z) - (a.z - o.z) * (p.x - o.x);
+    const d1 = cross(a1, a2, b1), d2 = cross(a1, a2, b2);
+    const d3 = cross(b1, b2, a1), d4 = cross(b1, b2, a2);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+  // Where two (already known to cross) segments meet, in XZ; y averaged.
+  function segCrossPointXZ(a1, a2, b1, b2) {
+    const den = (a1.x - a2.x) * (b1.z - b2.z) - (a1.z - a2.z) * (b1.x - b2.x);
+    if (Math.abs(den) < 1e-12) return { x: (a1.x + a2.x) / 2, y: (a1.y + a2.y) / 2, z: (a1.z + a2.z) / 2 };
+    const t = ((a1.x - b1.x) * (b1.z - b2.z) - (a1.z - b1.z) * (b1.x - b2.x)) / den;
+    return { x: a1.x + t * (a2.x - a1.x), y: (a1.y + a2.y) / 2, z: a1.z + t * (a2.z - a1.z) };
+  }
+  // Collapse LOCAL self-intersections of a single polyline (typically a wall/
+  // rail's edge line) -- segments that aren't adjacent (so trimEdge's
+  // consecutive-backward-segment fold detection above misses them) but are
+  // still geometrically nearby, e.g. a wiggly chicane whose offset briefly
+  // crosses back over an earlier/later part of itself. Each crossing's loop
+  // is collapsed to the crossing point (same technique as trimEdge), so it
+  // renders as zero-area there instead of visibly intersecting geometry.
+  // XZ-plane only, matching trimEdge's convention -- a genuine elevated
+  // crossover (same XZ footprint, different height, e.g. a bridge) would
+  // false-positive here; not expected on an ordinary track.
+  //
+  // The search is deliberately bounded to a local window (MAX_LOCAL_SPAN
+  // segments), NOT a full pairwise scan: a track that deliberately crosses
+  // itself far away in parameter space (a genuine figure-8 course, where the
+  // two lobes cross at one point but are each a legitimate, separate stretch
+  // of boundary) must keep both lobes intact -- collapsing "everything
+  // between" two crossings 100+ segments apart would silently delete an
+  // entire lobe instead of just the small overlapping area.
+  function collapseSelfIntersections(pts, closed) {
+    closed = closed !== false;
+    const N = pts.length;
+    const segCount = closed ? N : N - 1;
+    if (segCount < 4) return pts.map(p => ({ x: p.x, y: p.y, z: p.z })); // need 2 non-adjacent segments to cross
+    const nextIdx = i => closed ? (i + 1) % N : i + 1;
+    const out = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    const MAX_LOCAL_SPAN = 40;
+    const MAX_PASSES = segCount; // generous cap; each pass resolves at least one crossing
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      let found = null;
+      for (let i = 0; i < segCount && !found; i++) {
+        const a1 = out[i], a2 = out[nextIdx(i)];
+        const jMax = Math.min(segCount, i + MAX_LOCAL_SPAN);
+        for (let j = i + 2; j < jMax; j++) {
+          if (closed && i === 0 && j === segCount - 1) continue; // adjacent via wraparound
+          if (segmentsCrossXZ(a1, a2, out[j], out[nextIdx(j)])) { found = { i, j }; break; }
+        }
+      }
+      if (!found) break;
+      const { i, j } = found;
+      const X = segCrossPointXZ(out[i], out[nextIdx(i)], out[j], out[nextIdx(j)]);
+      let v = nextIdx(i);
+      while (true) { out[v] = { x: X.x, y: X.y, z: X.z }; if (v === j) break; v = nextIdx(v); }
+    }
+    return out;
+  }
+
+  // Compute hard-corner edge cuts for DISJOINT seams specifically (editor-
+  // authored hard corners, kind 'opened-closed' or 'split-open' -- always
+  // exactly two incident open-path ends by construction, never a 3+-way
+  // branch). `bakedPaths` entries are { id, closed, controlPoints, frames,
+  // edges }. Returns an array parallel to bakedPaths: each entry may contain
+  // { start:{left,right}, end:{left,right} } endpoint overrides. The two
+  // incident ends' boundary lines are intersected in XZ; a far/parallel
+  // intersection falls back to the shared center point, producing a
+  // deliberate hard mitre instead of the two ribbons just meeting/overlapping
+  // at the raw shared point.
+  function computeDisjointEdgeCuts(bakedPaths, disjointSeams) {
+    const cuts = bakedPaths.map(() => ({}));
+    const centerOf = inc => inc.frames[inc.idx].pos;
+    const fallback = inc => { const p = centerOf(inc); return { x: p.x, y: p.y, z: p.z }; };
+    const line = (inc, side) => ({ p: inc.edges[side][inc.idx], q: inc.edges[side][inc.neighbor] });
+    for (const seam of disjointSeams || []) {
+      const incs = [];
+      bakedPaths.forEach((bp, pathIndex) => {
+        if (bp.closed || !bp.controlPoints.length || bp.frames.length < 2) return;
+        const last = bp.controlPoints.length - 1;
+        if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
+          incs.push({ pathIndex, end: 'start', idx: 0, neighbor: 1, frames: bp.frames, edges: bp.edges });
+        }
+        if (bp.controlPoints[last] && bp.controlPoints[last].id === seam.pointId) {
+          incs.push({ pathIndex, end: 'end', idx: bp.frames.length - 1, neighbor: bp.frames.length - 2, frames: bp.frames, edges: bp.edges });
+        }
+      });
+      // A disjoint seam is always exactly 2-incident (opened-closed: one
+      // path's own start+end; split-open: one path's end + another's start).
+      // Anything else means the seam record is stale/malformed -- skip it
+      // rather than guess.
+      if (incs.length !== 2) continue;
+      const a = incs[0], b = incs[1];
+      const center = fallback(a);
+      const maxHalfW = Math.max(a.frames[a.idx].halfW || 1, b.frames[b.idx].halfW || 1);
+      // Only a SAME-end-type join (both 'start' or both 'end', e.g. two curves
+      // welded at both ends to close a loop) can meet with opposed
+      // orientation: there, each end's `edgeRight` -- hence its left/right
+      // edge labelling -- may be flipped relative to the other, and the
+      // edgeRight dot product correctly tells left-with-left from
+      // left-with-right (see below).
+      //
+      // An end<->start join (a.end !== b.end) is instead ALWAYS the same
+      // continuous curve turning a corner -- there is no "other end" to have
+      // an independent orientation, so it must NEVER flip, no matter how
+      // sharp the corner is (even a near-total hairpin reversal): the LEFT
+      // side of the road stays the LEFT side through the turn. Using the raw
+      // edgeRight dot product here was wrong -- rotating both tangents by the
+      // same corner angle rotates edgeRight by that angle too, so the sign
+      // flips as soon as the turn exceeds 90 degrees, incorrectly swapping
+      // left<->right and breaking the mitre past that point.
+      const erA = a.frames[a.idx].edgeRight, erB = b.frames[b.idx].edgeRight;
+      const flipped = a.end === b.end && (erA.x * erB.x + erA.y * erB.y + erA.z * erB.z) < 0;
+      const bSide = side => flipped ? (side === 'left' ? 'right' : 'left') : side;
+      // Miter for a's `side` = intersection of a's edge on that side with b's edge
+      // on the matching physical side. Named from a's perspective.
+      const sideCut = side => {
+        const la = line(a, side), lb = line(b, bSide(side));
+        let x = lineIntersectXZ(la.p, la.q, lb.p, lb.q) || center;
+        if (Math.hypot(x.x - center.x, x.z - center.z) > 6 * maxHalfW) x = center;
+        return x;
+      };
+      const left = sideCut('left'), right = sideCut('right');
+      for (const inc of [a, b]) {
+        if (!cuts[inc.pathIndex][inc.end]) cuts[inc.pathIndex][inc.end] = {};
+        // `left`/`right` are named from a's side. b's own left edge is whichever
+        // of the two corners lies on b's left -- swapped when the ends are flipped.
+        const useSwapped = inc === b && flipped;
+        const myLeft = useSwapped ? right : left;
+        const myRight = useSwapped ? left : right;
+        cuts[inc.pathIndex][inc.end].left = { x: myLeft.x, y: myLeft.y, z: myLeft.z };
+        cuts[inc.pathIndex][inc.end].right = { x: myRight.x, y: myRight.y, z: myRight.z };
+      }
+    }
+    return cuts;
+  }
+
   // --- JSON schema: parse / validate / serialize -----------------------------
   function normalizePoint(p, i) {
     if (!p || !Array.isArray(p.pos) || p.pos.length !== 3 || p.pos.some(n => typeof n !== 'number')) {
@@ -571,6 +709,7 @@
 
   global.TrackCore = {
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
+    computeDisjointEdgeCuts, collapseSelfIntersections,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
