@@ -20,8 +20,8 @@ window.addEventListener('resize', () => {
 });
 
 // ---------- Lighting ----------
-scene.add(new THREE.HemisphereLight(0x88bbff, 0x080810, 0.7));
-const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+scene.add(new THREE.HemisphereLight(0x88bbff, 0x080810, 0.45));
+const sun = new THREE.DirectionalLight(0xffffff, 0.75);
 sun.position.set(50, 80, 30);
 scene.add(sun);
 
@@ -122,8 +122,8 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   // the start; open paths leave the two ends unconnected. A global cross-
   // section curvature subdivides the strip across its width: 0 keeps the old
   // flat chord, 1 raises the center to a semicircular arc with the same edges.
-  const roadMaterial = () => new THREE.MeshStandardMaterial({ color: 0xadd8ff, emissive: 0xadd8ff, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
-  const pos = [], nrm = [], idx = [];
+  const roadMaterial = () => new THREE.MeshStandardMaterial({ color: 0x7fb4d4, emissive: 0x31566a, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide, flatShading: true });
+  const pos = [], idx = [];
   const crossCount = CROSS_SECTION_SEGMENTS + 1;
   for (let i = 0; i < N; i++) {
     const left = edges.left[i], right = edges.right[i], f = raw[i];
@@ -137,10 +137,6 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
         left.y + chord.y * v + f.normal.y * h,
         left.z + chord.z * v + f.normal.z * h
       );
-      const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
-      const crossT = new THREE.Vector3(chord.x + f.normal.x * dhdv, chord.y + f.normal.y * dhdv, chord.z + f.normal.z * dhdv);
-      const nml = toVec(f.tangent).cross(crossT).normalize();
-      nrm.push(nml.x, nml.y, nml.z);
     }
   }
   const segCount = closed ? N : N - 1;
@@ -154,9 +150,13 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setIndex(idx);
-  const mesh = new THREE.Mesh(g, roadMaterial());
+  // Duplicate indexed vertices and compute normals per triangle so lighting is
+  // flat per rendered polygon, not smoothed/interpolated across the road mesh.
+  const flatG = g.toNonIndexed();
+  flatG.computeVertexNormals();
+  g.dispose();
+  const mesh = new THREE.Mesh(flatG, roadMaterial());
   scene.add(mesh);
 
   // Dashed racing stripe riding just above the banked centerline.
@@ -340,7 +340,8 @@ function curvedSurfaceFrame(sample, s) {
 }
 
 function sampleTrack(x, z) {
-  let bestPath = paths[0], bestA = 0, bestB = 1, bestT = 0, bestD = Infinity;
+  let fallback = { path: paths[0], a: 0, b: 1, t: 0, d: Infinity };
+  let bestUnder = null;
   for (const path of paths) {
     const cl = path.centerline, M = cl.length;
     const segCount = path.closed ? M : M - 1;
@@ -355,12 +356,45 @@ function sampleTrack(x, z) {
       const px = a.pos.x + sx * t, pz = a.pos.z + sz * t;
       const dx = x - px, dz = z - pz;
       const d = dx * dx + dz * dz;
-      if (d < bestD) { bestD = d; bestPath = path; bestA = i; bestB = j; bestT = t; }
+      if (d < fallback.d) fallback = { path, a: i, b: j, t, d };
+
+      // If multiple road ribbons overlap under the ship, use only the closest
+      // one whose actual collision corridor contains this X/Z. Segments that
+      // are nearby but outside their sLeft/sRight bounds are not "under" the
+      // ship and should not steal physics from an overlapping branch/road.
+      let erx = a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t;
+      let ery = a.edgeRight.y + (b.edgeRight.y - a.edgeRight.y) * t;
+      let erz = a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t;
+      const erl = Math.hypot(erx, ery, erz) || 1;
+      erx /= erl; ery /= erl; erz /= erl;
+      const cx = a.pos.x + (b.pos.x - a.pos.x) * t;
+      const cy = a.pos.y + (b.pos.y - a.pos.y) * t;
+      const cz = a.pos.z + (b.pos.z - a.pos.z) * t;
+      const cosR2 = erx * erx + erz * erz || 1;
+      const lateral = ((x - cx) * erx + (z - cz) * erz) / cosR2;
+      let loS = (a.sLeft + (b.sLeft - a.sLeft) * t) + TrackCore.COLLISION_WALL_MARGIN;
+      let hiS = (a.sRight + (b.sRight - a.sRight) * t) - TrackCore.COLLISION_WALL_MARGIN;
+      if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; }
+      let wouldOffEnd = false;
+      if (!path.closed) {
+        if (i === 0 && t <= 1e-4) {
+          const e = cl[0];
+          wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.start) &&
+            ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+        } else if (j === M - 1 && t >= 1 - 1e-4) {
+          const e = cl[M - 1];
+          wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.end) &&
+            ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+        }
+      }
+      if (!wouldOffEnd && lateral >= loS && lateral <= hiS && (!bestUnder || d < bestUnder.d)) bestUnder = { path, a: i, b: j, t, d };
     }
   }
+  const best = bestUnder || fallback;
+  const bestPath = best.path, bestA = best.a, bestB = best.b;
   const cl = bestPath.centerline;
   const a = cl[bestA], b = cl[bestB];
-  const t = bestT;
+  const t = best.t;
 
   _sample.pos.copy(a.pos).lerp(b.pos, t);
   _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
@@ -390,14 +424,14 @@ function sampleTrack(x, z) {
 // ---------- Player vehicle ----------
 const shipGroup = new THREE.Group();
 const bodyGeo = new THREE.BoxGeometry(1.2, 0.4, 2.0);
-const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7a1a, metalness: 0.4, roughness: 0.3, emissive: 0x552200, emissiveIntensity: 0.3 });
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd85f14, metalness: 0.35, roughness: 0.4, emissive: 0x331400, emissiveIntensity: 0.15, flatShading: true });
 const body = new THREE.Mesh(bodyGeo, bodyMat);
 body.position.y = 0.3;
 shipGroup.add(body);
 
 // nose accent so orientation is obvious
 const noseGeo = new THREE.ConeGeometry(0.35, 0.8, 4);
-const noseMat = new THREE.MeshStandardMaterial({ color: 0x00d4ff, emissive: 0x0077aa, emissiveIntensity: 0.6 });
+const noseMat = new THREE.MeshStandardMaterial({ color: 0x00a8cc, emissive: 0x004866, emissiveIntensity: 0.25, flatShading: true });
 const nose = new THREE.Mesh(noseGeo, noseMat);
 nose.rotation.x = Math.PI / 2;
 nose.rotation.y = Math.PI / 4;
@@ -582,15 +616,28 @@ function updatePhysics(dt) {
     let px = physics.groundPos.x + vx * dt;
     let pz = physics.groundPos.z + vz * dt;
 
-    c = sampleTrack(px, pz);
-    if (c.offEnd) {
+    // First test the proposed move against the track segment we were already
+    // riding. If that move crosses its wall, resolve against THIS segment before
+    // allowing sampleTrack() to choose another overlapping branch. Otherwise,
+    // holding into a wall can tunnel through to a different nearby/overlapping
+    // ribbon whose corridor contains the post-wall position.
+    const current = c;
+    let projection = projectToSurface(current, px, pz);
+    let forceCurrentWall = !current.offEnd && (projection.s > projection.hiS || projection.s < projection.loS);
+
+    if (!forceCurrentWall) {
+      c = sampleTrack(px, pz);
+      projection = projectToSurface(c, px, pz);
+    }
+
+    if (!forceCurrentWall && c.offEnd) {
       // Leaving an open curve: stop projecting to the clamped endpoint and let
       // the craft continue ballistically until its X/Z is over a curve again.
       physics.airborne = true;
       physics.verticalVel = 0;
       physics.groundPos.set(px, physics.groundPos.y, pz);
     } else {
-      const { er, s, loS, hiS } = projectToSurface(c, px, pz);
+      const { er, s, loS, hiS } = projection;
 
       let hitSign = 0;
       if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
