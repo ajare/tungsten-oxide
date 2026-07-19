@@ -89,6 +89,31 @@ let topPanned = false;            // suppresses the context menu after a pan dra
 const ROLL_HANDLE_MARGIN = 6;     // keeps roll handles from rendering off the top/bottom edge
 
 function parts(path) { return TrackCore.splitPoints(path.points); }
+function branchPointIdsForPaths(paths, junctions) {
+  const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
+  const stats = new Map();
+  const stat = id => {
+    if (!stats.has(id)) stats.set(id, { endpoints: 0, interior: 0, closed: 0 });
+    return stats.get(id);
+  };
+  for (const path of paths || []) {
+    const cps = parts(path).controlPoints;
+    const closed = path.closed !== false;
+    for (let i = 0; i < cps.length; i++) {
+      const p = cps[i];
+      if (!p || !p.id) continue;
+      const s = stat(p.id);
+      if (closed) s.closed++;
+      else if (i === 0 || i === cps.length - 1) s.endpoints++;
+      else s.interior++;
+    }
+  }
+  for (const [id, s] of stats) {
+    if (s.endpoints >= 3) ids.add(id);
+    else if (s.endpoints >= 1 && (s.closed > 0 || s.interior > 0)) ids.add(id);
+  }
+  return ids;
+}
 function syncSelectionToId() {
   if (!selectedPointId) {
     const first = track.paths[0] && parts(track.paths[0]).controlPoints[0];
@@ -409,6 +434,7 @@ function drawTop() {
 
   const flat = renderMode === 'flat' || renderMode === 'elevation';
   const elevationMode = renderMode === 'elevation';
+  const branchPointIds = branchPointIdsForPaths(track.paths, track.junctions || []);
   const bakedPaths = track.paths.map(path => {
     const pp = parts(path);
     // Use the SAME baked frames the game uses, so the preview matches exactly
@@ -419,7 +445,8 @@ function drawTop() {
     const closed = path.closed !== false;
     const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, closed, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints);
     const edges = flat ? TrackCore.buildFlatEdges(frames, closed) : TrackCore.buildEdges(frames, closed);
-    return { id: path.id, closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
+    const hasBranchConnection = pp.controlPoints.some(cp => cp && branchPointIds.has(cp.id));
+    return { id: path.id, closed, parts: pp, controlPoints: pp.controlPoints, frames, edges, hasBranchConnection };
   });
   const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
   if (!dragging) crossingCache = []; // rebuilt per-path below; stays cached during drags
@@ -440,22 +467,26 @@ function drawTop() {
       bp.controlPoints[0] && bp.controlPoints[bp.controlPoints.length - 1] && bp.controlPoints[0].id === bp.controlPoints[bp.controlPoints.length - 1].id;
     // Detect self-intersections on the pre-collapse edges (for clickable
     // markers). Heavy (O(N^2)); only when idle -- during a drag/pan reuse the
-    // cached world-space crossings so the frame stays cheap.
-    if (!dragging) crossingCache[pathIndex] = detectPathCrossings(bp.controlPoints, bp.closed, edges, wrapsAtDisjointSeam);
+    // cached world-space crossings so the frame stays cheap. Branch-connected
+    // curves intentionally skip self-intersection detection/cleanup so their
+    // authored geometry is not altered by branch handling.
+    if (!dragging) crossingCache[pathIndex] = bp.hasBranchConnection ? [] : detectPathCrossings(bp.controlPoints, bp.closed, edges, wrapsAtDisjointSeam);
 
-    // Self-intersections (a tight fold, or the SAME side of this SAME curve
-    // crossing itself along its length -- e.g. a wiggly chicane) are collapsed
-    // to the crossing point here, on the edges shared by the road fill AND the
-    // wall outline below. This matches the game (track-game.js buildPath), which
-    // likewise cleans the edges that feed both its road ribbon and its physics
-    // corridor -- so the editor preview shows exactly what the game builds.
-    // Per-crossing keep/collapse overrides (authored via the markers) flow
-    // through the same deciders the game uses.
-    const deciders = TrackCore.makeSelfIntersectionDeciders(bp.controlPoints, bp.closed, TrackCore.N_DEFAULT, track.selfIntersectionOverrides || []);
-    edges = TrackCore.removeLocalEdgeSelfIntersections(
-      edges, bp.closed, wrapsAtDisjointSeam,
-      deciders && deciders.decideLeft, deciders && deciders.decideRight, deciders && deciders.scanSpan
-    );
+    if (!bp.hasBranchConnection) {
+      // Self-intersections (a tight fold, or the SAME side of this SAME curve
+      // crossing itself along its length -- e.g. a wiggly chicane) are collapsed
+      // to the crossing point here, on the edges shared by the road fill AND the
+      // wall outline below. This matches the game (track-game.js buildPath), which
+      // likewise cleans the edges that feed both its road ribbon and its physics
+      // corridor -- so the editor preview shows exactly what the game builds.
+      // Per-crossing keep/collapse overrides (authored via the markers) flow
+      // through the same deciders the game uses.
+      const deciders = TrackCore.makeSelfIntersectionDeciders(bp.controlPoints, bp.closed, TrackCore.N_DEFAULT, track.selfIntersectionOverrides || []);
+      edges = TrackCore.removeLocalEdgeSelfIntersections(
+        edges, bp.closed, wrapsAtDisjointSeam,
+        deciders && deciders.decideLeft, deciders && deciders.decideRight, deciders && deciders.scanSpan
+      );
+    }
     const count = bp.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
     const centerPts = [], leftPts = [], rightPts = [], rollAt = [], yAt = [];
     for (let i = 0; i < count; i++) {
@@ -1408,7 +1439,7 @@ function renderProps() {
         `<label title="Higher values pinch the curve tighter around the center; 1 is circular.">Tightness<input type="number" data-key="tightness" value="${crossSectionSel.tightness == null ? 1 : crossSectionSel.tightness}" step="0.1" min="0.2" max="4"></label>` +
         `<div style="margin-top:10px;color:#7fb8d8;font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cross-section preview</div>` +
         `<canvas id="crossSectionPreview" style="display:block;width:100%;height:170px;margin-top:5px;background:#071019;border:1px solid #244358;border-radius:5px"></canvas>` +
-        `<button id="delCrossSectionBtn" style="margin-top:10px;width:100%;background:#4a235a;border:1px solid #d58cff;color:#f4ddff;border-radius:5px;padding:6px;cursor:pointer">Delete cross-section point (min 2)</button>`;
+        `<button id="delCrossSectionBtn" ${pp.crossSectionPoints.length <= 2 ? 'disabled' : ''} style="margin-top:10px;width:100%;background:#4a235a;border:1px solid #d58cff;color:#f4ddff;border-radius:5px;padding:6px;cursor:pointer">Delete cross-section point (min 2)</button>`;
       wireTypeSelect();
       drawCrossSectionPreview(crossSectionSel);
       body.querySelectorAll('input').forEach(inp => {
@@ -1444,7 +1475,7 @@ function renderProps() {
         typeSelectRow('width') +
         `<label>Position (%)<input type="number" data-key="t" value="${(widthSel.t * 100).toFixed(1)}" step="1" min="0" max="100"></label>` +
         `<label>Width<input type="number" data-key="width" value="${widthSel.width}" step="1" min="1"></label>` +
-        `<button id="delWidthBtn" style="margin-top:10px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete width point (min 2)</button>`;
+        `<button id="delWidthBtn" ${pp.widthPoints.length <= 2 ? 'disabled' : ''} style="margin-top:10px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete width point (min 2)</button>`;
       wireTypeSelect();
       body.querySelectorAll('input').forEach(inp => {
         inp.addEventListener('input', () => {
@@ -1477,7 +1508,7 @@ function renderProps() {
         typeSelectRow('roll') +
         `<label>Position (%)<input type="number" data-key="t" value="${(rollSel.t * 100).toFixed(1)}" step="1" min="0" max="100"></label>` +
         `<label>Roll&deg;<input type="number" data-key="roll" value="${rollSel.roll}" step="1" min="-180" max="180"></label>` +
-        `<button id="delRollBtn" style="margin-top:10px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete roll point (min 2)</button>`;
+        `<button id="delRollBtn" ${pp.rollPoints.length <= 2 ? 'disabled' : ''} style="margin-top:10px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete roll point (min 2)</button>`;
       wireTypeSelect();
       body.querySelectorAll('input').forEach(inp => {
         inp.addEventListener('input', () => {
@@ -1514,6 +1545,7 @@ function renderProps() {
     : (disjointReason || 'Split/open this path here to create a hard shared corner.');
   const incomingSeg = selectedIncomingSegment();
   const outgoingSeg = selectedOutgoingSegment();
+  const pointDeleteDisabled = countPointOccurrences(p) > 1 || curParts().controlPoints.length <= 4;
   const greenBtn = incomingSeg
     ? `<button id="delPrevSegmentBtn" style="margin-top:6px;width:100%;background:#1f4f2d;border:1px solid #3b7;color:#caffd8;border-radius:5px;padding:6px;cursor:pointer">Delete green segment (previous)</button>`
     : '';
@@ -1529,8 +1561,8 @@ function renderProps() {
     row('weight', 'Weight', p.weight, 0.1) +
     `<label title="${disjointHelp}">Disjoint corner<input id="disjointChk" type="checkbox" ${seam ? 'checked' : ''} ${disjointReason ? 'disabled' : ''}></label>` +
     `<div style="color:${disjointReason ? '#ff99aa' : '#6f93a8'};font-size:11px;line-height:1.35;margin:-2px 0 8px">${disjointHelp}</div>` +
-    `<button id="startBtn" style="margin-top:10px;width:100%;background:#123a26;border:1px solid #2c9e5a;color:#bdf7d4;border-radius:5px;padding:6px;cursor:pointer">${isStart ? 'This is the start point' : 'Set as start point'}</button>` +
-    `<button id="delBtn" style="margin-top:6px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete point (min 4)</button>` +
+    `<button id="startBtn" ${isStart ? 'disabled' : ''} style="margin-top:10px;width:100%;background:#123a26;border:1px solid #2c9e5a;color:#bdf7d4;border-radius:5px;padding:6px;cursor:pointer">${isStart ? 'This is the start point' : 'Set as start point'}</button>` +
+    `<button id="delBtn" ${pointDeleteDisabled ? 'disabled' : ''} style="margin-top:6px;width:100%;background:#5a1f2a;border:1px solid #a34;color:#fbd;border-radius:5px;padding:6px;cursor:pointer">Delete point (min 4)</button>` +
     greenBtn + redBtn;
   wireTypeSelect();
   if (countPointOccurrences(p) > 1) document.getElementById('typeSelect').disabled = true;
@@ -2348,9 +2380,9 @@ elevCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
 // ---------- Keyboard ----------
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
+  if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (crossSectionSel) {

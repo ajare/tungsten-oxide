@@ -67,7 +67,7 @@ function disposeObject(obj) {
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals, deciders) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals, deciders, skipSelfIntersectionCleanup) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
   const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
@@ -96,11 +96,14 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     controlPoints[0] && controlPoints[controlPoints.length - 1] && controlPoints[0].id === controlPoints[controlPoints.length - 1].id;
   // `deciders` (from track.selfIntersectionOverrides) lets specific crossings
   // be force-kept or force-collapsed; when absent the default local window rule
-  // applies.
-  edges = TrackCore.removeLocalEdgeSelfIntersections(
-    edges, closed, wrapsAtDisjointSeam,
-    deciders && deciders.decideLeft, deciders && deciders.decideRight, deciders && deciders.scanSpan
-  );
+  // applies. Branch-connected curves intentionally skip this cleanup so branch
+  // geometry is not altered by runtime self-intersection handling.
+  if (!skipSelfIntersectionCleanup) {
+    edges = TrackCore.removeLocalEdgeSelfIntersections(
+      edges, closed, wrapsAtDisjointSeam,
+      deciders && deciders.decideLeft, deciders && deciders.decideRight, deciders && deciders.scanSpan
+    );
+  }
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
   // signed lateral offset (along edgeRight) of the left/right edges, so the
@@ -179,87 +182,6 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   return { closed, centerline, mesh, stripeLine, railR, railL, anchors, endpointIds };
 }
 
-function clonePointForRuntime(p) { return { ...p, pos: p.pos ? p.pos.slice() : p.pos }; }
-function runtimeScalarPoints(path) {
-  // Reuse authored roll/width controls for runtime-only branch topology
-  // normalization. The exact t-domain remap is less important than cutting the
-  // geometry correctly; editor-created tracks already remap more carefully.
-  return (path.points || []).filter(p => p.type === 'roll' || p.type === 'width' || p.type === 'crossSection').map(p => ({ ...p }));
-}
-function inferBranchPointIds(trackPaths, junctions) {
-  const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
-  const stats = new Map();
-  const stat = id => {
-    if (!stats.has(id)) stats.set(id, { total: 0, endpoints: 0, interior: 0, closed: 0 });
-    return stats.get(id);
-  };
-  for (const path of trackPaths || []) {
-    const cps = TrackCore.splitPoints(path.points || []).controlPoints;
-    const closed = path.closed !== false;
-    for (let i = 0; i < cps.length; i++) {
-      const p = cps[i];
-      if (!p || !p.id) continue;
-      const s = stat(p.id);
-      s.total++;
-      if (closed) s.closed++;
-      else if (i === 0 || i === cps.length - 1) s.endpoints++;
-      else s.interior++;
-    }
-  }
-  // Infer only true branch targets, not ordinary two-end disjoint/connected
-  // seams. A branch is an open endpoint sharing a point with a closed curve or
-  // interior vertex (which will be opened/split), or an already-split point with
-  // 3+ open endpoints.
-  for (const [id, s] of stats) {
-    if (s.endpoints >= 3) ids.add(id);
-    else if (s.endpoints >= 1 && (s.closed > 0 || s.interior > 0)) ids.add(id);
-  }
-  return ids;
-}
-function normalizeBranchTopologyForRuntime(trackPaths, junctions) {
-  const branchPointIds = inferBranchPointIds(trackPaths, junctions);
-  const isBranch = id => !!id && branchPointIds.has(id);
-  // Turn every branch point into a shared OPEN endpoint so its walls get cut and
-  // a junction patch fills the gap. A closed loop is sliced into one arc between
-  // each consecutive pair of branch points around the loop; an open curve is
-  // split at each interior branch point. This handles ALL of a path's branch
-  // points in a single pass -- the previous per-point "open then re-split"
-  // approach could not split a second branch point that landed within a few
-  // control points of the first (it failed a 4-point-per-piece guard), leaving
-  // that junction buried as an interior vertex with its walls running straight
-  // through the intersection.
-  const out = [];
-  for (const path of trackPaths || []) {
-    const cps = TrackCore.splitPoints(path.points).controlPoints;
-    const scalar = runtimeScalarPoints(path);
-    if (path.closed !== false) {
-      const bIdx = [];
-      for (let i = 0; i < cps.length; i++) if (isBranch(cps[i].id)) bIdx.push(i);
-      if (bIdx.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
-      const n = cps.length;
-      // One arc per gap between consecutive branch points (wraps around the loop).
-      // A single branch point yields one arc that starts and ends on it -- the
-      // whole loop opened at that point, matching the old single-branch behaviour.
-      for (let k = 0; k < bIdx.length; k++) {
-        const a = bIdx[k], b = bIdx[(k + 1) % bIdx.length];
-        const arc = [cps[a]];
-        let i = a;
-        do { i = (i + 1) % n; arc.push(cps[i]); } while (i !== b);
-        out.push({ id: (path.id || '') + '_arc' + k + '_' + cps[a].id, closed: false, points: arc.concat(scalar) });
-      }
-    } else {
-      const cut = [];
-      for (let i = 1; i < cps.length - 1; i++) if (isBranch(cps[i].id)) cut.push(i);
-      if (cut.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
-      const bounds = [0, ...cut, cps.length - 1];
-      for (let k = 0; k < bounds.length - 1; k++) {
-        out.push({ id: (path.id || '') + '_seg' + k, closed: false, points: cps.slice(bounds[k], bounds[k + 1] + 1).concat(scalar) });
-      }
-    }
-  }
-  return out;
-}
-
 // For each position-point ID that is a shared open endpoint of 2+ baked paths,
 // the list of { pathIndex, end } incidences touching it there.
 function sharedEndpointGroups(bakedPaths) {
@@ -281,6 +203,32 @@ function endpointIncidentCounts(bakedPaths) {
   const counts = new Map();
   for (const [id, list] of sharedEndpointGroups(bakedPaths)) counts.set(id, list.length);
   return counts;
+}
+
+function inferBranchPointIds(trackPaths, junctions) {
+  const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
+  const stats = new Map();
+  const stat = id => {
+    if (!stats.has(id)) stats.set(id, { endpoints: 0, interior: 0, closed: 0 });
+    return stats.get(id);
+  };
+  for (const path of trackPaths || []) {
+    const cps = TrackCore.splitPoints(path.points || []).controlPoints;
+    const closed = path.closed !== false;
+    for (let i = 0; i < cps.length; i++) {
+      const p = cps[i];
+      if (!p || !p.id) continue;
+      const s = stat(p.id);
+      if (closed) s.closed++;
+      else if (i === 0 || i === cps.length - 1) s.endpoints++;
+      else s.interior++;
+    }
+  }
+  for (const [id, s] of stats) {
+    if (s.endpoints >= 3) ids.add(id);
+    else if (s.endpoints >= 1 && (s.closed > 0 || s.interior > 0)) ids.add(id);
+  }
+  return ids;
 }
 
 // At a disjoint seam the two incident path ends generally have different
@@ -320,7 +268,10 @@ function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
 // meet there and overlap -- EXCEPT disjoint seams (editor-authored hard
 // corners), whose edges are cut to a clean mitre instead.
 function buildTrack(track) {
-  const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
+  // Preserve authored branch geometry exactly. Branch-connected paths are not
+  // split/opened or otherwise normalized at runtime.
+  const trackPaths = track.paths || [];
+  const branchPointIds = inferBranchPointIds(trackPaths, track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
   connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
@@ -335,7 +286,8 @@ function buildTrack(track) {
     const closed = p.closed !== false;
     const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
     const edges = TrackCore.buildEdges(frames, closed);
-    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges };
+    const hasBranchConnection = controlPoints.some(cp => cp && branchPointIds.has(cp.id));
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection };
   });
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
@@ -345,7 +297,7 @@ function buildTrack(track) {
   const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
   paths = bakedPaths.map((p, i) => buildPath(
     p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
-    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides)
+    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides), p.hasBranchConnection
   ));
   resetShip();
   const label = document.getElementById('trackName');
