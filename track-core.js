@@ -52,6 +52,10 @@
 
   const N_DEFAULT = 400;
   const DEG2RAD = Math.PI / 180;
+  const DEFAULT_CROSS_SECTION_CURVATURE = 0;
+  const DEFAULT_CROSS_SECTION_TIGHTNESS = 1;
+  const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
+  const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
 
   // --- tiny plain-object vector helpers ({x,y,z}) ----------------------------
   const vsub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
@@ -75,15 +79,17 @@
   // roll/width points are extracted and sorted by their own `t` (their array
   // position doesn't matter).
   function splitPoints(points) {
-    const controlPoints = [], rollPoints = [], widthPoints = [];
+    const controlPoints = [], rollPoints = [], widthPoints = [], crossSectionPoints = [];
     for (const p of points) {
       if (p.type === 'roll') rollPoints.push(p);
       else if (p.type === 'width') widthPoints.push(p);
+      else if (p.type === 'crossSection') crossSectionPoints.push(p);
       else controlPoints.push(p);
     }
     rollPoints.sort((a, b) => a.t - b.t);
     widthPoints.sort((a, b) => a.t - b.t);
-    return { controlPoints, rollPoints, widthPoints };
+    crossSectionPoints.sort((a, b) => a.t - b.t);
+    return { controlPoints, rollPoints, widthPoints, crossSectionPoints };
   }
 
   // --- uniform cubic B-spline basis (1/6 matrix) and its derivative ----------
@@ -161,6 +167,12 @@
   function evalWidthSpline(widthPoints, closed, tQuery) {
     return Math.max(1, evalScalarSpline(widthPoints, closed, tQuery, 'width'));
   }
+  function evalCrossSectionSpline(crossSectionPoints, closed, tQuery) {
+    return clampSignedUnit(evalScalarSpline(crossSectionPoints, closed, tQuery, 'curvature'));
+  }
+  function evalCrossSectionTightnessSpline(crossSectionPoints, closed, tQuery) {
+    return clampTightness(evalScalarSpline(crossSectionPoints, closed, tQuery, 'tightness'));
+  }
 
   // --- rational cubic B-spline evaluator --------------------------------------
   // Returns evalTrack(g), g in [0, CP_N) for closed paths or [0, CP_N-1] for
@@ -174,13 +186,14 @@
   // single code path for both cases and the curve still starts/ends right at
   // the first/last control point's neighbourhood, consistent with how this
   // engine already treats control points as approximate, not interpolated.
-  function makeEvaluator(controlPoints, closed, rollPoints, widthPoints) {
+  function makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints) {
     closed = closed !== false;
     const CP_N = controlPoints.length;
     const cpVec = controlPoints.map(c => ({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }));
     const cpW = controlPoints.map(c => (c.weight == null ? 1 : c.weight));
     const rp = (rollPoints && rollPoints.length >= 1) ? rollPoints : [{ t: 0, roll: 0 }, { t: 1, roll: 0 }];
     const wp = (widthPoints && widthPoints.length >= 1) ? widthPoints : [{ t: 0, width: 12 }, { t: 1, width: 12 }];
+    const xp = (crossSectionPoints && crossSectionPoints.length >= 1) ? crossSectionPoints : [{ t: 0, curvature: 0, tightness: 1 }, { t: 1, curvature: 0, tightness: 1 }];
     const gMax = (closed ? CP_N : CP_N - 1) || 1;
     const wrap = closed
       ? i => ((i % CP_N) + CP_N) % CP_N
@@ -191,12 +204,12 @@
         if (g <= 0) {
           const pos = cpVec[0];
           const tangent = vnorm(CP_N > 1 ? vsub(cpVec[1], cpVec[0]) : { x: 0, y: 0, z: 1 });
-          return { pos, tangent, roll: evalRollSpline(rp, closed, 0), width: evalWidthSpline(wp, closed, 0) };
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 0), width: evalWidthSpline(wp, closed, 0), crossSectionCurvature: evalCrossSectionSpline(xp, closed, 0), crossSectionTightness: evalCrossSectionTightnessSpline(xp, closed, 0) };
         }
         if (g >= CP_N - 1) {
           const pos = cpVec[CP_N - 1];
           const tangent = vnorm(CP_N > 1 ? vsub(cpVec[CP_N - 1], cpVec[CP_N - 2]) : { x: 0, y: 0, z: 1 });
-          return { pos, tangent, roll: evalRollSpline(rp, closed, 1), width: evalWidthSpline(wp, closed, 1) };
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 1), width: evalWidthSpline(wp, closed, 1), crossSectionCurvature: evalCrossSectionSpline(xp, closed, 1), crossSectionTightness: evalCrossSectionTightnessSpline(xp, closed, 1) };
         }
       }
       const seg = Math.floor(g);
@@ -220,7 +233,9 @@
       const t = g / gMax;
       const roll = evalRollSpline(rp, closed, t);
       const width = evalWidthSpline(wp, closed, t);
-      return { pos, tangent, roll, width };
+      const crossSectionCurvature = evalCrossSectionSpline(xp, closed, t);
+      const crossSectionTightness = evalCrossSectionTightnessSpline(xp, closed, t);
+      return { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness };
     }
     return { evalTrack, CP_N, closed };
   }
@@ -230,15 +245,15 @@
   // vectors plain {x,y,z}. Consumers wrap these in their own vector type.
   // Closed paths bake N samples spanning the full loop [0, CP_N); open paths
   // bake N samples spanning [0, CP_N-1] inclusive of both endpoints.
-  function buildCenterline(controlPoints, N, closed, rollPoints, widthPoints) {
+  function buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints) {
     closed = closed !== false;
     N = N || N_DEFAULT;
-    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints);
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
     const UP = { x: 0, y: 1, z: 0 };
     const out = [];
     for (let i = 0; i < N; i++) {
       const g = closed ? (i / N) * CP_N : (N > 1 ? (i / (N - 1)) * (CP_N - 1) : 0);
-      const { pos, tangent, roll, width } = evalTrack(g);
+      const { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness } = evalTrack(g);
 
       const h = vnorm(vcross(UP, tangent));
       let baseNormal = vnorm(vcross(tangent, h));
@@ -249,7 +264,7 @@
       const edgeRight = vadd(vscale(h, cosR), vscale(baseNormal, sinR));
       const normal = vnorm(vaddScaled(vscale(baseNormal, cosR), h, -sinR));
 
-      out.push({ pos, tangent, h, roll, width, halfW: width / 2, edgeRight, normal });
+      out.push({ pos, tangent, h, roll, width, halfW: width / 2, edgeRight, normal, crossSectionCurvature, crossSectionTightness });
     }
     return out;
   }
@@ -509,12 +524,21 @@
     const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
     return { type: 'width', t: Math.max(0, Math.min(1, num(wp && wp.t, 0))), width: Math.max(1, num(wp && wp.width, 12)) };
   }
+  function normalizeCrossSectionPoint(xp) {
+    const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+    return {
+      type: 'crossSection',
+      t: Math.max(0, Math.min(1, num(xp && xp.t, 0))),
+      curvature: clampSignedUnit(num(xp && xp.curvature, 0)),
+      tightness: clampTightness(num(xp && xp.tightness, DEFAULT_CROSS_SECTION_TIGHTNESS))
+    };
+  }
 
   // Legacy per-point `roll`/`width` migration: evenly spaces one point per
   // control point across the path's parameter domain.
   function defaultRollPoints(rawPoints, closed) {
     const n = rawPoints.length;
-    if (n === 0) return [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 }];
+    if (n === 0) return [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 0.5, roll: 0 }];
     const denom = closed ? n : Math.max(1, n - 1);
     return rawPoints.map((p, i) => ({
       type: 'roll',
@@ -524,7 +548,7 @@
   }
   function defaultWidthPoints(rawPoints, closed) {
     const n = rawPoints.length;
-    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 }];
+    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: 0.5, width: 12 }];
     const denom = closed ? n : Math.max(1, n - 1);
     return rawPoints.map((p, i) => ({
       type: 'width',
@@ -545,12 +569,14 @@
       const points = rawPath.points.map(p => {
         if (p && p.type === 'roll') return normalizeRollPoint(p);
         if (p && p.type === 'width') return normalizeWidthPoint(p);
+        if (p && p.type === 'crossSection') return normalizeCrossSectionPoint(p);
         return normalizePoint(p, i);
       });
       const posCount = points.filter(p => p.type === 'position').length;
       if (posCount < 4) throw new Error('path ' + i + ': a track path needs at least 4 position control points');
-      if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 });
-      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: 1, width: 12 });
+      if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 0.5, roll: 0 });
+      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: 0.5, width: 12 });
+      if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: 0.5, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
       return { id: rawPath.id || null, closed, points };
     }
 
@@ -566,10 +592,14 @@
     const widthPoints = (rawWidth && rawWidth.length >= 1)
       ? rawWidth.map(normalizeWidthPoint)
       : defaultWidthPoints(rawPoints, closed);
+    const rawCross = rawPath && Array.isArray(rawPath.crossSectionPoints) ? rawPath.crossSectionPoints : null;
+    const crossSectionPoints = (rawCross && rawCross.length >= 1)
+      ? rawCross.map(normalizeCrossSectionPoint)
+      : [{ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: 0.5, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }];
     return {
       id: rawPath && rawPath.id || null,
       closed,
-      points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints)
+      points: rawPoints.map(normalizePoint).concat(rollPoints, widthPoints, crossSectionPoints)
     };
   }
 
@@ -595,7 +625,16 @@
     else if (Array.isArray(data.controlPoints)) rawPaths = [{ closed: true, controlPoints: data.controlPoints }];
     else throw new Error('no paths or controlPoints array found');
     if (rawPaths.length < 1) throw new Error('a track needs at least one path');
-    const paths = rawPaths.map(normalizePath);
+    const topLevelCrossSectionCurvature = clampSignedUnit(data && data.crossSectionCurvature);
+    const paths = rawPaths.map((rawPath, i) => {
+      const path = normalizePath(rawPath, i);
+      const rawPoints = rawPath && !Array.isArray(rawPath) && Array.isArray(rawPath.points) ? rawPath.points : null;
+      const hadCrossSectionPoints = rawPoints && rawPoints.some(p => p && p.type === 'crossSection');
+      if (!hadCrossSectionPoints) {
+        for (const p of path.points) if (p.type === 'crossSection') p.curvature = topLevelCrossSectionCurvature;
+      }
+      return path;
+    });
     // Assign/stabilize position-point identities and make duplicate IDs share
     // the same object reference in memory. Old tracks without IDs get fresh IDs.
     const byId = new Map();
@@ -616,6 +655,7 @@
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
       paths,
+      crossSectionCurvature: topLevelCrossSectionCurvature,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       start: normalizeStart(data && data.start, paths)
@@ -628,6 +668,7 @@
       const lines = path.points.map(p => {
         if (p.type === 'roll') return '      { "type": "roll", "t": ' + p.t + ', "roll": ' + p.roll + ' }';
         if (p.type === 'width') return '      { "type": "width", "t": ' + p.t + ', "width": ' + p.width + ' }';
+        if (p.type === 'crossSection') return '      { "type": "crossSection", "t": ' + p.t + ', "curvature": ' + p.curvature + ', "tightness": ' + clampTightness(p.tightness) + ' }';
         return '      { "type": "position", "id": ' + JSON.stringify(p.id || '') + ', "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
       }).join(',\n');
       return '    { "id": ' + JSON.stringify(path.id || '') + ', "closed": ' + (path.closed !== false) + ', "points": [\n' + lines + '\n    ] }';
@@ -636,6 +677,7 @@
     return '{\n' +
       '  "version": 3,\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
+      '  "crossSectionCurvature": ' + clampSignedUnit(track.crossSectionCurvature) + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
@@ -646,6 +688,7 @@
   const DEFAULT_TRACK = {
     version: 2,
     name: 'Default Circuit',
+    crossSectionCurvature: DEFAULT_CROSS_SECTION_CURVATURE,
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
@@ -681,7 +724,9 @@
         { type: 'width', t: 0.6, width: 12 },
         { type: 'width', t: 0.7, width: 20 },
         { type: 'width', t: 0.8, width: 24 },
-        { type: 'width', t: 0.9, width: 22 }
+        { type: 'width', t: 0.9, width: 22 },
+        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
+        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
       ]
     }]
   };
@@ -689,6 +734,7 @@
   const STARTER_TRACK = {
     version: 2,
     name: 'New Track',
+    crossSectionCurvature: DEFAULT_CROSS_SECTION_CURVATURE,
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
@@ -700,9 +746,11 @@
         { type: 'position', pos: [-40, 0, 0], weight: 1 },
         { type: 'position', pos: [0, 0, -40], weight: 1 },
         { type: 'roll', t: 0, roll: 0 },
-        { type: 'roll', t: 1, roll: 0 },
+        { type: 'roll', t: 0.5, roll: 0 },
         { type: 'width', t: 0, width: 18 },
-        { type: 'width', t: 1, width: 18 }
+        { type: 'width', t: 0.5, width: 18 },
+        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
+        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
       ]
     }]
   };
@@ -711,6 +759,7 @@
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
     computeDisjointEdgeCuts, collapseSelfIntersections,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
+    evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
     // expose a deep-clone helper so callers never share point references

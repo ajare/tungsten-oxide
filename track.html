@@ -86,14 +86,30 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
+const CROSS_SECTION_SEGMENTS = 12;     // samples across the road width for curved cross-sections
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
+const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
+const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : 1);
+function crossSectionHeight(curvature, tightness, v, chordWidth) {
+  const u = 2 * Math.max(0, Math.min(1, v)) - 1; // -1 left edge, 0 center, 1 right edge
+  const base = Math.sqrt(Math.max(0, 1 - u * u));
+  return clampSignedUnit(curvature) * (chordWidth / 2) * Math.pow(base, clampTightness(tightness));
+}
+function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
+  const c = clampSignedUnit(curvature), k = clampTightness(tightness);
+  if (!c) return 0;
+  const u = 2 * Math.max(0.001, Math.min(0.999, v)) - 1;
+  const base = Math.sqrt(Math.max(0.000001, 1 - u * u));
+  return c * (chordWidth / 2) * k * (-2 * u) * Math.pow(base, k - 2);
+}
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
 let overlapMesh = null;                // dark-blue patches where two connected curves' road polygons overlap
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
+let trackCrossSectionCurvature = 0;
 
 function disposeObject(obj) {
   if (!obj) return;
@@ -110,7 +126,7 @@ function disposeObject(obj) {
 // point simply meet there without needing any join-specific cutting. Where
 // this same edge crosses itself elsewhere along its length, that loop's wall
 // segments are collapsed away first (see collapseSelfIntersections).
-function buildRail(edge, normals, closed, height, color) {
+function buildRail(edge, normals, closed, height, color, skipSegments) {
   const line = TrackCore.collapseSelfIntersections(edge, closed);
   const count = line.length;
   const positions = [], indices = [];
@@ -123,6 +139,7 @@ function buildRail(edge, normals, closed, height, color) {
   }
   const segCount = closed ? count : count - 1;
   for (let i = 0; i < segCount; i++) {
+    if (skipSegments && skipSegments.has(i)) continue;
     const j = closed ? (i + 1) % count : i + 1;
     const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
     indices.push(a0, b0, a1, a1, b0, b1);
@@ -137,10 +154,10 @@ function buildRail(edge, normals, closed, height, color) {
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
-  const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
+  const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
   const edges = prebuiltEdges || TrackCore.buildEdges(raw, closed);
 
   // At a DISJOINT seam (editor-authored hard corner) override the shared
@@ -174,25 +191,43 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
       pos: toVec(f.pos), tangent: toVec(f.tangent), h: toVec(f.h),
       edgeRight: toVec(f.edgeRight), normal: toVec(f.normal),
       roll: f.roll, width: f.width, halfW: f.halfW,
+      crossSectionCurvature: f.crossSectionCurvature, crossSectionTightness: f.crossSectionTightness,
       sLeft: off(edges.left[i]), sRight: off(edges.right[i])
     };
   });
 
   // Ribbon surface between the two edges. Closed paths wrap the strip back to
-  // the start; open paths leave the two ends unconnected. Where two paths share
-  // a control point their ribbons simply meet/overlap there -- no join-specific
-  // cutting.
+  // the start; open paths leave the two ends unconnected. A global cross-
+  // section curvature subdivides the strip across its width: 0 keeps the old
+  // flat chord, 1 raises the center to a semicircular arc with the same edges.
   const pos = [], nrm = [], idx = [];
+  const crossCount = CROSS_SECTION_SEGMENTS + 1;
   for (let i = 0; i < N; i++) {
-    const left = edges.left[i], right = edges.right[i], nml = raw[i].normal;
-    pos.push(left.x, left.y, left.z, right.x, right.y, right.z);
-    nrm.push(nml.x, nml.y, nml.z, nml.x, nml.y, nml.z);
+    const left = edges.left[i], right = edges.right[i], f = raw[i];
+    const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
+    const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
+    for (let j = 0; j < crossCount; j++) {
+      const v = j / CROSS_SECTION_SEGMENTS;
+      const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+      pos.push(
+        left.x + chord.x * v + f.normal.x * h,
+        left.y + chord.y * v + f.normal.y * h,
+        left.z + chord.z * v + f.normal.z * h
+      );
+      const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+      const crossT = new THREE.Vector3(chord.x + f.normal.x * dhdv, chord.y + f.normal.y * dhdv, chord.z + f.normal.z * dhdv);
+      const nml = toVec(f.tangent).cross(crossT).normalize();
+      nrm.push(nml.x, nml.y, nml.z);
+    }
   }
   const segCount = closed ? N : N - 1;
   for (let i = 0; i < segCount; i++) {
-    const j = closed ? (i + 1) % N : i + 1;
-    const l0 = i * 2, r0 = i * 2 + 1, l1 = j * 2, r1 = j * 2 + 1;
-    idx.push(l0, r0, l1, r0, r1, l1);
+    const ni = closed ? (i + 1) % N : i + 1;
+    for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
+      const a = i * crossCount + j, b = i * crossCount + j + 1;
+      const c = ni * crossCount + j, d = ni * crossCount + j + 1;
+      idx.push(a, b, c, b, d, c);
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -203,7 +238,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
 
   // Dashed racing stripe riding just above the banked centerline.
   const sg = new THREE.BufferGeometry().setFromPoints(
-    centerline.map(c => c.pos.clone().addScaledVector(c.normal, 0.05))
+    centerline.map(c => c.pos.clone().addScaledVector(c.normal, crossSectionHeight(c.crossSectionCurvature, c.crossSectionTightness, 0.5, c.width) + 0.05))
   );
   const stripeLine = closed
     ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }))
@@ -211,12 +246,39 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
   stripeLine.computeLineDistances();
   scene.add(stripeLine);
 
-  // Glowing guard rails rising from both edges, along the track's surface
-  // normal so they bank with the road. `raw[i].normal` aligns with
-  // edges.left[i]/edges.right[i] (both derived from the same baked frames).
-  const railNormals = raw.map(f => f.normal);
-  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355);
-  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355);
+  const skippedRailSegments = { left: new Set(), right: new Set() };
+  const markInsideDisjointRailCrossings = (end, i, seg) => {
+    if (!endpointCuts || !endpointCuts[end]) return;
+    const f = raw[i], p = f.pos, er = f.edgeRight;
+    const sideOffset = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
+    // At very sharp disjoint corners, the inner miter can cross past the
+    // centerline onto the opposite side of the road. The road mesh can pinch
+    // there, but the rail wall segment self-intersects visibly. Suppress only
+    // that endpoint wall segment; keep the outside rail and the road surface.
+    if (sideOffset(edges.left[i]) > 0) skippedRailSegments.left.add(seg);
+    if (sideOffset(edges.right[i]) < 0) skippedRailSegments.right.add(seg);
+  };
+  markInsideDisjointRailCrossings('start', 0, 0);
+  markInsideDisjointRailCrossings('end', raw.length - 1, Math.max(0, raw.length - 2));
+
+  // Glowing guard rails rising from both edges, along the track surface normal
+  // AT THAT EDGE. With a curved cross-section the left/right edge normals tilt
+  // away from the centerline (up to a semicircular section at curvature=1), so
+  // the wall up-vectors must be derived from the same cross-section profile as
+  // the road mesh rather than reusing the centerline normal.
+  const edgeNormalAt = (i, v) => {
+    const left = edges.left[i], right = edges.right[i], f = raw[i];
+    const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
+    const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
+    const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+    const crossT = new THREE.Vector3(chord.x + f.normal.x * dhdv, chord.y + f.normal.y * dhdv, chord.z + f.normal.z * dhdv);
+    const nml = toVec(f.tangent).cross(crossT).normalize();
+    return { x: nml.x, y: nml.y, z: nml.z };
+  };
+  const railRNormals = raw.map((_, i) => edgeNormalAt(i, 1));
+  const railLNormals = raw.map((_, i) => edgeNormalAt(i, 0));
+  const railR = buildRail(edges.right, railRNormals, closed, 1.4, 0xff3355, skippedRailSegments.right);
+  const railL = buildRail(edges.left, railLNormals, closed, 1.4, 0xff3355, skippedRailSegments.left);
   scene.add(railR, railL);
 
   const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
@@ -232,7 +294,7 @@ function runtimeScalarPoints(path) {
   // Reuse authored roll/width controls for runtime-only branch topology
   // normalization. The exact t-domain remap is less important than cutting the
   // geometry correctly; editor-created tracks already remap more carefully.
-  return (path.points || []).filter(p => p.type === 'roll' || p.type === 'width').map(p => ({ ...p }));
+  return (path.points || []).filter(p => p.type === 'roll' || p.type === 'width' || p.type === 'crossSection').map(p => ({ ...p }));
 }
 function inferBranchPointIds(trackPaths, junctions) {
   const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
@@ -534,6 +596,7 @@ function buildTrack(track) {
   const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
+  trackCrossSectionCurvature = clampSignedUnit(track.crossSectionCurvature);
   connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
 
   // Drop any previously-built geometry before rebuilding.
@@ -545,11 +608,11 @@ function buildTrack(track) {
   overlapMesh = null;
 
   const bakedPaths = trackPaths.map(p => {
-    const { controlPoints, rollPoints, widthPoints } = TrackCore.splitPoints(p.points);
+    const { controlPoints, rollPoints, widthPoints, crossSectionPoints } = TrackCore.splitPoints(p.points);
     const closed = p.closed !== false;
-    const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
+    const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
     const edges = TrackCore.buildEdges(frames, closed);
-    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, frames, edges };
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges };
   });
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
@@ -557,7 +620,7 @@ function buildTrack(track) {
   const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, disjointSeams);
   const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
   paths = bakedPaths.map((p, i) => buildPath(
-    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
+    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
   ));
   const disjointSeamPointIds = new Set(disjointSeams.map(s => s.pointId));
   overlapMesh = buildOverlapMesh(bakedPaths, 0x0a2a66, disjointSeamPointIds);
@@ -578,9 +641,31 @@ const _sample = {
   tangent: new THREE.Vector3(),
   edgeRight: new THREE.Vector3(),
   normal: new THREE.Vector3(),
-  halfW: 0, sLeft: 0, sRight: 0,
+  halfW: 0, sLeft: 0, sRight: 0, crossSectionCurvature: 0, crossSectionTightness: 1,
   offEnd: false
 };
+function curvedSurfaceHeight(sample, s) {
+  const lo = sample.sLeft, hi = sample.sRight;
+  const span = hi - lo;
+  if (Math.abs(span) < 1e-6) return 0;
+  const v = (s - lo) / span;
+  return crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+}
+function curvedSurfaceFrame(sample, s) {
+  const lo = sample.sLeft, hi = sample.sRight;
+  const span = hi - lo;
+  const v = Math.abs(span) < 1e-6 ? 0.5 : (s - lo) / span;
+  const lift = crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+  const pos = sample.pos.clone()
+    .addScaledVector(sample.edgeRight, s)
+    .addScaledVector(sample.normal, lift);
+  const dhdv = crossSectionHeightDerivative(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+  const crossT = sample.edgeRight.clone().multiplyScalar(span).addScaledVector(sample.normal, dhdv);
+  const normal = new THREE.Vector3().crossVectors(sample.tangent, crossT).normalize();
+  if (normal.dot(sample.normal) < 0) normal.negate();
+  return { pos, normal };
+}
+
 function sampleTrack(x, z) {
   let bestPath = paths[0], bestA = 0, bestB = 1, bestT = 0, bestD = Infinity;
   for (const path of paths) {
@@ -609,6 +694,8 @@ function sampleTrack(x, z) {
   _sample.edgeRight.copy(a.edgeRight).lerp(b.edgeRight, t).normalize();
   _sample.normal.copy(a.normal).lerp(b.normal, t).normalize();
   _sample.halfW = a.halfW + (b.halfW - a.halfW) * t;
+  _sample.crossSectionCurvature = a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * t;
+  _sample.crossSectionTightness = a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * t;
   _sample.sLeft = a.sLeft + (b.sLeft - a.sLeft) * t;
   _sample.sRight = a.sRight + (b.sRight - a.sRight) * t;
   _sample.offEnd = false;
@@ -664,9 +751,10 @@ function resetShip() {
     if (d < bestD) { bestD = d; startIndex = i; }
   }
   const s = cl[startIndex];
-  // Centre of the track (on the centerline, no lateral offset), hovering above it.
-  physics.groundPos.copy(s.pos);
-  shipGroup.position.set(s.pos.x, s.pos.y + 0.5, s.pos.z);
+  // Centre of the track, following the actual cross-section geometry if enabled.
+  const startSurface = curvedSurfaceFrame(s, 0);
+  physics.groundPos.set(s.pos.x, startSurface.pos.y, s.pos.z);
+  shipGroup.position.copy(startSurface.pos).addScaledVector(startSurface.normal, 0.5);
   let heading = Math.atan2(s.tangent.x, s.tangent.z);
   if (trackStart.reverse) heading += Math.PI;
   physics.heading = heading;
@@ -678,8 +766,8 @@ function resetShip() {
   physics.verticalVel = 0;
   physics.landingBounce = 0;
   physics.landingBounceVel = 0;
-  physics.up.set(0, 1, 0);
-  physics.visualGroundPos.copy(physics.groundPos);
+  physics.up.copy(startSurface.normal);
+  physics.visualGroundPos.copy(startSurface.pos);
   physics.visualUp.copy(physics.up);
   physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
   physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
@@ -780,6 +868,8 @@ function updatePhysics(dt) {
   // banked/sloped cross-section can introduce tiny X/Z corrections that look
   // like movement while turning on the spot.
   let c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+  let surfaceNormal = c.normal;
+  let surfaceRenderPos = physics.groundPos;
   const vx = Math.sin(physics.velocityAngle) * physics.speed;
   const vz = Math.cos(physics.velocityAngle) * physics.speed;
 
@@ -805,14 +895,16 @@ function updatePhysics(dt) {
 
     c = sampleTrack(px, pz);
     const { er, s, loS, hiS } = projectToSurface(c, px, pz);
-    const surfaceY = c.pos.y + er.y * s;
-    if (!c.offEnd && s >= loS && s <= hiS && physics.groundPos.y <= surfaceY) {
+    const surface = curvedSurfaceFrame(c, s);
+    if (!c.offEnd && s >= loS && s <= hiS && physics.groundPos.y <= surface.pos.y) {
       const impactSpeed = Math.max(0, -physics.verticalVel);
       physics.airborne = false;
       physics.verticalVel = 0;
       physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
       physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
-      physics.groundPos.set(c.pos.x + er.x * s, surfaceY, c.pos.z + er.z * s);
+      physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
     }
   } else if (hasTranslation) {
     let px = physics.groundPos.x + vx * dt;
@@ -845,8 +937,21 @@ function updatePhysics(dt) {
         physics.velocityAngle = Math.atan2(vX, vZ);
       }
 
-      physics.groundPos.set(c.pos.x + er.x * finalS, c.pos.y + er.y * finalS, c.pos.z + er.z * finalS);
+      const surface = curvedSurfaceFrame(c, finalS);
+      physics.groundPos.set(c.pos.x + er.x * finalS, surface.pos.y, c.pos.z + er.z * finalS);
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
     }
+  }
+
+  if (!physics.airborne && !hasTranslation) {
+    c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+    const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.z);
+    const finalS = THREE.MathUtils.clamp(s, loS, hiS);
+    const surface = curvedSurfaceFrame(c, finalS);
+    physics.groundPos.set(c.pos.x + c.edgeRight.x * finalS, surface.pos.y, c.pos.z + c.edgeRight.z * finalS);
+    surfaceRenderPos = surface.pos;
+    surfaceNormal = surface.normal;
   }
 
   // Sit on the surface, hovering a little along the surface normal. groundPos
@@ -856,13 +961,13 @@ function updatePhysics(dt) {
   // correction in groundPos; smooth only unexpectedly-large render deltas so
   // normal movement stays responsive while seam pops are eased out.
   const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.08;
-  const renderDelta = physics.visualGroundPos.distanceTo(physics.groundPos);
+  const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
   if (renderDelta > expectedStep) {
-    physics.visualGroundPos.lerp(physics.groundPos, Math.min(1, dt * 18));
+    physics.visualGroundPos.lerp(surfaceRenderPos, Math.min(1, dt * 18));
   } else {
-    physics.visualGroundPos.copy(physics.groundPos);
+    physics.visualGroundPos.copy(surfaceRenderPos);
   }
-  physics.visualUp.lerp(c.normal, Math.min(1, dt * 18)).normalize();
+  physics.visualUp.lerp(surfaceNormal, Math.min(1, dt * 18)).normalize();
 
   // Damped spring for landing impacts: a harder fall creates a larger, quick
   // hover rebound after re-contacting the track.
@@ -933,7 +1038,21 @@ function updateCamera(dt) {
 }
 
 // ---------- Track loading: built-in default + JSON import --------------------
-buildTrack(TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK));
+function loadStoredTrack() {
+  try {
+    const stored = localStorage.getItem('web3d.currentTrack');
+    return stored ? TrackCore.parseTrack(stored) : null;
+  } catch (err) {
+    console.warn('Could not load editor preview track:', err);
+    return null;
+  }
+}
+buildTrack(loadStoredTrack() || TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK));
+window.addEventListener('storage', (e) => {
+  if (e.key !== 'web3d.currentTrack' || !e.newValue) return;
+  try { buildTrack(TrackCore.parseTrack(e.newValue)); }
+  catch (err) { console.warn('Could not live-update track from editor:', err); }
+});
 
 const fileInput = document.getElementById('fileInput');
 document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
