@@ -109,6 +109,7 @@ let meshCache = new Map();          // assetId -> geometry-js Mesh
 let selectedMeshId = null;          // placement id
 let railSel = null;                 // { meshId, edgeId } in Rails mode
 let meshDragOffset = null;
+let meshRotateStart = null;         // { originRotation, startAngle } for shift-drag rotation
 
 function invalidateMeshCache() { meshCache = new Map(); }
 
@@ -151,7 +152,7 @@ function compiledMeshes() {
   return out;
 }
 
-function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; }
+function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; }
 
 // Hit-test a world point against placements, nearest-last so the topmost drawn
 // region wins the click.
@@ -2488,6 +2489,14 @@ async function clipboardHasText() {
   } catch { return false; }   // denied or unavailable: just omit the option
 }
 
+// The right mouse button's own 'contextmenu' event fires *after* mousedown,
+// by which point this popup is already the frontmost element under the
+// cursor -- so the OS/browser hit-tests it, not topCanvas underneath, and
+// topCanvas's own contextmenu handler (which only suppresses its own
+// bubbling) never runs. Without this, the browser's native menu (Copy /
+// Paste / Inspect, depending on browser) appears layered on top of ours.
+addPointMenu.addEventListener('contextmenu', (e) => e.preventDefault());
+
 addPointMenu.addEventListener('click', (e) => {
   if (!pendingAdd) return;
   const { worldX, worldZ } = pendingAdd;
@@ -2667,8 +2676,19 @@ topCanvas.addEventListener('mousedown', (e) => {
       selectedPointId = null; segSel = null; rollSel = null; widthSel = null; crossSectionSel = null;
       selectedMeshId = meshHit.placement.id;
       railSel = null;
-      meshDragOffset = { dx: meshHit.placement.x - w.x, dz: meshHit.placement.z - w.z };
-      dragging = 'meshTop';
+      if (e.shiftKey) {
+        // Angle is measured the same way TrackMesh.localToWorld measures
+        // `rotation`: atan2(dz, dx) from the placement origin. Recording the
+        // offset between that and the mouse's *current* angle -- rather than
+        // snapping rotation straight to it -- means the shape doesn't jump the
+        // moment the drag starts.
+        const startAngle = Math.atan2(w.z - meshHit.placement.z, w.x - meshHit.placement.x) * 180 / Math.PI;
+        meshRotateStart = { originRotation: meshHit.placement.rotation || 0, startAngle };
+        dragging = 'meshRotate';
+      } else {
+        meshDragOffset = { dx: meshHit.placement.x - w.x, dz: meshHit.placement.z - w.z };
+        dragging = 'meshTop';
+      }
       hideAddPointMenu();
       refresh();
       return;
@@ -2702,6 +2722,19 @@ window.addEventListener('mousemove', (e) => {
       const moved = snapWorldXZ({ x: w.x + meshDragOffset.dx, z: w.z + meshDragOffset.dz });
       placement.x = Math.round(moved.x * 10) / 10;
       placement.z = Math.round(moved.z * 10) / 10;
+      refresh();
+    }
+  } else if (dragging === 'meshRotate') {
+    const placement = selectedPlacement();
+    if (placement && meshRotateStart) {
+      freezeTopViewForDrag();
+      if (!dragMutated) { pushUndo(); dragMutated = true; updateUndoRedoButtons(); }
+      const { x, y } = localPos(topCanvas, e);
+      const w = screenToWorld(x, y);
+      const angle = Math.atan2(w.z - placement.z, w.x - placement.x) * 180 / Math.PI;
+      let rotation = meshRotateStart.originRotation + (angle - meshRotateStart.startAngle);
+      rotation = ((rotation % 360) + 360) % 360;
+      placement.rotation = Math.round(rotation * 10) / 10;
       refresh();
     }
   } else if (dragging === 'meshElev') {
@@ -2807,7 +2840,7 @@ window.addEventListener('mouseup', () => {
     draw();
   }
   releaseTopViewFreeze();
-  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null;
+  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null; meshRotateStart = null;
 });
 
 // ---------- Elevation mouse ----------
@@ -3026,6 +3059,7 @@ window.__editor = {
   screenToWorld,
   compiledMeshes,
   assetMesh,
+  importMeshFromClipboard,
   railCount: (assetId) => {
     const mesh = assetMesh(assetId);
     return mesh ? [...mesh.edges.values()].filter(e => e.attributes?.rail).length : 0;
