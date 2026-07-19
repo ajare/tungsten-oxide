@@ -40,20 +40,10 @@ const N = TrackCore.N_DEFAULT;         // centerline samples per path
 const CROSS_SECTION_SEGMENTS = 24;     // max samples across the road width for curved cross-sections
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
-const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
-const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : 1);
-function crossSectionHeight(curvature, tightness, v, chordWidth) {
-  const u = 2 * Math.max(0, Math.min(1, v)) - 1; // -1 left edge, 0 center, 1 right edge
-  const base = Math.sqrt(Math.max(0, 1 - u * u));
-  return clampSignedUnit(curvature) * (chordWidth / 2) * Math.pow(base, clampTightness(tightness));
-}
-function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
-  const c = clampSignedUnit(curvature), k = clampTightness(tightness);
-  if (!c) return 0;
-  const u = 2 * Math.max(0.001, Math.min(0.999, v)) - 1;
-  const base = Math.sqrt(Math.max(0.000001, 1 - u * u));
-  return c * (chordWidth / 2) * k * (-2 * u) * Math.pow(base, k - 2);
-}
+// The road's cross-section profile lives in TrackCore, shared with the editor's
+// preview and the USD exporter so all three draw the same surface.
+const crossSectionHeight = TrackCore.crossSectionHeight;
+const crossSectionHeightDerivative = TrackCore.crossSectionHeightDerivative;
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
@@ -430,7 +420,9 @@ function buildMeshRegions(track) {
 
     const compiled = TrackMesh.compile(mesh, placement);
     const elevation = placement.elevation || 0;
-    const railHeight = asset.railHeight == null ? TrackMesh.DEFAULT_RAIL_HEIGHT : asset.railHeight;
+    // parseTrack always fills railHeight in, so this fallback only catches a
+    // track object built by hand (tests, the console) that skipped it.
+    const railHeight = asset.railHeight == null ? TrackCore.DEFAULT_RAIL_HEIGHT : asset.railHeight;
 
     // Surface: one flat triangle soup at the region's elevation.
     const surfacePositions = [];

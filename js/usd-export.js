@@ -1,23 +1,15 @@
 /* usd-export.js — ASCII USD (.usda) export for authored tracks.
  * Pure browser/Node module: no three.js. TrackCore is passed in because
  * track-core.js is deliberately a classic script, while mesh regions use the
- * shared TrackMesh module directly.
+ * shared TrackMesh module directly. The exported road surface is built from
+ * TrackCore's own centerline, edge and cross-section math, so an exported track
+ * is the same geometry the editor previewed and the game drives on.
  */
 import * as TrackMesh from './track-mesh.js';
 
 const DEFAULT_CROSS_SECTION_SEGMENTS = 24;
 const ROAD_MATERIAL = 'RoadSurface';
 const MESH_MATERIAL = 'MeshRegionSurface';
-
-const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
-const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : 1);
-
-function crossSectionHeight(curvature, tightness, v, chordWidth) {
-  const c = clampSignedUnit(curvature);
-  if (Math.abs(c) < 1e-6) return 0;
-  const q = 1 - Math.pow(Math.abs(v * 2 - 1), clampTightness(tightness));
-  return c * chordWidth * 0.5 * q;
-}
 
 export function sanitizeUsdIdentifier(value, fallback = 'Prim') {
   let s = String(value || '').replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
@@ -112,7 +104,7 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
     const texV = distances[i] / representativeWidth;
     for (let j = 0; j <= crossSectionSegments; j++) {
       const v = j / crossSectionSegments;
-      const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+      const h = TrackCore.crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
       points.push([
         left.x + chord.x * v + f.normal.x * h,
         left.y + chord.y * v + f.normal.y * h,

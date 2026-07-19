@@ -48,6 +48,10 @@
  *                                      first/last position control point
  *   buildCenterline(cps, N, closed)  - array of baked frames (plain {x,y,z})
  *   buildEdges(frames, closed)       - trimmed { left, right } edge polylines
+ *   crossSectionHeight(curvature, tightness, v, chordWidth)
+ *                                    - road-surface rise above the flat chord
+ *                                      (v: 0 left edge .. 1 right edge), plus
+ *                                      crossSectionHeightDerivative for normals
  *   parseTrack(text)                 - JSON string -> validated track object
  *   serializeTrack(track)            - track object -> pretty JSON string
  *   DEFAULT_TRACK, STARTER_TRACK     - built-in tracks
@@ -76,6 +80,37 @@
   };
   const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
   const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
+
+  // --- cross-section profile -------------------------------------------------
+  // How far the road surface rises above the flat chord between its two edges,
+  // as a function of `v` (0 = left edge, 0.5 = centre, 1 = right edge). At
+  // curvature 1 and tightness 1 this is a semicircle spanning the chord;
+  // tightness is an exponent on that arc (>1 flattens the middle and steepens
+  // the edges, <1 does the reverse), and negative curvature dishes the road
+  // instead of crowning it. Both edges stay put at every setting, so changing
+  // the profile never changes the road's width or where its walls are.
+  //
+  // This lives here, in the shared core, because THREE consumers draw this same
+  // surface -- the game's ribbon mesh and physics, the editor's cross-section
+  // preview, and the USD exporter -- and they must agree exactly or an exported
+  // track no longer matches the one that was authored and driven.
+  function crossSectionHeight(curvature, tightness, v, chordWidth) {
+    const c = clampSignedUnit(curvature);
+    if (!c) return 0;
+    const u = 2 * Math.max(0, Math.min(1, v)) - 1;   // -1 left edge, 0 centre, 1 right edge
+    const base = Math.sqrt(Math.max(0, 1 - u * u));
+    return c * (chordWidth / 2) * Math.pow(base, clampTightness(tightness));
+  }
+
+  // d(height)/dv, used to build the surface normal across the road. The edges
+  // are nudged off 0/1 because the arc's slope is infinite exactly there.
+  function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
+    const c = clampSignedUnit(curvature), k = clampTightness(tightness);
+    if (!c) return 0;
+    const u = 2 * Math.max(0.001, Math.min(0.999, v)) - 1;
+    const base = Math.sqrt(Math.max(0.000001, 1 - u * u));
+    return c * (chordWidth / 2) * k * (-2 * u) * Math.pow(base, k - 2);
+  }
 
   // --- tiny plain-object vector helpers ({x,y,z}) ----------------------------
   const vsub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
@@ -1131,9 +1166,10 @@
     DEFAULT_SELF_INTERSECTION_SPAN,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
+    crossSectionHeight, crossSectionHeightDerivative,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
-    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT,
+    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))
   };

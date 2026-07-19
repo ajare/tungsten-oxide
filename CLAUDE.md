@@ -49,9 +49,11 @@ points: [
 - Position point `id`s are stable editor identities. If the same position ID appears in multiple path occurrences, `parseTrack()` unifies them into the same in-memory object, so editing one moves every occurrence. `disjointSeams` lets the editor reverse hard-corner split/open operations; the game only needs point IDs plus seam pointIds to cut disjoint edges.
 - `start: { path, point, reverse }` picks which position control point the player begins at (nearest baked sample) and facing direction relative to the path's natural parametric direction.
 
-Public API exposed as `window.TrackCore`: `basis`/`basisDeriv` (B-spline basis + derivative), `splitPoints`, `makeEvaluator(cps, closed)` → `{ evalTrack(g), CP_N, closed }`, `buildCenterline`, `buildEdges`, `parseTrack`/`serializeTrack`, `cloneTrack`, `DEFAULT_TRACK`/`STARTER_TRACK`, `N_DEFAULT`.
+Public API exposed as `window.TrackCore`: `basis`/`basisDeriv` (B-spline basis + derivative), `splitPoints`, `makeEvaluator(cps, closed)` → `{ evalTrack(g), CP_N, closed }`, `buildCenterline`, `buildEdges`, `parseTrack`/`serializeTrack`, `cloneTrack`, `crossSectionHeight`/`crossSectionHeightDerivative`, `DEFAULT_TRACK`/`STARTER_TRACK`, `N_DEFAULT`.
 
 Both `js/track-game.js` (3D mesh/physics) and `js/editor.js` (2D authoring UI) build on top of this same shared math so the editor's preview and the game's actual track geometry can never drift apart — if you change interpolation/eval behavior, change it once in `track-core.js`.
+
+**`js/usd-export.js` is a third consumer of that same math**, and it is the one that can drift unnoticed, because nothing on screen shows an exported file being wrong. It had its own copy of the cross-section profile — a triangular tent where the game and editor build a semicircular arc — so any track with a curved cross section exported to a shape nobody authored. The profile now lives in `TrackCore.crossSectionHeight`, and a test compares exported vertices against it directly. Note *why* that test uses intermediate `v` values: every plausible profile formula agrees at the road's centre and both edges, so sampling only those three points cannot catch this class of bug.
 
 ## Architecture: mesh regions (`js/track-mesh.js`)
 

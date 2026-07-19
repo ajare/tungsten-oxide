@@ -31,7 +31,14 @@
  */
 import { SerializerMeshChunk } from '@willpower/geometry';
 
-export const DEFAULT_RAIL_HEIGHT = 3;
+// No DEFAULT_RAIL_HEIGHT lives here, deliberately. Rail height is a property of
+// the ASSET RECORD in the track schema, so the default belongs to the layer
+// that normalizes that schema -- TrackCore.DEFAULT_RAIL_HEIGHT, which
+// normalizeMeshAssets() injects. This module owns geometry, not schema
+// defaults, and never needs the value itself: every function here takes the
+// height from the caller. A second copy did exist, and drifted -- schema 5
+// doubled the world's units, TrackCore's default went 3 -> 6, and the copy here
+// stayed at 3.
 export const RAIL_ATTRIBUTE = 'rail';
 
 // --- assets ----------------------------------------------------------------

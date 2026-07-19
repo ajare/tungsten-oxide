@@ -8,8 +8,12 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #061119; color: var(--text);
     font-family: system-ui, sans-serif; font-size: 13px; overflow: hidden; }
-  #app { display: grid; grid-template-columns: 1fr 240px; grid-template-rows: auto 1fr 150px;
+  /* The elevation row's height is a variable so collapsing it is a single class
+     on #app: the top-down row is 1fr and simply absorbs whatever it gives up. */
+  #app { --elev-h: 225px;
+    display: grid; grid-template-columns: 1fr 240px; grid-template-rows: auto 1fr var(--elev-h);
     grid-template-areas: "top top" "canvas props" "elev props"; height: 100vh; gap: 1px; }
+  #app.elevCollapsed { --elev-h: 30px; }
   #topbar { grid-area: top; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
   #topbar .toolbarBreak { flex-basis: 100%; height: 0; }
@@ -30,6 +34,19 @@
   #pointFilters input { accent-color: var(--accent); }
   #canvasWrap { grid-area: canvas; position: relative; background: #08141d; }
   #elevWrap { grid-area: elev; position: relative; background: #071019; border-top: 1px solid var(--line); }
+  /* A grid item's default min-height:auto floors it at its content's intrinsic
+     size. An in-flow <canvas> with height:100% has no definite parent height to
+     resolve against, so it falls back to its BITMAP size -- which fitCanvas()
+     sets to rect.height * devicePixelRatio. On a HiDPI display that floor is
+     taller than the box, so the 1fr row could not shrink to hand the elevation
+     row more height: the grid overflowed 100vh and, body being overflow:hidden,
+     the elevation panel was pushed off the bottom of the viewport instead of
+     growing. Taking these two canvases out of flow removes them from intrinsic
+     sizing entirely, so the rows size purely from grid-template-rows. Scoped to
+     these two ids on purpose -- #crossSectionPreview in the props panel is a
+     normal in-flow canvas and must stay one. */
+  #canvasWrap, #elevWrap { min-height: 0; min-width: 0; overflow: hidden; }
+  #topCanvas, #elevCanvas { position: absolute; inset: 0; }
   canvas { display: block; width: 100%; height: 100%; }
   #props { grid-area: props; background: var(--panel); border-left: 1px solid var(--line);
     padding: 12px; overflow-y: auto; }
@@ -41,7 +58,18 @@
   #props .hint { color: #6f93a8; line-height: 1.5; margin-top: 10px; font-size: 12px; }
   #props .none { color: #6f93a8; font-style: italic; }
   .badge { position: absolute; top: 8px; left: 10px; color: #6f93a8; pointer-events: none; }
-  #elevWrap .badge { top: 4px; }
+  /* Keep the instruction text clear of the collapse button in the corner. */
+  #elevWrap .badge { top: 4px; right: 44px; }
+  #elevToggle { position: absolute; top: 4px; right: 8px; z-index: 5;
+    width: 22px; height: 22px; padding: 0; line-height: 1; text-align: center;
+    background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 4px; font: inherit; cursor: pointer; }
+  #elevToggle:hover { background: #1f4c6b; }
+  /* Collapsed: nothing but a title bar and the button to bring it back. */
+  #elevCollapsedLabel { display: none; position: absolute; top: 50%; left: 10px;
+    transform: translateY(-50%); color: #6f93a8; pointer-events: none; }
+  #app.elevCollapsed #elevCanvas, #app.elevCollapsed #elevWrap .badge { display: none; }
+  #app.elevCollapsed #elevCollapsedLabel { display: block; }
   #addPointMenu { position: fixed; display: none; z-index: 20; background: #10202e;
     border: 1px solid #2c6a9e; border-radius: 6px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.55);
     flex-direction: column; gap: 3px; min-width: 120px; user-select: none; }
@@ -95,7 +123,6 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <strong style="color:var(--accent)">Track Editor</strong>
     <input id="nameInput" type="text" title="Track name">
     <button id="dirBtn">Direction: &#8635;</button>
     <span class="spacer" aria-hidden="true"></span>
@@ -171,6 +198,8 @@
 
   <div id="elevWrap">
     <canvas id="elevCanvas"></canvas>
+    <span id="elevCollapsedLabel">Elevation (Y)</span>
+    <button id="elevToggle" type="button" aria-controls="elevWrap" aria-expanded="true">&#9662;</button>
     <div class="badge">Elevation (Y) &mdash; circles: drag up/down to sculpt hills &nbsp;&middot;&nbsp; <span style="color:#ffaa3c">roll line</span> (above = right, below = left): its diamonds are a separate set of control points &mdash; click empty space to add one, drag to move, Delete to remove</div>
   </div>
 

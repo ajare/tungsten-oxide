@@ -58,6 +58,59 @@ function openStraightTrack() {
   }));
 }
 
+/* A dead-straight, flat, level road of a known width, crowned by a curved cross
+ * section. Because it is flat and level, every exported vertex's Y is exactly
+ * the cross-section height at that point across the road, which is what lets
+ * the test below compare the exporter against TrackCore directly. */
+function crownedStraightTrack(curvature, tightness) {
+  return TrackCore.parseTrack(JSON.stringify({
+    version: 5,
+    name: 'Crowned',
+    samples: 8,
+    paths: [{
+      closed: false,
+      points: [
+        { type: 'position', id: 'a', pos: [0, 0, 0], weight: 1 },
+        { type: 'position', id: 'b', pos: [30, 0, 0], weight: 1 },
+        { type: 'position', id: 'c', pos: [60, 0, 0], weight: 1 },
+        { type: 'position', id: 'd', pos: [90, 0, 0], weight: 1 },
+        { type: 'width', t: 0, width: 10 },
+        { type: 'width', t: 1, width: 10 },
+        { type: 'crossSection', t: 0, curvature, tightness },
+        { type: 'crossSection', t: 1, curvature, tightness }
+      ]
+    }]
+  }));
+}
+
+/* The exporter must build the road from TrackCore's cross-section profile, not
+ * a formula of its own. It once had its own -- a triangular tent where the game
+ * and editor draw a semicircular arc -- so an exported track silently stopped
+ * matching the one that was authored and driven. The two agree at the centre
+ * and both edges no matter what the profile is, so only intermediate v values
+ * catch that class of drift. */
+for (const [curvature, tightness] of [[1, 1], [1, 2.5], [-0.6, 0.4]]) {
+  test(`export builds the road from TrackCore's cross-section (curvature ${curvature}, tightness ${tightness})`, () => {
+    const segments = 4;
+    const scene = buildUsdScene(crownedStraightTrack(curvature, tightness), { TrackCore, crossSectionSegments: segments });
+    const ring = scene.meshes[0].points.slice(0, segments + 1);
+
+    assert.deepEqual(
+      ring.map(p => Number(p[1].toFixed(6))),
+      Array.from({ length: segments + 1 }, (_, j) =>
+        Number(TrackCore.crossSectionHeight(curvature, tightness, j / segments, 10).toFixed(6)))
+    );
+    // Guard the guard: a profile that never leaves the chord would pass the
+    // comparison above trivially.
+    assert.ok(Math.abs(ring[segments / 2][1]) > 1, 'expected a genuinely crowned road');
+  });
+}
+
+test('a flat cross section leaves the road on its chord', () => {
+  const scene = buildUsdScene(crownedStraightTrack(0, 1), { TrackCore, crossSectionSegments: 4 });
+  for (const p of scene.meshes[0].points) assert.equal(p[1], 0);
+});
+
 test('open curve export has no end caps', () => {
   const scene = buildUsdScene(openStraightTrack(), { TrackCore, crossSectionSegments: 2 });
   assert.equal(scene.meshes[0].points.length, 8 * 3);

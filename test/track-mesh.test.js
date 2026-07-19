@@ -321,6 +321,52 @@ test('defaults injected during normalization are not double-scaled', () => {
   assert.equal(migrated.meshes[0].rotation, 10, 'rotation is an angle');
 });
 
+/* The editor builds a fresh curve's width points from TrackCore.DEFAULT_WIDTH
+ * rather than its own literal, because it once had one: schema 5 doubled the
+ * world's units and js/editor.js kept a hardcoded 12, so every curve drawn in
+ * Create mode (and both halves of every segment split) came out half as wide as
+ * an imported one. The editor is DOM-bound and cannot be imported here, so this
+ * pins the two halves of that contract instead -- the constant it reads must be
+ * exported, and must be the same one normalization injects. A second, private
+ * default anywhere in the core would let the divergence back in. */
+/* Rail height has ONE default, and it lives in TrackCore because that is the
+ * layer that normalizes the asset record it belongs to. js/track-mesh.js used to
+ * export a competing copy that nothing inside it used; schema 5 doubled the
+ * world's units, TrackCore's default went 3 -> 6, and the copy stayed at 3 --
+ * and it was the copy the game read as its fallback. The `undefined` assertion
+ * is the point of this test: it fails the moment someone re-adds a second
+ * default to the geometry layer. */
+test('rail height has a single default, owned by TrackCore', () => {
+  assert.equal(typeof TrackCore.DEFAULT_RAIL_HEIGHT, 'number');
+  assert.ok(TrackCore.DEFAULT_RAIL_HEIGHT > 0);
+  assert.equal(TM.DEFAULT_RAIL_HEIGHT, undefined, 'track-mesh.js must not export a competing default');
+
+  const noRailHeight = JSON.stringify({
+    version: 5, name: 'No rail height',
+    paths: JSON.parse(trackFixture()).paths,
+    meshAssets: { pad: { mesh: TM.meshToJSON(padWithHole().mesh) } },   // no railHeight authored
+    meshes: [{ id: 'm1', asset: 'pad', x: 0, z: 0, rotation: 0, elevation: 0 }]
+  });
+  assert.equal(TrackCore.parseTrack(noRailHeight).meshAssets.pad.railHeight, TrackCore.DEFAULT_RAIL_HEIGHT);
+});
+
+test('the default width is a single exported constant', () => {
+  assert.equal(typeof TrackCore.DEFAULT_WIDTH, 'number');
+  assert.ok(TrackCore.DEFAULT_WIDTH > 0);
+  const noWidths = JSON.stringify({
+    version: 5, name: 'No widths',
+    paths: [{ id: 'p', closed: true, points: [
+      { type: 'position', id: 'a', pos: [10, 0, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [0, 0, 10], weight: 1 },
+      { type: 'position', id: 'c', pos: [-10, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [0, 0, -10], weight: 1 }
+    ] }]
+  });
+  const injected = widths(TrackCore.parseTrack(noWidths));
+  assert.deepEqual(injected, [TrackCore.DEFAULT_WIDTH, TrackCore.DEFAULT_WIDTH],
+    'normalization must inject the same default the editor draws with');
+});
+
 test('mesh asset geometry and rail height scale with the track', () => {
   const migrated = TrackCore.parseTrack(trackFixture(4));
   const mesh = TM.meshFromJSON(migrated.meshAssets.pad.mesh);

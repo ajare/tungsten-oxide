@@ -94,6 +94,14 @@ let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit cente
 let panLast = null;               // last mouse position while right-drag panning
 let topPanned = false;            // suppresses the context menu after a pan drag
 const ROLL_HANDLE_MARGIN = 6;     // keeps roll handles from rendering off the top/bottom edge
+// Elevation panel collapsed to a title bar at the bottom of the window. Declared
+// here, with the rest of the view state, rather than beside its wiring at the
+// end of the file: drawElev() reads it, and the first draw happens before that
+// point, which for a `let` would be a temporal-dead-zone throw rather than a
+// harmless undefined.
+const ELEV_COLLAPSED_KEY = 'web3d.editorElevCollapsed';
+let elevCollapsed = false;
+try { elevCollapsed = localStorage.getItem(ELEV_COLLAPSED_KEY) === '1'; } catch { /* private mode */ }
 
 function parts(path) { return TrackCore.splitPoints(path.points); }
 
@@ -459,11 +467,23 @@ function insertPositionAt(path, k, obj) {
   const arrIdx = k < idxs.length ? idxs[k] : path.points.length;
   path.points.splice(arrIdx, 0, obj);
 }
+// Flat, straight-sided defaults for a path that has no authored roll/width/
+// cross-section of its own -- a curve drawn in Create mode, or either half of a
+// segment split.
+//
+// The width MUST come from TrackCore, not a literal: it is the one value here
+// that is a world LENGTH, so it moves with the unit scale. Schema 5 doubled the
+// world and this function kept its old hardcoded 12, which is why every curve
+// drawn in the editor came out half the width of an imported one -- and why
+// splitting a path silently halved both halves. Everything else below is
+// scale-invariant (roll is an angle, curvature dimensionless, tightness an
+// exponent) and stays as written.
 function flatRollWidthDefaults(closed = true) {
   const endT = closed ? 0.5 : 1;
+  const width = TrackCore.DEFAULT_WIDTH;
   return [
     { type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 },
-    { type: 'width', t: 0, width: 12 }, { type: 'width', t: endT, width: 12 },
+    { type: 'width', t: 0, width }, { type: 'width', t: endT, width },
     { type: 'crossSection', t: 0, curvature: 0, tightness: 1 }, { type: 'crossSection', t: endT, curvature: 0, tightness: 1 }
   ];
 }
@@ -1174,7 +1194,64 @@ function rollLineEnd(f, rollDeg) {
 //   - roll handles (diamonds): the path's roll-type points, a separate set of
 //     control points (own count, own spacing) driving the roll spline.
 let elevGeom = { padX: 30, top: 20, bottom: 20, yScale: 1, yMid: 0 };
+
+/* Round-number spacing for an axis: the smallest 1/2/5 x 10^n step that keeps
+ * the tick count near `targetTicks`. Picking the step from the data range
+ * instead of a fixed increment is what keeps the labels readable at every zoom
+ * -- a flat track spanning 3 units and a mountain spanning 300 both get about
+ * the same number of ticks, at values a person would actually choose. */
+function niceAxisStep(range, targetTicks) {
+  const raw = range / Math.max(1, targetTicks);
+  if (!(raw > 0) || !isFinite(raw)) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const normalized = raw / magnitude;
+  const step = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return step * magnitude;
+}
+
+/* Y-axis scale for the elevation strip: a faint full-width gridline at each
+ * round elevation, labelled in the left gutter. Full-width rather than short
+ * ticks because the point is reading a HEIGHT off the profile at some point
+ * along the track, which means carrying the eye across the panel.
+ *
+ * Drawn before everything else so it sits behind the profile, the handles and
+ * the mesh line. The tick that lands on zero is skipped: the zero line is drawn
+ * straight after this with its own emphasis and its own 'y=0' label, and two
+ * labels in the same few pixels just collide. */
+function drawElevYAxis(ctx, geom) {
+  const { padX, top, bottom, minY, maxY, yScale, w } = geom;
+  const range = maxY - minY;
+  if (!(range > 0) || !isFinite(range)) return;
+  // Roughly one label per 34px of panel height, so a taller panel gets a finer
+  // scale rather than the same few lines stretched further apart.
+  const step = niceAxisStep(range, Math.max(2, Math.round((bottom - top) / 34)));
+  const decimals = Math.max(0, Math.min(3, -Math.floor(Math.log10(step) + 1e-9)));
+
+  ctx.save();
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 1;
+  for (let v = Math.ceil(minY / step) * step; v <= maxY + step * 1e-6; v += step) {
+    const y = bottom - (v - minY) * yScale;
+    if (y < top - 0.5 || y > bottom + 0.5) continue;
+    const isZero = Math.abs(v) < step * 1e-6;
+    if (isZero) continue;                       // the zero line labels itself
+    ctx.strokeStyle = 'rgba(60,95,125,0.34)';
+    ctx.beginPath(); ctx.moveTo(padX, y); ctx.lineTo(w - padX, y); ctx.stroke();
+    ctx.fillStyle = '#5c7f95';
+    // `+v.toFixed()` strips a "-0" from values that round to zero.
+    ctx.fillText(String(+v.toFixed(decimals)), padX - 6, y);
+  }
+  ctx.restore();
+}
 function drawElev() {
+  // Collapsed: the canvas is display:none, so its rect is 0x0. Fitting and
+  // drawing against that would overwrite elevGeom with nonsense (bottom = -20,
+  // a negative yScale) that the hit-testers would read on the way back out.
+  // Leaving the last good geometry in place costs nothing -- nothing can be
+  // clicked in a hidden canvas, and expanding redraws before anything is.
+  if (elevCollapsed) return;
   const { w, h } = fitCanvas(elevCanvas, elevCtx);
   const ctx = elevCtx;
   ctx.clearRect(0, 0, w, h);
@@ -1198,7 +1275,9 @@ function drawElev() {
   }
   const pad = Math.max(8, (maxY - minY) * 0.3 + 4);
   minY -= pad; maxY += pad;
-  const top = 20, bottom = h - 20, padX = 34;
+  // padX also reserves the gutter the Y-axis labels are right-aligned into, so
+  // it has to fit the widest tick text (see drawElevYAxis).
+  const top = 20, bottom = h - 20, padX = 44;
   const yScale = (bottom - top) / ((maxY - minY) || 1);
 
   // Sample the ACTUAL interpolated spline (same evaluator the game/top-down
@@ -1241,11 +1320,20 @@ function drawElev() {
 
   elevGeom = { padX, top, bottom, minY, maxY, yScale, w, h, closed, n, xs, profile, totalArc, totalSamples, rollK };
 
+  drawElevYAxis(ctx, elevGeom);
+
   // zero line
   const zeroY = bottom - (0 - minY) * yScale;
   ctx.strokeStyle = 'rgba(70,110,140,0.5)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(padX, zeroY); ctx.lineTo(w - padX, zeroY); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle = '#6f93a8'; ctx.font = '10px system-ui'; ctx.fillText('y=0', 4, zeroY + 3);
+  // Labelled like every other tick -- right-aligned in the same gutter -- so the
+  // scale reads as one clean column of numbers instead of one stray left-aligned
+  // string. Kept brighter than the rest to hold the zero line's emphasis.
+  ctx.save();
+  ctx.font = '10px system-ui'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#8fb4c8';
+  ctx.fillText('0', padX - 6, zeroY);
+  ctx.restore();
 
   // Selected mesh region: one draggable horizontal line at its elevation. A
   // mesh has no path parameter, so it spans the full width rather than being
@@ -1473,12 +1561,31 @@ function averageRollDeg(a, b) {
   const ar = a * Math.PI / 180, br = b * Math.PI / 180;
   return round1(Math.atan2(Math.sin(ar) + Math.sin(br), Math.cos(ar) + Math.cos(br)) * 180 / Math.PI);
 }
-function uniqueScalarPoints(points, key) {
+/* Collapse points that land on the same `t` -- the last one wins, whole.
+ *
+ * These arrays are built by pushing synthesized range endpoints first and then
+ * the authored interior points, whose remapped t is rounded to 3dp; an interior
+ * point near a range end can round straight onto the endpoint's t. Array order
+ * is therefore meaningful, and JS sort is stable, so "last" is always the
+ * authored point rather than the synthesized sample -- which is the one worth
+ * keeping.
+ *
+ * It replaces the whole point deliberately. This used to take a value key and
+ * copy just that one field onto the survivor, which worked while every point
+ * type had exactly one value -- then cross-section points gained `tightness`
+ * alongside `curvature` and the call site still passed only 'curvature'. The
+ * survivor came out with one point's curvature and the other's tightness: a
+ * pair nobody authored. Swapping the object cannot develop that bug again, no
+ * matter what fields a point type grows later.
+ *
+ * Every element here is a freshly built literal (never an object aliased from
+ * path.points), so replacing rather than mutating is safe for callers. */
+function uniqueScalarPoints(points) {
   points.sort((a, b) => a.t - b.t);
   const out = [];
   for (const p of points) {
     const prev = out[out.length - 1];
-    if (prev && Math.abs(prev.t - p.t) < 1e-5) prev[key] = p[key];
+    if (prev && Math.abs(prev.t - p.t) < 1e-5) out[out.length - 1] = p;
     else out.push(p);
   }
   return out;
@@ -1518,7 +1625,7 @@ function rollWidthForSourceRange(sourceParts, sourceClosed, startT, endT) {
     if (sourceClosed && endT > 1 && t < startT) t += 1;
     if (inRange(t)) crossSectionPoints.push({ type: 'crossSection', t: roundT(mapT(t)), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
   }
-  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'), uniqueScalarPoints(crossSectionPoints, 'curvature'));
+  return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
 function sampleRollWidthFromPath(path, startT, endT) {
   return rollWidthForSourceRange(parts(path), path.closed, startT, endT);
@@ -1544,7 +1651,7 @@ function sampleRollWidthForClosedReconnect(openPath) {
   for (const rp of pp.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: rp.t, roll: rp.roll });
   for (const wp of pp.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: wp.t, width: wp.width });
   for (const cp of pp.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: cp.t, curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
-  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'), uniqueScalarPoints(crossSectionPoints, 'curvature'));
+  return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
 function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCount) {
   const leftParts = parts(leftPath), rightParts = parts(rightPath);
@@ -1585,7 +1692,7 @@ function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCo
   for (const wp of rightParts.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: roundT((seamIndex + wp.t * rightSpan) / maxG), width: wp.width });
   for (const cp of leftParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: roundT((cp.t * seamIndex) / maxG), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
   for (const cp of rightParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: roundT((seamIndex + cp.t * rightSpan) / maxG), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
-  return uniqueScalarPoints(rollPoints, 'roll').concat(uniqueScalarPoints(widthPoints, 'width'), uniqueScalarPoints(crossSectionPoints, 'curvature'));
+  return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
 function disjointDisabledReason(path, pointIndex) {
   const cps = parts(path).controlPoints;
@@ -1776,10 +1883,9 @@ function drawCrossSectionPreview(point) {
   const sx = (w - 2 * pad) / width;
   const sy = (h - 2 * pad) / Math.max(width, 1);
   const scale = Math.min(sx, sy);
-  const heightAt = v => {
-    const u = 2 * Math.max(0, Math.min(1, v)) - 1;
-    return curvature * (width / 2) * Math.pow(Math.sqrt(Math.max(0, 1 - u * u)), tightness);
-  };
+  // Same profile the game's ribbon and the USD exporter use, so the preview
+  // shows the surface that will actually be built.
+  const heightAt = v => TrackCore.crossSectionHeight(curvature, tightness, v, width);
   const px = x => midX + x * scale;
   const py = y => midY - y * scale;
 
@@ -3251,6 +3357,27 @@ window.__editor = {
     return mesh ? [...mesh.edges.values()].filter(e => e.attributes?.rail).length : 0;
   }
 };
+
+// ---------- Elevation panel collapse ----------
+// Collapsing swaps one class on #app; the grid's --elev-h shrinks to a title
+// bar and the top-down row (1fr) absorbs the rest. The state is remembered
+// separately from the track, under its own key, so reopening the editor doesn't
+// silently re-expand a panel the user put away.
+const elevToggleBtn = document.getElementById('elevToggle');
+function applyElevCollapsed() {
+  document.getElementById('app').classList.toggle('elevCollapsed', elevCollapsed);
+  elevToggleBtn.innerHTML = elevCollapsed ? '&#9652;' : '&#9662;';
+  elevToggleBtn.title = elevCollapsed ? 'Expand the elevation panel' : 'Collapse the elevation panel';
+  elevToggleBtn.setAttribute('aria-expanded', String(!elevCollapsed));
+}
+function setElevCollapsed(collapsed) {
+  elevCollapsed = collapsed;
+  try { localStorage.setItem(ELEV_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* private mode */ }
+  applyElevCollapsed();
+  draw();   // both canvases re-fit: the rows just changed height
+}
+elevToggleBtn.addEventListener('click', () => setElevCollapsed(!elevCollapsed));
+applyElevCollapsed();
 
 window.addEventListener('resize', draw);
 refresh();
