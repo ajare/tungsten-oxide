@@ -1,0 +1,1015 @@
+
+// ---------- Scene setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x02040a);
+scene.fog = new THREE.Fog(0x02040a, 60, 220);
+
+const camera = new THREE.PerspectiveCamera(
+  65, window.innerWidth / window.innerHeight, 0.1, 1000
+);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- Lighting ----------
+scene.add(new THREE.HemisphereLight(0x88bbff, 0x080810, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(50, 80, 30);
+scene.add(sun);
+
+// ---------- Track: built from control points via shared TrackCore ------------
+// The track is authored data: each path holds a single array of TYPED control
+// points (type: 'position' | 'roll' | 'width', see track-core.js), split via
+// TrackCore.splitPoints() into the three point sets buildPath() consumes.
+// Position points interpolate with a rational cubic B-spline; roll/width each
+// interpolate with their own independent spline. TrackCore holds the shared
+// math so the editor's preview and this geometry can never drift apart.
+// buildTrack() (re)generates everything from a path list, so importing new
+// JSON at runtime just calls it again.
+const N = TrackCore.N_DEFAULT;         // centerline samples per path
+const CROSS_SECTION_SEGMENTS = 12;     // samples across the road width for curved cross-sections
+const UP = new THREE.Vector3(0, 1, 0);
+const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
+const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
+const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : 1);
+function crossSectionHeight(curvature, tightness, v, chordWidth) {
+  const u = 2 * Math.max(0, Math.min(1, v)) - 1; // -1 left edge, 0 center, 1 right edge
+  const base = Math.sqrt(Math.max(0, 1 - u * u));
+  return clampSignedUnit(curvature) * (chordWidth / 2) * Math.pow(base, clampTightness(tightness));
+}
+function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
+  const c = clampSignedUnit(curvature), k = clampTightness(tightness);
+  if (!c) return 0;
+  const u = 2 * Math.max(0.001, Math.min(0.999, v)) - 1;
+  const base = Math.sqrt(Math.max(0.000001, 1 - u * u));
+  return c * (chordWidth / 2) * k * (-2 * u) * Math.pow(base, k - 2);
+}
+
+let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
+let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
+let overlapMesh = null;                // dark-blue patches where two connected curves' road polygons overlap
+let trackName = '';
+let trackStart = { path: 0, point: 0, reverse: false };
+
+function disposeObject(obj) {
+  if (!obj) return;
+  scene.remove(obj);
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) obj.material.dispose();
+}
+
+// A thin guard rail rising from one track edge, along the track's surface
+// normal at each point (NOT world-up) so the wall banks with the road instead
+// of always pointing straight up. `normals` is parallel to `edge` (same
+// indexing as the baked frames the edges came from). Open paths leave the
+// rail's two ends unconnected (no cap segment), so ribbons sharing a control
+// point simply meet there without needing any join-specific cutting. Where
+// this same edge crosses itself elsewhere along its length, that loop's wall
+// segments are collapsed away first (see collapseSelfIntersections).
+function buildRail(edge, normals, closed, height, color, skipSegments) {
+  const line = TrackCore.collapseSelfIntersections(edge, closed);
+  const count = line.length;
+  const positions = [], indices = [];
+  for (let i = 0; i < count; i++) {
+    const base = line[i], n = normals[i];
+    positions.push(
+      base.x, base.y, base.z,
+      base.x + n.x * height, base.y + n.y * height, base.z + n.z * height
+    );
+  }
+  const segCount = closed ? count : count - 1;
+  for (let i = 0; i < segCount; i++) {
+    if (skipSegments && skipSegments.has(i)) continue;
+    const j = closed ? (i + 1) % count : i + 1;
+    const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
+    indices.push(a0, b0, a1, a1, b0, b1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.4, side: THREE.DoubleSide });
+  return new THREE.Mesh(geo, mat);
+}
+
+// Compile a single path (closed loop or open curve) into renderable geometry
+// and a physics-ready centerline.
+function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
+  // Bake the centerline via the shared core, then derive the two track edges
+  // with self-intersections trimmed to sharp corners.
+  const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
+  let edges = prebuiltEdges || TrackCore.buildEdges(raw, closed);
+
+  // At a DISJOINT seam (editor-authored hard corner) override the shared
+  // endpoint's normal/edges so the two incident ribbons mitre into a clean
+  // corner instead of just meeting/overlapping at the raw shared point.
+  // Branch junctions (3+ incident ends, or 2-incident but not a disjoint
+  // seam) are NOT touched here -- those still freely overlap, see
+  // buildOverlapMesh.
+  if (endpointNormals) {
+    if (endpointNormals.start) raw[0].normal = endpointNormals.start;
+    if (endpointNormals.end) raw[raw.length - 1].normal = endpointNormals.end;
+  }
+  if (endpointCuts) {
+    const applyCut = (end, i) => {
+      if (!endpointCuts[end]) return;
+      if (endpointCuts[end].left) edges.left[i] = endpointCuts[end].left;
+      if (endpointCuts[end].right) edges.right[i] = endpointCuts[end].right;
+    };
+    applyCut('start', 0);
+    applyCut('end', raw.length - 1);
+  }
+
+  const wrapsAtDisjointSeam = !closed && !!endpointCuts && !!endpointCuts.start && !!endpointCuts.end &&
+    controlPoints[0] && controlPoints[controlPoints.length - 1] && controlPoints[0].id === controlPoints[controlPoints.length - 1].id;
+  edges = TrackCore.removeLocalEdgeSelfIntersections(edges, closed, wrapsAtDisjointSeam);
+
+  // Wrap frames into THREE vectors for the physics. Also record each sample's
+  // signed lateral offset (along edgeRight) of the left/right edges, so the
+  // collision corridor follows the actual (possibly mitred) road edge, not
+  // just centerline +/- halfW.
+  const centerline = raw.map((f, i) => {
+    const er = f.edgeRight, p = f.pos;
+    const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
+    return {
+      pos: toVec(f.pos), tangent: toVec(f.tangent), h: toVec(f.h),
+      edgeRight: toVec(f.edgeRight), normal: toVec(f.normal),
+      roll: f.roll, width: f.width, halfW: f.halfW,
+      crossSectionCurvature: f.crossSectionCurvature, crossSectionTightness: f.crossSectionTightness,
+      sLeft: off(edges.left[i]), sRight: off(edges.right[i])
+    };
+  });
+
+  // Ribbon surface between the two edges. Closed paths wrap the strip back to
+  // the start; open paths leave the two ends unconnected. A global cross-
+  // section curvature subdivides the strip across its width: 0 keeps the old
+  // flat chord, 1 raises the center to a semicircular arc with the same edges.
+  const pos = [], nrm = [], idx = [];
+  const crossCount = CROSS_SECTION_SEGMENTS + 1;
+  for (let i = 0; i < N; i++) {
+    const left = edges.left[i], right = edges.right[i], f = raw[i];
+    const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
+    const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
+    for (let j = 0; j < crossCount; j++) {
+      const v = j / CROSS_SECTION_SEGMENTS;
+      const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+      pos.push(
+        left.x + chord.x * v + f.normal.x * h,
+        left.y + chord.y * v + f.normal.y * h,
+        left.z + chord.z * v + f.normal.z * h
+      );
+      const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+      const crossT = new THREE.Vector3(chord.x + f.normal.x * dhdv, chord.y + f.normal.y * dhdv, chord.z + f.normal.z * dhdv);
+      const nml = toVec(f.tangent).cross(crossT).normalize();
+      nrm.push(nml.x, nml.y, nml.z);
+    }
+  }
+  const segCount = closed ? N : N - 1;
+  for (let i = 0; i < segCount; i++) {
+    const ni = closed ? (i + 1) % N : i + 1;
+    for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
+      const a = i * crossCount + j, b = i * crossCount + j + 1;
+      const c = ni * crossCount + j, d = ni * crossCount + j + 1;
+      idx.push(a, b, c, b, d, c);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setIndex(idx);
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xadd8ff, emissive: 0xadd8ff, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+  scene.add(mesh);
+
+  // Dashed racing stripe riding just above the banked centerline.
+  const sg = new THREE.BufferGeometry().setFromPoints(
+    centerline.map(c => c.pos.clone().addScaledVector(c.normal, crossSectionHeight(c.crossSectionCurvature, c.crossSectionTightness, 0.5, c.width) + 0.05))
+  );
+  const stripeLine = closed
+    ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }))
+    : new THREE.Line(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }));
+  stripeLine.computeLineDistances();
+  scene.add(stripeLine);
+
+  // Glowing guard rails rising from both edges, along the track surface normal
+  // AT THAT EDGE. With a curved cross-section the left/right edge normals tilt
+  // away from the centerline (up to a semicircular section at curvature=1), so
+  // the wall up-vectors must be derived from the same cross-section profile as
+  // the road mesh rather than reusing the centerline normal.
+  const edgeNormalAt = (i, v) => {
+    const left = edges.left[i], right = edges.right[i], f = raw[i];
+    const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
+    const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
+    const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+    const crossT = new THREE.Vector3(chord.x + f.normal.x * dhdv, chord.y + f.normal.y * dhdv, chord.z + f.normal.z * dhdv);
+    const nml = toVec(f.tangent).cross(crossT).normalize();
+    return { x: nml.x, y: nml.y, z: nml.z };
+  };
+  // Walls remain physical via centerline.sLeft/sRight collision bounds above,
+  // but are not rendered as guard-rail meshes.
+  const railR = null;
+  const railL = null;
+
+  const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
+  const endpointIds = {
+    start: controlPoints[0] && controlPoints[0].id,
+    end: controlPoints[controlPoints.length - 1] && controlPoints[controlPoints.length - 1].id
+  };
+  return { closed, centerline, mesh, stripeLine, railR, railL, anchors, endpointIds };
+}
+
+function clonePointForRuntime(p) { return { ...p, pos: p.pos ? p.pos.slice() : p.pos }; }
+function runtimeScalarPoints(path) {
+  // Reuse authored roll/width controls for runtime-only branch topology
+  // normalization. The exact t-domain remap is less important than cutting the
+  // geometry correctly; editor-created tracks already remap more carefully.
+  return (path.points || []).filter(p => p.type === 'roll' || p.type === 'width' || p.type === 'crossSection').map(p => ({ ...p }));
+}
+function inferBranchPointIds(trackPaths, junctions) {
+  const ids = new Set((junctions || []).map(j => j.pointId).filter(Boolean));
+  const stats = new Map();
+  const stat = id => {
+    if (!stats.has(id)) stats.set(id, { total: 0, endpoints: 0, interior: 0, closed: 0 });
+    return stats.get(id);
+  };
+  for (const path of trackPaths || []) {
+    const cps = TrackCore.splitPoints(path.points || []).controlPoints;
+    const closed = path.closed !== false;
+    for (let i = 0; i < cps.length; i++) {
+      const p = cps[i];
+      if (!p || !p.id) continue;
+      const s = stat(p.id);
+      s.total++;
+      if (closed) s.closed++;
+      else if (i === 0 || i === cps.length - 1) s.endpoints++;
+      else s.interior++;
+    }
+  }
+  // Infer only true branch targets, not ordinary two-end disjoint/connected
+  // seams. A branch is an open endpoint sharing a point with a closed curve or
+  // interior vertex (which will be opened/split), or an already-split point with
+  // 3+ open endpoints.
+  for (const [id, s] of stats) {
+    if (s.endpoints >= 3) ids.add(id);
+    else if (s.endpoints >= 1 && (s.closed > 0 || s.interior > 0)) ids.add(id);
+  }
+  return ids;
+}
+function normalizeBranchTopologyForRuntime(trackPaths, junctions) {
+  const branchPointIds = inferBranchPointIds(trackPaths, junctions);
+  const isBranch = id => !!id && branchPointIds.has(id);
+  // Turn every branch point into a shared OPEN endpoint so its walls get cut and
+  // a junction patch fills the gap. A closed loop is sliced into one arc between
+  // each consecutive pair of branch points around the loop; an open curve is
+  // split at each interior branch point. This handles ALL of a path's branch
+  // points in a single pass -- the previous per-point "open then re-split"
+  // approach could not split a second branch point that landed within a few
+  // control points of the first (it failed a 4-point-per-piece guard), leaving
+  // that junction buried as an interior vertex with its walls running straight
+  // through the intersection.
+  const out = [];
+  for (const path of trackPaths || []) {
+    const cps = TrackCore.splitPoints(path.points).controlPoints;
+    const scalar = runtimeScalarPoints(path);
+    if (path.closed !== false) {
+      const bIdx = [];
+      for (let i = 0; i < cps.length; i++) if (isBranch(cps[i].id)) bIdx.push(i);
+      if (bIdx.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
+      const n = cps.length;
+      // One arc per gap between consecutive branch points (wraps around the loop).
+      // A single branch point yields one arc that starts and ends on it -- the
+      // whole loop opened at that point, matching the old single-branch behaviour.
+      for (let k = 0; k < bIdx.length; k++) {
+        const a = bIdx[k], b = bIdx[(k + 1) % bIdx.length];
+        const arc = [cps[a]];
+        let i = a;
+        do { i = (i + 1) % n; arc.push(cps[i]); } while (i !== b);
+        out.push({ id: (path.id || '') + '_arc' + k + '_' + cps[a].id, closed: false, points: arc.concat(scalar) });
+      }
+    } else {
+      const cut = [];
+      for (let i = 1; i < cps.length - 1; i++) if (isBranch(cps[i].id)) cut.push(i);
+      if (cut.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
+      const bounds = [0, ...cut, cps.length - 1];
+      for (let k = 0; k < bounds.length - 1; k++) {
+        out.push({ id: (path.id || '') + '_seg' + k, closed: false, points: cps.slice(bounds[k], bounds[k + 1] + 1).concat(scalar) });
+      }
+    }
+  }
+  return out;
+}
+
+// For each position-point ID that is a shared open endpoint of 2+ baked paths,
+// the list of { pathIndex, end } incidences touching it there.
+function sharedEndpointGroups(bakedPaths) {
+  const groups = new Map();
+  const add = (id, pathIndex, end) => {
+    if (!id) return;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push({ pathIndex, end });
+  };
+  bakedPaths.forEach((bp, pathIndex) => {
+    if (bp.closed || !bp.controlPoints.length) return;
+    const first = bp.controlPoints[0], last = bp.controlPoints[bp.controlPoints.length - 1];
+    if (first) add(first.id, pathIndex, 'start');
+    if (last) add(last.id, pathIndex, 'end');
+  });
+  return groups;
+}
+function endpointIncidentCounts(bakedPaths) {
+  const counts = new Map();
+  for (const [id, list] of sharedEndpointGroups(bakedPaths)) counts.set(id, list.length);
+  return counts;
+}
+
+// --- overlap detection between connected curves' road polygons -------------
+// Where two paths share a control point their road ribbons are drawn
+// independently (see buildPath) and are free to overlap near that point.
+// This finds the actual overlapping area -- via exact convex-polygon
+// clipping of each path's road quads near the shared point -- so it can be
+// highlighted, rather than approximating the junction shape.
+function crossXZ(a, b, c) { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); }
+function polySignedAreaXZ(poly) {
+  let s = 0;
+  for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; s += p.x * q.z - q.x * p.z; }
+  return s / 2;
+}
+function ensureCCWXZ(poly) { return polySignedAreaXZ(poly) < 0 ? poly.slice().reverse() : poly; }
+function segIntersectXZ(p1, p2, p3, p4) {
+  const d = (p2.x - p1.x) * (p4.z - p3.z) - (p2.z - p1.z) * (p4.x - p3.x);
+  if (Math.abs(d) < 1e-12) return p2;
+  const t = ((p3.x - p1.x) * (p4.z - p3.z) - (p3.z - p1.z) * (p4.x - p3.x)) / d;
+  return { x: p1.x + t * (p2.x - p1.x), z: p1.z + t * (p2.z - p1.z) };
+}
+// Sutherland-Hodgman: clip convex polygon `subject` against convex polygon
+// `clip` (both CCW in XZ). Returns the (convex) intersection polygon, or []
+// if they don't overlap.
+function clipConvexPolyXZ(subject, clip) {
+  let output = subject;
+  for (let i = 0; i < clip.length && output.length; i++) {
+    const A = clip[i], B = clip[(i + 1) % clip.length];
+    const input = output;
+    output = [];
+    for (let j = 0; j < input.length; j++) {
+      const cur = input[j], prev = input[(j - 1 + input.length) % input.length];
+      const curIn = crossXZ(A, B, cur) >= 0, prevIn = crossXZ(A, B, prev) >= 0;
+      if (curIn) {
+        if (!prevIn) output.push(segIntersectXZ(prev, cur, A, B));
+        output.push(cur);
+      } else if (prevIn) {
+        output.push(segIntersectXZ(prev, cur, A, B));
+      }
+    }
+  }
+  return output;
+}
+function aabbOverlapXZ(p, q) {
+  let p0x = Infinity, p1x = -Infinity, p0z = Infinity, p1z = -Infinity;
+  for (const v of p) { p0x = Math.min(p0x, v.x); p1x = Math.max(p1x, v.x); p0z = Math.min(p0z, v.z); p1z = Math.max(p1z, v.z); }
+  let q0x = Infinity, q1x = -Infinity, q0z = Infinity, q1z = -Infinity;
+  for (const v of q) { q0x = Math.min(q0x, v.x); q1x = Math.max(q1x, v.x); q0z = Math.min(q0z, v.z); q1z = Math.max(q1z, v.z); }
+  return p0x <= q1x && p1x >= q0x && p0z <= q1z && p1z >= q0z;
+}
+// Barycentric weights of 2D point (x,z) in triangle (a,b,c), using only x/z.
+function baryXZ(x, z, a, b, c) {
+  const d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+  if (Math.abs(d) < 1e-12) return null;
+  const wa = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / d;
+  const wb = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / d;
+  return [wa, wb, 1 - wa - wb];
+}
+// A quad's height + surface normal at 2D point (x,z), found by splitting the
+// quad into its two triangles and barycentric-interpolating whichever one
+// contains the point (falls back to the other on the shared diagonal). Only
+// used to place/orient an already-clipped vertex in 3D -- the clip itself
+// (clipConvexPolyXZ) never looks at height.
+function sampleQuad3D(corners, x, z) {
+  const [c0, c1, c2, c3] = corners;
+  const blend = (w, a, b, c) => ({
+    y: w[0] * a.y + w[1] * b.y + w[2] * c.y,
+    n: {
+      x: w[0] * a.n.x + w[1] * b.n.x + w[2] * c.n.x,
+      y: w[0] * a.n.y + w[1] * b.n.y + w[2] * c.n.y,
+      z: w[0] * a.n.z + w[1] * b.n.z + w[2] * c.n.z
+    }
+  });
+  let w = baryXZ(x, z, c0, c1, c2);
+  if (w && w[0] >= -1e-6 && w[1] >= -1e-6 && w[2] >= -1e-6) return blend(w, c0, c1, c2);
+  w = baryXZ(x, z, c0, c2, c3) || [0.25, 0.25, 0.5];
+  return blend(w, c0, c2, c3);
+}
+// Road quads (as XZ polygons for clipping, plus the original 3D+normal
+// corners for later height/normal lookup) for the samples closest to one end
+// of a baked path, far enough to cover any plausible overlap with another
+// path meeting it there.
+function nearEndQuads(bp, fromStart) {
+  const frames = bp.frames, edges = bp.edges, count = frames.length;
+  const halfW = (frames[fromStart ? 0 : count - 1].halfW) || 6;
+  const targetLen = halfW * 3;
+  const maxSamples = Math.min(40, count - 1);
+  const quads = [];
+  let dist = 0;
+  for (let step = 0; step < maxSamples; step++) {
+    const i = fromStart ? step : count - 2 - step;
+    const j = i + 1;
+    const l0 = edges.left[i], l1 = edges.left[j], r0 = edges.right[i], r1 = edges.right[j];
+    const ni = frames[i].normal, nj = frames[j].normal;
+    const poly = ensureCCWXZ([{ x: l0.x, z: l0.z }, { x: l1.x, z: l1.z }, { x: r1.x, z: r1.z }, { x: r0.x, z: r0.z }]);
+    const corners = [{ ...l0, n: ni }, { ...l1, n: nj }, { ...r1, n: nj }, { ...r0, n: ni }];
+    quads.push({ poly, corners });
+    dist += Math.hypot(frames[j].pos.x - frames[i].pos.x, frames[j].pos.z - frames[i].pos.z);
+    if (dist >= targetLen) break;
+  }
+  return quads;
+}
+// All overlap polygons { poly: [{x,y,z,n}...] } between every pair of paths
+// incident at one shared point. The overlap region itself is found by exact
+// 2D convex-polygon clipping in the XZ (ground) plane only -- height plays no
+// part in determining WHERE the polygons overlap. Once a vertex's (x,z) is
+// known, its height and normal are looked up from both source roads (via
+// sampleQuad3D) and averaged, so the overlay vertex sits on -- and is oriented
+// with -- the actual (possibly banked) road surfaces meeting there, instead of
+// one flat height per patch (which produced visible seams/z-fighting between
+// adjacent patches on banked sections).
+function overlapPolysAtSharedPoint(bakedPaths, incidences) {
+  const perInc = incidences.map(inc => nearEndQuads(bakedPaths[inc.pathIndex], inc.end === 'start'));
+  const out = [];
+  for (let a = 0; a < perInc.length; a++) {
+    for (let b = a + 1; b < perInc.length; b++) {
+      for (const qa of perInc[a]) {
+        for (const qb of perInc[b]) {
+          if (!aabbOverlapXZ(qa.poly, qb.poly)) continue;
+          const clipped = clipConvexPolyXZ(qa.poly, qb.poly);
+          if (clipped.length < 3) continue;
+          const poly = clipped.map(v => {
+            const sa = sampleQuad3D(qa.corners, v.x, v.z), sb = sampleQuad3D(qb.corners, v.x, v.z);
+            const nx = sa.n.x + sb.n.x, ny = sa.n.y + sb.n.y, nz = sa.n.z + sb.n.z;
+            const nl = Math.hypot(nx, ny, nz) || 1;
+            return { x: v.x, y: (sa.y + sb.y) / 2, z: v.z, n: { x: nx / nl, y: ny / nl, z: nz / nl } };
+          });
+          out.push(poly);
+        }
+      }
+    }
+  }
+  return out;
+}
+// One merged mesh of all overlap patches, lifted slightly above the road
+// surface (along the blended local surface normal, so it hugs banked track
+// too) to avoid z-fighting. `disjointSeamPointIds` are skipped -- those get a
+// clean mitre from computeDisjointEdgeCuts instead of being left to overlap.
+function buildOverlapMesh(bakedPaths, color, disjointSeamPointIds) {
+  const groups = sharedEndpointGroups(bakedPaths);
+  const allPolys = [];
+  for (const [id, incidences] of groups) {
+    if (incidences.length < 2) continue;
+    if (disjointSeamPointIds && disjointSeamPointIds.has(id)) continue;
+    allPolys.push(...overlapPolysAtSharedPoint(bakedPaths, incidences));
+  }
+  if (!allPolys.length) return null;
+  const LIFT = 0.02;
+  const pos = [], nrm = [], idx = [];
+  let vBase = 0;
+  for (const poly of allPolys) {
+    for (const v of poly) {
+      pos.push(v.x + v.n.x * LIFT, v.y + v.n.y * LIFT, v.z + v.n.z * LIFT);
+      nrm.push(v.n.x, v.n.y, v.n.z);
+    }
+    for (let i = 1; i < poly.length - 1; i++) idx.push(vBase, vBase + i, vBase + i + 1);
+    vBase += poly.length;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  geo.setIndex(idx);
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+  return new THREE.Mesh(geo, mat);
+}
+// At a disjoint seam the two incident path ends generally have different
+// surface normals (the two curves approach the hard corner from different
+// directions/banking). If each rail used its own normal, the wall bases
+// would meet (via computeDisjointEdgeCuts) but the tops would still splay
+// apart. Average the endpoint normals per seam and use that shared normal at
+// BOTH incident ends so the rail tops meet too, not just the bases.
+function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
+  const out = bakedPaths.map(() => ({}));
+  const norm = v => { const l = Math.hypot(v.x, v.y, v.z) || 1; return { x: v.x / l, y: v.y / l, z: v.z / l }; };
+  for (const seam of disjointSeams || []) {
+    const incs = [];
+    bakedPaths.forEach((bp, pathIndex) => {
+      if (bp.closed || !bp.controlPoints.length || !bp.frames.length) return;
+      const lastCp = bp.controlPoints.length - 1;
+      if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'start', normal: bp.frames[0].normal });
+      }
+      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === seam.pointId) {
+        incs.push({ pathIndex, end: 'end', normal: bp.frames[bp.frames.length - 1].normal });
+      }
+    });
+    if (incs.length < 2) continue;
+    const avg = norm(incs.reduce((s, inc) => ({
+      x: s.x + inc.normal.x, y: s.y + inc.normal.y, z: s.z + inc.normal.z
+    }), { x: 0, y: 0, z: 0 }));
+    for (const inc of incs) out[inc.pathIndex][inc.end] = avg;
+  }
+  return out;
+}
+// (Re)build the entire track from a normalized track object, then reset the
+// ship. `track.paths` is [{ closed, points }, ...] (points: typed
+// position/roll/width control points, see track-core.js). `track.start` is
+// { path, point, reverse } picking which position control point the ship
+// begins at and which way it faces. Paths that share a control point simply
+// meet there and overlap -- EXCEPT disjoint seams (editor-authored hard
+// corners), whose edges are cut to a clean mitre instead.
+function buildTrack(track) {
+  const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
+  trackName = track.name || '';
+  trackStart = track.start || { path: 0, point: 0, reverse: false };
+  connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
+
+  // Drop any previously-built geometry before rebuilding.
+  for (const p of paths) {
+    disposeObject(p.mesh); disposeObject(p.stripeLine);
+    disposeObject(p.railR); disposeObject(p.railL);
+  }
+  disposeObject(overlapMesh);
+  overlapMesh = null;
+
+  const bakedPaths = trackPaths.map(p => {
+    const { controlPoints, rollPoints, widthPoints, crossSectionPoints } = TrackCore.splitPoints(p.points);
+    const closed = p.closed !== false;
+    const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
+    const edges = TrackCore.buildEdges(frames, closed);
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges };
+  });
+  const incidentCounts = endpointIncidentCounts(bakedPaths);
+  for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
+  const disjointSeams = track.disjointSeams || [];
+  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, disjointSeams);
+  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
+  paths = bakedPaths.map((p, i) => buildPath(
+    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
+  ));
+  const disjointSeamPointIds = new Set(disjointSeams.map(s => s.pointId));
+  overlapMesh = buildOverlapMesh(bakedPaths, 0x0a2a66, disjointSeamPointIds);
+  if (overlapMesh) scene.add(overlapMesh);
+
+  resetShip();
+  const label = document.getElementById('trackName');
+  if (label) label.textContent = trackName;
+}
+
+// Sample a smooth, interpolated track frame at a horizontal position. Searches
+// ALL path segments for the nearest projected point, then interpolates within
+// that segment. Segment-based selection avoids endpoint ambiguity at disjoint
+// shared control points, where nearest-sample selection can briefly stick to
+// the old path end and then jump to the new path.
+const _sample = {
+  pos: new THREE.Vector3(),
+  tangent: new THREE.Vector3(),
+  edgeRight: new THREE.Vector3(),
+  normal: new THREE.Vector3(),
+  halfW: 0, sLeft: 0, sRight: 0, crossSectionCurvature: 0, crossSectionTightness: 1,
+  offEnd: false
+};
+function curvedSurfaceHeight(sample, s) {
+  const lo = sample.sLeft, hi = sample.sRight;
+  const span = hi - lo;
+  if (Math.abs(span) < 1e-6) return 0;
+  const v = (s - lo) / span;
+  return crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+}
+function curvedSurfaceFrame(sample, s) {
+  const lo = sample.sLeft, hi = sample.sRight;
+  const span = hi - lo;
+  const v = Math.abs(span) < 1e-6 ? 0.5 : (s - lo) / span;
+  const lift = crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+  const pos = sample.pos.clone()
+    .addScaledVector(sample.edgeRight, s)
+    .addScaledVector(sample.normal, lift);
+  const dhdv = crossSectionHeightDerivative(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
+  const crossT = sample.edgeRight.clone().multiplyScalar(span).addScaledVector(sample.normal, dhdv);
+  const normal = new THREE.Vector3().crossVectors(sample.tangent, crossT).normalize();
+  if (normal.dot(sample.normal) < 0) normal.negate();
+  return { pos, normal };
+}
+
+function sampleTrack(x, z) {
+  let bestPath = paths[0], bestA = 0, bestB = 1, bestT = 0, bestD = Infinity;
+  for (const path of paths) {
+    const cl = path.centerline, M = cl.length;
+    const segCount = path.closed ? M : M - 1;
+    for (let i = 0; i < segCount; i++) {
+      const j = path.closed ? (i + 1) % M : i + 1;
+      const a = cl[i], b = cl[j];
+      const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
+      const segLen2 = sx * sx + sz * sz;
+      const t = segLen2 > 0
+        ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (z - a.pos.z) * sz) / segLen2, 0, 1)
+        : 0;
+      const px = a.pos.x + sx * t, pz = a.pos.z + sz * t;
+      const dx = x - px, dz = z - pz;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; bestPath = path; bestA = i; bestB = j; bestT = t; }
+    }
+  }
+  const cl = bestPath.centerline;
+  const a = cl[bestA], b = cl[bestB];
+  const t = bestT;
+
+  _sample.pos.copy(a.pos).lerp(b.pos, t);
+  _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
+  _sample.edgeRight.copy(a.edgeRight).lerp(b.edgeRight, t).normalize();
+  _sample.normal.copy(a.normal).lerp(b.normal, t).normalize();
+  _sample.halfW = a.halfW + (b.halfW - a.halfW) * t;
+  _sample.crossSectionCurvature = a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * t;
+  _sample.crossSectionTightness = a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * t;
+  _sample.sLeft = a.sLeft + (b.sLeft - a.sLeft) * t;
+  _sample.sRight = a.sRight + (b.sRight - a.sRight) * t;
+  _sample.offEnd = false;
+  if (!bestPath.closed) {
+    const M = bestPath.centerline.length;
+    if (bestA === 0 && t <= 1e-4) {
+      const e = bestPath.centerline[0];
+      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.start) &&
+        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+    } else if (bestB === M - 1 && t >= 1 - 1e-4) {
+      const e = bestPath.centerline[M - 1];
+      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.end) &&
+        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+    }
+  }
+  return _sample;
+}
+
+// ---------- Player vehicle ----------
+const shipGroup = new THREE.Group();
+const bodyGeo = new THREE.BoxGeometry(1.2, 0.4, 2.0);
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7a1a, metalness: 0.4, roughness: 0.3, emissive: 0x552200, emissiveIntensity: 0.3 });
+const body = new THREE.Mesh(bodyGeo, bodyMat);
+body.position.y = 0.3;
+shipGroup.add(body);
+
+// nose accent so orientation is obvious
+const noseGeo = new THREE.ConeGeometry(0.35, 0.8, 4);
+const noseMat = new THREE.MeshStandardMaterial({ color: 0x00d4ff, emissive: 0x0077aa, emissiveIntensity: 0.6 });
+const nose = new THREE.Mesh(noseGeo, noseMat);
+nose.rotation.x = Math.PI / 2;
+nose.rotation.y = Math.PI / 4;
+nose.position.set(0, 0.3, 1.25);
+shipGroup.add(nose);
+
+scene.add(shipGroup);
+
+// Place the ship at control point 0's region, facing along the track, and clear
+// its motion. Called by buildTrack() on load and on every JSON import.
+function resetShip() {
+  // Start at the chosen control point (the spline doesn't pass exactly through
+  // its control points, so find the closest baked sample rather than assuming
+  // it's sample `point`), on the chosen path, facing its natural tangent
+  // direction or the reverse of it.
+  const pathIndex = THREE.MathUtils.clamp(trackStart.path, 0, paths.length - 1);
+  const startPath = paths[pathIndex];
+  const pointIndex = THREE.MathUtils.clamp(trackStart.point, 0, startPath.anchors.length - 1);
+  const anchor = startPath.anchors[pointIndex];
+  const cl = startPath.centerline;
+  let startIndex = 0, bestD = Infinity;
+  for (let i = 0; i < cl.length; i++) {
+    const d = cl[i].pos.distanceToSquared(anchor);
+    if (d < bestD) { bestD = d; startIndex = i; }
+  }
+  const s = cl[startIndex];
+  // Centre of the track, following the actual cross-section geometry if enabled.
+  const startSurface = curvedSurfaceFrame(s, 0);
+  physics.groundPos.set(s.pos.x, startSurface.pos.y, s.pos.z);
+  shipGroup.position.copy(startSurface.pos).addScaledVector(startSurface.normal, 0.5);
+  let heading = Math.atan2(s.tangent.x, s.tangent.z);
+  if (trackStart.reverse) heading += Math.PI;
+  physics.heading = heading;
+  physics.velocityAngle = heading;
+  physics.speed = 0;
+  physics.visualBank = 0;
+  physics.visualPitch = 0;
+  physics.airborne = false;
+  physics.verticalVel = 0;
+  physics.landingBounce = 0;
+  physics.landingBounceVel = 0;
+  physics.up.copy(startSurface.normal);
+  physics.visualGroundPos.copy(startSurface.pos);
+  physics.visualUp.copy(physics.up);
+  physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
+  physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
+}
+
+// ---------- Input ----------
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+function isDown(...codes) { return codes.some(c => keys[c]); }
+
+// ---------- Wipeout-style hover physics ----------
+const physics = {
+  heading: 0,        // facing direction (radians) — set by resetShip()
+  velocityAngle: 0,  // direction the vehicle is actually moving
+  speed: 0,                // signed scalar speed (units/sec)
+  maxSpeed: 34,
+  maxReverse: -12,
+  accel: 26,
+  brakeDecel: 42,
+  friction: 20,      // decel when neither throttle nor brake held -- stops quickly when let go
+  turnRate: 2.4,           // rad/sec at low speed
+  grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
+  bobTime: 0,
+  visualBank: 0,           // smoothed steer-lean (rad)
+  visualPitch: 0,          // smoothed accel-pitch (rad)
+  up: new THREE.Vector3(0, 1, 0),      // current road surface normal
+  forward: new THREE.Vector3(0, 0, 1), // ship's actual (banked) forward, orthogonal to `up`
+  right: new THREE.Vector3(1, 0, 0),   // ship's actual (banked) right, orthogonal to both
+  // Hover-free reference position (on the ribbon surface, no bob offset).
+  // Velocity is integrated from THIS, not from shipGroup.position -- the
+  // rendered position has the hover bob added along `normal`, and once the
+  // track is banked `normal` isn't purely vertical, so its bob offset leaks
+  // into X/Z. Feeding that back into next frame's lateral (s) projection
+  // compounds into a slow one-directional drift on any banked section, even
+  // at a dead stop. groundPos sidesteps that by staying bob-free.
+  groundPos: new THREE.Vector3(),
+  // Smoothed render-only surface position/up. Physics integrates against
+  // groundPos directly, but the rendered ship/camera can ease over tiny
+  // projection discontinuities (notably at disjoint path seams) instead of
+  // visibly popping.
+  visualGroundPos: new THREE.Vector3(),
+  visualUp: new THREE.Vector3(0, 1, 0),
+  airborne: false,
+  verticalVel: 0,
+  gravity: 30,
+  landingBounce: 0,
+  landingBounceVel: 0
+};
+
+function lerpAngle(a, b, t) {
+  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * t;
+}
+
+function updatePhysics(dt) {
+  const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
+  const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
+  const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+  const hasTranslation = !!(throttle || brake || Math.abs(physics.speed) > 0.001);
+
+  // Longitudinal speed control
+  if (throttle) {
+    physics.speed += physics.accel * dt;
+  } else if (brake) {
+    physics.speed -= physics.brakeDecel * dt;
+  } else {
+    // natural friction bleeds speed toward 0
+    const decay = physics.friction * dt;
+    if (physics.speed > 0) physics.speed = Math.max(0, physics.speed - decay);
+    else physics.speed = Math.min(0, physics.speed + decay);
+  }
+  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, physics.maxSpeed);
+
+  // Steering: turn rate scales down slightly at top speed for stability,
+  // and inverts naturally when reversing.
+  // `heading` is a WORLD-space yaw, but the driver's frame of reference is the
+  // road surface. Once the track banks past vertical (roll > 90deg, up to
+  // ~180deg inverted) the surface normal points downward and the ship/camera
+  // are upside down, so a fixed world-yaw turn reads as reversed to the
+  // driver. Flip the steer by the sign of the surface normal's vertical
+  // component so "left" stays the driver's left through inverted sections.
+  const upSign = physics.up.y < 0 ? -1 : 1;
+  const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
+  const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
+  physics.heading += steer * effectiveTurn * dt * upSign;
+
+  // Hover "grip": velocity direction chases heading, but lags behind under
+  // hard turns at speed -> gives the classic wipeout slide/drift feel.
+  const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
+  physics.velocityAngle = lerpAngle(physics.velocityAngle, physics.heading, Math.min(gripThisFrame * dt, 1));
+
+  // Integrate/reproject the hover-free ground reference only while the ship is
+  // translating (throttle/brake/coasting). Steering in place should rotate the
+  // ship without reprojecting groundPos: reprojecting a stationary point onto a
+  // banked/sloped cross-section can introduce tiny X/Z corrections that look
+  // like movement while turning on the spot.
+  let c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+  let surfaceNormal = c.normal;
+  let surfaceRenderPos = physics.groundPos;
+  const vx = Math.sin(physics.velocityAngle) * physics.speed;
+  const vz = Math.cos(physics.velocityAngle) * physics.speed;
+
+  const projectToSurface = (sample, px, pz) => {
+    const er = sample.edgeRight;
+    const cosR2 = er.x * er.x + er.z * er.z || 1;         // = cos^2(roll)
+    let s = ((px - sample.pos.x) * er.x + (pz - sample.pos.z) * er.z) / cosR2;
+
+    // Drivable corridor is bounded by the TRIMMED edges per side, so cut corners
+    // pinch the collision exactly like the visual mesh (walls you see = walls you hit).
+    const margin = 0.9;
+    let loS = sample.sLeft + margin;    // inner limit of the left edge (negative side)
+    let hiS = sample.sRight - margin;   // inner limit of the right edge (positive side)
+    if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
+    return { er, s, loS, hiS };
+  };
+
+  if (physics.airborne) {
+    const px = physics.groundPos.x + vx * dt;
+    const pz = physics.groundPos.z + vz * dt;
+    physics.verticalVel -= physics.gravity * dt;
+    physics.groundPos.set(px, physics.groundPos.y + physics.verticalVel * dt, pz);
+
+    c = sampleTrack(px, pz);
+    const { er, s, loS, hiS } = projectToSurface(c, px, pz);
+    const surface = curvedSurfaceFrame(c, s);
+    if (!c.offEnd && s >= loS && s <= hiS && physics.groundPos.y <= surface.pos.y) {
+      const impactSpeed = Math.max(0, -physics.verticalVel);
+      physics.airborne = false;
+      physics.verticalVel = 0;
+      physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
+      physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
+      physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
+    }
+  } else if (hasTranslation) {
+    let px = physics.groundPos.x + vx * dt;
+    let pz = physics.groundPos.z + vz * dt;
+
+    c = sampleTrack(px, pz);
+    if (c.offEnd) {
+      // Leaving an open curve: stop projecting to the clamped endpoint and let
+      // the craft continue ballistically until its X/Z is over a curve again.
+      physics.airborne = true;
+      physics.verticalVel = 0;
+      physics.groundPos.set(px, physics.groundPos.y, pz);
+    } else {
+      const { er, s, loS, hiS } = projectToSurface(c, px, pz);
+
+      let hitSign = 0;
+      if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
+      let finalS = s;
+      if (hitSign) {
+        finalS = THREE.MathUtils.clamp(s, loS, hiS);
+        // Slide along the wall we hit: cancel only the velocity component pushing
+        // into it (with light scrub), so the ship glides instead of stopping dead.
+        const nl = Math.hypot(er.x, er.z) || 1;
+        const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
+        let vX = Math.sin(physics.velocityAngle) * physics.speed;
+        let vZ = Math.cos(physics.velocityAngle) * physics.speed;
+        const into = vX * wnx + vZ * wnz;
+        if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
+        physics.speed = Math.hypot(vX, vZ) * 0.98;
+        physics.velocityAngle = Math.atan2(vX, vZ);
+      }
+
+      const surface = curvedSurfaceFrame(c, finalS);
+      physics.groundPos.set(c.pos.x + er.x * finalS, surface.pos.y, c.pos.z + er.z * finalS);
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
+    }
+  }
+
+  if (!physics.airborne && !hasTranslation) {
+    c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+    const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.z);
+    const finalS = THREE.MathUtils.clamp(s, loS, hiS);
+    const surface = curvedSurfaceFrame(c, finalS);
+    physics.groundPos.set(c.pos.x + c.edgeRight.x * finalS, surface.pos.y, c.pos.z + c.edgeRight.z * finalS);
+    surfaceRenderPos = surface.pos;
+    surfaceNormal = surface.normal;
+  }
+
+  // Sit on the surface, hovering a little along the surface normal. groundPos
+  // (bob-free) is what next frame's integration reads from; shipGroup's
+  // actual rendered position adds the hover bob on top of it. At disjoint
+  // seams the nearest path segment can switch, producing a small projection
+  // correction in groundPos; smooth only unexpectedly-large render deltas so
+  // normal movement stays responsive while seam pops are eased out.
+  const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.08;
+  const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
+  if (renderDelta > expectedStep) {
+    physics.visualGroundPos.lerp(surfaceRenderPos, Math.min(1, dt * 18));
+  } else {
+    physics.visualGroundPos.copy(surfaceRenderPos);
+  }
+  physics.visualUp.lerp(surfaceNormal, Math.min(1, dt * 18)).normalize();
+
+  // Damped spring for landing impacts: a harder fall creates a larger, quick
+  // hover rebound after re-contacting the track.
+  physics.landingBounceVel += -55 * physics.landingBounce * dt;
+  physics.landingBounceVel *= Math.exp(-7 * dt);
+  physics.landingBounce += physics.landingBounceVel * dt;
+  if (Math.abs(physics.landingBounce) < 0.001 && Math.abs(physics.landingBounceVel) < 0.001) {
+    physics.landingBounce = 0; physics.landingBounceVel = 0;
+  }
+
+  physics.bobTime += dt;
+  const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03 + physics.landingBounce;
+  shipGroup.position.set(
+    physics.visualGroundPos.x + physics.visualUp.x * hover,
+    physics.visualGroundPos.y + physics.visualUp.y * hover,
+    physics.visualGroundPos.z + physics.visualUp.z * hover
+  );
+  physics.up.copy(physics.visualUp);
+
+  // Orient the ship to the road: nose along heading, "up" along surface normal.
+  const up = physics.visualUp;
+  const fwd = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
+  fwd.addScaledVector(up, -fwd.dot(up)).normalize();
+  const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
+  const forward = new THREE.Vector3().crossVectors(right, up).normalize();
+  shipGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
+  // Keep this exact orthonormal basis around for the chase camera, so it
+  // always sits directly behind/above the ship using the SAME up/forward --
+  // not a separately-computed (and potentially non-orthogonal) pair.
+  physics.right.copy(right);
+  physics.forward.copy(forward);
+
+  // Extra hover flair: lean into the steer, pitch back under acceleration.
+  const targetBank = THREE.MathUtils.clamp(-steer * speedRatio * 0.5, -0.5, 0.5);
+  physics.visualBank = THREE.MathUtils.lerp(physics.visualBank, targetBank, dt * 6);
+  physics.visualPitch = THREE.MathUtils.lerp(physics.visualPitch, physics.speed * 0.004, dt * 6);
+  shipGroup.quaternion.multiply(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(physics.visualPitch, 0, physics.visualBank, 'XYZ'))
+  );
+
+  // HUD
+  const kmh = Math.round(Math.abs(physics.speed) * 9);
+  document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>';
+}
+
+// ---------- Chase camera (rigidly fixed behind and above the ship) ----------
+const CAM_BACK = 6.5;   // distance behind the ship
+const CAM_UP = 3.2;     // height above the ship
+function updateCamera(dt) {
+  // Use the ship's own orthonormal (forward, up) basis -- the same one its
+  // quaternion was built from -- rather than a flat heading-only forward.
+  // Mixing a flat forward with the fully-banked `up` (as before) isn't even
+  // orthogonal once the track rolls, so the camera would drift out from
+  // directly behind the ship; and leaving camera.up at world Y meant the
+  // rendered horizon didn't bank with the track, fighting the position
+  // offset. Setting camera.up to the track's own up keeps the camera locked
+  // directly behind/above the ship at any roll, including past 90 degrees.
+  const up = physics.up, fwd = physics.forward;
+  const base = physics.visualGroundPos.clone().addScaledVector(up, 0.5);
+  camera.up.copy(up);
+  camera.position.copy(base)
+    .addScaledVector(fwd, -CAM_BACK)
+    .addScaledVector(up, CAM_UP);
+  const lookAt = base.clone()
+    .addScaledVector(fwd, 6)
+    .addScaledVector(up, 0.8);
+  camera.lookAt(lookAt);
+}
+
+// ---------- Track loading: built-in default + JSON import --------------------
+function loadStoredTrack() {
+  try {
+    const stored = localStorage.getItem('web3d.currentTrack');
+    return stored ? TrackCore.parseTrack(stored) : null;
+  } catch (err) {
+    console.warn('Could not load editor preview track:', err);
+    return null;
+  }
+}
+buildTrack(loadStoredTrack() || TrackCore.cloneTrack(TrackCore.DEFAULT_TRACK));
+window.addEventListener('storage', (e) => {
+  if (e.key !== 'web3d.currentTrack' || !e.newValue) return;
+  try { buildTrack(TrackCore.parseTrack(e.newValue)); }
+  catch (err) { console.warn('Could not live-update track from editor:', err); }
+});
+
+const fileInput = document.getElementById('fileInput');
+document.getElementById('importBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const track = TrackCore.parseTrack(await file.text());
+    buildTrack(track);
+  } catch (err) {
+    alert('Could not load track: ' + err.message);
+  }
+  e.target.value = '';   // allow re-importing the same file
+});
+
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  updatePhysics(dt);
+  updateCamera(dt);
+  renderer.render(scene, camera);
+}
+animate();

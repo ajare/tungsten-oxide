@@ -596,7 +596,7 @@
   // control point across the path's parameter domain.
   function defaultRollPoints(rawPoints, closed) {
     const n = rawPoints.length;
-    if (n === 0) return [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 0.5, roll: 0 }];
+    if (n === 0) return [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: closed ? 0.5 : 1, roll: 0 }];
     const denom = closed ? n : Math.max(1, n - 1);
     return rawPoints.map((p, i) => ({
       type: 'roll',
@@ -606,7 +606,7 @@
   }
   function defaultWidthPoints(rawPoints, closed) {
     const n = rawPoints.length;
-    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: 0.5, width: 12 }];
+    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: closed ? 0.5 : 1, width: 12 }];
     const denom = closed ? n : Math.max(1, n - 1);
     return rawPoints.map((p, i) => ({
       type: 'width',
@@ -632,9 +632,10 @@
       });
       const posCount = points.filter(p => p.type === 'position').length;
       if (posCount < 4) throw new Error('path ' + i + ': a track path needs at least 4 position control points');
-      if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 0.5, roll: 0 });
-      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: 0.5, width: 12 });
-      if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: 0.5, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
+      const endT = closed ? 0.5 : 1;
+      if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 });
+      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: endT, width: 12 });
+      if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: endT, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
       return { id: rawPath.id || null, closed, points };
     }
 
@@ -653,7 +654,7 @@
     const rawCross = rawPath && Array.isArray(rawPath.crossSectionPoints) ? rawPath.crossSectionPoints : null;
     const crossSectionPoints = (rawCross && rawCross.length >= 1)
       ? rawCross.map(normalizeCrossSectionPoint)
-      : [{ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: 0.5, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }];
+      : [{ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: closed ? 0.5 : 1, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }];
     return {
       id: rawPath && rawPath.id || null,
       closed,
@@ -713,7 +714,6 @@
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
       paths,
-      crossSectionCurvature: topLevelCrossSectionCurvature,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       start: normalizeStart(data && data.start, paths)
@@ -735,7 +735,6 @@
     return '{\n' +
       '  "version": 3,\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
-      '  "crossSectionCurvature": ' + clampSignedUnit(track.crossSectionCurvature) + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
@@ -746,7 +745,6 @@
   const DEFAULT_TRACK = {
     version: 2,
     name: 'Default Circuit',
-    crossSectionCurvature: DEFAULT_CROSS_SECTION_CURVATURE,
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
@@ -792,7 +790,6 @@
   const STARTER_TRACK = {
     version: 2,
     name: 'New Track',
-    crossSectionCurvature: DEFAULT_CROSS_SECTION_CURVATURE,
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
     junctions: [],
