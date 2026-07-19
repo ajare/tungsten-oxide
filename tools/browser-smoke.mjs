@@ -77,7 +77,13 @@ await visit('editor: import mesh, move, rail, export', 'editor.html', async (pag
   }));
   if (imported.placements !== 1) throw new Error('expected 1 placement, got ' + JSON.stringify(imported));
 
-  // Rails mode: click the midpoint of the pad's south edge.
+  // Import rails every rim edge, so a fresh region is enclosed and drivable
+  // immediately: 4 outer + 4 hole edges here, with no interior seams.
+  const railedOnImport = await page.evaluate(() => window.__editor.railCount(window.__editor.track.meshes[0].asset));
+  if (railedOnImport !== 8) throw new Error('expected 8 railed edges on import, got ' + railedOnImport);
+
+  // Rails mode: click the midpoint of the pad's south edge. Since import
+  // railed it, the click toggles it OFF -- that is how you open a ledge.
   await page.selectOption('#editModeSelect', 'rails');
   await page.waitForTimeout(200);
   const pt = await page.evaluate(() => {
@@ -91,11 +97,55 @@ await visit('editor: import mesh, move, rail, export', 'editor.html', async (pag
   await page.waitForTimeout(300);
 
   const railed = await page.evaluate(() => window.__editor.railCount(window.__editor.track.meshes[0].asset));
-  if (railed !== 1) throw new Error('expected 1 railed edge after click, got ' + railed);
+  if (railed !== 7) throw new Error('expected 7 railed edges after unrailing one, got ' + railed);
 
   const json = await page.evaluate(() => window.TrackCore.serializeTrack(window.__editor.track));
   if (!json.includes('"meshAssets"') || !json.includes('"rail"')) throw new Error('export missing mesh/rail data');
-  return `asset=${imported.assets[0]}, rails=${railed}, export ${json.length}b`;
+  return `asset=${imported.assets[0]}, rails ${railedOnImport}->${railed}, export ${json.length}b`;
+});
+
+// Regression: opening the context menu must not read the clipboard.
+//
+// An ungranted readText() pops the browser's OWN native "Paste" confirmation
+// bubble. Probing on right-click therefore means a system popup nobody asked
+// for, layered over our menu, every single time -- plus a second one when the
+// paste actually runs. This page deliberately has no clipboard permission,
+// which is what a real first-time user has; granting it in the test would
+// hide the very thing being tested.
+await visit('editor: right-click does not read the clipboard', 'editor.html', async (page) => {
+  await page.addInitScript(() => {
+    window.__reads = 0;
+    const orig = navigator.clipboard.readText.bind(navigator.clipboard);
+    navigator.clipboard.readText = () => { window.__reads++; return orig(); };
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+
+  const state = await page.evaluate(async () => {
+    try { return (await navigator.permissions.query({ name: 'clipboard-read' })).state; }
+    catch { return 'unavailable'; }
+  });
+  if (state === 'granted') throw new Error('this test proves nothing with clipboard permission already granted');
+
+  const box = await page.locator('#topCanvas').boundingBox();
+  await page.mouse.click(Math.round(box.x + box.width * 0.75), Math.round(box.y + box.height * 0.25), { button: 'right' });
+  await page.waitForTimeout(400);
+
+  const shown = (id) => page.evaluate(i => getComputedStyle(document.getElementById(i)).display !== 'none', id);
+  if (!await shown('addPointMenu')) throw new Error('right-click did not open the add-point menu');
+  // Un-prompted permission still offers the option -- it just does not probe.
+  if (!await shown('pasteMeshSection')) throw new Error('paste option should still be offered when permission is un-prompted');
+
+  const afterMenu = await page.evaluate(() => window.__reads);
+  if (afterMenu !== 0) throw new Error(`opening the menu read the clipboard ${afterMenu}x, should be 0`);
+
+  // Choosing it reads exactly once: the single prompt the user actually asked for.
+  await page.locator('#pasteMeshSection button').click();
+  await page.waitForTimeout(500);
+  const afterPaste = await page.evaluate(() => window.__reads);
+  if (afterPaste !== 1) throw new Error(`pasting read the clipboard ${afterPaste}x, should be 1`);
+
+  return `menu 0 reads, paste 1 read (permission: ${state})`;
 });
 
 await visit('track.html loads and builds a mesh region', 'track.html', async (page) => {

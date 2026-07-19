@@ -1,5 +1,6 @@
 
 import * as TrackMesh from './track-mesh.js';
+import { exportTrackToUSDA, sanitizeFileStem, DEFAULT_USD_CROSS_SECTION_SEGMENTS } from './usd-export.js';
 
 // ---------- Editor state ----------
 // track.paths: [{ closed, points }, ...] — a track is one or more paths, each
@@ -2463,11 +2464,11 @@ function showAddPointMenu(clientX, clientY, worldX, worldZ) {
   addPointMenu.style.top = Math.min(clientY, window.innerHeight - 120) + 'px';
   addPointMenu.style.display = 'flex';
   // The menu opens immediately with the paste option hidden, then reveals it
-  // if the clipboard turns out to hold something. Awaiting the read first
-  // would stall the menu behind a permission prompt on every right-click.
+  // if the clipboard turns out to hold something. Awaiting the check first
+  // would stall the menu behind it on every right-click.
   pasteMeshSection.style.display = 'none';
   const token = ++menuToken;
-  clipboardHasText().then((has) => {
+  clipboardMayHaveText().then((has) => {
     if (!has || token !== menuToken || addPointMenu.style.display === 'none') return;
     pasteMeshSection.style.display = 'flex';
   });
@@ -2479,14 +2480,36 @@ function hideAddPointMenu() {
   pendingAdd = null;
 }
 
-// True when the clipboard holds any non-whitespace text. Whether that text is
-// actually a mesh is left to import time, which reports a specific reason --
-// probing that hard here would mean parsing on every right-click.
-async function clipboardHasText() {
+// Whether to offer "From clipboard" at all.
+//
+// The obvious implementation -- just readText() and see -- is wrong, because
+// an ungranted read pops the browser's own native "Paste" confirmation
+// bubble. Doing that merely because someone opened a context menu means a
+// system popup they never asked for, layered over ours, on EVERY right-click;
+// and since the real paste reads again, they get a second one. So consult the
+// permission first, which is silent:
+//
+//   granted -> reading is silent, so probe properly and only offer the option
+//              when there is really something there.
+//   denied  -> the paste could never work, so omit it.
+//   prompt  -> offer it unprobed. The single read then happens on the click
+//              that actually asks to paste, where a confirmation is expected,
+//              and an empty clipboard is reported gracefully by parseMeshJSON.
+//
+// Whether the text is actually a mesh is left to import time either way, which
+// reports a specific reason -- probing that hard here would mean parsing on
+// every right-click.
+async function clipboardMayHaveText() {
+  if (!navigator.clipboard?.readText) return false;
+  let state = 'prompt';
   try {
-    if (!navigator.clipboard?.readText) return false;
+    state = (await navigator.permissions.query({ name: 'clipboard-read' })).state;
+  } catch { state = 'prompt'; }   // no Permissions API, or the name is unknown (Firefox)
+  if (state === 'denied') return false;
+  if (state !== 'granted') return true;
+  try {
     return !!(await navigator.clipboard.readText()).trim();
-  } catch { return false; }   // denied or unavailable: just omit the option
+  } catch { return false; }
 }
 
 // The right mouse button's own 'contextmenu' event fires *after* mousedown,
@@ -2945,6 +2968,21 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.download = (track.name || 'track').replace(/[^\w.-]+/g, '_') + '.json';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('exportUsdBtn').addEventListener('click', () => {
+  assertNoStaleSeams();
+  try {
+    const usda = exportTrackToUSDA(track, { TrackCore, crossSectionSegments: DEFAULT_USD_CROSS_SECTION_SEGMENTS });
+    const blob = new Blob([usda], { type: 'model/vnd.usda' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = sanitizeFileStem(track.name, 'track') + '.usda';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (err) {
+    alert('Could not export USD: ' + (err.message || err));
+  }
 });
 document.getElementById('joinBtn').addEventListener('click', performJoin);
 document.getElementById('deleteCurveBtn').addEventListener('click', deleteSelectedCurve);
