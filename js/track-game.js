@@ -4,10 +4,10 @@ import * as TrackMesh from './track-mesh.js';
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x02040a);
-scene.fog = new THREE.Fog(0x02040a, 60, 220);
+scene.fog = new THREE.Fog(0x02040a, 120, 440);
 
 const camera = new THREE.PerspectiveCamera(
-  65, window.innerWidth / window.innerHeight, 0.1, 1000
+  65, window.innerWidth / window.innerHeight, 0.2, 2000
 );
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -441,9 +441,9 @@ function meshRegionAt(x, z, shipY) {
 
 // A surface more than this far ABOVE the ship is treated as overhead geometry
 // rather than something to snap up onto.
-const SURFACE_SNAP_UP = 1.5;
+const SURFACE_SNAP_UP = 3;
 // How far below the lowest drivable surface counts as "fallen off for good".
-const RESPAWN_FALL_DEPTH = 50;
+const RESPAWN_FALL_DEPTH = 100;
 
 // Project a horizontal position onto a corridor sample's cross-section,
 // returning the lateral offset `s` and the drivable range bounded by the
@@ -461,7 +461,7 @@ function projectToSurface(sample, px, pz) {
 // How far along the tangent a point may sit from its sampled centerline frame
 // and still count as "over the ribbon". Generous relative to the spacing
 // between baked samples, but far smaller than any real gap.
-const CORRIDOR_ALONG_TOL = 4;
+const CORRIDOR_ALONG_TOL = 8;
 
 /* Is X/Z genuinely over a corridor sample's drivable surface?
  *
@@ -534,6 +534,13 @@ function curvedSurfaceFrame(sample, s) {
   return { pos, normal };
 }
 
+// How far past a centerline segment's own extent a point may sit and still
+// count as being "over" that segment. A perpendicular projection lands exactly
+// on the segment, so this only ever admits float noise at a shared sample
+// point; anything beyond belongs to a neighbouring segment, or to no segment at
+// all (which is what running off an open end means).
+const SEGMENT_ALONG_TOL = 0.5;
+
 function sampleTrack(x, z) {
   let fallback = { path: paths[0], a: 0, b: 1, t: 0, d: Infinity };
   let bestUnder = null;
@@ -582,7 +589,19 @@ function sampleTrack(x, z) {
             ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
         }
       }
-      if (!wouldOffEnd && lateral >= loS && lateral <= hiS && (!bestUnder || d < bestUnder.d)) bestUnder = { path, a: i, b: j, t, d };
+      // Being within the lateral bounds is not the same as being OVER this
+      // segment. `t` is clamped to [0,1], so a point beyond a segment's end
+      // projects onto that end and reports the lateral offset of the endpoint
+      // -- which on a straight run down the middle of a road is 0 for every
+      // segment on the path, however far away. Left unchecked, a point off the
+      // open END of a curve is claimed by some far-back segment, so `best` is
+      // never the terminal segment and offEnd below can never fire: the ship
+      // gets reprojected backwards instead of launching off the end. Require
+      // the projection to be a genuine perpendicular foot, which it is exactly
+      // when `t` did not clamp.
+      const alongSeg = segLen2 > 0 ? ((x - px) * sx + (z - pz) * sz) / Math.sqrt(segLen2) : 0;
+      const overSegment = Math.abs(alongSeg) <= SEGMENT_ALONG_TOL;
+      if (overSegment && !wouldOffEnd && lateral >= loS && lateral <= hiS && (!bestUnder || d < bestUnder.d)) bestUnder = { path, a: i, b: j, t, d };
     }
   }
   const best = bestUnder || fallback;
@@ -618,14 +637,14 @@ function sampleTrack(x, z) {
 
 // ---------- Player vehicle ----------
 const shipGroup = new THREE.Group();
-const bodyGeo = new THREE.BoxGeometry(1.2, 0.4, 2.0);
+const bodyGeo = new THREE.BoxGeometry(2.4, 0.8, 4.0);
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd85f14, metalness: 0.35, roughness: 0.4, emissive: 0x331400, emissiveIntensity: 0.15, flatShading: true });
 const body = new THREE.Mesh(bodyGeo, bodyMat);
 body.position.y = 0.3;
 shipGroup.add(body);
 
 // nose accent so orientation is obvious
-const noseGeo = new THREE.ConeGeometry(0.35, 0.8, 4);
+const noseGeo = new THREE.ConeGeometry(0.7, 1.6, 4);
 const noseMat = new THREE.MeshStandardMaterial({ color: 0x00a8cc, emissive: 0x004866, emissiveIntensity: 0.25, flatShading: true });
 const nose = new THREE.Mesh(noseGeo, noseMat);
 nose.rotation.x = Math.PI / 2;
@@ -676,7 +695,7 @@ function resetShip() {
   // Centre of the track, following the actual cross-section geometry if enabled.
   const startSurface = curvedSurfaceFrame(s, 0);
   physics.groundPos.set(s.pos.x, startSurface.pos.y, s.pos.z);
-  shipGroup.position.copy(startSurface.pos).addScaledVector(startSurface.normal, 0.5);
+  shipGroup.position.copy(startSurface.pos).addScaledVector(startSurface.normal, 1);
   let heading = Math.atan2(s.tangent.x, s.tangent.z);
   if (trackStart.reverse) heading += Math.PI;
   physics.heading = heading;
@@ -729,11 +748,11 @@ const physics = {
   heading: 0,        // facing direction (radians) — set by resetShip()
   velocityAngle: 0,  // direction the vehicle is actually moving
   speed: 0,                // signed scalar speed (units/sec)
-  maxSpeed: 34,
-  maxReverse: -12,
-  accel: 26,
-  brakeDecel: 42,
-  friction: 20,      // decel when neither throttle nor brake held -- stops quickly when let go
+  maxSpeed: 68,
+  maxReverse: -24,
+  accel: 52,
+  brakeDecel: 84,
+  friction: 40,      // decel when neither throttle nor brake held -- stops quickly when let go
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
   bobTime: 0,
@@ -758,7 +777,7 @@ const physics = {
   visualUp: new THREE.Vector3(0, 1, 0),
   airborne: false,
   verticalVel: 0,
-  gravity: 30,
+  gravity: 60,
   landingBounce: 0,
   landingBounceVel: 0
 };
@@ -848,8 +867,8 @@ function updatePhysics(dt) {
       const impactSpeed = Math.max(0, -physics.verticalVel);
       physics.airborne = false;
       physics.verticalVel = 0;
-      physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
-      physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
+      physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
+      physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
       physics.groundPos.set(px, landing.region.elevation, pz);
       surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
       surfaceNormal = UP;
@@ -862,8 +881,8 @@ function updatePhysics(dt) {
         const impactSpeed = Math.max(0, -physics.verticalVel);
         physics.airborne = false;
         physics.verticalVel = 0;
-        physics.landingBounce += Math.min(1.6, impactSpeed * 0.09);
-        physics.landingBounceVel += Math.min(8, impactSpeed * 0.35);
+        physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
+        physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
         physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
@@ -990,7 +1009,7 @@ function updatePhysics(dt) {
     return;
   }
 
-  const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.08;
+  const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.16;
   const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
   if (renderDelta > expectedStep) {
     physics.visualGroundPos.lerp(surfaceRenderPos, Math.min(1, dt * 18));
@@ -1009,7 +1028,7 @@ function updatePhysics(dt) {
   }
 
   physics.bobTime += dt;
-  const hover = 0.5 + Math.sin(physics.bobTime * 6) * 0.03 + physics.landingBounce;
+  const hover = 1 + Math.sin(physics.bobTime * 6) * 0.06 + physics.landingBounce;
   shipGroup.position.set(
     physics.visualGroundPos.x + physics.visualUp.x * hover,
     physics.visualGroundPos.y + physics.visualUp.y * hover,
@@ -1039,13 +1058,13 @@ function updatePhysics(dt) {
   );
 
   // HUD
-  const kmh = Math.round(Math.abs(physics.speed) * 9);
+  const kmh = Math.round(Math.abs(physics.speed) * 4.5);
   document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>';
 }
 
 // ---------- Chase camera (rigidly fixed behind and above the ship) ----------
-const CAM_BACK = 6.5;   // distance behind the ship
-const CAM_UP = 3.2;     // height above the ship
+const CAM_BACK = 13;    // distance behind the ship
+const CAM_UP = 6.4;     // height above the ship
 function updateCamera(dt) {
   // Use the ship's own orthonormal (forward, up) basis -- the same one its
   // quaternion was built from -- rather than a flat heading-only forward.
@@ -1056,14 +1075,14 @@ function updateCamera(dt) {
   // offset. Setting camera.up to the track's own up keeps the camera locked
   // directly behind/above the ship at any roll, including past 90 degrees.
   const up = physics.up, fwd = physics.forward;
-  const base = physics.visualGroundPos.clone().addScaledVector(up, 0.5);
+  const base = physics.visualGroundPos.clone().addScaledVector(up, 1);
   camera.up.copy(up);
   camera.position.copy(base)
     .addScaledVector(fwd, -CAM_BACK)
     .addScaledVector(up, CAM_UP);
   const lookAt = base.clone()
-    .addScaledVector(fwd, 6)
-    .addScaledVector(up, 0.8);
+    .addScaledVector(fwd, 12)
+    .addScaledVector(up, 1.6);
   camera.lookAt(lookAt);
 }
 

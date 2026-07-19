@@ -102,7 +102,7 @@ await visit('track.html loads and builds a mesh region', 'track.html', async (pa
   await page.evaluate((mesh) => {
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
     t.meshAssets = { pad: { name: 'pad', railHeight: 3, mesh: JSON.parse(mesh) } };
-    t.meshes = [{ id: 'm1', asset: 'pad', x: 60, z: 0, rotation: 0, elevation: 0 }];
+    t.meshes = [{ id: 'm1', asset: 'pad', x: 600, z: 0, rotation: 0, elevation: 0 }];
     localStorage.setItem('web3d.currentTrack', window.TrackCore.serializeTrack(t));
   }, meshFile);
   await page.reload({ waitUntil: 'networkidle' });
@@ -122,7 +122,7 @@ await visit('game: drives on a mesh region and is stopped by rails', 'track.html
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
     t.meshAssets = { pad: { name: 'pad', railHeight: 3, mesh: m } };
     // Far from the ribbon so the corridor cannot claim the ship.
-    t.meshes = [{ id: 'm1', asset: 'pad', x: 300, z: 0, rotation: 0, elevation: 5 }];
+    t.meshes = [{ id: 'm1', asset: 'pad', x: 600, z: 0, rotation: 0, elevation: 5 }];
     localStorage.setItem('web3d.currentTrack', window.TrackCore.serializeTrack(t));
   }, meshFile);
   await page.reload({ waitUntil: 'networkidle' });
@@ -134,7 +134,7 @@ await visit('game: drives on a mesh region and is stopped by rails', 'track.html
   // Drop the ship in the middle of the pad heading toward the south rail (-Z).
   await page.evaluate(() => {
     const p = window.__game.physics;
-    p.groundPos.set(305, 5, 5);
+    p.groundPos.set(605, 5, 5);
     p.airborne = false; p.verticalVel = 0;
     p.heading = Math.PI; p.velocityAngle = Math.PI; p.speed = 60;
   });
@@ -153,7 +153,7 @@ await visit('game: drives on a mesh region and is stopped by rails', 'track.html
   if (after.airborne) throw new Error('ship fell off a RAILED pad: ' + JSON.stringify(after));
   if (Math.abs(after.y - 5) > 1e-6) throw new Error('ship left the flat surface, y=' + after.y);
   if (after.z < 0.5) throw new Error('ship pushed through the south rail, z=' + after.z);
-  if (after.z > 2) throw new Error('ship never reached the rail, z=' + after.z);
+  if (after.z > 4) throw new Error('ship never reached the rail, z=' + after.z);
   return `held at y=${after.y.toFixed(2)}, z=${after.z.toFixed(2)} (rail stopped it)`;
 });
 
@@ -163,7 +163,7 @@ await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', as
   await page.evaluate((mesh) => {
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
     t.meshAssets = { pad: { name: 'pad', railHeight: 3, mesh: JSON.parse(mesh) } };
-    t.meshes = [{ id: 'm1', asset: 'pad', x: 300, z: 0, rotation: 0, elevation: 5 }];
+    t.meshes = [{ id: 'm1', asset: 'pad', x: 600, z: 0, rotation: 0, elevation: 5 }];
     localStorage.setItem('web3d.currentTrack', window.TrackCore.serializeTrack(t));
   }, meshFile);
   await page.reload({ waitUntil: 'networkidle' });
@@ -174,7 +174,7 @@ await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', as
 
   await page.evaluate(() => {
     const p = window.__game.physics;
-    p.groundPos.set(305, 5, 5);
+    p.groundPos.set(605, 5, 5);
     p.airborne = false; p.verticalVel = 0;
     p.heading = Math.PI; p.velocityAngle = Math.PI; p.speed = 60;
   });
@@ -199,7 +199,7 @@ await visit('game: a hole in a mesh region is not drivable', 'track.html', async
     for (const e of m.edges) e.attributes = { rail: true };
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
     t.meshAssets = { pad: { name: 'pad', railHeight: 3, mesh: m } };
-    t.meshes = [{ id: 'm1', asset: 'pad', x: 300, z: 0, rotation: 0, elevation: 5 }];
+    t.meshes = [{ id: 'm1', asset: 'pad', x: 600, z: 0, rotation: 0, elevation: 5 }];
     localStorage.setItem('web3d.currentTrack', window.TrackCore.serializeTrack(t));
   }, meshFile);
   await page.reload({ waitUntil: 'networkidle' });
@@ -215,7 +215,7 @@ await visit('game: a hole in a mesh region is not drivable', 'track.html', async
   });
   const supported = await page.evaluate(() => {
     const p = window.__game.physics;
-    p.groundPos.set(305, 5, 5); p.airborne = false; p.verticalVel = 0; p.speed = 0;
+    p.groundPos.set(605, 5, 5); p.airborne = false; p.verticalVel = 0; p.speed = 0;
     return true;
   });
   await page.waitForTimeout(300);
@@ -224,7 +224,7 @@ await visit('game: a hole in a mesh region is not drivable', 'track.html', async
 
   await page.evaluate(() => {
     const p = window.__game.physics;
-    p.groundPos.set(315, 5, 15); p.airborne = false; p.verticalVel = 0; p.speed = 0;
+    p.groundPos.set(615, 5, 15); p.airborne = false; p.verticalVel = 0; p.speed = 0;
   });
   await page.waitForTimeout(500);
   const overHole = await page.evaluate(() => window.__game.physics.groundPos.y);
@@ -267,9 +267,88 @@ await visit('regression: mesh-free track still drives normally', 'track.html', a
   if (end.speed < 10) throw new Error('ship did not accelerate, speed=' + end.speed);
   const travelled = Math.hypot(end.x - start.x, end.z - start.z);
   if (travelled < 20) throw new Error('ship barely moved, travelled=' + travelled.toFixed(1));
-  // DEFAULT_TRACK spans roughly +/-95; anything far outside means it flew off.
-  if (Math.hypot(end.x, end.z) > 140) throw new Error('ship left the track area: ' + JSON.stringify(end));
-  return `lapped ${travelled.toFixed(0)}u at ${end.speed.toFixed(0)} km/h, never airborne`;
+  // DEFAULT_TRACK spans roughly +/-190 at schema-5 scale; far outside means it flew off.
+  if (Math.hypot(end.x, end.z) > 320) throw new Error('ship left the track area: ' + JSON.stringify(end));
+  // "Keep the feel" means the HUD readout is unchanged by the unit rescale:
+  // raw speed doubled, so its display factor was halved to compensate.
+  // Read both in one evaluate: sampling them separately skews while decelerating.
+  const { kmh, raw } = await page.evaluate(() => ({
+    kmh: parseInt(document.getElementById('speed').textContent, 10),
+    raw: Math.abs(window.__game.physics.speed)
+  }));
+  const expected = Math.round(raw * 4.5);
+  if (Math.abs(kmh - expected) > 2) throw new Error(`HUD ${kmh} != expected ${expected} for raw ${raw}`);
+  return `lapped ${travelled.toFixed(0)}u at ${end.speed.toFixed(0)} u/s, HUD ${kmh} km/h, never airborne`;
+});
+
+
+// An OPEN curve's end must launch the ship ballistically. Regression test for a
+// bug where lateral-only containment let a far-back segment claim a point that
+// was past the end, so `best` was never the terminal segment, offEnd never
+// fired, and the ship was reprojected backwards instead of flying off.
+const openTrack = {
+  version: 5, name: 'Open Straight',
+  start: { path: 0, point: 0, reverse: false },
+  disjointSeams: [], junctions: [], meshAssets: {}, meshes: [],
+  paths: [{
+    id: 'p1', closed: false,
+    points: [
+      { type: 'position', id: 'a', pos: [0, 0, -200], weight: 1 },
+      { type: 'position', id: 'b', pos: [0, 0, -100], weight: 1 },
+      { type: 'position', id: 'c', pos: [0, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [0, 0, 100], weight: 1 },
+      { type: 'position', id: 'e', pos: [0, 0, 200], weight: 1 },
+      { type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 },
+      { type: 'width', t: 0, width: 24 }, { type: 'width', t: 1, width: 24 }
+    ]
+  }]
+};
+
+async function driveOffEnd(page, { fromZ, heading, expectBeyond }) {
+  await page.evaluate(({ fromZ, heading }) => {
+    const p = window.__game.physics;
+    p.groundPos.set(0, 0, fromZ);
+    p.airborne = false; p.verticalVel = 0; p.landingBounce = 0; p.landingBounceVel = 0;
+    p.heading = heading; p.velocityAngle = heading; p.speed = 60;
+  }, { fromZ, heading });
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
+  let launched = false, maxReach = fromZ;
+  for (let i = 0; i < 14 && !launched; i++) {
+    await page.waitForTimeout(120);
+    const st = await page.evaluate(() => {
+      const p = window.__game.physics;
+      return { air: p.airborne, z: p.groundPos.z, y: p.groundPos.y };
+    });
+    maxReach = expectBeyond > 0 ? Math.max(maxReach, st.z) : Math.min(maxReach, st.z);
+    if (st.air) launched = true;
+  }
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+  return { launched, maxReach };
+}
+
+await visit('game: a ship can fly off the end of an open curve', 'track.html', async (page) => {
+  await page.evaluate((t) => localStorage.setItem('web3d.currentTrack', JSON.stringify(t)), openTrack);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(700);
+
+  const far = await driveOffEnd(page, { fromZ: 170, heading: 0, expectBeyond: 1 });
+  if (!far.launched) throw new Error(`ship never left the far end (reached z=${far.maxReach.toFixed(1)} of 200)`);
+
+  // And it must keep going, not be snapped back onto the ribbon.
+  await page.waitForTimeout(700);
+  const after = await page.evaluate(() => {
+    const p = window.__game.physics;
+    return { air: p.airborne, z: p.groundPos.z, y: p.groundPos.y };
+  });
+  if (!after.air) throw new Error('ship was recaptured by the track after leaving');
+  if (after.z <= 200) throw new Error('ship did not travel past the end, z=' + after.z);
+  if (after.y >= 0) throw new Error('ship is not falling, y=' + after.y);
+
+  // The START end must launch too (driving backwards off point `a`).
+  const near = await driveOffEnd(page, { fromZ: -170, heading: Math.PI, expectBeyond: -1 });
+  if (!near.launched) throw new Error(`ship never left the start end (reached z=${near.maxReach.toFixed(1)} of -200)`);
+
+  return `launched off both ends, then fell to y=${after.y.toFixed(1)} at z=${after.z.toFixed(0)}`;
 });
 
 await browser.close();

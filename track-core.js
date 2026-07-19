@@ -60,8 +60,16 @@
   const DEG2RAD = Math.PI / 180;
   const DEFAULT_CROSS_SECTION_CURVATURE = 0;
   const DEFAULT_CROSS_SECTION_TIGHTNESS = 1;
-  const COLLISION_WALL_MARGIN = 0.9;
-  const DEFAULT_RAIL_HEIGHT = 3;
+  const COLLISION_WALL_MARGIN = 1.8;
+  const DEFAULT_RAIL_HEIGHT = 6;
+  const DEFAULT_WIDTH = 24;
+  // Schema 5 doubled the world's unit scale: every length in a track (control
+  // point positions, widths, elevations, mesh geometry) is twice what the same
+  // track measured under schema 4, and the game's ship, speeds and gravity were
+  // scaled to match. Nothing about how a track looks or drives changed -- only
+  // the absolute units. Older files are converted once, on load.
+  const TRACK_SCHEMA_VERSION = 5;
+  const LEGACY_UNIT_SCALE = 2;
   const finiteOr = (n, fallback, min) => {
     if (typeof n !== 'number' || !isFinite(n)) return fallback;
     return typeof min === 'number' ? Math.max(min, n) : n;
@@ -204,7 +212,7 @@
     const cpVec = controlPoints.map(c => ({ x: c.pos[0], y: c.pos[1], z: c.pos[2] }));
     const cpW = controlPoints.map(c => (c.weight == null ? 1 : c.weight));
     const rp = (rollPoints && rollPoints.length >= 1) ? rollPoints : [{ t: 0, roll: 0 }, { t: 1, roll: 0 }];
-    const wp = (widthPoints && widthPoints.length >= 1) ? widthPoints : [{ t: 0, width: 12 }, { t: 1, width: 12 }];
+    const wp = (widthPoints && widthPoints.length >= 1) ? widthPoints : [{ t: 0, width: DEFAULT_WIDTH }, { t: 1, width: DEFAULT_WIDTH }];
     const xp = (crossSectionPoints && crossSectionPoints.length >= 1) ? crossSectionPoints : [{ t: 0, curvature: 0, tightness: 1 }, { t: 1, curvature: 0, tightness: 1 }];
     const gMax = (closed ? CP_N : CP_N - 1) || 1;
     const wrap = closed
@@ -688,7 +696,7 @@
   }
   function normalizeWidthPoint(wp) {
     const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
-    return { type: 'width', t: Math.max(0, Math.min(1, num(wp && wp.t, 0))), width: Math.max(1, num(wp && wp.width, 12)) };
+    return { type: 'width', t: Math.max(0, Math.min(1, num(wp && wp.t, 0))), width: Math.max(1, num(wp && wp.width, DEFAULT_WIDTH)) };
   }
   function normalizeCrossSectionPoint(xp) {
     const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
@@ -714,12 +722,12 @@
   }
   function defaultWidthPoints(rawPoints, closed) {
     const n = rawPoints.length;
-    if (n === 0) return [{ type: 'width', t: 0, width: 12 }, { type: 'width', t: closed ? 0.5 : 1, width: 12 }];
+    if (n === 0) return [{ type: 'width', t: 0, width: DEFAULT_WIDTH }, { type: 'width', t: closed ? 0.5 : 1, width: DEFAULT_WIDTH }];
     const denom = closed ? n : Math.max(1, n - 1);
     return rawPoints.map((p, i) => ({
       type: 'width',
       t: closed ? i / n : i / denom,
-      width: (p && typeof p.width === 'number') ? Math.max(1, p.width) : 12
+      width: (p && typeof p.width === 'number') ? Math.max(1, p.width) : DEFAULT_WIDTH
     }));
   }
 
@@ -742,7 +750,7 @@
       if (posCount < 4) throw new Error('path ' + i + ': a track path needs at least 4 position control points');
       const endT = closed ? 0.5 : 1;
       if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 });
-      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: 12 }, { type: 'width', t: endT, width: 12 });
+      if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: DEFAULT_WIDTH }, { type: 'width', t: endT, width: DEFAULT_WIDTH });
       if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: endT, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
       return { id: rawPath.id || null, closed, points };
     }
@@ -846,11 +854,72 @@
     return out;
   }
 
+  /* Multiply every LENGTH in a raw (just-parsed) track by `k`, in place.
+   *
+   * Only lengths scale. Angles (roll), curve parameters (t), NURBS weights,
+   * cross-section curvature (dimensionless) and tightness (an exponent) are
+   * scale-invariant -- scaling any of them would change a track's shape rather
+   * than its size.
+   *
+   * This runs on the RAW data, before normalization, on purpose. Normalization
+   * injects defaults (widths, rail heights) that are already expressed in
+   * current units; scaling afterwards would double those too and silently widen
+   * every old track that never authored an explicit width.
+   *
+   * Every schema variant stores a control point as { pos: [x, y, z] }, so one
+   * point-shaped scaler covers the modern `points` array and all the legacy
+   * controlPoints/widthPoints/bare-array forms.
+   */
+  function scaleRawTrackData(data, k) {
+    if (!data || k === 1) return data;
+    const scalePoint = p => {
+      if (!p || typeof p !== 'object') return;
+      if (Array.isArray(p.pos) && p.pos.length === 3 && p.pos.every(n => typeof n === 'number')) {
+        p.pos = [p.pos[0] * k, p.pos[1] * k, p.pos[2] * k];
+      }
+      if (typeof p.width === 'number') p.width *= k;
+    };
+    const scaleList = list => { if (Array.isArray(list)) list.forEach(scalePoint); };
+
+    if (Array.isArray(data)) { scaleList(data); return data; }   // bare legacy array of points
+    scaleList(data.controlPoints);
+    scaleList(data.widthPoints);
+    for (const rawPath of (Array.isArray(data.paths) ? data.paths : [])) {
+      if (Array.isArray(rawPath)) { scaleList(rawPath); continue; }
+      if (!rawPath || typeof rawPath !== 'object') continue;
+      scaleList(rawPath.points);
+      scaleList(rawPath.controlPoints);
+      scaleList(rawPath.widthPoints);
+    }
+    for (const entry of Object.values(data.meshAssets || {})) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.railHeight === 'number') entry.railHeight *= k;
+      const mesh = entry.mesh && typeof entry.mesh === 'object' ? entry.mesh : entry;
+      for (const v of (Array.isArray(mesh.vertices) ? mesh.vertices : [])) {
+        if (!v || !v.position) continue;
+        v.position = { x: (v.position.x || 0) * k, y: (v.position.y || 0) * k };
+      }
+    }
+    for (const m of (Array.isArray(data.meshes) ? data.meshes : [])) {
+      if (!m || typeof m !== 'object') continue;
+      if (typeof m.x === 'number') m.x *= k;
+      if (typeof m.z === 'number') m.z *= k;
+      if (typeof m.elevation === 'number') m.elevation *= k;
+      // rotation is an angle -- unchanged.
+    }
+    return data;
+  }
+
   // Accepts either the current { paths: [{closed, points}, ...] } schema, the
   // pre-refactor three-array schema, or the legacy single-closed-loop
   // { controlPoints: [...] } schema (see normalizePath).
   function parseTrack(text) {
     const data = JSON.parse(text);
+    // One-time unit migration: anything written before schema 5 is in the old
+    // half-size units. Converting up front means every consumer downstream sees
+    // a single unit system, with no runtime scale factor anywhere.
+    const sourceVersion = (!Array.isArray(data) && data && data.version) || 3;
+    if (sourceVersion < TRACK_SCHEMA_VERSION) scaleRawTrackData(data, LEGACY_UNIT_SCALE);
     let rawPaths;
     if (Array.isArray(data)) rawPaths = [{ closed: true, controlPoints: data }];
     else if (Array.isArray(data.paths)) rawPaths = data.paths;
@@ -890,7 +959,7 @@
       .map(normalizeMeshPlacement)
       .filter(m => m && Object.prototype.hasOwnProperty.call(meshAssets, m.asset));
     return {
-      version: (data && data.version) || 3,
+      version: TRACK_SCHEMA_VERSION,
       name: (data && data.name) || 'Untitled Track',
       samples: (data && data.samples) || N_DEFAULT,
       paths,
@@ -925,7 +994,7 @@
       .map(id => '    ' + JSON.stringify(id) + ': ' + JSON.stringify(assets[id]))
       .join(',\n');
     return '{\n' +
-      '  "version": 4,\n' +
+      '  "version": ' + TRACK_SCHEMA_VERSION + ',\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
@@ -938,7 +1007,7 @@
 
   // --- built-in tracks --------------------------------------------------------
   const DEFAULT_TRACK = {
-    version: 2,
+    version: TRACK_SCHEMA_VERSION,
     name: 'Default Circuit',
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
@@ -948,16 +1017,16 @@
     paths: [{
       closed: true,
       points: [
-        { type: 'position', pos: [90, 0, 0], weight: 1 },
-        { type: 'position', pos: [70, 4, 46], weight: 1 },
-        { type: 'position', pos: [18, 8, 60], weight: 1 },
-        { type: 'position', pos: [-34, 5, 54], weight: 1 },
-        { type: 'position', pos: [-74, 0, 30], weight: 1 },
-        { type: 'position', pos: [-92, -4, -6], weight: 1 },
-        { type: 'position', pos: [-66, -3, -40], weight: 1 },
-        { type: 'position', pos: [-16, 1, -56], weight: 1 },
-        { type: 'position', pos: [40, 3, -48], weight: 1 },
-        { type: 'position', pos: [80, 1, -22], weight: 1 },
+        { type: 'position', pos: [180, 0, 0], weight: 1 },
+        { type: 'position', pos: [140, 8, 92], weight: 1 },
+        { type: 'position', pos: [36, 16, 120], weight: 1 },
+        { type: 'position', pos: [-68, 10, 108], weight: 1 },
+        { type: 'position', pos: [-148, 0, 60], weight: 1 },
+        { type: 'position', pos: [-184, -8, -12], weight: 1 },
+        { type: 'position', pos: [-132, -6, -80], weight: 1 },
+        { type: 'position', pos: [-32, 2, -112], weight: 1 },
+        { type: 'position', pos: [80, 6, -96], weight: 1 },
+        { type: 'position', pos: [160, 2, -44], weight: 1 },
         { type: 'roll', t: 0.0, roll: 0 },
         { type: 'roll', t: 0.1, roll: -14 },
         { type: 'roll', t: 0.2, roll: -22 },
@@ -968,16 +1037,16 @@
         { type: 'roll', t: 0.7, roll: 8 },
         { type: 'roll', t: 0.8, roll: -12 },
         { type: 'roll', t: 0.9, roll: -6 },
-        { type: 'width', t: 0.0, width: 22 },
-        { type: 'width', t: 0.1, width: 18 },
-        { type: 'width', t: 0.2, width: 14 },
-        { type: 'width', t: 0.3, width: 13 },
-        { type: 'width', t: 0.4, width: 16 },
-        { type: 'width', t: 0.5, width: 12 },
-        { type: 'width', t: 0.6, width: 12 },
-        { type: 'width', t: 0.7, width: 20 },
-        { type: 'width', t: 0.8, width: 24 },
-        { type: 'width', t: 0.9, width: 22 },
+        { type: 'width', t: 0.0, width: 44 },
+        { type: 'width', t: 0.1, width: 36 },
+        { type: 'width', t: 0.2, width: 28 },
+        { type: 'width', t: 0.3, width: 26 },
+        { type: 'width', t: 0.4, width: 32 },
+        { type: 'width', t: 0.5, width: 24 },
+        { type: 'width', t: 0.6, width: 24 },
+        { type: 'width', t: 0.7, width: 40 },
+        { type: 'width', t: 0.8, width: 48 },
+        { type: 'width', t: 0.9, width: 44 },
         { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
         { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
       ]
@@ -985,7 +1054,7 @@
   };
 
   const STARTER_TRACK = {
-    version: 2,
+    version: TRACK_SCHEMA_VERSION,
     name: 'New Track',
     start: { path: 0, point: 0, reverse: false },
     disjointSeams: [],
@@ -995,14 +1064,14 @@
     paths: [{
       closed: true,
       points: [
-        { type: 'position', pos: [40, 0, 0], weight: 1 },
-        { type: 'position', pos: [0, 0, 40], weight: 1 },
-        { type: 'position', pos: [-40, 0, 0], weight: 1 },
-        { type: 'position', pos: [0, 0, -40], weight: 1 },
+        { type: 'position', pos: [80, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, 80], weight: 1 },
+        { type: 'position', pos: [-80, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, -80], weight: 1 },
         { type: 'roll', t: 0, roll: 0 },
         { type: 'roll', t: 0.5, roll: 0 },
-        { type: 'width', t: 0, width: 18 },
-        { type: 'width', t: 0.5, width: 18 },
+        { type: 'width', t: 0, width: 36 },
+        { type: 'width', t: 0.5, width: 36 },
         { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
         { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
       ]

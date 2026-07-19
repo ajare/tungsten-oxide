@@ -55,7 +55,7 @@ Both `js/track-game.js` (3D mesh/physics) and `js/editor.js` (2D authoring UI) b
 
 ## Architecture: mesh regions (`js/track-mesh.js`)
 
-Flat, drivable areas imported from the geometry-js editor — plazas, junction pads, arenas — for shapes a swept spline ribbon cannot express. Schema 4 adds:
+Flat, drivable areas imported from the geometry-js editor — plazas, junction pads, arenas — for shapes a swept spline ribbon cannot express. Introduced in schema 4:
 
 ```
 meshAssets: { <assetId>: { name, railHeight, mesh } }   // mesh = pristine geometry-js JSON
@@ -66,21 +66,43 @@ Design rules, all of which the code depends on:
 
 - **Assets are geometry, placements are transforms.** A placement is rigid: X/Z translation, yaw rotation, and one `elevation`. There is no scale, and a region is always horizontal (normal `+Y`, no banking or cross-section). Because the transform is rigid, **a triangulation computed in asset space stays valid for every placement** — assets are triangulated once, never per frame.
 - **Rail flags live on the asset**, as `attributes.rail` on geometry-js edges, so every placement of a shape is railed identically. Need different railing? Import the file again — imports always mint a new asset id (`pad`, `pad-2`), never disturbing existing placements.
+- **Two import routes, one code path.** `parseMeshJSON()` validates and returns `{ mesh }` or `{ error }` without ever throwing or touching `track`, so a bad paste is reported before anything is mutated; `addMeshAsset(mesh, name, at)` then mints the asset and placement. File import (`Import Mesh`) centres the region on the view so an asset authored far from `(0,0)` still lands somewhere visible; clipboard import (`Paste Mesh`) places it at the world origin, preserving authored coordinates. `navigator.clipboard` needs a secure context, so the paste path degrades to an alert pointing at the file route. The Edit-mode right-click menu offers a third entry point, centring the region on the click; it opens *immediately* with the paste option hidden and reveals it only once an async `clipboardHasText()` resolves, since awaiting a clipboard read first would stall the menu behind a permission prompt on every right-click. A `menuToken` guards against a slow read from an already-dismissed menu revealing the option on a later one.
+- **Import rails every rim edge** (`TrackMesh.railBoundaryEdges`), so a fresh region is enclosed and drivable immediately; you unrail edges to open ledges. "Rim" means `edge.polygons.size === 1` — an edge owned by two polygons is an interior seam you drive across, and railing it would wall a region down the middle. Hole rims are owned by the one polygon holding the hole, so they count as rim and an imported hole starts as a walled pillar rather than a pit.
 - **A railed edge is a solid, finite-height wall**; an unflagged boundary edge is a **ledge** you drive off into the existing ballistic code. Holes follow exactly the same rules, so a bare hole is a pit you fall through.
 - **Rails are collision everywhere now.** `G` is a pure rendering toggle and never changes what stops the ship.
 - **Surface precedence is nearest-in-Y**, not simple containment. `surfaceOwnerAt()` picks whichever of the mesh region and the spline corridor sits closer to the ship's current Y, which is what lets a mesh flyover pass over a ribbon without hijacking the ship underneath.
 - **`corridorContains()` is the real containment test, not `projectToSurface()`.** `projectToSurface` returns only a *lateral* offset `s`; a point far off the *end* of a segment projects onto that segment's clamped endpoint and reports a small, in-range `s` while being hundreds of units away. Ignoring this teleports the ship onto a distant ribbon when it leaves a mesh ledge. Always pair the lateral bounds with the along-tangent check.
 
+### Lateral offset is not containment — the recurring trap
+
+This has now caused two separate bugs, so it is worth stating as a rule: **anywhere you test whether a point is "on" a piece of track, a lateral/`s` bound alone is wrong.** Because `t` is clamped to `[0,1]`, a point beyond a segment's end projects *onto that end* and inherits its lateral offset — which, for a ship running down the middle of a straight road, is `0` for every segment on the path no matter how distant.
+
+Two places guard against it, and both are load-bearing:
+
+- `SEGMENT_ALONG_TOL` in `sampleTrack()`'s `bestUnder` test. Without it, a point past an **open curve's end** is claimed by a far-back segment, so `best` is never the terminal segment, `offEnd` can never fire, and the ship is reprojected backwards instead of launching off the end — it becomes impossible to leave a curve. Covered by a browser test that verifies both ends.
+- `CORRIDOR_ALONG_TOL` in `corridorContains()`, for the mesh-exit and airborne-landing paths.
+
 Physics on a region is genuinely different code from the corridor: free 2D integration plus swept segment collision (`slideAlongRails`), because there is no lateral parameter to clamp on an arbitrary polygon. Collision is swept, not positional, so a fast ship cannot tunnel through a wall.
 
 **Known limitation, by design:** a region is flat, so it only meets a ribbon cleanly where that ribbon is level and unbanked. Every other join is a visible step. Place regions accordingly.
+
+## World units and schema migration
+
+**Schema 5 doubled the world's unit scale.** Every length in a track — control point positions, widths, elevations, rail heights, mesh geometry — is twice what the same track measured under schema 4, and the game's ship, speeds, gravity, camera and thresholds were all scaled to match. **Nothing about how a track looks or drives changed; only the absolute units did.** The HUD's `speed × 4.5` factor was halved from `× 9` for exactly this reason, so the km/h readout is unchanged.
+
+Rules if you touch this:
+
+- **Only lengths scale.** Angles (`roll`, `rotation`), curve parameters (`t`), NURBS `weight`, cross-section `curvature` (dimensionless) and `tightness` (an exponent) are scale-invariant. Scaling any of them changes a track's *shape*, not its size. Likewise, rates (`turnRate` rad/s, `grip`, lerp factors, the bob frequency, the landing spring's `-55`) and ratios (`0.98` scrub, `1.5` step factor) stay put — only their length/velocity *caps* scale.
+- **`scaleRawTrackData()` runs before normalization, deliberately.** Normalization injects defaults (`DEFAULT_WIDTH`, `DEFAULT_RAIL_HEIGHT`) that are already in current units; scaling afterwards would double those too and silently widen every old track that never authored an explicit width. There's a test pinning this.
+- **Built-in tracks are authored in current units** and carry `version: TRACK_SCHEMA_VERSION`, so `cloneTrack(DEFAULT_TRACK)` — which bypasses `parseTrack` entirely — is never re-migrated.
+- Migration is keyed off the file's `version` and is idempotent across save/load.
 
 ## Editor conventions (`js/editor.js`)
 
 - Editor state lives in a single mutable `track` object (`TrackCore.cloneTrack(TrackCore.STARTER_TRACK)` initially).
 - Undo/redo uses whole-track deep-clone snapshots (`undoStack`/`redoStack`, capped at `MAX_HISTORY`), not diffs. Every discrete mutation calls `pushUndo()` once *before* mutating, capturing pre-edit state. Continuous gestures (dragging a point, typing in a field) call `pushUndo()` once at gesture start, not per-tick, so one drag = one undo step — see `dragMutated` for how point-selection-without-dragging avoids recording a no-op step.
 - Mesh regions: the JSON in `track` is authoritative (it is what undo snapshots and export read); `meshCache` holds a live geometry-js `Mesh` per asset purely to avoid reparsing. Rail edits mutate the live mesh and then `writeBackAsset()` immediately re-serializes it, so the two never drift. Undo/redo drops the cache entirely, since restored assets may differ.
-- The mode dropdown is `edit | create | rails`. Rails mode is modal on purpose: only mesh edges are pickable, so flagging a rail can't be confused with selecting anything else. Mesh regions are hit-tested *last* in edit mode, after every path handle, so a large region never steals a click from a control point drawn on top of it.
+- The mode dropdown is `edit | create | rails`, with `E`/`C`/`R` shortcuts. All mode changes go through `setEditMode()` — it clears the abandoned create draft, drops the rail pick when leaving Rails mode, and syncs the dropdown, so the keys and the dropdown can't drift. Rails mode is modal on purpose: only mesh edges are pickable, so flagging a rail can't be confused with selecting anything else. Mesh regions are hit-tested *last* in edit mode, after every path handle, so a large region never steals a click from a control point drawn on top of it.
 - Both modules expose a read-only `window.__editor` / `window.__game` handle for console debugging and the browser smoke tests, since ES modules leak nothing to the page.
 
 ## Game conventions (`js/track-game.js`)

@@ -82,6 +82,28 @@ export function toggleRailEdge(mesh, edgeId) {
   return setRailEdge(mesh, edgeId, !isRailEdge(mesh, edgeId));
 }
 
+/* An edge is on the region's rim exactly when a single polygon claims it:
+ * two owners means it is an interior seam between neighbouring faces, and
+ * zero means it is dangling geometry bounding nothing drivable. Hole rims
+ * count -- a hole's edges belong to the one polygon that owns the hole -- so
+ * this rails the inside of a hole too, which is what makes an imported hole a
+ * walled-off pillar rather than a pit. */
+export function isBoundaryEdge(mesh, edgeId) {
+  return mesh.getEdge(edgeId)?.polygons?.size === 1;
+}
+
+/* Rail every rim edge, leaving interior seams bare. Used on import so a fresh
+ * region is enclosed by default; individual edges are then unflagged in the
+ * editor's Rails mode to open up ledges. Returns the number railed. */
+export function railBoundaryEdges(mesh) {
+  let n = 0;
+  for (const [edgeId] of mesh.edges) {
+    if (!isBoundaryEdge(mesh, edgeId)) continue;
+    if (setRailEdge(mesh, edgeId, true)) n++;
+  }
+  return n;
+}
+
 // --- placement transform ---------------------------------------------------
 // Asset-local (x, y) maps to world (x, z); `rotation` is a yaw in degrees
 // applied about the placement origin before translation.

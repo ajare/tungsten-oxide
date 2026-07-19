@@ -87,7 +87,7 @@ const CROSS_SECTION_COLOR = '#d58cff';
 let renderMode = 'banked';
 let pointFilters = { position: true, roll: true, width: true, crossSection: true };
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
-let gridSize = 16;
+let gridSize = 32;
 let snapToGrid = false;
 let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit center
 let panLast = null;               // last mouse position while right-drag panning
@@ -183,45 +183,91 @@ function newMeshPlacementId() {
   for (let i = 1; ; i++) if (!taken.has('m' + i)) return 'm' + i;
 }
 
-// Import a geometry-js mesh JSON as a new asset, always under a fresh id so an
-// existing placement is never disturbed by a re-import, and drop one placement
-// of it at the centre of the current view.
-function importMeshFile(filename, text) {
+// Parse geometry-js mesh JSON. Returns { mesh } or { error }, never throws and
+// never touches the track -- so callers can report a bad paste without having
+// already half-mutated state.
+function parseMeshJSON(text) {
+  if (!String(text || '').trim()) return { error: 'nothing to import (the clipboard is empty)' };
   let data;
-  try { data = JSON.parse(text); } catch (err) { alert('Mesh import failed: ' + err.message); return; }
+  try { data = JSON.parse(text); } catch (err) { return { error: 'not valid JSON (' + err.message + ')' }; }
   const wrapped = TrackCore.normalizeMeshAssets({ probe: data });
-  if (!wrapped.probe) { alert('Mesh import failed: no vertices/polygons array found'); return; }
-  let mesh;
-  try { mesh = TrackMesh.meshFromJSON(wrapped.probe.mesh); }
-  catch (err) { alert('Mesh import failed: ' + err.message); return; }
+  if (!wrapped.probe) return { error: 'no vertices/polygons array found -- is this a geometry-js mesh?' };
+  try { return { mesh: TrackMesh.meshFromJSON(wrapped.probe.mesh) }; }
+  catch (err) { return { error: err.message }; }
+}
+
+// Import a parsed mesh as a new asset, always under a fresh id so an existing
+// placement is never disturbed by a re-import, and drop one placement of it.
+// `at` is the world position for the placement origin; omit it to centre the
+// shape on the current view.
+function addMeshAsset(mesh, name, at) {
+  // Enclosed by default: an imported region is walled all the way round, so
+  // it is drivable the moment it lands. Opening a ledge is one click in Rails
+  // mode, whereas the other default -- a bare rim -- makes every new region a
+  // pad you slide straight off before you can do anything about it.
+  TrackMesh.railBoundaryEdges(mesh);
 
   pushUndo();
   if (!track.meshAssets) track.meshAssets = {};
   if (!track.meshes) track.meshes = [];
-  const assetId = TrackMesh.uniqueAssetId(filename, new Set(Object.keys(track.meshAssets)));
+  const assetId = TrackMesh.uniqueAssetId(name, new Set(Object.keys(track.meshAssets)));
   track.meshAssets[assetId] = {
     name: assetId,
     railHeight: TrackCore.DEFAULT_RAIL_HEIGHT,
     mesh: TrackMesh.meshToJSON(mesh)
   };
-  // Centre the shape on the view rather than its own origin, so an asset
-  // authored far from (0,0) still lands where you can see it.
-  const bounds = TrackMesh.assetBounds(mesh);
-  const centre = screenToWorld(view.w / 2, view.h / 2);
-  const placement = {
-    id: newMeshPlacementId(),
-    asset: assetId,
-    x: Math.round((centre.x - bounds.cx) * 10) / 10,
-    z: Math.round((centre.z - bounds.cy) * 10) / 10,
-    rotation: 0,
-    elevation: 0
-  };
+  let x = 0, z = 0;
+  if (!at) {
+    // Centre the shape on the view rather than its own origin, so an asset
+    // authored far from (0,0) still lands where you can see it.
+    const bounds = TrackMesh.assetBounds(mesh);
+    const centre = screenToWorld(view.w / 2, view.h / 2);
+    x = Math.round((centre.x - bounds.cx) * 10) / 10;
+    z = Math.round((centre.z - bounds.cy) * 10) / 10;
+  } else { x = at.x; z = at.z; }
+  const placement = { id: newMeshPlacementId(), asset: assetId, x, z, rotation: 0, elevation: 0 };
   track.meshes.push(placement);
   invalidateMeshCache();
   selectedMeshId = placement.id;
   railSel = null;
   updateUndoRedoButtons();
   refresh();
+}
+
+function importMeshFile(filename, text) {
+  const { mesh, error } = parseMeshJSON(text);
+  if (error) { alert('Mesh import failed: ' + error); return; }
+  addMeshAsset(mesh, filename);
+}
+
+// Paste a mesh copied from the geometry-js editor's "Copy JSON" button.
+// `centreOn` centres the shape's bounds on that world point (used by the
+// right-click menu, where the click position is the whole point). Without it
+// the region goes to the world origin, honouring its authored coordinates.
+async function importMeshFromClipboard(centreOn) {
+  let text;
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('clipboard reads are unavailable in this browser (needs https:// or localhost)');
+    text = await navigator.clipboard.readText();
+  } catch (err) {
+    alert('Could not read the clipboard: ' + err.message +
+      '\n\nUse Import Mesh to load a .json file instead.');
+    return;
+  }
+  const { mesh, error } = parseMeshJSON(text);
+  if (error) { alert('Clipboard does not contain a mesh: ' + error); return; }
+  let at = { x: 0, z: 0 };
+  if (centreOn && Number.isFinite(centreOn.x) && Number.isFinite(centreOn.z)) {
+    // Offset by the shape's own centre so it lands *centred* on the click
+    // rather than hanging off it by however far the asset was authored from
+    // its own origin.
+    const bounds = TrackMesh.assetBounds(mesh);
+    at = {
+      x: Math.round((centreOn.x - bounds.cx) * 10) / 10,
+      z: Math.round((centreOn.z - bounds.cy) * 10) / 10
+    };
+  }
+  addMeshAsset(mesh, 'pasted-mesh', at);
 }
 
 function deleteSelectedMesh() {
@@ -1036,7 +1082,7 @@ function drawElev() {
     minY = Math.min(minY, selectedMeshPlacement.elevation);
     maxY = Math.max(maxY, selectedMeshPlacement.elevation);
   }
-  const pad = Math.max(4, (maxY - minY) * 0.3 + 2);
+  const pad = Math.max(8, (maxY - minY) * 0.3 + 4);
   minY -= pad; maxY += pad;
   const top = 20, bottom = h - 20, padX = 34;
   const yScale = (bottom - top) / ((maxY - minY) || 1);
@@ -2404,18 +2450,54 @@ function performJoin() {
 
 // ---------- Add-point popup menu (top-down view) ----------
 const addPointMenu = document.getElementById('addPointMenu');
+const pasteMeshSection = document.getElementById('pasteMeshSection');
 let pendingAdd = null; // { worldX, worldZ }
+// Each menu opening gets a token so a slow clipboard read from a previous,
+// already-dismissed menu can't reveal the paste option on the current one.
+let menuToken = 0;
+
 function showAddPointMenu(clientX, clientY, worldX, worldZ) {
   pendingAdd = { worldX, worldZ };
   addPointMenu.style.left = Math.min(clientX, window.innerWidth - 140) + 'px';
   addPointMenu.style.top = Math.min(clientY, window.innerHeight - 120) + 'px';
   addPointMenu.style.display = 'flex';
+  // The menu opens immediately with the paste option hidden, then reveals it
+  // if the clipboard turns out to hold something. Awaiting the read first
+  // would stall the menu behind a permission prompt on every right-click.
+  pasteMeshSection.style.display = 'none';
+  const token = ++menuToken;
+  clipboardHasText().then((has) => {
+    if (!has || token !== menuToken || addPointMenu.style.display === 'none') return;
+    pasteMeshSection.style.display = 'flex';
+  });
 }
-function hideAddPointMenu() { addPointMenu.style.display = 'none'; pendingAdd = null; }
+function hideAddPointMenu() {
+  addPointMenu.style.display = 'none';
+  pasteMeshSection.style.display = 'none';
+  menuToken++;
+  pendingAdd = null;
+}
+
+// True when the clipboard holds any non-whitespace text. Whether that text is
+// actually a mesh is left to import time, which reports a specific reason --
+// probing that hard here would mean parsing on every right-click.
+async function clipboardHasText() {
+  try {
+    if (!navigator.clipboard?.readText) return false;
+    return !!(await navigator.clipboard.readText()).trim();
+  } catch { return false; }   // denied or unavailable: just omit the option
+}
+
 addPointMenu.addEventListener('click', (e) => {
-  const type = e.target.dataset.type;
-  if (!type || !pendingAdd) return;
+  if (!pendingAdd) return;
   const { worldX, worldZ } = pendingAdd;
+  if (e.target.dataset.action === 'pasteMesh') {
+    hideAddPointMenu();
+    importMeshFromClipboard({ x: worldX, z: worldZ });
+    return;
+  }
+  const type = e.target.dataset.type;
+  if (!type) return;
   hideAddPointMenu();
   segSel = null;
   if (type === 'position') insertNear(worldX, worldZ);
@@ -2429,6 +2511,20 @@ window.addEventListener('mousedown', (e) => {
   if (addPointMenu.style.display !== 'none' && !addPointMenu.contains(e.target)) hideAddPointMenu();
 }, true);
 
+// ---------- Mode switching ----------
+// The single entry point for changing mode, so the dropdown and the E/C/R
+// shortcuts can never disagree about the abandoned draft or the rail pick.
+function setEditMode(mode) {
+  editMode = mode;
+  createDraft = [];
+  // The picked-edge highlight only means anything inside Rails mode.
+  if (editMode !== 'rails') railSel = null;
+  const modeEl = document.getElementById('editModeSelect');
+  if (modeEl) modeEl.value = mode;
+  hideAddPointMenu();
+  draw();
+}
+
 // ---------- Create mode ----------
 function finishCreateDraft(closed) {
   if (createDraft.length < 4) { alert('A curve needs at least 4 position points.'); return; }
@@ -2436,10 +2532,7 @@ function finishCreateDraft(closed) {
   const path = { id: newId('path'), closed, points: createDraft.slice().concat(flatRollWidthDefaults(closed)) };
   track.paths.push(path);
   selectPosition(track.paths.length - 1, closed ? 0 : createDraft.length - 1);
-  createDraft = [];
-  editMode = 'edit';
-  const modeEl = document.getElementById('editModeSelect');
-  if (modeEl) modeEl.value = 'edit';
+  setEditMode('edit');
   refresh();
 }
 // Hit-test against the in-progress draft's own points (screen-space, same
@@ -2751,6 +2844,15 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
   if (e.target.tagName === 'INPUT') return;
+  // A focused dropdown/textarea owns its own letter keys (native typeahead),
+  // so don't shadow them -- including the mode dropdown itself, where
+  // typeahead already reaches every mode and fires 'change'.
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+  // Mode shortcuts. Bare keys only: leave Ctrl/Alt/Meta chords to the browser.
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    const mode = { KeyE: 'edit', KeyC: 'create', KeyR: 'rails' }[e.code];
+    if (mode) { e.preventDefault(); setEditMode(mode); return; }
+  }
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (selectedMeshId) { deleteSelectedMesh(); return; }
@@ -2816,12 +2918,7 @@ document.getElementById('deleteCurveBtn').addEventListener('click', deleteSelect
 document.getElementById('undoBtn').addEventListener('click', undo);
 document.getElementById('redoBtn').addEventListener('click', redo);
 document.getElementById('editModeSelect').addEventListener('change', (e) => {
-  editMode = e.target.value;
-  createDraft = [];
-  // The picked-edge highlight only means anything inside Rails mode.
-  if (editMode !== 'rails') railSel = null;
-  hideAddPointMenu();
-  draw();
+  setEditMode(e.target.value);
 });
 document.getElementById('curveSelect').addEventListener('change', (e) => {
   const pi = Number(e.target.value);
@@ -2916,6 +3013,9 @@ meshFileInput.addEventListener('change', async (e) => {
   importMeshFile(file.name, await file.text());
   e.target.value = '';
 });
+// Arrow, not a bare reference: the handler would otherwise receive the click
+// MouseEvent as `centreOn` and try to centre the region on event.x/event.z.
+document.getElementById('pasteMeshBtn').addEventListener('click', () => importMeshFromClipboard());
 
 // Modules export nothing to the page, so expose a small read-only handle for
 // debugging from the console and for browser smoke tests.
@@ -2923,6 +3023,7 @@ window.__editor = {
   get track() { return track; },
   get selectedMeshId() { return selectedMeshId; },
   worldToScreen,
+  screenToWorld,
   compiledMeshes,
   assetMesh,
   railCount: (assetId) => {

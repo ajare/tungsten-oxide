@@ -53,6 +53,8 @@
   #addPointMenu button[data-type="roll"] { border-color: #ffaa3c; }
   #addPointMenu button[data-type="width"] { border-color: #b6ff3c; }
   #addPointMenu button[data-type="crossSection"] { border-color: #d58cff; }
+  #addPointMenu button[data-action="pasteMesh"] { border-color: #8a6ad0; }
+  #addPointMenu #pasteMeshSection { border-top: 1px solid #24506e; margin-top: 3px; padding-top: 3px; }
   #topCanvas { touch-action: none; }
   #topZoomControl {
     position: absolute; right: 14px; bottom: 14px; z-index: 10;
@@ -79,13 +81,14 @@
     <button id="newBtn">New</button>
     <button id="importBtn">Import JSON</button>
     <button id="importMeshBtn" title="Import a geometry-js mesh JSON as a drivable region">Import Mesh</button>
+    <button id="pasteMeshBtn" title="Paste a geometry-js mesh JSON from the clipboard, placed at the origin">Paste Mesh</button>
     <button id="exportBtn">Export JSON</button>
     <span class="spacer" aria-hidden="true"></span>
     <button id="undoBtn" disabled title="Undo (Ctrl+Z)">&#8630; Undo</button>
     <button id="redoBtn" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z)">&#8631; Redo</button>
     <span class="spacer" aria-hidden="true"></span>
     <label>Mode
-      <select id="editModeSelect"><option value="edit">Edit</option><option value="create">Create</option><option value="rails">Rails</option></select>
+      <select id="editModeSelect" title="Edit (E) / Create (C) / Rails (R)"><option value="edit">Edit</option><option value="create">Create</option><option value="rails">Rails</option></select>
     </label>
     <label>Curve
       <select id="curveSelect" title="Current curve"></select>
@@ -107,10 +110,10 @@
     <span class="spacer" aria-hidden="true"></span>
     <label title="Top-down grid size">Grid
       <select id="gridSizeSelect">
-        <option value="4">4</option>
         <option value="8">8</option>
-        <option value="16" selected>16</option>
-        <option value="32">32</option>
+        <option value="16">16</option>
+        <option value="32" selected>32</option>
+        <option value="64">64</option>
       </select>
     </label>
     <label title="Snap position control points to the top-down grid"><input id="snapGridChk" type="checkbox"> Snap</label>
@@ -148,6 +151,10 @@
   <button data-type="roll" style="color:#ffaa3c">Roll</button>
   <button data-type="width" style="color:#b6ff3c">Width</button>
   <button data-type="crossSection" style="color:#d58cff">Cross-section</button>
+  <div id="pasteMeshSection" style="display:none; flex-direction:column; gap:3px">
+    <div class="menuLabel">Add mesh</div>
+    <button data-action="pasteMesh" style="color:#c0a0ff">From clipboard</button>
+  </div>
 </div>
 
 <!-- track-core.js stays a classic script: it is dependency-free and sets

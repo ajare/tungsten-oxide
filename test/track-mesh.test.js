@@ -35,6 +35,46 @@ function railedPad(railAll = false) {
   return mesh;
 }
 
+test('railing on import walls the rim, and the inside of a hole with it', () => {
+  const { mesh } = padWithHole();
+  const railed = TM.railBoundaryEdges(mesh);
+
+  assert.equal(railed, 8, '4 outer rim edges + 4 hole rim edges');
+  const c = TM.compile(mesh, flatPlacement());
+  assert.equal(c.rails.length, 8);
+  // Every wall must face away from the drivable surface, hole rims included --
+  // otherwise a rail pushes the ship into the void it is meant to fence off.
+  for (const rail of c.rails) {
+    const mx = (rail.a.x + rail.b.x) / 2, mz = (rail.a.z + rail.b.z) / 2;
+    assert.equal(TM.containsWorldPoint(c, mx + rail.nx * 0.5, mz + rail.nz * 0.5), false);
+    assert.equal(TM.containsWorldPoint(c, mx - rail.nx * 0.5, mz - rail.nz * 0.5), true);
+  }
+});
+
+test('railing on import leaves interior seams between polygons bare', () => {
+  // Two squares meeting along x = 30: that shared edge is a seam you drive
+  // across, not a rim. Railing it would wall the region down the middle.
+  const mesh = new Mesh();
+  // Share the two middle vertices explicitly -- passing coincident points
+  // would mint separate vertices and leave the squares merely abutting.
+  const a = mesh.addVertex(new Vector2(0, 0));
+  const b = mesh.addVertex(new Vector2(30, 0));
+  const c0 = mesh.addVertex(new Vector2(30, 30));
+  const d = mesh.addVertex(new Vector2(0, 30));
+  const e = mesh.addVertex(new Vector2(60, 0));
+  const f = mesh.addVertex(new Vector2(60, 30));
+  mesh.addPolygon([a, b, c0, d]);
+  mesh.addPolygon([b, e, f, c0]);
+  const seam = mesh.findEdge(b, c0);
+  assert.equal(mesh.getEdge(seam).polygons.size, 2, 'test setup: the two squares must actually share an edge');
+
+  TM.railBoundaryEdges(mesh);
+
+  assert.equal(TM.isRailEdge(mesh, seam), false, 'the shared seam stays drivable');
+  const c = TM.compile(mesh, flatPlacement());
+  assert.equal(c.rails.length, 6, 'the 8 authored edges minus the 2 that coincide on the seam');
+});
+
 test('compile bakes triangles for the polygon minus its hole', () => {
   const { mesh } = padWithHole();
   const c = TM.compile(mesh, flatPlacement());
@@ -148,11 +188,11 @@ test('asset ids stay unique so a re-import never disturbs existing placements', 
 
 // --- track-core schema 4 -----------------------------------------------------
 
-function trackFixture() {
+function trackFixture(version = 5) {
   const { mesh } = padWithHole();
   TM.setRailEdge(mesh, mesh.findEdge(0, 1), true);
   return JSON.stringify({
-    version: 4,
+    version,
     name: 'Mesh Test',
     paths: [{ id: 'path1', closed: true, points: [
       { type: 'position', id: 'p1', pos: [50, 0, 0], weight: 1 },
@@ -197,16 +237,105 @@ test('rail flags survive a full track round trip', () => {
 });
 
 test('tracks written before schema 4 load with no mesh data', () => {
-  const legacy = TrackCore.parseTrack(JSON.stringify({
-    version: 3, name: 'Old',
+  const legacy = TrackCore.parseTrack(legacyTrackJson(3));
+  assert.deepEqual(legacy.meshAssets, {});
+  assert.deepEqual(legacy.meshes, []);
+  assert.ok(TrackCore.serializeTrack(legacy).includes('"meshes": []'));
+});
+
+// --- schema 5: world unit scale ---------------------------------------------
+
+function legacyTrackJson(version, extra = {}) {
+  return JSON.stringify({
+    version, name: 'Old',
+    paths: [{ id: 'p', closed: true, points: [
+      { type: 'position', id: 'a', pos: [10, 1, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [0, 0, 10], weight: 1 },
+      { type: 'position', id: 'c', pos: [-10, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [0, 0, -10], weight: 1 },
+      { type: 'roll', t: 0, roll: 20 },
+      { type: 'roll', t: 0.5, roll: -20 },
+      { type: 'width', t: 0, width: 12 },
+      { type: 'width', t: 0.5, width: 12 }
+    ] }],
+    ...extra
+  });
+}
+
+const positions = track => TrackCore.splitPoints(track.paths[0].points).controlPoints.map(p => p.pos);
+const widths = track => TrackCore.splitPoints(track.paths[0].points).widthPoints.map(p => p.width);
+const rolls = track => TrackCore.splitPoints(track.paths[0].points).rollPoints.map(p => p.roll);
+
+test('a pre-schema-5 track is scaled up on load', () => {
+  const migrated = TrackCore.parseTrack(legacyTrackJson(4));
+  assert.equal(migrated.version, 5);
+  assert.deepEqual(positions(migrated)[0], [20, 2, 0], 'positions double');
+  assert.deepEqual(widths(migrated), [24, 24], 'widths double');
+});
+
+test('scale-invariant values are left alone by the migration', () => {
+  const migrated = TrackCore.parseTrack(legacyTrackJson(4));
+  const parts = TrackCore.splitPoints(migrated.paths[0].points);
+  assert.deepEqual(rolls(migrated), [20, -20], 'roll is an angle');
+  assert.deepEqual(parts.widthPoints.map(p => p.t), [0, 0.5], 't is a fraction');
+  assert.deepEqual(parts.controlPoints.map(p => p.weight), [1, 1, 1, 1], 'NURBS weights');
+  for (const p of parts.crossSectionPoints) {
+    assert.equal(p.curvature, 0, 'curvature is dimensionless');
+    assert.equal(p.tightness, 1, 'tightness is an exponent');
+  }
+});
+
+test('a schema-5 track is left exactly as authored', () => {
+  const already = TrackCore.parseTrack(legacyTrackJson(5));
+  assert.deepEqual(positions(already)[0], [10, 1, 0], 'no double-scaling');
+  assert.deepEqual(widths(already), [12, 12]);
+});
+
+test('migrating is idempotent through a save/load cycle', () => {
+  const once = TrackCore.parseTrack(legacyTrackJson(4));
+  const twice = TrackCore.parseTrack(TrackCore.serializeTrack(once));
+  assert.deepEqual(positions(twice), positions(once), 're-loading must not scale again');
+  assert.deepEqual(widths(twice), widths(once));
+});
+
+test('defaults injected during normalization are not double-scaled', () => {
+  // This track authors no width points, so normalization supplies them. Those
+  // defaults are already in current units and must not be scaled again.
+  const noWidths = JSON.stringify({
+    version: 4, name: 'Old',
     paths: [{ id: 'p', closed: true, points: [
       { type: 'position', id: 'a', pos: [10, 0, 0], weight: 1 },
       { type: 'position', id: 'b', pos: [0, 0, 10], weight: 1 },
       { type: 'position', id: 'c', pos: [-10, 0, 0], weight: 1 },
       { type: 'position', id: 'd', pos: [0, 0, -10], weight: 1 }
-    ] }]
-  }));
-  assert.deepEqual(legacy.meshAssets, {});
-  assert.deepEqual(legacy.meshes, []);
-  assert.ok(TrackCore.serializeTrack(legacy).includes('"meshes": []'));
+    ] }],
+    meshAssets: { pad: { mesh: TM.meshToJSON(padWithHole().mesh) } },   // no railHeight
+    meshes: [{ id: 'm1', asset: 'pad', x: 5, z: 5, rotation: 10, elevation: 3 }]
+  });
+  const migrated = TrackCore.parseTrack(noWidths);
+  assert.deepEqual(widths(migrated), [24, 24], 'default width, not 48');
+  assert.equal(migrated.meshAssets.pad.railHeight, TrackCore.DEFAULT_RAIL_HEIGHT, 'default rail height, not doubled');
+  // Values that WERE authored still scale.
+  assert.equal(migrated.meshes[0].x, 10);
+  assert.equal(migrated.meshes[0].elevation, 6);
+  assert.equal(migrated.meshes[0].rotation, 10, 'rotation is an angle');
+});
+
+test('mesh asset geometry and rail height scale with the track', () => {
+  const migrated = TrackCore.parseTrack(trackFixture(4));
+  const mesh = TM.meshFromJSON(migrated.meshAssets.pad.mesh);
+  const xs = [...mesh.vertices.values()].map(v => v.position.x);
+  assert.equal(Math.max(...xs), 60, 'the 30-wide pad is now 60 wide');
+  assert.equal(migrated.meshAssets.pad.railHeight, 5, 'authored 2.5 doubles');
+  assert.equal(migrated.meshes[0].elevation, 25, 'authored 12.5 doubles');
+  assert.equal(migrated.meshes[0].rotation, 37, 'rotation unchanged');
+});
+
+test('built-in tracks are authored in current units', () => {
+  for (const name of ['DEFAULT_TRACK', 'STARTER_TRACK']) {
+    const t = TrackCore[name];
+    assert.equal(t.version, 5, `${name} must not be re-migrated on load`);
+    const reloaded = TrackCore.parseTrack(TrackCore.serializeTrack(t));
+    assert.deepEqual(positions(reloaded), positions(t), `${name} survives a round trip unscaled`);
+  }
 });
