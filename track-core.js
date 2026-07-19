@@ -54,6 +54,7 @@
   const DEG2RAD = Math.PI / 180;
   const DEFAULT_CROSS_SECTION_CURVATURE = 0;
   const DEFAULT_CROSS_SECTION_TIGHTNESS = 1;
+  const COLLISION_WALL_MARGIN = 0.9;
   const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
   const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
 
@@ -364,6 +365,19 @@
     return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
+  // Convert cleaned left/right edge polylines into the signed lateral offsets
+  // used by runtime collision. This is the game's physical wall representation:
+  // each wall is stored per centerline sample as distance along that frame's
+  // banked edgeRight axis, so collision follows trimmed/mitred edges while the
+  // ship remains projected on the curve's cross-section frame.
+  function computePhysicalWallOffsets(frames, edges) {
+    return frames.map((f, i) => {
+      const er = f.edgeRight, p = f.pos;
+      const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
+      return { sLeft: off(edges.left[i]), sRight: off(edges.right[i]) };
+    });
+  }
+
   // Proper segment-segment crossing test in the XZ plane (strict: sharing an
   // endpoint does NOT count, so adjacent polyline segments never false-positive).
   function segmentsCrossXZ(a1, a2, b1, b2) {
@@ -379,7 +393,77 @@
     const t = ((a1.x - b1.x) * (b1.z - b2.z) - (a1.z - b1.z) * (b1.x - b2.x)) / den;
     return { x: a1.x + t * (a2.x - a1.x), y: (a1.y + a2.y) / 2, z: a1.z + t * (a2.z - a1.z) };
   }
-  function removeLocalSelfIntersectionLoops(pts, closed, wrapOpen) {
+  // Default local window (in segments): a self-intersection whose two crossing
+  // segments are within this many segments of each other is collapsed; farther
+  // ones are left alone. See the figure-8 rationale on findSelfIntersections.
+  // Per-crossing overrides (see makeSelfIntersectionDeciders) can flip either
+  // way; this is only the fallback when no override matches.
+  const DEFAULT_SELF_INTERSECTION_SPAN = 100;
+
+  // For crossing segments i < j on a polyline of `segCount` segments: the span
+  // (how far apart, in segments) and whether the SHORTER arc between them wraps
+  // around the end. On a circular polyline the two segments split the ring into
+  // two arcs; the shorter is the accidental loop we collapse (collapsing the
+  // longer would delete the bulk of the track).
+  function crossingSpan(i, j, segCount, circular) {
+    const forwardSpan = j - i;
+    const wrappedSpan = circular ? segCount - forwardSpan : Infinity;
+    return { span: Math.min(forwardSpan, wrappedSpan), useWrappedInterval: wrappedSpan < forwardSpan };
+  }
+
+  // Find ALL self-intersections of a polyline in XZ -- a full pairwise scan
+  // with NO span bound (build-time only, not per-frame). Returns
+  // [{ i, j, span, useWrappedInterval, point }] on the RAW polyline, so callers
+  // can present/decide crossings individually (the editor draws a marker per
+  // crossing; the user forces keep/collapse on specific ones). XZ-plane only,
+  // matching trimEdge's convention -- a genuine elevated crossover (same XZ
+  // footprint, different height, e.g. a bridge) would false-positive.
+  //
+  // The default collapse rule is deliberately LOCAL (see
+  // DEFAULT_SELF_INTERSECTION_SPAN): a track that crosses itself far away in
+  // parameter space (a genuine figure-8, where two lobes cross at one point but
+  // are each a legitimate separate stretch) must keep both lobes intact --
+  // collapsing "everything between" two crossings 100+ segments apart would
+  // silently delete an entire lobe instead of the small overlapping area.
+  function findSelfIntersections(pts, closed, wrapOpen) {
+    closed = closed !== false;
+    const circular = closed || !!wrapOpen;
+    const N = pts.length;
+    const segCount = circular ? N : N - 1;
+    const out = [];
+    if (segCount < 4) return out;
+    const nextIdx = i => circular ? (i + 1) % N : i + 1;
+    for (let i = 0; i < segCount; i++) {
+      const a1 = pts[i], a2 = pts[nextIdx(i)];
+      for (let j = i + 2; j < segCount; j++) {
+        if (circular && i === 0 && j === segCount - 1) continue;
+        const b1 = pts[j], b2 = pts[nextIdx(j)];
+        if (!segmentsCrossXZ(a1, a2, b1, b2)) continue;
+        const { span, useWrappedInterval } = crossingSpan(i, j, segCount, circular);
+        out.push({ i, j, span, useWrappedInterval, point: segCrossPointXZ(a1, a2, b1, b2) });
+      }
+    }
+    return out;
+  }
+
+  // Collapse self-intersections of a single polyline (a track edge / wall line)
+  // to the crossing point, so each accidental loop renders as zero-area instead
+  // of visibly intersecting geometry. Iterates (MAX_PASSES) so multiple
+  // crossings resolve one at a time, and guards runaway crossing points
+  // (near-parallel/degenerate segments) back to the loop midpoint. `wrapOpen`
+  // treats an open polyline as circular (segment N-1 -> 0 exists), used when an
+  // open path's two ends actually meet -- e.g. an 'opened-closed' disjoint
+  // seam, where a fold straddling the seam must still be caught.
+  //
+  //   decide(crossing) -> collapse?   Per-crossing policy. Default: collapse
+  //     iff crossing.span <= DEFAULT_SELF_INTERSECTION_SPAN (the local window).
+  //     A per-crossing override predicate (see makeSelfIntersectionDeciders)
+  //     can force a nearby crossing to be KEPT or a far one COLLAPSED.
+  //   scanSpan   Perf bound: pairs farther apart than this are never even
+  //     tested for crossing. Defaults to the local window (so the common,
+  //     no-override case stays O(N * window)). Raise (or Infinity) only when an
+  //     override may force-collapse a far crossing, so it can be found.
+  function removeLocalSelfIntersectionLoops(pts, closed, wrapOpen, decide, scanSpan) {
     closed = closed !== false;
     const circular = closed || !!wrapOpen;
     const N = pts.length;
@@ -387,7 +471,8 @@
     if (segCount < 4) return pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
     const nextIdx = i => circular ? (i + 1) % N : i + 1;
     const out = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
-    const MAX_LOCAL_SPAN = 100;
+    const maxScan = (scanSpan == null) ? DEFAULT_SELF_INTERSECTION_SPAN : scanSpan;
+    const shouldCollapse = decide || (c => c.span <= DEFAULT_SELF_INTERSECTION_SPAN);
     const MAX_PASSES = segCount;
     for (let pass = 0; pass < MAX_PASSES; pass++) {
       let found = null;
@@ -395,13 +480,14 @@
         const a1 = out[i], a2 = out[nextIdx(i)];
         for (let j = i + 2; j < segCount; j++) {
           if (circular && i === 0 && j === segCount - 1) continue;
-          const forwardSpan = j - i;
-          const wrappedSpan = circular ? segCount - forwardSpan : Infinity;
-          if (Math.min(forwardSpan, wrappedSpan) > MAX_LOCAL_SPAN) continue;
-          if (segmentsCrossXZ(a1, a2, out[j], out[nextIdx(j)])) {
-            found = { i, j, useWrappedInterval: wrappedSpan < forwardSpan };
-            break;
-          }
+          const { span, useWrappedInterval } = crossingSpan(i, j, segCount, circular);
+          if (span > maxScan) continue;
+          const b1 = out[j], b2 = out[nextIdx(j)];
+          if (!segmentsCrossXZ(a1, a2, b1, b2)) continue;
+          const crossing = { i, j, span, useWrappedInterval, point: segCrossPointXZ(a1, a2, b1, b2) };
+          if (!shouldCollapse(crossing)) continue; // force-kept: leave the loop
+          found = crossing;
+          break;
         }
       }
       if (!found) break;
@@ -430,57 +516,68 @@
     return out;
   }
 
-  function removeLocalEdgeSelfIntersections(edges, closed, wrapOpen) {
+  function removeLocalEdgeSelfIntersections(edges, closed, wrapOpen, decideLeft, decideRight, scanSpan) {
     return {
-      left: removeLocalSelfIntersectionLoops(edges.left, closed, wrapOpen),
-      right: removeLocalSelfIntersectionLoops(edges.right, closed, wrapOpen)
+      left: removeLocalSelfIntersectionLoops(edges.left, closed, wrapOpen, decideLeft, scanSpan),
+      right: removeLocalSelfIntersectionLoops(edges.right, closed, wrapOpen, decideRight, scanSpan)
     };
   }
 
-  // Collapse LOCAL self-intersections of a single polyline (typically a wall/
-  // rail's edge line) -- segments that aren't adjacent (so trimEdge's
-  // consecutive-backward-segment fold detection above misses them) but are
-  // still geometrically nearby, e.g. a wiggly chicane whose offset briefly
-  // crosses back over an earlier/later part of itself. Each crossing's loop
-  // is collapsed to the crossing point (same technique as trimEdge), so it
-  // renders as zero-area there instead of visibly intersecting geometry.
-  // XZ-plane only, matching trimEdge's convention -- a genuine elevated
-  // crossover (same XZ footprint, different height, e.g. a bridge) would
-  // false-positive here; not expected on an ordinary track.
-  //
-  // The search is deliberately bounded to a local window (MAX_LOCAL_SPAN
-  // segments), NOT a full pairwise scan: a track that deliberately crosses
-  // itself far away in parameter space (a genuine figure-8 course, where the
-  // two lobes cross at one point but are each a legitimate, separate stretch
-  // of boundary) must keep both lobes intact -- collapsing "everything
-  // between" two crossings 100+ segments apart would silently delete an
-  // entire lobe instead of just the small overlapping area.
-  function collapseSelfIntersections(pts, closed) {
-    closed = closed !== false;
-    const N = pts.length;
-    const segCount = closed ? N : N - 1;
-    if (segCount < 4) return pts.map(p => ({ x: p.x, y: p.y, z: p.z })); // need 2 non-adjacent segments to cross
-    const nextIdx = i => closed ? (i + 1) % N : i + 1;
-    const out = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
-    const MAX_LOCAL_SPAN = 40;
-    const MAX_PASSES = segCount; // generous cap; each pass resolves at least one crossing
-    for (let pass = 0; pass < MAX_PASSES; pass++) {
-      let found = null;
-      for (let i = 0; i < segCount && !found; i++) {
-        const a1 = out[i], a2 = out[nextIdx(i)];
-        const jMax = Math.min(segCount, i + MAX_LOCAL_SPAN);
-        for (let j = i + 2; j < jMax; j++) {
-          if (closed && i === 0 && j === segCount - 1) continue; // adjacent via wraparound
-          if (segmentsCrossXZ(a1, a2, out[j], out[nextIdx(j)])) { found = { i, j }; break; }
-        }
-      }
-      if (!found) break;
-      const { i, j } = found;
-      const X = segCrossPointXZ(out[i], out[nextIdx(i)], out[j], out[nextIdx(j)]);
-      let v = nextIdx(i);
-      while (true) { out[v] = { x: X.x, y: X.y, z: X.z }; if (v === j) break; v = nextIdx(v); }
-    }
-    return out;
+  // --- per-crossing keep/collapse overrides ----------------------------------
+  // A self-intersection is identified STABLY (across edits, resampling, and
+  // different N between editor and game) by the pair of control-point ids
+  // nearest its two branches, plus which edge side it is on. Segment indices
+  // are NOT stored -- they shift on any edit.
+
+  // Id of the control point nearest frame `i` (of N). Resolution-independent:
+  // depends only on the control-point parameter g the frame sits at, so the
+  // editor (one N) and the game (another N) resolve the same crossing to the
+  // same id.
+  function controlIdAtFrame(controlPoints, closed, N, i) {
+    const CP_N = controlPoints.length;
+    if (!CP_N) return null;
+    const g = closed ? (i / N) * CP_N : (N > 1 ? (i / (N - 1)) * (CP_N - 1) : 0);
+    let idx = Math.round(g);
+    idx = closed ? (((idx % CP_N) + CP_N) % CP_N) : Math.max(0, Math.min(CP_N - 1, idx));
+    const cp = controlPoints[idx];
+    return (cp && cp.id) || null;
+  }
+
+  // Sorted [a, b] control-point-id key for a crossing's two branches.
+  function crossingKey(controlPoints, closed, N, crossing) {
+    let a = controlIdAtFrame(controlPoints, closed, N, crossing.i);
+    let b = controlIdAtFrame(controlPoints, closed, N, crossing.j);
+    if (a != null && b != null && a > b) { const t = a; a = b; b = t; }
+    return [a, b];
+  }
+
+  function crossingMatchesOverride(key, o) {
+    return (o.a === key[0] && o.b === key[1]) || (o.a === key[1] && o.b === key[0]);
+  }
+
+  // Build per-side decide predicates + a scanSpan for ONE path from the whole
+  // track's overrides. Overrides are self-scoping: since control-point ids are
+  // globally unique, only entries whose BOTH ids belong to this path can match,
+  // so we keep just those. Returns null when none apply (callers then use the
+  // default local-window rule with no extra work). `allOverrides` entries are
+  // { side, a, b, action }.
+  function makeSelfIntersectionDeciders(controlPoints, closed, N, allOverrides) {
+    const ids = new Set((controlPoints || []).map(c => c && c.id).filter(Boolean));
+    const list = (allOverrides || []).filter(o => ids.has(o.a) && ids.has(o.b));
+    if (!list.length) return null;
+    const mk = side => {
+      const relevant = list.filter(o => o.side === side);
+      if (!relevant.length) return undefined; // default rule for this side
+      return crossing => {
+        const key = crossingKey(controlPoints, closed, N, crossing);
+        const o = relevant.find(r => crossingMatchesOverride(key, r));
+        if (o) return o.action === 'collapse';
+        return crossing.span <= DEFAULT_SELF_INTERSECTION_SPAN;
+      };
+    };
+    // If any override forces a collapse, far pairs must be tested too.
+    const scanSpan = list.some(o => o.action === 'collapse') ? Infinity : undefined;
+    return { decideLeft: mk('left'), decideRight: mk('right'), scanSpan };
   }
 
   // Compute hard-corner edge cuts for DISJOINT seams specifically (editor-
@@ -662,6 +759,20 @@
     };
   }
 
+  // Per-crossing keep/collapse override: { side:'left'|'right', a, b, action }.
+  // a/b are control-point ids (the crossing's two branches, order-insensitive);
+  // action 'keep' preserves the loop, 'collapse' removes it, overriding the
+  // default local-window rule. Anything malformed is dropped.
+  function normalizeSelfIntersectionOverride(o) {
+    if (!o || typeof o.a !== 'string' || typeof o.b !== 'string' || !o.a || !o.b) return null;
+    return {
+      side: o.side === 'right' ? 'right' : 'left',
+      a: o.a,
+      b: o.b,
+      action: o.action === 'collapse' ? 'collapse' : 'keep'
+    };
+  }
+
   // Clamp a start descriptor to valid path/point indices for the given paths.
   function normalizeStart(rawStart, paths) {
     let path = (rawStart && Number.isInteger(rawStart.path)) ? rawStart.path : 0;
@@ -716,6 +827,8 @@
       paths,
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
+      selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
+        .map(normalizeSelfIntersectionOverride).filter(Boolean),
       start: normalizeStart(data && data.start, paths)
     };
   }
@@ -738,6 +851,7 @@
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
+      '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 
@@ -812,11 +926,13 @@
 
   global.TrackCore = {
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
-    computeDisjointEdgeCuts, collapseSelfIntersections, removeLocalEdgeSelfIntersections,
+    computePhysicalWallOffsets, computeDisjointEdgeCuts, removeLocalSelfIntersectionLoops, removeLocalEdgeSelfIntersections,
+    findSelfIntersections, controlIdAtFrame, crossingKey, makeSelfIntersectionDeciders,
+    DEFAULT_SELF_INTERSECTION_SPAN,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     parseTrack, serializeTrack, normalizeStart,
-    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
+    DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))
   };

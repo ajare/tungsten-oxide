@@ -153,6 +153,7 @@ function newId(prefix) {
 function ensureTrackIds() {
   if (!track.disjointSeams) track.disjointSeams = [];
   if (!track.junctions) track.junctions = [];
+  if (!track.selfIntersectionOverrides) track.selfIntersectionOverrides = [];
   usedIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(s => s.id).filter(Boolean));
   const pointById = new Map(), pathIds = new Set();
   for (const path of track.paths) {
@@ -321,6 +322,74 @@ function elevationColor(y, minY, maxY) {
 // Per-path baked preview data, cached each draw so hit-testing (segments,
 // nodes) can reuse it without re-evaluating the spline.
 let pathPreviews = [];
+// Per-path list of self-intersections in WORLD space ({side,a,b,span,world}),
+// cached so the O(N^2) detection runs only on idle redraws, not every frame of
+// a drag/pan. Re-projected to screen and re-coloured (by current overrides)
+// cheaply on every draw. Parallel to pathPreviews.
+let crossingCache = [];
+
+// ---------- self-intersection crossing markers ----------
+// The saved override (if any) for a crossing, matched by side + unordered id
+// pair.
+function crossingOverrideFor(a, b, side) {
+  return (track.selfIntersectionOverrides || []).find(o =>
+    o.side === side && ((o.a === a && o.b === b) || (o.a === b && o.b === a)));
+}
+// Effective state of a crossing: forced-* when an override exists, else auto-*
+// per the default local-window rule (mirrors TrackCore's default decide).
+function crossingState(cr) {
+  const o = crossingOverrideFor(cr.a, cr.b, cr.side);
+  if (o) return o.action === 'collapse' ? 'forced-collapse' : 'forced-keep';
+  return cr.span <= TrackCore.DEFAULT_SELF_INTERSECTION_SPAN ? 'auto-collapse' : 'auto-keep';
+}
+const CROSSING_COLORS = {
+  'auto-collapse': '#b9c2d0', // light grey: removed automatically
+  'auto-keep': '#ffb020',     // amber: kept automatically (far crossing) -- the
+                              // "overlap still there" case; deliberately NOT the
+                              // cyan of the centerline so it stands out on top
+  'forced-collapse': '#ff3355',// red: user forced removal
+  'forced-keep': '#37d17a'    // green: user forced keep
+};
+const CROSSING_HIT_RADIUS = 11;
+// Detect every self-intersection on a path's two edges (pre-collapse), keyed by
+// the control-point-id pair so it survives edits/resampling. World-space.
+function detectPathCrossings(controlPoints, closed, edges, wrapOpen) {
+  const out = [];
+  const scan = (side, pts) => {
+    for (const c of TrackCore.findSelfIntersections(pts, closed, wrapOpen)) {
+      const key = TrackCore.crossingKey(controlPoints, closed, TrackCore.N_DEFAULT, c);
+      if (key[0] == null || key[1] == null) continue;
+      out.push({ side, a: key[0], b: key[1], span: c.span, world: { x: c.point.x, z: c.point.z } });
+    }
+  };
+  scan('left', edges.left);
+  scan('right', edges.right);
+  return out;
+}
+// Nearest crossing marker to a screen point, or null. Searches the cache.
+function crossingMarkerAtTop(sx, sy) {
+  let best = null, bestD = CROSSING_HIT_RADIUS;
+  for (const list of crossingCache) {
+    for (const cr of list || []) {
+      const s = worldToScreen(cr.world.x, cr.world.z);
+      const d = Math.hypot(s.x - sx, s.y - sy);
+      if (d <= bestD) { bestD = d; best = cr; }
+    }
+  }
+  return best;
+}
+// Cycle a crossing's override: auto -> keep -> collapse -> auto. Undo-able.
+function cycleCrossingOverride(cr) {
+  pushUndo();
+  if (!track.selfIntersectionOverrides) track.selfIntersectionOverrides = [];
+  const list = track.selfIntersectionOverrides;
+  const idx = list.findIndex(o =>
+    o.side === cr.side && ((o.a === cr.a && o.b === cr.b) || (o.a === cr.b && o.b === cr.a)));
+  if (idx < 0) list.push({ side: cr.side, a: cr.a, b: cr.b, action: 'keep' });
+  else if (list[idx].action === 'keep') list[idx].action = 'collapse';
+  else list.splice(idx, 1);
+  refresh();
+}
 
 // ---------- Draw the top-down ribbon(s) ----------
 function drawTop() {
@@ -353,6 +422,7 @@ function drawTop() {
     return { id: path.id, closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
   });
   const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, track.disjointSeams || []);
+  if (!dragging) crossingCache = []; // rebuilt per-path below; stays cached during drags
   pathPreviews = bakedPaths.map((bp, pathIndex) => {
     const pp = bp.parts, frames = bp.frames;
     let edges = bp.edges;
@@ -368,40 +438,48 @@ function drawTop() {
     }
     const wrapsAtDisjointSeam = !bp.closed && !!cuts.start && !!cuts.end &&
       bp.controlPoints[0] && bp.controlPoints[bp.controlPoints.length - 1] && bp.controlPoints[0].id === bp.controlPoints[bp.controlPoints.length - 1].id;
-    edges = TrackCore.removeLocalEdgeSelfIntersections(edges, bp.closed, wrapsAtDisjointSeam);
-    // Where the SAME side of this SAME curve's edge crosses itself elsewhere
-    // along its length (e.g. a wiggly chicane), the wall drawn there should
-    // collapse to the crossing point -- matching track.html's buildRail. Kept
-    // as a separate wallLeft/wallRight so only the wall OUTLINE is affected;
-    // the filled road ribbon below still shows the true (uncollapsed) edges.
-    const wallLeft = TrackCore.collapseSelfIntersections(edges.left, bp.closed);
-    const wallRight = TrackCore.collapseSelfIntersections(edges.right, bp.closed);
+    // Detect self-intersections on the pre-collapse edges (for clickable
+    // markers). Heavy (O(N^2)); only when idle -- during a drag/pan reuse the
+    // cached world-space crossings so the frame stays cheap.
+    if (!dragging) crossingCache[pathIndex] = detectPathCrossings(bp.controlPoints, bp.closed, edges, wrapsAtDisjointSeam);
+
+    // Self-intersections (a tight fold, or the SAME side of this SAME curve
+    // crossing itself along its length -- e.g. a wiggly chicane) are collapsed
+    // to the crossing point here, on the edges shared by the road fill AND the
+    // wall outline below. This matches the game (track-game.js buildPath), which
+    // likewise cleans the edges that feed both its road ribbon and its physics
+    // corridor -- so the editor preview shows exactly what the game builds.
+    // Per-crossing keep/collapse overrides (authored via the markers) flow
+    // through the same deciders the game uses.
+    const deciders = TrackCore.makeSelfIntersectionDeciders(bp.controlPoints, bp.closed, TrackCore.N_DEFAULT, track.selfIntersectionOverrides || []);
+    edges = TrackCore.removeLocalEdgeSelfIntersections(
+      edges, bp.closed, wrapsAtDisjointSeam,
+      deciders && deciders.decideLeft, deciders && deciders.decideRight, deciders && deciders.scanSpan
+    );
     const count = bp.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
-    const centerPts = [], leftPts = [], rightPts = [], wallLeftPts = [], wallRightPts = [], rollAt = [], yAt = [];
+    const centerPts = [], leftPts = [], rightPts = [], rollAt = [], yAt = [];
     for (let i = 0; i < count; i++) {
       const j = i % frames.length;
       const f = frames[j];
       centerPts.push(worldToScreen(f.pos.x, f.pos.z));
       leftPts.push(worldToScreen(edges.left[j].x, edges.left[j].z));
       rightPts.push(worldToScreen(edges.right[j].x, edges.right[j].z));
-      wallLeftPts.push(worldToScreen(wallLeft[j].x, wallLeft[j].z));
-      wallRightPts.push(worldToScreen(wallRight[j].x, wallRight[j].z));
       rollAt.push(f.roll * 180 / Math.PI);
       yAt.push(f.pos.y);
     }
-    return { parts: pp, frames, edges, centerPts, leftPts, rightPts, wallLeftPts, wallRightPts, rollAt, yAt };
+    return { parts: pp, frames, edges, centerPts, leftPts, rightPts, rollAt, yAt };
   });
 
   const allY = pathPreviews.flatMap(p => p.yAt);
   const minElev = Math.min(...allY), maxElev = Math.max(...allY);
 
   for (const prev of pathPreviews) {
-    const { leftPts, rightPts, wallLeftPts, wallRightPts, rollAt, centerPts, yAt } = prev;
+    const { leftPts, rightPts, rollAt, centerPts, yAt } = prev;
+
+    // --- road fill ---
     if (flat) {
       // ribbon filled per-segment, coloured by interpolated roll (the edge
       // geometry carries no banking cue in this mode, so colour does instead).
-      // Uses the TRUE (uncollapsed) edges -- the road surface itself isn't
-      // clipped, only the wall outline drawn below it is.
       for (let i = 0; i < leftPts.length - 1; i++) {
         ctx.beginPath();
         ctx.moveTo(leftPts[i].x, leftPts[i].y);
@@ -414,16 +492,8 @@ function drawTop() {
           : rollColor(rollAt[i]);
         ctx.fill();
       }
-      // wall outlines (no lean tint -- colour is on the fill now); collapsed
-      // where the same side crosses itself, so it doesn't draw through there
-      ctx.strokeStyle = 'rgba(10,20,28,0.6)'; ctx.lineWidth = 1.5;
-      for (const edge of [wallLeftPts, wallRightPts]) {
-        ctx.beginPath(); ctx.moveTo(edge[0].x, edge[0].y);
-        for (let i = 1; i < edge.length; i++) ctx.lineTo(edge[i].x, edge[i].y);
-        ctx.stroke();
-      }
     } else {
-      // filled ribbon -- true (uncollapsed) edges, same reasoning as above
+      // filled ribbon
       ctx.beginPath();
       ctx.moveTo(leftPts[0].x, leftPts[0].y);
       for (let i = 1; i < leftPts.length; i++) ctx.lineTo(leftPts[i].x, leftPts[i].y);
@@ -431,16 +501,13 @@ function drawTop() {
       ctx.closePath();
       ctx.fillStyle = 'rgba(42,55,75,0.55)';
       ctx.fill();
-
-      // wall outlines tinted by roll (banked geometry already shows lean
-      // visually, this tint just reinforces it); collapsed at self-crossings
-      for (const edge of [wallLeftPts, wallRightPts]) {
-        for (let i = 0; i < edge.length - 1; i++) {
-          ctx.strokeStyle = rollTint(rollAt[i]);
-          ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.moveTo(edge[i].x, edge[i].y); ctx.lineTo(edge[i + 1].x, edge[i + 1].y); ctx.stroke();
-        }
-      }
+    }
+    // --- guard rail edges: the post-cleanup left/right curve edges.
+    ctx.strokeStyle = '#ffdd00'; ctx.lineWidth = 2;
+    for (const edge of [leftPts, rightPts]) {
+      ctx.beginPath(); ctx.moveTo(edge[0].x, edge[0].y);
+      for (let i = 1; i < edge.length; i++) ctx.lineTo(edge[i].x, edge[i].y);
+      ctx.stroke();
     }
     // centerline
     ctx.strokeStyle = 'rgba(79,214,255,0.9)';
@@ -448,6 +515,30 @@ function drawTop() {
     ctx.beginPath(); ctx.moveTo(centerPts[0].x, centerPts[0].y);
     for (let i = 1; i < centerPts.length; i++) ctx.lineTo(centerPts[i].x, centerPts[i].y);
     ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // self-intersection markers: one dot per detected crossing, coloured by
+  // effective state. Click to cycle auto -> keep -> collapse -> auto. Filled
+  // disc = the loop is collapsed (removed); hollow ring = the loop is kept.
+  // Red/green = user override; amber/grey = automatic. A dark halo keeps them
+  // visible on any ribbon/centerline colour.
+  for (const list of crossingCache) {
+    for (const cr of list || []) {
+      const state = crossingState(cr);
+      const s = worldToScreen(cr.world.x, cr.world.z);
+      const collapsed = state === 'auto-collapse' || state === 'forced-collapse';
+      const col = CROSSING_COLORS[state];
+      // dark contrast halo
+      ctx.beginPath(); ctx.arc(s.x, s.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+      // coloured disc (collapsed) or ring (kept)
+      ctx.beginPath(); ctx.arc(s.x, s.y, 6.5, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5; ctx.strokeStyle = col;
+      if (collapsed) { ctx.fillStyle = col; ctx.fill(); }
+      ctx.stroke();
+      // small centre pip so kept (hollow) markers still read as a target
+      if (!collapsed) { ctx.beginPath(); ctx.arc(s.x, s.y, 1.6, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); }
+    }
   }
 
   // start marker + direction arrow
@@ -875,12 +966,26 @@ function junctionIsValid(j) {
   const exists = track.paths.some(path => parts(path).controlPoints.some(p => p.id === j.pointId));
   return exists;
 }
+function allPositionIds() {
+  const ids = new Set();
+  for (const path of track.paths) for (const p of parts(path).controlPoints) if (p.id) ids.add(p.id);
+  return ids;
+}
+// A self-intersection override is stale once either endpoint control point it
+// was anchored to no longer exists.
+function overrideIsValid(o, ids) {
+  return !!o && ids.has(o.a) && ids.has(o.b);
+}
 function removeStaleSeams() {
   const before = (track.disjointSeams || []).length;
   track.disjointSeams = (track.disjointSeams || []).filter(seamIsValid);
   const beforeJ = (track.junctions || []).length;
   track.junctions = (track.junctions || []).filter(junctionIsValid);
-  return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length);
+  const beforeO = (track.selfIntersectionOverrides || []).length;
+  const ids = allPositionIds();
+  track.selfIntersectionOverrides = (track.selfIntersectionOverrides || []).filter(o => overrideIsValid(o, ids));
+  return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length)
+    + (beforeO - track.selfIntersectionOverrides.length);
 }
 function assertNoStaleSeams() {
   const removed = removeStaleSeams();
@@ -1472,7 +1577,9 @@ function updateMeta() {
   const total = uniquePositions.size;
   const seamCount = (track.disjointSeams || []).length;
   const junctionCount = (track.junctions || []).length;
-  const staleSeams = (track.disjointSeams || []).filter(s => !seamIsValid(s)).length + (track.junctions || []).filter(j => !junctionIsValid(j)).length;
+  const staleIds = allPositionIds();
+  const staleSeams = (track.disjointSeams || []).filter(s => !seamIsValid(s)).length + (track.junctions || []).filter(j => !junctionIsValid(j)).length
+    + (track.selfIntersectionOverrides || []).filter(o => !overrideIsValid(o, staleIds)).length;
   document.getElementById('metaHint').innerHTML =
     `${track.paths.length} path(s), ${total} unique position control points total` +
     (seamCount ? `, ${seamCount} disjoint corner(s)` : '') +
@@ -2081,6 +2188,10 @@ topCanvas.addEventListener('mousedown', (e) => {
   if (rollHandleHit && !e.shiftKey) { dragMutated = false; rollSel = rollHandleHit; widthSel = null; crossSectionSel = null; segSel = null; dragging = 'rollTop'; refresh(); return; }
   const rollHit = rollNodeAtTop(x, y);
   if (rollHit && !e.shiftKey) { rollSel = rollHit; widthSel = null; segSel = null; refresh(); return; }
+  if (!e.shiftKey) {
+    const crossingHit = crossingMarkerAtTop(x, y);
+    if (crossingHit) { cycleCrossingOverride(crossingHit); return; }
+  }
   const hit = nodeAtTop(x, y);
   if (hit && e.shiftKey) {
     const end = endpointEndFor(hit);
