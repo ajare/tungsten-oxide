@@ -397,27 +397,17 @@ function drawTop() {
   const elevationMode = renderMode === 'elevation';
   const bakedPaths = track.paths.map(path => {
     const pp = parts(path);
-    // Use the SAME baked frames the game uses, so the preview (including
-    // sharp cut corners) matches exactly what you drive. Edges are either the
-    // real banked geometry, or (flat mode) the unrolled width-only footprint.
+    // Use the SAME baked frames the game uses, so the preview matches exactly
+    // what you drive. Edges are either the real banked geometry, or (flat
+    // mode) the unrolled width-only footprint. Paths sharing a control point
+    // are not cut/clipped against each other -- they just meet there.
     const closed = path.closed !== false;
     const frames = TrackCore.buildCenterline(pp.controlPoints, TrackCore.N_DEFAULT, closed, pp.rollPoints, pp.widthPoints);
     const edges = flat ? TrackCore.buildFlatEdges(frames, closed) : TrackCore.buildEdges(frames, closed);
     return { id: path.id, closed, parts: pp, controlPoints: pp.controlPoints, frames, edges };
   });
-  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, (track.disjointSeams || []).concat(track.junctions || []));
-  pathPreviews = bakedPaths.map((bp, pathIndex) => {
+  pathPreviews = bakedPaths.map((bp) => {
     const pp = bp.parts, frames = bp.frames, edges = bp.edges;
-    const cuts = edgeCuts[pathIndex] || {};
-    if (cuts.start) {
-      if (cuts.start.left) edges.left[0] = cuts.start.left;
-      if (cuts.start.right) edges.right[0] = cuts.start.right;
-    }
-    if (cuts.end) {
-      const i = frames.length - 1;
-      if (cuts.end.left) edges.left[i] = cuts.end.left;
-      if (cuts.end.right) edges.right[i] = cuts.end.right;
-    }
     const count = bp.closed ? frames.length + 1 : frames.length; // closed: echo sample 0 at the end
     const centerPts = [], leftPts = [], rightPts = [], rollAt = [], yAt = [];
     for (let i = 0; i < count; i++) {

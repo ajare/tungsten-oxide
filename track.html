@@ -86,15 +86,12 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
-const BRANCH_CUT_SAMPLES = 12;         // max samples to cut road edges/walls back at branch junctions
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
-let junctionMeshes = [];               // filled branch/intersection surface patches
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
-let branchEndpointIds = new Set();     // endpoint IDs with 3+ incident curve ends (open rail gaps / junction fill)
-let branchClipZones = [];              // local no-wall zones around branch centers: { pos, radius }
+let overlapMesh = null;                // dark-blue patches where two connected curves' road polygons overlap
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
 
@@ -105,20 +102,13 @@ function disposeObject(obj) {
   if (obj.material) obj.material.dispose();
 }
 
-// A thin guard rail rising from one (already trimmed) track edge, along the
-// track's surface normal at each point (NOT world-up) so the wall banks with
-// the road instead of always pointing straight up. `normals` is parallel to
-// `edge` (same indexing as the baked frames the edges came from).
-function inBranchClipZone(a, b) {
-  if (!branchClipZones.length) return false;
-  const x = (a.x + b.x) * 0.5, y = (a.y + b.y) * 0.5, z = (a.z + b.z) * 0.5;
-  for (const zone of branchClipZones) {
-    const dx = x - zone.pos.x, dy = y - zone.pos.y, dz = z - zone.pos.z;
-    if (dx * dx + dy * dy + dz * dz <= zone.radius * zone.radius) return true;
-  }
-  return false;
-}
-function buildRail(edge, normals, closed, height, color, skipStartCount, skipEndCount) {
+// A thin guard rail rising from one track edge, along the track's surface
+// normal at each point (NOT world-up) so the wall banks with the road instead
+// of always pointing straight up. `normals` is parallel to `edge` (same
+// indexing as the baked frames the edges came from). Open paths leave the
+// rail's two ends unconnected (no cap segment), so ribbons sharing a control
+// point simply meet there without needing any join-specific cutting.
+function buildRail(edge, normals, closed, height, color) {
   const count = edge.length;
   const positions = [], indices = [];
   for (let i = 0; i < count; i++) {
@@ -130,9 +120,7 @@ function buildRail(edge, normals, closed, height, color, skipStartCount, skipEnd
   }
   const segCount = closed ? count : count - 1;
   for (let i = 0; i < segCount; i++) {
-    if (!closed && ((skipStartCount && i < skipStartCount) || (skipEndCount && i >= segCount - skipEndCount))) continue;
     const j = closed ? (i + 1) % count : i + 1;
-    if (inBranchClipZone(edge[i], edge[j])) continue;
     const a0 = i * 2, a1 = i * 2 + 1, b0 = j * 2, b1 = j * 2 + 1;
     indices.push(a0, b0, a1, a1, b0, b1);
   }
@@ -146,51 +134,15 @@ function buildRail(edge, normals, closed, height, color, skipStartCount, skipEnd
 
 // Compile a single path (closed loop or open curve) into renderable geometry
 // and a physics-ready centerline.
-function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges, endpointCuts, endpointNormals) {
+function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, prebuiltEdges) {
   // Bake the centerline via the shared core, then derive the two track edges
   // with self-intersections trimmed to sharp corners.
   const raw = prebuiltRaw || TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints);
   const edges = prebuiltEdges || TrackCore.buildEdges(raw, closed);
-  if (endpointNormals) {
-    if (endpointNormals.start) raw[0].normal = endpointNormals.start;
-    if (endpointNormals.end) raw[raw.length - 1].normal = endpointNormals.end;
-  }
-  if (endpointCuts) {
-    const applyCut = (end, i) => {
-      if (!endpointCuts[end]) return;
-      if (endpointCuts[end].left) edges.left[i] = endpointCuts[end].left;
-      if (endpointCuts[end].right) edges.right[i] = endpointCuts[end].right;
-    };
-    applyCut('start', 0);
-    applyCut('end', raw.length - 1);
-  }
-  let branchCutStart = 0, branchCutEnd = 0;
-  if (!closed) {
-    // At branch intersections (3+ incident curve ends), remove each incident
-    // ribbon's geometry from the shared point up to a cut line. Collapsing the
-    // whole run (not just vertex 0) turns those triangles zero-area, so the old
-    // road/wall geometry no longer renders inside the junction patch.
-    if (controlPoints[0] && branchEndpointIds.has(controlPoints[0].id)) {
-      const cutN = branchCutIndex(raw, true);
-      branchCutStart = cutN;
-      const l = { x: edges.left[cutN].x, y: edges.left[cutN].y, z: edges.left[cutN].z };
-      const r = { x: edges.right[cutN].x, y: edges.right[cutN].y, z: edges.right[cutN].z };
-      for (let i = 0; i <= cutN; i++) { edges.left[i] = { ...l }; edges.right[i] = { ...r }; }
-    }
-    const lastCp = controlPoints.length - 1;
-    if (controlPoints[lastCp] && branchEndpointIds.has(controlPoints[lastCp].id)) {
-      const cutN = branchCutIndex(raw, false);
-      branchCutEnd = cutN;
-      const j = raw.length - 1 - cutN;
-      const l = { x: edges.left[j].x, y: edges.left[j].y, z: edges.left[j].z };
-      const r = { x: edges.right[j].x, y: edges.right[j].y, z: edges.right[j].z };
-      for (let i = j; i < raw.length; i++) { edges.left[i] = { ...l }; edges.right[i] = { ...r }; }
-    }
-  }
 
   // Wrap frames into THREE vectors for the physics. Also record each sample's
-  // signed lateral offset (along edgeRight) of the TRIMMED left/right edges, so
-  // the collision corridor follows the cut corners, not just centerline +/- halfW.
+  // signed lateral offset (along edgeRight) of the left/right edges, so the
+  // collision corridor follows the actual road edge, not just centerline +/- halfW.
   const centerline = raw.map((f, i) => {
     const er = f.edgeRight, p = f.pos;
     const off = e => (e.x - p.x) * er.x + (e.y - p.y) * er.y + (e.z - p.z) * er.z;
@@ -202,9 +154,10 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
     };
   });
 
-  // Ribbon surface between the two (trimmed) edges. Collapsed vertices at a
-  // sharp corner make zero-area triangles there. Closed paths wrap the strip
-  // back to the start; open paths leave the two ends capped-off (open).
+  // Ribbon surface between the two edges. Closed paths wrap the strip back to
+  // the start; open paths leave the two ends unconnected. Where two paths share
+  // a control point their ribbons simply meet/overlap there -- no join-specific
+  // cutting.
   const pos = [], nrm = [], idx = [];
   for (let i = 0; i < N; i++) {
     const left = edges.left[i], right = edges.right[i], nml = raw[i].normal;
@@ -213,7 +166,6 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
   }
   const segCount = closed ? N : N - 1;
   for (let i = 0; i < segCount; i++) {
-    if (!closed && ((branchCutStart && i < branchCutStart) || (branchCutEnd && i >= segCount - branchCutEnd))) continue;
     const j = closed ? (i + 1) % N : i + 1;
     const l0 = i * 2, r0 = i * 2 + 1, l1 = j * 2, r1 = j * 2 + 1;
     idx.push(l0, r0, l1, r0, r1, l1);
@@ -222,7 +174,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setIndex(idx);
-  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xadd8ff, emissive: 0xadd8ff, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
   scene.add(mesh);
 
   // Dashed racing stripe riding just above the banked centerline.
@@ -230,19 +182,17 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, prebuiltRaw, 
     centerline.map(c => c.pos.clone().addScaledVector(c.normal, 0.05))
   );
   const stripeLine = closed
-    ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }))
-    : new THREE.Line(sg, new THREE.LineDashedMaterial({ color: 0x4fd6ff, dashSize: 3, gapSize: 2 }));
+    ? new THREE.LineLoop(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }))
+    : new THREE.Line(sg, new THREE.LineDashedMaterial({ color: 0xffdd00, dashSize: 3, gapSize: 2 }));
   stripeLine.computeLineDistances();
   scene.add(stripeLine);
 
-  // Glowing guard rails rising from both trimmed edges, along the track's
-  // surface normal so they bank with the road. `raw[i].normal` aligns with
+  // Glowing guard rails rising from both edges, along the track's surface
+  // normal so they bank with the road. `raw[i].normal` aligns with
   // edges.left[i]/edges.right[i] (both derived from the same baked frames).
   const railNormals = raw.map(f => f.normal);
-  const skipStartRail = branchCutStart;
-  const skipEndRail = branchCutEnd;
-  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355, skipStartRail, skipEndRail);
-  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355, skipStartRail, skipEndRail);
+  const railR = buildRail(edges.right, railNormals, closed, 1.4, 0xff3355);
+  const railL = buildRail(edges.left, railNormals, closed, 1.4, 0xff3355);
   scene.add(railR, railL);
 
   const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
@@ -292,184 +242,251 @@ function inferBranchPointIds(trackPaths, junctions) {
 }
 function normalizeBranchTopologyForRuntime(trackPaths, junctions) {
   const branchPointIds = inferBranchPointIds(trackPaths, junctions);
-  let out = (trackPaths || []).map(p => ({ ...p, points: (p.points || []).slice() }));
-  for (const pointId of branchPointIds) {
-    const next = [];
-    for (const path of out) {
-      const pp = TrackCore.splitPoints(path.points);
-      const cps = pp.controlPoints;
-      const idx = cps.findIndex(p => p.id === pointId);
-      if (idx < 0) { next.push(path); continue; }
-      if (path.closed !== false) {
-        // A branch into a closed loop must open the loop at the junction, or
-        // the loop's walls remain continuous through the intersection.
-        const rotated = cps.slice(idx).concat(cps.slice(0, idx), cps[idx]);
-        next.push({ ...path, closed: false, points: rotated.concat(runtimeScalarPoints(path)) });
-      } else if (idx > 0 && idx < cps.length - 1 && idx + 1 >= 4 && cps.length - idx >= 4) {
-        // Defensive runtime split for older/exported tracks whose editor did
-        // not split a middle-vertex branch target.
-        next.push(
-          { id: (path.id || '') + '_a_' + pointId, closed: false, points: cps.slice(0, idx + 1).concat(runtimeScalarPoints(path)) },
-          { id: (path.id || '') + '_b_' + pointId, closed: false, points: cps.slice(idx).concat(runtimeScalarPoints(path)) }
-        );
-      } else {
-        next.push(path);
+  const isBranch = id => !!id && branchPointIds.has(id);
+  // Turn every branch point into a shared OPEN endpoint so its walls get cut and
+  // a junction patch fills the gap. A closed loop is sliced into one arc between
+  // each consecutive pair of branch points around the loop; an open curve is
+  // split at each interior branch point. This handles ALL of a path's branch
+  // points in a single pass -- the previous per-point "open then re-split"
+  // approach could not split a second branch point that landed within a few
+  // control points of the first (it failed a 4-point-per-piece guard), leaving
+  // that junction buried as an interior vertex with its walls running straight
+  // through the intersection.
+  const out = [];
+  for (const path of trackPaths || []) {
+    const cps = TrackCore.splitPoints(path.points).controlPoints;
+    const scalar = runtimeScalarPoints(path);
+    if (path.closed !== false) {
+      const bIdx = [];
+      for (let i = 0; i < cps.length; i++) if (isBranch(cps[i].id)) bIdx.push(i);
+      if (bIdx.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
+      const n = cps.length;
+      // One arc per gap between consecutive branch points (wraps around the loop).
+      // A single branch point yields one arc that starts and ends on it -- the
+      // whole loop opened at that point, matching the old single-branch behaviour.
+      for (let k = 0; k < bIdx.length; k++) {
+        const a = bIdx[k], b = bIdx[(k + 1) % bIdx.length];
+        const arc = [cps[a]];
+        let i = a;
+        do { i = (i + 1) % n; arc.push(cps[i]); } while (i !== b);
+        out.push({ id: (path.id || '') + '_arc' + k + '_' + cps[a].id, closed: false, points: arc.concat(scalar) });
+      }
+    } else {
+      const cut = [];
+      for (let i = 1; i < cps.length - 1; i++) if (isBranch(cps[i].id)) cut.push(i);
+      if (cut.length === 0) { out.push({ ...path, points: path.points.slice() }); continue; }
+      const bounds = [0, ...cut, cps.length - 1];
+      for (let k = 0; k < bounds.length - 1; k++) {
+        out.push({ id: (path.id || '') + '_seg' + k, closed: false, points: cps.slice(bounds[k], bounds[k + 1] + 1).concat(scalar) });
       }
     }
-    out = next;
   }
   return out;
 }
 
-function endpointIncidentCounts(bakedPaths) {
-  const counts = new Map();
-  bakedPaths.forEach(bp => {
+// For each position-point ID that is a shared open endpoint of 2+ baked paths,
+// the list of { pathIndex, end } incidences touching it there.
+function sharedEndpointGroups(bakedPaths) {
+  const groups = new Map();
+  const add = (id, pathIndex, end) => {
+    if (!id) return;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push({ pathIndex, end });
+  };
+  bakedPaths.forEach((bp, pathIndex) => {
     if (bp.closed || !bp.controlPoints.length) return;
     const first = bp.controlPoints[0], last = bp.controlPoints[bp.controlPoints.length - 1];
-    if (first && first.id) counts.set(first.id, (counts.get(first.id) || 0) + 1);
-    if (last && last.id) counts.set(last.id, (counts.get(last.id) || 0) + 1);
+    if (first) add(first.id, pathIndex, 'start');
+    if (last) add(last.id, pathIndex, 'end');
   });
+  return groups;
+}
+function endpointIncidentCounts(bakedPaths) {
+  const counts = new Map();
+  for (const [id, list] of sharedEndpointGroups(bakedPaths)) counts.set(id, list.length);
   return counts;
 }
-function branchIncidentEndpointIds(bakedPaths, authoredBranchPointIds) {
-  const counts = endpointIncidentCounts(bakedPaths);
-  const ids = new Set([...counts].filter(([, n]) => n >= 3).map(([id]) => id));
-  for (const id of authoredBranchPointIds || []) if ((counts.get(id) || 0) >= 2) ids.add(id);
-  return ids;
+
+// --- overlap detection between connected curves' road polygons -------------
+// Where two paths share a control point their road ribbons are drawn
+// independently (see buildPath) and are free to overlap near that point.
+// This finds the actual overlapping area -- via exact convex-polygon
+// clipping of each path's road quads near the shared point -- so it can be
+// highlighted, rather than approximating the junction shape.
+function crossXZ(a, b, c) { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); }
+function polySignedAreaXZ(poly) {
+  let s = 0;
+  for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; s += p.x * q.z - q.x * p.z; }
+  return s / 2;
 }
-function branchCutIndex(frames, fromStart) {
-  const end = fromStart ? 0 : frames.length - 1;
-  const target = Math.max(3, (frames[end].halfW || 6) * 0.45);
+function ensureCCWXZ(poly) { return polySignedAreaXZ(poly) < 0 ? poly.slice().reverse() : poly; }
+function segIntersectXZ(p1, p2, p3, p4) {
+  const d = (p2.x - p1.x) * (p4.z - p3.z) - (p2.z - p1.z) * (p4.x - p3.x);
+  if (Math.abs(d) < 1e-12) return p2;
+  const t = ((p3.x - p1.x) * (p4.z - p3.z) - (p3.z - p1.z) * (p4.x - p3.x)) / d;
+  return { x: p1.x + t * (p2.x - p1.x), z: p1.z + t * (p2.z - p1.z) };
+}
+// Sutherland-Hodgman: clip convex polygon `subject` against convex polygon
+// `clip` (both CCW in XZ). Returns the (convex) intersection polygon, or []
+// if they don't overlap.
+function clipConvexPolyXZ(subject, clip) {
+  let output = subject;
+  for (let i = 0; i < clip.length && output.length; i++) {
+    const A = clip[i], B = clip[(i + 1) % clip.length];
+    const input = output;
+    output = [];
+    for (let j = 0; j < input.length; j++) {
+      const cur = input[j], prev = input[(j - 1 + input.length) % input.length];
+      const curIn = crossXZ(A, B, cur) >= 0, prevIn = crossXZ(A, B, prev) >= 0;
+      if (curIn) {
+        if (!prevIn) output.push(segIntersectXZ(prev, cur, A, B));
+        output.push(cur);
+      } else if (prevIn) {
+        output.push(segIntersectXZ(prev, cur, A, B));
+      }
+    }
+  }
+  return output;
+}
+function aabbOverlapXZ(p, q) {
+  let p0x = Infinity, p1x = -Infinity, p0z = Infinity, p1z = -Infinity;
+  for (const v of p) { p0x = Math.min(p0x, v.x); p1x = Math.max(p1x, v.x); p0z = Math.min(p0z, v.z); p1z = Math.max(p1z, v.z); }
+  let q0x = Infinity, q1x = -Infinity, q0z = Infinity, q1z = -Infinity;
+  for (const v of q) { q0x = Math.min(q0x, v.x); q1x = Math.max(q1x, v.x); q0z = Math.min(q0z, v.z); q1z = Math.max(q1z, v.z); }
+  return p0x <= q1x && p1x >= q0x && p0z <= q1z && p1z >= q0z;
+}
+// Barycentric weights of 2D point (x,z) in triangle (a,b,c), using only x/z.
+function baryXZ(x, z, a, b, c) {
+  const d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+  if (Math.abs(d) < 1e-12) return null;
+  const wa = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / d;
+  const wb = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / d;
+  return [wa, wb, 1 - wa - wb];
+}
+// A quad's height + surface normal at 2D point (x,z), found by splitting the
+// quad into its two triangles and barycentric-interpolating whichever one
+// contains the point (falls back to the other on the shared diagonal). Only
+// used to place/orient an already-clipped vertex in 3D -- the clip itself
+// (clipConvexPolyXZ) never looks at height.
+function sampleQuad3D(corners, x, z) {
+  const [c0, c1, c2, c3] = corners;
+  const blend = (w, a, b, c) => ({
+    y: w[0] * a.y + w[1] * b.y + w[2] * c.y,
+    n: {
+      x: w[0] * a.n.x + w[1] * b.n.x + w[2] * c.n.x,
+      y: w[0] * a.n.y + w[1] * b.n.y + w[2] * c.n.y,
+      z: w[0] * a.n.z + w[1] * b.n.z + w[2] * c.n.z
+    }
+  });
+  let w = baryXZ(x, z, c0, c1, c2);
+  if (w && w[0] >= -1e-6 && w[1] >= -1e-6 && w[2] >= -1e-6) return blend(w, c0, c1, c2);
+  w = baryXZ(x, z, c0, c2, c3) || [0.25, 0.25, 0.5];
+  return blend(w, c0, c2, c3);
+}
+// Road quads (as XZ polygons for clipping, plus the original 3D+normal
+// corners for later height/normal lookup) for the samples closest to one end
+// of a baked path, far enough to cover any plausible overlap with another
+// path meeting it there.
+function nearEndQuads(bp, fromStart) {
+  const frames = bp.frames, edges = bp.edges, count = frames.length;
+  const halfW = (frames[fromStart ? 0 : count - 1].halfW) || 6;
+  const targetLen = halfW * 3;
+  const maxSamples = Math.min(40, count - 1);
+  const quads = [];
   let dist = 0;
-  const limit = Math.min(BRANCH_CUT_SAMPLES, Math.max(1, Math.floor(frames.length / 5)));
-  for (let step = 1; step <= limit; step++) {
-    const a = frames[fromStart ? step - 1 : frames.length - step];
-    const b = frames[fromStart ? step : frames.length - 1 - step];
-    dist += Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y, a.pos.z - b.pos.z);
-    if (dist >= target) return step;
+  for (let step = 0; step < maxSamples; step++) {
+    const i = fromStart ? step : count - 2 - step;
+    const j = i + 1;
+    const l0 = edges.left[i], l1 = edges.left[j], r0 = edges.right[i], r1 = edges.right[j];
+    const ni = frames[i].normal, nj = frames[j].normal;
+    const poly = ensureCCWXZ([{ x: l0.x, z: l0.z }, { x: l1.x, z: l1.z }, { x: r1.x, z: r1.z }, { x: r0.x, z: r0.z }]);
+    const corners = [{ ...l0, n: ni }, { ...l1, n: nj }, { ...r1, n: nj }, { ...r0, n: ni }];
+    quads.push({ poly, corners });
+    dist += Math.hypot(frames[j].pos.x - frames[i].pos.x, frames[j].pos.z - frames[i].pos.z);
+    if (dist >= targetLen) break;
   }
-  return limit;
+  return quads;
 }
-
-function buildBranchClipZones(bakedPaths, branchPointIds) {
-  const zones = [];
-  for (const pointId of branchPointIds || []) {
-    let pos = null, radius = 0;
-    bakedPaths.forEach(bp => {
-      bp.controlPoints.forEach(cp => {
-        if (cp && cp.id === pointId) pos = { x: cp.pos[0], y: cp.pos[1], z: cp.pos[2] };
-      });
-      bp.frames.forEach(f => {
-        if (!pos) return;
-        const dx = f.pos.x - pos.x, dy = f.pos.y - pos.y, dz = f.pos.z - pos.z;
-        if (dx * dx + dy * dy + dz * dz < Math.pow((f.halfW || 6) * 1.4, 2)) {
-          radius = Math.max(radius, (f.halfW || 6) * 1.15 + 0.75);
-        }
-      });
-    });
-    if (pos) zones.push({ pos, radius: radius || 8 });
-  }
-  return zones;
-}
-
-function convexHullXZ(points) {
-  const pts = points.slice().sort((a, b) => a.x === b.x ? a.z - b.z : a.x - b.x);
-  const cross = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
-  const lower = [];
-  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
-  const upper = [];
-  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
-  return lower.slice(0, -1).concat(upper.slice(0, -1));
-}
-
-function buildBranchJunctionMeshes(bakedPaths, branchPointIds) {
+// All overlap polygons { poly: [{x,y,z,n}...] } between every pair of paths
+// incident at one shared point. The overlap region itself is found by exact
+// 2D convex-polygon clipping in the XZ (ground) plane only -- height plays no
+// part in determining WHERE the polygons overlap. Once a vertex's (x,z) is
+// known, its height and normal are looked up from both source roads (via
+// sampleQuad3D) and averaged, so the overlay vertex sits on -- and is oriented
+// with -- the actual (possibly banked) road surfaces meeting there, instead of
+// one flat height per patch (which produced visible seams/z-fighting between
+// adjacent patches on banked sections).
+function overlapPolysAtSharedPoint(bakedPaths, incidences) {
+  const perInc = incidences.map(inc => nearEndQuads(bakedPaths[inc.pathIndex], inc.end === 'start'));
   const out = [];
-  const ids = branchIncidentEndpointIds(bakedPaths, branchPointIds);
-  for (const pointId of ids) {
-    const pts = [], normals = [];
-    bakedPaths.forEach(bp => {
-      if (bp.closed || !bp.controlPoints.length) return;
-      const lastCp = bp.controlPoints.length - 1;
-      const add = i => {
-        pts.push(bp.edges.left[i], bp.edges.right[i]);
-        normals.push(bp.frames[i].normal, bp.frames[i].normal);
-      };
-      if (bp.controlPoints[0] && bp.controlPoints[0].id === pointId) add(branchCutIndex(bp.frames, true));
-      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === pointId) add(bp.frames.length - 1 - branchCutIndex(bp.frames, false));
-    });
-    if (pts.length < 3) continue;
-    const hull = convexHullXZ(pts);
-    if (hull.length < 3) continue;
-    const center = hull.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
-    center.x /= hull.length; center.y /= hull.length; center.z /= hull.length;
-    const avgN = normals.reduce((s, n) => ({ x: s.x + n.x, y: s.y + n.y, z: s.z + n.z }), { x: 0, y: 0, z: 0 });
-    const nl = Math.hypot(avgN.x, avgN.y, avgN.z) || 1;
-    const n = { x: avgN.x / nl, y: avgN.y / nl, z: avgN.z / nl };
-    const pos = [center.x, center.y, center.z], nrm = [n.x, n.y, n.z], idx = [];
-    hull.forEach(p => { pos.push(p.x, p.y, p.z); nrm.push(n.x, n.y, n.z); });
-    for (let i = 0; i < hull.length; i++) idx.push(0, i + 1, ((i + 1) % hull.length) + 1);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-    geo.setIndex(idx);
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide }));
-    scene.add(mesh);
-    out.push(mesh);
+  for (let a = 0; a < perInc.length; a++) {
+    for (let b = a + 1; b < perInc.length; b++) {
+      for (const qa of perInc[a]) {
+        for (const qb of perInc[b]) {
+          if (!aabbOverlapXZ(qa.poly, qb.poly)) continue;
+          const clipped = clipConvexPolyXZ(qa.poly, qb.poly);
+          if (clipped.length < 3) continue;
+          const poly = clipped.map(v => {
+            const sa = sampleQuad3D(qa.corners, v.x, v.z), sb = sampleQuad3D(qb.corners, v.x, v.z);
+            const nx = sa.n.x + sb.n.x, ny = sa.n.y + sb.n.y, nz = sa.n.z + sb.n.z;
+            const nl = Math.hypot(nx, ny, nz) || 1;
+            return { x: v.x, y: (sa.y + sb.y) / 2, z: v.z, n: { x: nx / nl, y: ny / nl, z: nz / nl } };
+          });
+          out.push(poly);
+        }
+      }
+    }
   }
   return out;
 }
-
-// At a disjoint corner the two incident path ends have different surface
-// normals. If each rail used its own normal, the wall bases would meet (edge
-// cuts) but the tops would split apart. Average the endpoint normals per seam
-// and use that shared normal at both incident ends so the rail tops meet too.
-function computeDisjointEndpointNormals(bakedPaths, disjointSeams) {
-  const out = bakedPaths.map(() => ({}));
-  const norm = v => {
-    const l = Math.hypot(v.x, v.y, v.z) || 1;
-    return { x: v.x / l, y: v.y / l, z: v.z / l };
-  };
-  for (const seam of disjointSeams || []) {
-    const incs = [];
-    bakedPaths.forEach((bp, pathIndex) => {
-      if (bp.closed || !bp.controlPoints.length || !bp.frames.length) return;
-      const lastCp = bp.controlPoints.length - 1;
-      if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
-        incs.push({ pathIndex, end: 'start', normal: bp.frames[0].normal });
-      }
-      if (bp.controlPoints[lastCp] && bp.controlPoints[lastCp].id === seam.pointId) {
-        incs.push({ pathIndex, end: 'end', normal: bp.frames[bp.frames.length - 1].normal });
-      }
-    });
-    if (incs.length < 2) continue;
-    const avg = norm(incs.reduce((s, inc) => ({
-      x: s.x + inc.normal.x, y: s.y + inc.normal.y, z: s.z + inc.normal.z
-    }), { x: 0, y: 0, z: 0 }));
-    for (const inc of incs) out[inc.pathIndex][inc.end] = avg;
+// One merged mesh of all overlap patches, lifted slightly above the road
+// surface (along the blended local surface normal, so it hugs banked track
+// too) to avoid z-fighting.
+function buildOverlapMesh(bakedPaths, color) {
+  const groups = sharedEndpointGroups(bakedPaths);
+  const allPolys = [];
+  for (const [, incidences] of groups) {
+    if (incidences.length < 2) continue;
+    allPolys.push(...overlapPolysAtSharedPoint(bakedPaths, incidences));
   }
-  return out;
+  if (!allPolys.length) return null;
+  const LIFT = 0.02;
+  const pos = [], nrm = [], idx = [];
+  let vBase = 0;
+  for (const poly of allPolys) {
+    for (const v of poly) {
+      pos.push(v.x + v.n.x * LIFT, v.y + v.n.y * LIFT, v.z + v.n.z * LIFT);
+      nrm.push(v.n.x, v.n.y, v.n.z);
+    }
+    for (let i = 1; i < poly.length - 1; i++) idx.push(vBase, vBase + i, vBase + i + 1);
+    vBase += poly.length;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  geo.setIndex(idx);
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+  return new THREE.Mesh(geo, mat);
 }
-
 // (Re)build the entire track from a normalized track object, then reset the
 // ship. `track.paths` is [{ closed, points }, ...] (points: typed
 // position/roll/width control points, see track-core.js). `track.start` is
 // { path, point, reverse } picking which position control point the ship
-// begins at and which way it faces. `track.disjointSeams` identifies hard
-// shared corners whose open endpoint edges should be cut.
+// begins at and which way it faces. Paths that share a control point simply
+// meet there -- their ribbons/walls are not cut or clipped against each other.
 function buildTrack(track) {
-  const authoredBranchPointIds = inferBranchPointIds(track.paths || [], track.junctions || []);
   const trackPaths = normalizeBranchTopologyForRuntime(track.paths || [], track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
   connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
 
   // Drop any previously-built geometry before rebuilding.
-  for (const m of junctionMeshes) disposeObject(m);
-  junctionMeshes = [];
   for (const p of paths) {
     disposeObject(p.mesh); disposeObject(p.stripeLine);
     disposeObject(p.railR); disposeObject(p.railL);
   }
+  disposeObject(overlapMesh);
+  overlapMesh = null;
 
   const bakedPaths = trackPaths.map(p => {
     const { controlPoints, rollPoints, widthPoints } = TrackCore.splitPoints(p.points);
@@ -478,17 +495,13 @@ function buildTrack(track) {
     const edges = TrackCore.buildEdges(frames, closed);
     return { id: p.id, closed, controlPoints, rollPoints, widthPoints, frames, edges };
   });
-  const hardJunctions = (track.disjointSeams || []).concat(track.junctions || []);
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
-  branchClipZones = buildBranchClipZones(bakedPaths, authoredBranchPointIds);
-  const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, hardJunctions);
-  const endpointNormals = computeDisjointEndpointNormals(bakedPaths, hardJunctions);
-  branchEndpointIds = branchIncidentEndpointIds(bakedPaths, authoredBranchPointIds);
-  paths = bakedPaths.map((p, i) => buildPath(
-    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i]
+  paths = bakedPaths.map(p => buildPath(
+    p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.frames, p.edges
   ));
-  junctionMeshes = buildBranchJunctionMeshes(bakedPaths, authoredBranchPointIds);
+  overlapMesh = buildOverlapMesh(bakedPaths, 0x0a2a66);
+  if (overlapMesh) scene.add(overlapMesh);
 
   resetShip();
   const label = document.getElementById('trackName');

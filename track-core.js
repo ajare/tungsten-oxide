@@ -349,60 +349,6 @@
     return { left: trimEdge(left, frames, closed), right: trimEdge(right, frames, closed) };
   }
 
-  // Compute hard-corner edge cuts for disjoint shared endpoints. `bakedPaths`
-  // entries are { id, closed, controlPoints, frames, edges }. Returns an array
-  // parallel to bakedPaths: each entry may contain { start:{left,right},
-  // end:{left,right} } endpoint overrides. Boundary lines from the two incident
-  // path ends are intersected in XZ; far/parallel intersections fall back to the
-  // shared center point, producing a deliberate hard cut instead of folded edge
-  // overhangs.
-  function computeDisjointEdgeCuts(bakedPaths, disjointSeams) {
-    const cuts = bakedPaths.map(() => ({}));
-    const centerOf = inc => inc.frames[inc.idx].pos;
-    const fallback = inc => {
-      const p = centerOf(inc);
-      return { x: p.x, y: p.y, z: p.z };
-    };
-    const line = (inc, side) => ({ p: inc.edges[side][inc.idx], q: inc.edges[side][inc.neighbor] });
-    for (const seam of disjointSeams || []) {
-      const incs = [];
-      bakedPaths.forEach((bp, pathIndex) => {
-        if (bp.closed || !bp.controlPoints.length || bp.frames.length < 2) return;
-        const last = bp.controlPoints.length - 1;
-        if (bp.controlPoints[0] && bp.controlPoints[0].id === seam.pointId) {
-          incs.push({ pathIndex, end: 'start', idx: 0, neighbor: 1, frames: bp.frames, edges: bp.edges });
-        }
-        if (bp.controlPoints[last] && bp.controlPoints[last].id === seam.pointId) {
-          incs.push({ pathIndex, end: 'end', idx: bp.frames.length - 1, neighbor: bp.frames.length - 2, frames: bp.frames, edges: bp.edges });
-        }
-      });
-      if (incs.length < 2) continue;
-      const center = fallback(incs[0]);
-      if (incs.length > 2) {
-        // Branch junction: leave each incident ribbon at full width so the
-        // overlapping road surfaces form a drivable merged junction. Pinching
-        // these to the center point creates a zero-width bottleneck that makes
-        // the ship pop or fall instead of choosing either branch.
-        continue;
-      }
-      const a = incs[0], b = incs[1];
-      const maxHalfW = Math.max(a.frames[a.idx].halfW || 1, b.frames[b.idx].halfW || 1);
-      const sideCut = side => {
-        const la = line(a, side), lb = line(b, side);
-        let x = lineIntersectXZ(la.p, la.q, lb.p, lb.q) || center;
-        if (Math.hypot(x.x - center.x, x.z - center.z) > 6 * maxHalfW) x = center;
-        return x;
-      };
-      const left = sideCut('left'), right = sideCut('right');
-      for (const inc of [a, b]) {
-        if (!cuts[inc.pathIndex][inc.end]) cuts[inc.pathIndex][inc.end] = {};
-        cuts[inc.pathIndex][inc.end].left = { x: left.x, y: left.y, z: left.z };
-        cuts[inc.pathIndex][inc.end].right = { x: right.x, y: right.y, z: right.z };
-      }
-    }
-    return cuts;
-  }
-
   // --- JSON schema: parse / validate / serialize -----------------------------
   function normalizePoint(p, i) {
     if (!p || !Array.isArray(p.pos) || p.pos.length !== 3 || p.pos.some(n => typeof n !== 'number')) {
@@ -625,7 +571,6 @@
 
   global.TrackCore = {
     basis, basisDeriv, splitPoints, makeEvaluator, buildCenterline, buildEdges, buildFlatEdges,
-    computeDisjointEdgeCuts,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     parseTrack, serializeTrack, normalizeStart,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT,
