@@ -35,7 +35,7 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
-const CROSS_SECTION_SEGMENTS = 12;     // samples across the road width for curved cross-sections
+const CROSS_SECTION_SEGMENTS = 24;     // max samples across the road width for curved cross-sections
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
@@ -55,6 +55,8 @@ function crossSectionHeightDerivative(curvature, tightness, v, chordWidth) {
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
+let showGuardRails = false;
+let showWireframe = false;
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
 
@@ -123,41 +125,44 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   // section curvature subdivides the strip across its width: 0 keeps the old
   // flat chord, 1 raises the center to a semicircular arc with the same edges.
   const roadMaterial = () => new THREE.MeshStandardMaterial({ color: 0x7fb4d4, emissive: 0x31566a, emissiveIntensity: 0.12, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide, flatShading: true });
-  const pos = [], idx = [];
-  const crossCount = CROSS_SECTION_SEGMENTS + 1;
-  for (let i = 0; i < N; i++) {
-    const left = edges.left[i], right = edges.right[i], f = raw[i];
+  const surfacePoint = (frameIndex, v) => {
+    const left = edges.left[frameIndex], right = edges.right[frameIndex], f = raw[frameIndex];
     const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
     const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
-    for (let j = 0; j < crossCount; j++) {
-      const v = j / CROSS_SECTION_SEGMENTS;
-      const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
-      pos.push(
-        left.x + chord.x * v + f.normal.x * h,
-        left.y + chord.y * v + f.normal.y * h,
-        left.z + chord.z * v + f.normal.z * h
-      );
-    }
-  }
+    const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
+    return [
+      left.x + chord.x * v + f.normal.x * h,
+      left.y + chord.y * v + f.normal.y * h,
+      left.z + chord.z * v + f.normal.z * h
+    ];
+  };
+  // Fixed cross-section resolution: 24 segments across every longitudinal strip.
+  const pos = [];
+  const pushPoint = p => pos.push(p[0], p[1], p[2]);
   const segCount = closed ? N : N - 1;
   for (let i = 0; i < segCount; i++) {
     const ni = closed ? (i + 1) % N : i + 1;
     for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
-      const a = i * crossCount + j, b = i * crossCount + j + 1;
-      const c = ni * crossCount + j, d = ni * crossCount + j + 1;
-      idx.push(a, b, c, b, d, c);
+      const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
+      const a = surfacePoint(i, v0), b = surfacePoint(i, v1);
+      const c = surfacePoint(ni, v0), d = surfacePoint(ni, v1);
+      pushPoint(a); pushPoint(b); pushPoint(c);
+      pushPoint(b); pushPoint(d); pushPoint(c);
     }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  // Duplicate indexed vertices and compute normals per triangle so lighting is
-  // flat per rendered polygon, not smoothed/interpolated across the road mesh.
-  const flatG = g.toNonIndexed();
+  const flatG = new THREE.BufferGeometry();
+  flatG.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   flatG.computeVertexNormals();
-  g.dispose();
   const mesh = new THREE.Mesh(flatG, roadMaterial());
   scene.add(mesh);
+
+  const wireLine = new THREE.LineSegments(
+    new THREE.WireframeGeometry(flatG),
+    new THREE.LineBasicMaterial({ color: 0x102838, transparent: true, opacity: 0.55, depthTest: false })
+  );
+  wireLine.visible = showWireframe;
+  wireLine.renderOrder = 10;
+  scene.add(wireLine);
 
   // Dashed racing stripe riding just above the banked centerline.
   const sg = new THREE.BufferGeometry().setFromPoints(
@@ -169,17 +174,48 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   stripeLine.computeLineDistances();
   scene.add(stripeLine);
 
-  // Walls remain physical via centerline.sLeft/sRight collision bounds above,
-  // but are not rendered as guard-rail meshes.
-  const railR = null;
-  const railL = null;
+  // Optional guard rails, toggled with G. Collision remains driven by
+  // centerline.sLeft/sRight; these meshes are visual only.
+  const buildGuardRail = (sideKey, color) => {
+    const RAIL_H = 1.8, LIFT = 0.04;
+    const pos = [], idx = [];
+    for (const c of centerline) {
+      const surface = curvedSurfaceFrame(c, c[sideKey]);
+      const base = surface.pos.clone().addScaledVector(surface.normal, LIFT);
+      const top = base.clone().addScaledVector(surface.normal, RAIL_H);
+      pos.push(base.x, base.y, base.z, top.x, top.y, top.z);
+    }
+    const segCount = closed ? centerline.length : centerline.length - 1;
+    for (let i = 0; i < segCount; i++) {
+      const j = closed ? (i + 1) % centerline.length : i + 1;
+      const a = i * 2, b = i * 2 + 1, c = j * 2, d = j * 2 + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    const flatG = g.toNonIndexed();
+    flatG.computeVertexNormals();
+    g.dispose();
+    const m = new THREE.MeshStandardMaterial({
+      color, emissive: color, emissiveIntensity: 0.25,
+      roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide, flatShading: true
+    });
+    const rail = new THREE.Mesh(flatG, m);
+    rail.visible = showGuardRails;
+    return rail;
+  };
+  const railL = buildGuardRail('sLeft', 0xd8b400);
+  const railR = buildGuardRail('sRight', 0xd8b400);
+  scene.add(railL);
+  scene.add(railR);
 
   const anchors = controlPoints.map(c => new THREE.Vector3(c.pos[0], c.pos[1], c.pos[2]));
   const endpointIds = {
     start: controlPoints[0] && controlPoints[0].id,
     end: controlPoints[controlPoints.length - 1] && controlPoints[controlPoints.length - 1].id
   };
-  return { closed, centerline, mesh, stripeLine, railR, railL, anchors, endpointIds };
+  return { closed, centerline, mesh, wireLine, stripeLine, railR, railL, anchors, endpointIds };
 }
 
 // For each position-point ID that is a shared open endpoint of 2+ baked paths,
@@ -278,7 +314,7 @@ function buildTrack(track) {
 
   // Drop any previously-built geometry before rebuilding.
   for (const p of paths) {
-    disposeObject(p.mesh); disposeObject(p.stripeLine);
+    disposeObject(p.mesh); disposeObject(p.wireLine); disposeObject(p.stripeLine);
     disposeObject(p.railR); disposeObject(p.railL);
   }
   const bakedPaths = trackPaths.map(p => {
@@ -482,7 +518,20 @@ function resetShip() {
 
 // ---------- Input ----------
 const keys = {};
-window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'KeyG' && !e.repeat) {
+    showGuardRails = !showGuardRails;
+    for (const p of paths) {
+      if (p.railL) p.railL.visible = showGuardRails;
+      if (p.railR) p.railR.visible = showGuardRails;
+    }
+  }
+  if (e.code === 'KeyH' && !e.repeat) {
+    showWireframe = !showWireframe;
+    for (const p of paths) if (p.wireLine) p.wireLine.visible = showWireframe;
+  }
+});
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 function isDown(...codes) { return codes.some(c => keys[c]); }

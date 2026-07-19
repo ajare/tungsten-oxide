@@ -1,0 +1,9 @@
+{
+  "name": "tungsten-oxide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based racing track editor and driving game.",
+  "dependencies": {
+    "@willpower/geometry": "file:ext/geoemetry-js"
+  }
+}

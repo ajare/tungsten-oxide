@@ -1,0 +1,3 @@
+[submodule "geoemetry-js"]
+	path = ext/geoemetry-js
+	url = https://github.com/ajare/geoemetry-js
