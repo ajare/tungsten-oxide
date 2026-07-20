@@ -24,6 +24,10 @@ In the editor, **Import Mesh** loads a `.json` file and drops it into the middle
 
 An imported region arrives **fully railed**: every rim edge is a wall, so it is drivable straight away and you open ledges by clicking them off. Edges shared between two polygons are interior seams and are never railed — you drive across those. Holes are rims too, so an imported hole starts as a walled pillar; unrail it to turn it into a pit. Regions are exported inside the track JSON and are drivable in the game.
 
+### Road thickness
+
+A track's **cross-section** points control the road's profile across its width — how much it crowns, and how thick it is. `Thickness` extrudes the road downward into a solid shell with an underside and side walls, so an elevated section reads as a slab rather than a paper sheet. It is authored per cross-section point, so it can taper along a curve, and it is purely cosmetic: you still drive on the top surface exactly as before. Set it to `0` for the original zero-thickness look.
+
 ### A note on units
 
 Track files record a schema `version`. Schema 5 doubled the world's unit scale — a road that was 12 units wide is now 24 — and the ship, speeds and gravity were scaled to match, so tracks look and drive exactly as they did. Older files are converted automatically the first time they're loaded; re-exporting saves them in the new units.

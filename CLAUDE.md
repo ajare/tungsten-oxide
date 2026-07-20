@@ -37,9 +37,14 @@ points: [
   { type: 'position', id: 'p1', pos: [x,y,z], weight },
   { type: 'roll',     t: 0..1, roll: <deg> },
   { type: 'width',    t: 0..1, width: <full width> },
+  { type: 'crossSection', t: 0..1, curvature, tightness, thickness },
   ...
 ]
 ```
+
+A `crossSection` point shapes the road's profile *across* its width: `curvature` (−1..1) crowns or dishes it, `tightness` is the exponent on that arc, and `thickness` extrudes the whole profile **downward into a shell** with an underside and side walls (0 = the original zero-thickness sheet). The shell is purely visual — physics still projects onto the top surface only. `curvature` and `tightness` are scale-invariant; `thickness` is a length and scales with the world's units.
+
+The game and the USD exporter each build the shell from `TrackCore.crossSectionHeight` plus the frame's normal and thickness, in their own mesh/prim separate from the road surface — which keeps the road's UV mapping untouched and gives the substructure its own material. In the editor, every cross-section point is minted through `crossSectionPoint()` in `js/editor.js`: splits, joins, seam reconnects, type conversions and insertions all construct these, and spelling the fields out at each site is how a new field gets silently dropped (a split would quietly reset thickness to the default).
 
 - Each control-point type is independent — its own count, its own spacing — and only interacts with points of its own type.
 - `position` points interpolate with a rational, uniformly-knotted cubic B-spline (NURBS); their order in the array *is* the path's shape sequence.
@@ -99,6 +104,9 @@ Rules if you touch this:
 - **`scaleRawTrackData()` runs before normalization, deliberately.** Normalization injects defaults (`DEFAULT_WIDTH`, `DEFAULT_RAIL_HEIGHT`) that are already in current units; scaling afterwards would double those too and silently widen every old track that never authored an explicit width. There's a test pinning this.
 - **Built-in tracks are authored in current units** and carry `version: TRACK_SCHEMA_VERSION`, so `cloneTrack(DEFAULT_TRACK)` — which bypasses `parseTrack` entirely — is never re-migrated.
 - Migration is keyed off the file's `version` and is idempotent across save/load.
+- **The unit migration is keyed to `UNIT_SCALE_SCHEMA_VERSION` (5), not to `TRACK_SCHEMA_VERSION`.** Those were the same number while 5 was current, so `sourceVersion < TRACK_SCHEMA_VERSION` looked correct — but it meant the *next* version bump, for whatever unrelated reason, would silently re-double every schema-5 track ever saved. Schema 6 was that bump. If you add a schema version, do not re-point this at the current version; there is a test pinning it.
+
+**Schema 6 added cross-section thickness** — an extrusion distance that turns the road ribbon into a shell. It changes no units. Because thickness is a *length*, it scales with the world (`scaleRawTrackData` handles it) while `curvature` and `tightness` beside it do not.
 
 ## Editor conventions (`js/editor.js`)
 

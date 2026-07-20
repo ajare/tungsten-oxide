@@ -52,9 +52,10 @@ let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point 
 // the world-space bake from track-mesh.js that physics queries every frame.
 let meshRegions = [];
 let trackFloorY = -1e9;                // auto-respawn threshold, set by buildTrack()
-// Rails are collision geometry everywhere now, so they are visible by default;
-// G is purely a rendering toggle and never changes what stops the ship.
-let showGuardRails = true;
+// Rails are collision geometry everywhere regardless of this flag -- G is
+// purely a rendering toggle and never changes what stops the ship. Off by
+// default so the track reads cleanly; press G to see the walls.
+let showGuardRails = false;
 let showWireframe = false;
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
@@ -221,6 +222,62 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   wireLine.renderOrder = 10;
   scene.add(wireLine);
 
+  // ---- Shell -------------------------------------------------------------
+  // Extrude the whole cross-section straight down its own normal to give the
+  // ribbon an underside and two side walls, so an elevated road reads as a slab
+  // rather than a paper sheet. Thickness comes from the cross-section spline, so
+  // it can taper along the path like curvature and width do.
+  //
+  // Built as its OWN mesh, deliberately, for two reasons: the road surface's UV
+  // mapping stays exactly as it was (a path texture would otherwise smear around
+  // the sides and underside), and the substructure gets its own darker material.
+  // It is purely visual -- physics still projects onto the top surface only, so
+  // nothing here can change how the ship drives.
+  const underPoint = (frameIndex, v) => {
+    const s = surfacePoint(frameIndex, v);
+    const f = raw[frameIndex];
+    const t = f.crossSectionThickness || 0;
+    return [s[0] - f.normal.x * t, s[1] - f.normal.y * t, s[2] - f.normal.z * t];
+  };
+  let shell = null;
+  if (raw.some(f => (f.crossSectionThickness || 0) > 1e-6)) {
+    const shellPos = [];
+    const tri = (p, q, r) => shellPos.push(p[0], p[1], p[2], q[0], q[1], q[2], r[0], r[1], r[2]);
+    // Same two-triangle split the top surface uses, so a quad here tessellates
+    // identically to the strip above it.
+    const quad = (p, q, r, s) => { tri(p, q, r); tri(q, s, r); };
+
+    for (let i = 0; i < segCount; i++) {
+      const ni = closed ? (i + 1) % N : i + 1;
+      for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
+        const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
+        const a = underPoint(i, v0), b = underPoint(i, v1);
+        const c = underPoint(ni, v0), d = underPoint(ni, v1);
+        tri(a, c, b); tri(b, c, d);          // reversed vs the top, so it faces down
+      }
+      quad(surfacePoint(i, 0), underPoint(i, 0), surfacePoint(ni, 0), underPoint(ni, 0));
+      quad(underPoint(i, 1), surfacePoint(i, 1), underPoint(ni, 1), surfacePoint(ni, 1));
+    }
+    // An open curve is a cut slab: cap both ends so you cannot see into it.
+    // A closed loop wraps and needs none.
+    if (!closed) {
+      for (const end of [0, N - 1]) {
+        for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
+          const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
+          quad(surfacePoint(end, v0), underPoint(end, v0), surfacePoint(end, v1), underPoint(end, v1));
+        }
+      }
+    }
+
+    const shellG = new THREE.BufferGeometry();
+    shellG.setAttribute('position', new THREE.Float32BufferAttribute(shellPos, 3));
+    shellG.computeVertexNormals();
+    shell = new THREE.Mesh(shellG, new THREE.MeshStandardMaterial({
+      color: 0x3b5c72, roughness: 0.9, metalness: 0.05, side: THREE.DoubleSide, flatShading: true
+    }));
+    scene.add(shell);
+  }
+
   const stripeLine = null;
 
   // Optional guard rails, toggled with G. Collision remains driven by
@@ -264,7 +321,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     start: controlPoints[0] && controlPoints[0].id,
     end: controlPoints[controlPoints.length - 1] && controlPoints[controlPoints.length - 1].id
   };
-  return { closed, centerline, mesh, wireLine, stripeLine, railR, railL, anchors, endpointIds };
+  return { closed, centerline, mesh, wireLine, shell, stripeLine, railR, railL, anchors, endpointIds };
 }
 
 // For each position-point ID that is a shared open endpoint of 2+ baked paths,
@@ -363,7 +420,7 @@ function buildTrack(track) {
 
   // Drop any previously-built geometry before rebuilding.
   for (const p of paths) {
-    disposeObject(p.mesh); disposeObject(p.wireLine); disposeObject(p.stripeLine);
+    disposeObject(p.mesh); disposeObject(p.wireLine); disposeObject(p.shell); disposeObject(p.stripeLine);
     disposeObject(p.railR); disposeObject(p.railL);
   }
   buildMeshRegions(track);
@@ -396,6 +453,7 @@ function buildTrack(track) {
   resetShip();
   const label = document.getElementById('trackName');
   if (label) label.textContent = trackName;
+  computeMinimapBounds();
 }
 
 // ---------- Mesh regions ----------
@@ -764,6 +822,13 @@ function resetShip() {
 const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  // `e.code` is a PHYSICAL key position (right for WASD, the deliberate
+  // gaming convention), but [ and ] are punctuation: on many non-US layouts
+  // the character is typed via a different physical key (often an AltGr
+  // combo), so e.code never matches BracketLeft/BracketRight there and the
+  // zoom keys would silently never fire. Track the literal character too, and
+  // read zoom off that instead.
+  keys[e.key] = true;
   // G is a pure rendering toggle: rails are solid collision either way.
   if (e.code === 'KeyG' && !e.repeat) {
     showGuardRails = !showGuardRails;
@@ -782,7 +847,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyR' && !e.repeat) respawn();
 });
-window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; keys[e.key] = false; });
 
 function isDown(...codes) { return codes.some(c => keys[c]); }
 
@@ -791,7 +856,7 @@ const physics = {
   heading: 0,        // facing direction (radians) — set by resetShip()
   velocityAngle: 0,  // direction the vehicle is actually moving
   speed: 0,                // signed scalar speed (units/sec)
-  maxSpeed: 68,
+  maxSpeed: 102,     // 68 * 1.5
   maxReverse: -24,
   accel: 52,
   brakeDecel: 84,
@@ -1106,9 +1171,53 @@ function updatePhysics(dt) {
 }
 
 // ---------- Chase camera (rigidly fixed behind and above the ship) ----------
-const CAM_BACK = 13;    // distance behind the ship
-const CAM_UP = 6.4;     // height above the ship
+const CAM_BACK = 13;         // distance behind the ship, at zoom 1
+const CAM_UP_DEFAULT = 6.4;  // height above the ship, at zoom 1
+// [ and ] scale both distance-behind and height together, so the camera moves
+// straight in/out along its existing angle. O/K instead adjust camHeight
+// itself -- independent of zoom -- so the camera can sit higher or lower
+// without also changing how far back it is.
+const CAM_ZOOM_MIN = 0.4;
+const CAM_ZOOM_MAX = 3;
+const CAM_ZOOM_RATE = 1.2;   // zoom multiplier change per second, held down
+let camZoom = 1;
+const CAM_UP_MIN = 0.5;
+const CAM_UP_MAX = 25;
+const CAM_UP_RATE = 6;   // units per second, held down
+let camHeight = CAM_UP_DEFAULT;
+// Height, in the ship's own local up, of the body mesh's geometric centre --
+// matches body.position.y (BoxGeometry is centred on its own local origin, so
+// that offset from shipGroup IS the body's centre). This is "the centre of the
+// ship" the look-at target below is anchored to.
+const SHIP_CENTER_HEIGHT = 0.3;
+// The look-at target's FIXED offset from that centre, in the ship's own
+// (forward, up) frame -- these numbers alone decide where the camera aims,
+// independent of camera distance/zoom/height. Forward is well ahead of the
+// ship (a look-ahead chase cam, so the aim leads into a turn rather than
+// trailing behind it); up is a little above the body so the horizon doesn't
+// sit right on the ship's roofline.
+const LOOK_AT_FORWARD = 12;
+const LOOK_AT_UP_DEFAULT = 1.6;
+// P/L walk the look-at target's height up/down from its default -- e.g. aim
+// higher over a crest, or lower for a tighter, more head-on view. Letters,
+// like G/H/R below, so tracked by e.code (physical position): unlike [ and ],
+// there's an established gaming convention for letter keys to be physical-
+// position-based, and these don't have the AltGr-combo problem punctuation
+// does.
+const LOOK_AT_UP_MIN = -6;
+const LOOK_AT_UP_MAX = 12;
+const LOOK_AT_UP_RATE = 4;    // units per second, held down
+let lookAtUp = LOOK_AT_UP_DEFAULT;
 function updateCamera(dt) {
+  // By character (e.key), not physical position (e.code) -- see the keydown
+  // handler for why that matters for punctuation keys specifically.
+  if (isDown(']')) camZoom = Math.min(CAM_ZOOM_MAX, camZoom * (1 + CAM_ZOOM_RATE * dt));
+  if (isDown('[')) camZoom = Math.max(CAM_ZOOM_MIN, camZoom / (1 + CAM_ZOOM_RATE * dt));
+  if (isDown('KeyO')) camHeight = Math.min(CAM_UP_MAX, camHeight + CAM_UP_RATE * dt);
+  if (isDown('KeyK')) camHeight = Math.max(CAM_UP_MIN, camHeight - CAM_UP_RATE * dt);
+  if (isDown('KeyP')) lookAtUp = Math.min(LOOK_AT_UP_MAX, lookAtUp + LOOK_AT_UP_RATE * dt);
+  if (isDown('KeyL')) lookAtUp = Math.max(LOOK_AT_UP_MIN, lookAtUp - LOOK_AT_UP_RATE * dt);
+
   // Use the ship's own orthonormal (forward, up) basis -- the same one its
   // quaternion was built from -- rather than a flat heading-only forward.
   // Mixing a flat forward with the fully-banked `up` (as before) isn't even
@@ -1117,16 +1226,174 @@ function updateCamera(dt) {
   // rendered horizon didn't bank with the track, fighting the position
   // offset. Setting camera.up to the track's own up keeps the camera locked
   // directly behind/above the ship at any roll, including past 90 degrees.
+  //
+  // Note this basis is deliberately NOT shipGroup's actual quaternion: that
+  // one also carries the cosmetic lean/pitch "flair" added at the end of
+  // updatePhysics, and following that here would make the camera bank and
+  // pitch along with it. physics.up/physics.forward are the orthonormal pair
+  // the flair is layered ON TOP of, so building off them keeps the camera's
+  // own motion smooth regardless of that flourish.
   const up = physics.up, fwd = physics.forward;
-  const base = physics.visualGroundPos.clone().addScaledVector(up, 1);
+  // physics.visualGroundPos already tracks the ship's own smoothed render
+  // position (shipGroup.position is this plus the hover bob), so anchoring
+  // here keeps the camera glued to the ship without also picking up the bob's
+  // small oscillation -- shipCenter is that same point, at the body's actual
+  // centre height instead of an arbitrary lift.
+  const shipCenter = physics.visualGroundPos.clone().addScaledVector(up, SHIP_CENTER_HEIGHT);
   camera.up.copy(up);
-  camera.position.copy(base)
-    .addScaledVector(fwd, -CAM_BACK)
-    .addScaledVector(up, CAM_UP);
-  const lookAt = base.clone()
-    .addScaledVector(fwd, 12)
-    .addScaledVector(up, 1.6);
+  camera.position.copy(shipCenter)
+    .addScaledVector(fwd, -CAM_BACK * camZoom)
+    .addScaledVector(up, camHeight * camZoom);
+  // The look-at point: a FIXED position relative to the ship's centre, in the
+  // ship's own frame, so it moves and turns rigidly with the ship. Neither
+  // zoom nor camHeight (O/K) touch it -- only P/L, which adjust its own
+  // height (lookAtUp) along `up`.
+  const lookAt = shipCenter.clone()
+    .addScaledVector(fwd, LOOK_AT_FORWARD)
+    .addScaledVector(up, lookAtUp);
   camera.lookAt(lookAt);
+}
+
+// ---------- Minimap ----------
+// A flat top-down (X/Z) overview in its own 2D canvas, separate from the
+// three.js scene entirely -- it needs none of the perspective/lighting/
+// texture machinery the main render does, just filled shapes and a dot.
+// Same X -> screen-x, Z -> screen-y convention as the editor's top-down view,
+// so anyone used to authoring tracks there sees the same orientation here.
+// A missing element here (stale cached HTML, or a page that simply doesn't
+// carry a #minimap) must degrade to "no minimap", not crash the render loop:
+// drawMinimap() runs every frame inside animate(), so a null context there
+// would take the entire game down over a purely decorative overlay.
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
+// Recomputed once per buildTrack() rather than every frame: it depends only on
+// track geometry, which changes on import/rebuild, not on the ship's motion.
+let minimapBounds = { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
+
+function computeMinimapBounds() {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of paths) {
+    for (const f of p.centerline) {
+      minX = Math.min(minX, f.pos.x); maxX = Math.max(maxX, f.pos.x);
+      minZ = Math.min(minZ, f.pos.z); maxZ = Math.max(maxZ, f.pos.z);
+    }
+  }
+  for (const region of meshRegions) {
+    const b = region.compiled.bounds;
+    minX = Math.min(minX, b.minX); maxX = Math.max(maxX, b.maxX);
+    minZ = Math.min(minZ, b.minZ); maxZ = Math.max(maxZ, b.maxZ);
+  }
+  minimapBounds = isFinite(minX) ? { minX, maxX, minZ, maxZ } : { minX: -1, maxX: 1, minZ: -1, maxZ: 1 };
+}
+
+// Pixels-per-world-unit that fits the WHOLE track's bounds into a w x h
+// canvas, with margin, preserving aspect ratio (a stretched track would
+// misrepresent turn angles). The map is ship-centred and rotates every frame
+// (see drawMinimap), so this only ever sets the zoom level, never a
+// translation -- a fixed offset from the track's bounding-box centre would be
+// meaningless once the anchor is the ship instead.
+function computeMinimapScale(w, h) {
+  const { minX, maxX, minZ, maxZ } = minimapBounds;
+  const margin = 10;
+  const spanX = (maxX - minX) || 1, spanZ = (maxZ - minZ) || 1;
+  return Math.min((w - 2 * margin) / spanX, (h - 2 * margin) / spanZ);
+}
+
+function minimapTracePolygon(ctx, toScreen, loop) {
+  loop.forEach((p, i) => {
+    const s = toScreen(p.x, p.z);
+    i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y);
+  });
+  ctx.closePath();
+}
+
+// The road's actual drivable width, not just its centerline: reconstructs the
+// same left/right edge offsets collision uses (pos + edgeRight * sLeft/sRight),
+// so what the minimap shows as "road" matches what the ship can drive on.
+function minimapTraceRoad(ctx, toScreen, path) {
+  const cl = path.centerline;
+  if (cl.length < 2) return;
+  ctx.beginPath();
+  cl.forEach((f, i) => {
+    const s = toScreen(f.pos.x + f.edgeRight.x * f.sLeft, f.pos.z + f.edgeRight.z * f.sLeft);
+    i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y);
+  });
+  for (let i = cl.length - 1; i >= 0; i--) {
+    const f = cl[i];
+    const s = toScreen(f.pos.x + f.edgeRight.x * f.sRight, f.pos.z + f.edgeRight.z * f.sRight);
+    ctx.lineTo(s.x, s.y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawMinimap() {
+  if (!minimapCtx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = minimapCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  if (w <= 0 || h <= 0) return;   // e.g. display:none while hidden
+  const pixelW = Math.round(w * dpr), pixelH = Math.round(h * dpr);
+  if (minimapCanvas.width !== pixelW) minimapCanvas.width = pixelW;
+  if (minimapCanvas.height !== pixelH) minimapCanvas.height = pixelH;
+  minimapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  minimapCtx.clearRect(0, 0, w, h);
+
+  // Heading-up: the ship sits fixed at the canvas centre and everything else
+  // is rotated around it by the ship's own heading, so the ship's forward
+  // direction always renders as screen-up, whichever way it's actually
+  // pointed in the world. Built from a proper rotation, not just cancelling
+  // heading -- the world (x, z) plane maps directly to screen (x, y) with no
+  // flip elsewhere in this file, so a naive "rotate by -heading" (see the
+  // derivation this replaced) came out mirrored: physics.right rendered on
+  // the LEFT instead of the right. Solving for the transform that sends both
+  // fwd -> screen-up AND physics.right -> screen-right simultaneously
+  // (fwd_xz, right_xz form an orthonormal basis of the plane, so any point's
+  // screen offset is just its projection onto each, placed on the matching
+  // screen axis) gets both of those right.
+  //
+  // The map is then mirrored left/right on top of that -- negating offX is
+  // the one line that does it. This was tried first as a CSS
+  // `transform: scaleX(-1)` on the canvas element, which had no visible
+  // effect, so it's done directly in the pixels drawn instead: that can't be
+  // silently absorbed by compositing, a stale stylesheet, or anything else
+  // between this code and the screen.
+  const scale = computeMinimapScale(w, h);
+  const shipX = physics.groundPos.x, shipZ = physics.groundPos.z;
+  const heading = physics.heading;
+  const sinH = Math.sin(heading), cosH = Math.cos(heading);
+  const cx = w / 2, cy = h / 2;
+  const toScreen = (x, z) => {
+    const rx = x - shipX, rz = z - shipZ;
+    const offX = -(rx * cosH - rz * sinH);
+    const offY = -(rx * sinH + rz * cosH);
+    return { x: cx + offX * scale, y: cy + offY * scale };
+  };
+
+  // Mesh regions first: backdrop surfaces, drawn beneath the roads.
+  minimapCtx.fillStyle = 'rgba(120,90,180,0.55)';
+  for (const region of meshRegions) {
+    minimapCtx.beginPath();
+    for (const poly of region.compiled.polygons) {
+      minimapTracePolygon(minimapCtx, toScreen, poly.outer);
+      for (const hole of poly.holes) minimapTracePolygon(minimapCtx, toScreen, hole);
+    }
+    minimapCtx.fill('evenodd');
+  }
+
+  minimapCtx.fillStyle = 'rgba(127,180,212,0.85)';
+  for (const p of paths) minimapTraceRoad(minimapCtx, toScreen, p);
+
+  // Ship position: a plain circle, deliberately no heading tick -- this is a
+  // where-am-I overview, not a second HUD.
+  const ship = toScreen(physics.groundPos.x, physics.groundPos.z);
+  minimapCtx.beginPath();
+  minimapCtx.arc(ship.x, ship.y, 4.5, 0, Math.PI * 2);
+  minimapCtx.fillStyle = '#ffcc33';
+  minimapCtx.fill();
+  minimapCtx.lineWidth = 1.5;
+  minimapCtx.strokeStyle = '#3a2400';
+  minimapCtx.stroke();
 }
 
 // ---------- Track loading: built-in default + JSON import --------------------
@@ -1177,6 +1444,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePhysics(dt);
   updateCamera(dt);
+  drawMinimap();
   renderer.render(scene, camera);
 }
 animate();

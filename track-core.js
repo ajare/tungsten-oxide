@@ -8,8 +8,16 @@
  *     { type: 'position', id: 'p1', pos: [x, y, z], weight: <NURBS weight> },
  *     { type: 'roll',     t: 0..1, roll: <degrees> },
  *     { type: 'width',    t: 0..1, width: <full width> },
+ *     { type: 'crossSection', t: 0..1, curvature, tightness, thickness },
  *     ...
  *   ]
+ *
+ * A crossSection point shapes the road's profile across its width: `curvature`
+ * (-1..1) crowns or dishes it, `tightness` is the exponent on that arc, and
+ * `thickness` extrudes the whole profile DOWNWARD into a shell with an
+ * underside and side walls (0 = the old zero-thickness sheet). curvature and
+ * tightness are scale-invariant; thickness is a length and scales with the
+ * world's units.
  *
  * Each type is independent (its own count, its own spacing) and only
  * interacts with points of its own type: 'position' points interpolate with
@@ -64,6 +72,13 @@
   const DEG2RAD = Math.PI / 180;
   const DEFAULT_CROSS_SECTION_CURVATURE = 0;
   const DEFAULT_CROSS_SECTION_TIGHTNESS = 1;
+  // How far the road is extruded DOWN from its driving surface, turning the
+  // ribbon from an infinitely thin sheet into a shell with a visible underside
+  // and side walls. Unlike curvature (dimensionless) and tightness (an
+  // exponent), this is a LENGTH -- it scales with the world's unit scale, and
+  // scaleRawTrackData has to know about it. 0 means the old zero-thickness
+  // sheet, which is the escape hatch for anyone who wants the previous look.
+  const DEFAULT_CROSS_SECTION_THICKNESS = 4;
   const COLLISION_WALL_MARGIN = 1.8;
   const DEFAULT_RAIL_HEIGHT = 6;
   const DEFAULT_WIDTH = 24;
@@ -72,14 +87,25 @@
   // track measured under schema 4, and the game's ship, speeds and gravity were
   // scaled to match. Nothing about how a track looks or drives changed -- only
   // the absolute units. Older files are converted once, on load.
-  const TRACK_SCHEMA_VERSION = 5;
+  const TRACK_SCHEMA_VERSION = 6;
   const LEGACY_UNIT_SCALE = 2;
+  // The unit doubling happened at schema 5 and only there, so the migration is
+  // keyed to that version and NOT to TRACK_SCHEMA_VERSION. Those were the same
+  // number while 5 was current, which made `sourceVersion < TRACK_SCHEMA_VERSION`
+  // look right -- but it meant the next bump, whatever it was for, would silently
+  // re-double every schema-5 track ever saved. Schema 6 only adds cross-section
+  // thickness; it changes no units.
+  const UNIT_SCALE_SCHEMA_VERSION = 5;
   const finiteOr = (n, fallback, min) => {
     if (typeof n !== 'number' || !isFinite(n)) return fallback;
     return typeof min === 'number' ? Math.max(min, n) : n;
   };
   const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
   const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
+  // No upper bound: a deliberately deep shell is a legitimate look, and unlike
+  // tightness there is no exponent to blow up. Negative is meaningless, though --
+  // it would extrude the shell up through the road surface.
+  const clampThickness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0, n) : DEFAULT_CROSS_SECTION_THICKNESS);
 
   // --- cross-section profile -------------------------------------------------
   // How far the road surface rises above the flat chord between its two edges,
@@ -228,6 +254,9 @@
   function evalCrossSectionTightnessSpline(crossSectionPoints, closed, tQuery) {
     return clampTightness(evalScalarSpline(crossSectionPoints, closed, tQuery, 'tightness'));
   }
+  function evalCrossSectionThicknessSpline(crossSectionPoints, closed, tQuery) {
+    return clampThickness(evalScalarSpline(crossSectionPoints, closed, tQuery, 'thickness'));
+  }
 
   // --- rational cubic B-spline evaluator --------------------------------------
   // Returns evalTrack(g), g in [0, CP_N) for closed paths or [0, CP_N-1] for
@@ -248,23 +277,38 @@
     const cpW = controlPoints.map(c => (c.weight == null ? 1 : c.weight));
     const rp = (rollPoints && rollPoints.length >= 1) ? rollPoints : [{ t: 0, roll: 0 }, { t: 1, roll: 0 }];
     const wp = (widthPoints && widthPoints.length >= 1) ? widthPoints : [{ t: 0, width: DEFAULT_WIDTH }, { t: 1, width: DEFAULT_WIDTH }];
-    const xp = (crossSectionPoints && crossSectionPoints.length >= 1) ? crossSectionPoints : [{ t: 0, curvature: 0, tightness: 1 }, { t: 1, curvature: 0, tightness: 1 }];
+    const defaultCrossSection = {
+      t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE,
+      tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS
+    };
+    const xp = (crossSectionPoints && crossSectionPoints.length >= 1)
+      ? crossSectionPoints
+      : [{ ...defaultCrossSection, t: 0 }, { ...defaultCrossSection, t: 1 }];
     const gMax = (closed ? CP_N : CP_N - 1) || 1;
     const wrap = closed
       ? i => ((i % CP_N) + CP_N) % CP_N
       : i => Math.max(0, Math.min(CP_N - 1, i));
+
+    // Every cross-section value sampled at one t. Factored out because all three
+    // exits below need the same set, and the set grows: it was curvature alone,
+    // then curvature + tightness, now + thickness.
+    const crossSectionAt = t => ({
+      crossSectionCurvature: evalCrossSectionSpline(xp, closed, t),
+      crossSectionTightness: evalCrossSectionTightnessSpline(xp, closed, t),
+      crossSectionThickness: evalCrossSectionThicknessSpline(xp, closed, t)
+    });
 
     function evalTrack(g) {
       if (!closed && CP_N > 0) {
         if (g <= 0) {
           const pos = cpVec[0];
           const tangent = vnorm(CP_N > 1 ? vsub(cpVec[1], cpVec[0]) : { x: 0, y: 0, z: 1 });
-          return { pos, tangent, roll: evalRollSpline(rp, closed, 0), width: evalWidthSpline(wp, closed, 0), crossSectionCurvature: evalCrossSectionSpline(xp, closed, 0), crossSectionTightness: evalCrossSectionTightnessSpline(xp, closed, 0) };
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 0), width: evalWidthSpline(wp, closed, 0), ...crossSectionAt(0) };
         }
         if (g >= CP_N - 1) {
           const pos = cpVec[CP_N - 1];
           const tangent = vnorm(CP_N > 1 ? vsub(cpVec[CP_N - 1], cpVec[CP_N - 2]) : { x: 0, y: 0, z: 1 });
-          return { pos, tangent, roll: evalRollSpline(rp, closed, 1), width: evalWidthSpline(wp, closed, 1), crossSectionCurvature: evalCrossSectionSpline(xp, closed, 1), crossSectionTightness: evalCrossSectionTightnessSpline(xp, closed, 1) };
+          return { pos, tangent, roll: evalRollSpline(rp, closed, 1), width: evalWidthSpline(wp, closed, 1), ...crossSectionAt(1) };
         }
       }
       const seg = Math.floor(g);
@@ -288,9 +332,7 @@
       const t = g / gMax;
       const roll = evalRollSpline(rp, closed, t);
       const width = evalWidthSpline(wp, closed, t);
-      const crossSectionCurvature = evalCrossSectionSpline(xp, closed, t);
-      const crossSectionTightness = evalCrossSectionTightnessSpline(xp, closed, t);
-      return { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness };
+      return { pos, tangent, roll, width, ...crossSectionAt(t) };
     }
     return { evalTrack, CP_N, closed };
   }
@@ -308,7 +350,7 @@
     const out = [];
     for (let i = 0; i < N; i++) {
       const g = closed ? (i / N) * CP_N : (N > 1 ? (i / (N - 1)) * (CP_N - 1) : 0);
-      const { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness } = evalTrack(g);
+      const { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness, crossSectionThickness } = evalTrack(g);
 
       const h = vnorm(vcross(UP, tangent));
       let baseNormal = vnorm(vcross(tangent, h));
@@ -319,7 +361,7 @@
       const edgeRight = vadd(vscale(h, cosR), vscale(baseNormal, sinR));
       const normal = vnorm(vaddScaled(vscale(baseNormal, cosR), h, -sinR));
 
-      out.push({ pos, tangent, h, roll, width, halfW: width / 2, edgeRight, normal, crossSectionCurvature, crossSectionTightness });
+      out.push({ pos, tangent, h, roll, width, halfW: width / 2, edgeRight, normal, crossSectionCurvature, crossSectionTightness, crossSectionThickness });
     }
     return out;
   }
@@ -751,8 +793,21 @@
       type: 'crossSection',
       t: Math.max(0, Math.min(1, num(xp && xp.t, 0))),
       curvature: clampSignedUnit(num(xp && xp.curvature, 0)),
-      tightness: clampTightness(num(xp && xp.tightness, DEFAULT_CROSS_SECTION_TIGHTNESS))
+      tightness: clampTightness(num(xp && xp.tightness, DEFAULT_CROSS_SECTION_TIGHTNESS)),
+      thickness: clampThickness(num(xp && xp.thickness, DEFAULT_CROSS_SECTION_THICKNESS))
     };
+  }
+
+  // The cross-section defaults injected when a path authors none of its own.
+  // One helper so the three sites that need them cannot drift apart.
+  function defaultCrossSectionPoints(closed, curvature) {
+    const make = t => ({
+      type: 'crossSection', t,
+      curvature: clampSignedUnit(curvature),
+      tightness: DEFAULT_CROSS_SECTION_TIGHTNESS,
+      thickness: DEFAULT_CROSS_SECTION_THICKNESS
+    });
+    return [make(0), make(closed ? 0.5 : 1)];
   }
 
   // Legacy per-point `roll`/`width` migration: evenly spaces one point per
@@ -798,7 +853,7 @@
       const endT = closed ? 0.5 : 1;
       if (!points.some(p => p.type === 'roll')) points.push({ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 });
       if (!points.some(p => p.type === 'width')) points.push({ type: 'width', t: 0, width: DEFAULT_WIDTH }, { type: 'width', t: endT, width: DEFAULT_WIDTH });
-      if (!points.some(p => p.type === 'crossSection')) points.push({ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: endT, curvature: clampSignedUnit(rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS });
+      if (!points.some(p => p.type === 'crossSection')) points.push(...defaultCrossSectionPoints(closed, rawPath.crossSectionCurvature));
       return { id: rawPath.id || null, closed, points, texture: normalizePathTexture(rawPath.texture) };
     }
 
@@ -817,7 +872,7 @@
     const rawCross = rawPath && Array.isArray(rawPath.crossSectionPoints) ? rawPath.crossSectionPoints : null;
     const crossSectionPoints = (rawCross && rawCross.length >= 1)
       ? rawCross.map(normalizeCrossSectionPoint)
-      : [{ type: 'crossSection', t: 0, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }, { type: 'crossSection', t: closed ? 0.5 : 1, curvature: clampSignedUnit(rawPath && rawPath.crossSectionCurvature), tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }];
+      : defaultCrossSectionPoints(closed, rawPath && rawPath.crossSectionCurvature);
     return {
       id: rawPath && rawPath.id || null,
       closed,
@@ -944,7 +999,8 @@
    * Only lengths scale. Angles (roll), curve parameters (t), NURBS weights,
    * cross-section curvature (dimensionless) and tightness (an exponent) are
    * scale-invariant -- scaling any of them would change a track's shape rather
-   * than its size.
+   * than its size. Cross-section THICKNESS is not in that company: it is an
+   * extrusion distance in world units, so it scales like width does.
    *
    * This runs on the RAW data, before normalization, on purpose. Normalization
    * injects defaults (widths, rail heights) that are already expressed in
@@ -963,6 +1019,7 @@
         p.pos = [p.pos[0] * k, p.pos[1] * k, p.pos[2] * k];
       }
       if (typeof p.width === 'number') p.width *= k;
+      if (typeof p.thickness === 'number') p.thickness *= k;
     };
     const scaleList = list => { if (Array.isArray(list)) list.forEach(scalePoint); };
 
@@ -975,6 +1032,7 @@
       scaleList(rawPath.points);
       scaleList(rawPath.controlPoints);
       scaleList(rawPath.widthPoints);
+      scaleList(rawPath.crossSectionPoints);   // pre-refactor three-array schema
     }
     for (const entry of Object.values(data.meshAssets || {})) {
       if (!entry || typeof entry !== 'object') continue;
@@ -1004,7 +1062,10 @@
     // half-size units. Converting up front means every consumer downstream sees
     // a single unit system, with no runtime scale factor anywhere.
     const sourceVersion = (!Array.isArray(data) && data && data.version) || 3;
-    if (sourceVersion < TRACK_SCHEMA_VERSION) scaleRawTrackData(data, LEGACY_UNIT_SCALE);
+    // Keyed to the version that changed units, NOT to the current version --
+    // see UNIT_SCALE_SCHEMA_VERSION. A schema-5 file is already in current
+    // units and must be left alone no matter how far the schema moves on.
+    if (sourceVersion < UNIT_SCALE_SCHEMA_VERSION) scaleRawTrackData(data, LEGACY_UNIT_SCALE);
     let rawPaths;
     if (Array.isArray(data)) rawPaths = [{ closed: true, controlPoints: data }];
     else if (Array.isArray(data.paths)) rawPaths = data.paths;
@@ -1068,7 +1129,7 @@
       const lines = path.points.map(p => {
         if (p.type === 'roll') return '      { "type": "roll", "t": ' + p.t + ', "roll": ' + p.roll + ' }';
         if (p.type === 'width') return '      { "type": "width", "t": ' + p.t + ', "width": ' + p.width + ' }';
-        if (p.type === 'crossSection') return '      { "type": "crossSection", "t": ' + p.t + ', "curvature": ' + p.curvature + ', "tightness": ' + clampTightness(p.tightness) + ' }';
+        if (p.type === 'crossSection') return '      { "type": "crossSection", "t": ' + p.t + ', "curvature": ' + p.curvature + ', "tightness": ' + clampTightness(p.tightness) + ', "thickness": ' + clampThickness(p.thickness) + ' }';
         return '      { "type": "position", "id": ' + JSON.stringify(p.id || '') + ', "pos": [' + p.pos.join(', ') + '], "weight": ' + p.weight + ' }';
       }).join(',\n');
       const textureJson = path.texture ? ', "texture": ' + JSON.stringify(path.texture) : '';
@@ -1139,8 +1200,8 @@
         { type: 'width', t: 0.7, width: 40 },
         { type: 'width', t: 0.8, width: 48 },
         { type: 'width', t: 0.9, width: 44 },
-        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
-        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
+        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS },
+        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS }
       ]
     }]
   };
@@ -1165,8 +1226,8 @@
         { type: 'roll', t: 0.5, roll: 0 },
         { type: 'width', t: 0, width: 36 },
         { type: 'width', t: 0.5, width: 36 },
-        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS },
-        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS }
+        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS },
+        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS }
       ]
     }]
   };
@@ -1178,10 +1239,12 @@
     DEFAULT_SELF_INTERSECTION_SPAN,
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
+    evalCrossSectionThickness: evalCrossSectionThicknessSpline, DEFAULT_CROSS_SECTION_THICKNESS,
     crossSectionHeight, crossSectionHeightDerivative,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,
+    TRACK_SCHEMA_VERSION, UNIT_SCALE_SCHEMA_VERSION,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))
   };

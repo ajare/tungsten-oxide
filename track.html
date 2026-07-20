@@ -30,6 +30,12 @@
   }
   #controls button:hover, #controls a:hover { background: rgba(40,80,120,0.95); }
   #trackName { color: #7fe7ff; text-shadow: 0 0 6px rgba(0,200,255,0.7); }
+  #minimap {
+    position: absolute; top: 56px; right: 16px;
+    width: 200px; height: 200px;
+    border: 1px solid #2c6a9e; border-radius: 8px;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -46,6 +52,7 @@
   <a id="editorLink" href="editor.html" target="_blank">Open Editor</a>
   <input id="fileInput" type="file" accept="application/json,.json" hidden>
 </div>
+<canvas id="minimap"></canvas>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <!-- track-core.js stays a classic script: it is dependency-free and sets

@@ -318,7 +318,7 @@ const rolls = track => TrackCore.splitPoints(track.paths[0].points).rollPoints.m
 
 test('a pre-schema-5 track is scaled up on load', () => {
   const migrated = TrackCore.parseTrack(legacyTrackJson(4));
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, TrackCore.TRACK_SCHEMA_VERSION);
   assert.deepEqual(positions(migrated)[0], [20, 2, 0], 'positions double');
   assert.deepEqual(widths(migrated), [24, 24], 'widths double');
 });
@@ -386,6 +386,67 @@ test('defaults injected during normalization are not double-scaled', () => {
  * and it was the copy the game read as its fallback. The `undefined` assertion
  * is the point of this test: it fails the moment someone re-adds a second
  * default to the geometry layer. */
+const thicknesses = track => TrackCore.splitPoints(track.paths[0].points).crossSectionPoints.map(p => p.thickness);
+
+/* Schema 6 added cross-section thickness. It is an extrusion distance in world
+ * units, so unlike curvature (dimensionless) and tightness (an exponent) it has
+ * to move with the unit scale. */
+test('cross-section thickness round trips and defaults when absent', () => {
+  const authored = TrackCore.parseTrack(JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Slab',
+    paths: [{ id: 'p', closed: true, points: [
+      { type: 'position', id: 'a', pos: [10, 0, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [0, 0, 10], weight: 1 },
+      { type: 'position', id: 'c', pos: [-10, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [0, 0, -10], weight: 1 },
+      { type: 'crossSection', t: 0, curvature: 0, tightness: 1, thickness: 7 },
+      { type: 'crossSection', t: 0.5, curvature: 0, tightness: 1, thickness: 3 }
+    ] }]
+  }));
+  assert.deepEqual(thicknesses(authored), [7, 3]);
+  assert.deepEqual(thicknesses(TrackCore.parseTrack(TrackCore.serializeTrack(authored))), [7, 3], 'survives a save/load');
+
+  // A cross-section point that omits thickness gets the default, not NaN.
+  const bare = TrackCore.parseTrack(JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION,
+    paths: [{ id: 'p', closed: true, points: [
+      { type: 'position', id: 'a', pos: [10, 0, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [0, 0, 10], weight: 1 },
+      { type: 'position', id: 'c', pos: [-10, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [0, 0, -10], weight: 1 },
+      { type: 'crossSection', t: 0, curvature: 0.5, tightness: 2 }
+    ] }]
+  }));
+  assert.deepEqual(thicknesses(bare), [TrackCore.DEFAULT_CROSS_SECTION_THICKNESS]);
+});
+
+test('cross-section thickness scales with the world, curvature and tightness do not', () => {
+  const raw = JSON.parse(legacyTrackJson(4));
+  raw.paths[0].points.push({ type: 'crossSection', t: 0, curvature: 0.5, tightness: 2.5, thickness: 3 });
+  const migrated = TrackCore.parseTrack(JSON.stringify(raw));
+  const xs = TrackCore.splitPoints(migrated.paths[0].points).crossSectionPoints[0];
+  assert.equal(xs.thickness, 6, 'thickness is a length and doubles');
+  assert.equal(xs.curvature, 0.5, 'curvature is dimensionless');
+  assert.equal(xs.tightness, 2.5, 'tightness is an exponent');
+});
+
+/* The unit doubling belongs to schema 5 alone. While 5 was also the current
+ * version, the migration read `sourceVersion < TRACK_SCHEMA_VERSION`, which is
+ * indistinguishable from the correct rule right up until the version is bumped
+ * for any other reason -- at which point every schema-5 track ever saved gets
+ * silently doubled again. Schema 6 was that bump. */
+test('a schema-5 track is not re-scaled by a later schema bump', () => {
+  assert.ok(TrackCore.TRACK_SCHEMA_VERSION > TrackCore.UNIT_SCALE_SCHEMA_VERSION,
+    'this test is only meaningful once the schema has moved past the unit change');
+  const v5 = JSON.parse(legacyTrackJson(TrackCore.UNIT_SCALE_SCHEMA_VERSION));
+  const loaded = TrackCore.parseTrack(JSON.stringify(v5));
+  assert.deepEqual(positions(loaded)[0], [10, 1, 0], 'positions left exactly as authored');
+  assert.deepEqual(widths(loaded), [12, 12], 'widths left exactly as authored');
+  // ...while anything genuinely older still converts.
+  const v4 = TrackCore.parseTrack(legacyTrackJson(4));
+  assert.deepEqual(positions(v4)[0], [20, 2, 0], 'schema 4 still doubles');
+});
+
 test('rail height has a single default, owned by TrackCore', () => {
   assert.equal(typeof TrackCore.DEFAULT_RAIL_HEIGHT, 'number');
   assert.ok(TrackCore.DEFAULT_RAIL_HEIGHT > 0);
@@ -451,7 +512,7 @@ test('invalid curve texture assignments are cleared on load', () => {
 test('built-in tracks are authored in current units', () => {
   for (const name of ['DEFAULT_TRACK', 'STARTER_TRACK']) {
     const t = TrackCore[name];
-    assert.equal(t.version, 5, `${name} must not be re-migrated on load`);
+    assert.equal(t.version, TrackCore.TRACK_SCHEMA_VERSION, `${name} must not be re-migrated on load`);
     const reloaded = TrackCore.parseTrack(TrackCore.serializeTrack(t));
     assert.deepEqual(positions(reloaded), positions(t), `${name} survives a round trip unscaled`);
   }

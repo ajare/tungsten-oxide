@@ -477,14 +477,36 @@ function insertPositionAt(path, k, obj) {
 // drawn in the editor came out half the width of an imported one -- and why
 // splitting a path silently halved both halves. Everything else below is
 // scale-invariant (roll is an angle, curvature dimensionless, tightness an
-// exponent) and stays as written.
+// exponent) and stays as written. Thickness IS a length, which is why the
+// cross-section points below are built through crossSectionPoint().
+
+/* Build a cross-section point. Everything that mints one goes through here.
+ *
+ * These points started with one value, gained `tightness`, and have now gained
+ * `thickness` -- and the editor constructs them in a dozen places (splits,
+ * joins, seam reconnects, type conversions, insertions). Spelling the fields out
+ * at each of those is how a new field gets silently dropped: a split would quietly
+ * reset every road's thickness to the default. One builder means the next field
+ * is added once. Same reasoning as uniqueScalarPoints replacing whole points
+ * rather than copying one named key. */
+function crossSectionPoint(t, curvature, tightness, thickness) {
+  return {
+    type: 'crossSection', t,
+    curvature: curvature == null ? 0 : curvature,
+    tightness: tightness == null ? 1 : tightness,
+    thickness: thickness == null ? TrackCore.DEFAULT_CROSS_SECTION_THICKNESS : thickness
+  };
+}
+// Copy an existing cross-section point to a new t, carrying every value across.
+const crossSectionCopy = (t, src) => crossSectionPoint(t, src.curvature, src.tightness, src.thickness);
+
 function flatRollWidthDefaults(closed = true) {
   const endT = closed ? 0.5 : 1;
   const width = TrackCore.DEFAULT_WIDTH;
   return [
     { type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: endT, roll: 0 },
     { type: 'width', t: 0, width }, { type: 'width', t: endT, width },
-    { type: 'crossSection', t: 0, curvature: 0, tightness: 1 }, { type: 'crossSection', t: endT, curvature: 0, tightness: 1 }
+    crossSectionPoint(0, 0, 1), crossSectionPoint(endT, 0, 1)
   ];
 }
 function zeroElevationAndRoll(t) {
@@ -1456,7 +1478,11 @@ function convertSelectedPoint(newType) {
   } else { // crossSection
     const curvature = TrackCore.evalCrossSectionCurvature(remaining.crossSectionPoints, path.closed, t);
     const tightness = TrackCore.evalCrossSectionTightness(remaining.crossSectionPoints, path.closed, t);
-    created = { type: 'crossSection', t, curvature: Math.round(curvature * 100) / 100, tightness: Math.round(tightness * 10) / 10 };
+    const thickness = TrackCore.evalCrossSectionThickness(remaining.crossSectionPoints, path.closed, t);
+    created = crossSectionPoint(t,
+      Math.round(curvature * 100) / 100,
+      Math.round(tightness * 10) / 10,
+      Math.round(thickness * 10) / 10);
     path.points.push(created);
   }
 
@@ -1590,6 +1616,14 @@ function uniqueScalarPoints(points) {
   }
   return out;
 }
+// A cross-section point at `t`, with all three values sampled off an existing
+// path's cross-section spline at `sourceT`. Used wherever a split, join or seam
+// reconnect has to synthesize a range endpoint that matches the source curve.
+const crossSectionSampleAt = (xs, closed, sourceT, t) => crossSectionPoint(t,
+  round1(TrackCore.evalCrossSectionCurvature(xs, closed, sourceT)),
+  round1(TrackCore.evalCrossSectionTightness(xs, closed, sourceT)),
+  round1(TrackCore.evalCrossSectionThickness(xs, closed, sourceT)));
+
 function rollWidthForSourceRange(sourceParts, sourceClosed, startT, endT) {
   // Preserve authored roll/width points that lie inside the source range,
   // remapping their t values, and synthesize exact range endpoints. For closed
@@ -1607,8 +1641,8 @@ function rollWidthForSourceRange(sourceParts, sourceClosed, startT, endT) {
     { type: 'width', t: 1, width: widthAt(sourceParts, sourceClosed, sourceT(endT)) }
   ];
   const crossSectionPoints = [
-    { type: 'crossSection', t: 0, curvature: round1(TrackCore.evalCrossSectionCurvature(sourceParts.crossSectionPoints, sourceClosed, sourceT(startT))), tightness: round1(TrackCore.evalCrossSectionTightness(sourceParts.crossSectionPoints, sourceClosed, sourceT(startT))) },
-    { type: 'crossSection', t: 1, curvature: round1(TrackCore.evalCrossSectionCurvature(sourceParts.crossSectionPoints, sourceClosed, sourceT(endT))), tightness: round1(TrackCore.evalCrossSectionTightness(sourceParts.crossSectionPoints, sourceClosed, sourceT(endT))) }
+    crossSectionSampleAt(sourceParts.crossSectionPoints, sourceClosed, sourceT(startT), 0),
+    crossSectionSampleAt(sourceParts.crossSectionPoints, sourceClosed, sourceT(endT), 1)
   ];
   for (const rp of sourceParts.rollPoints) {
     let t = rp.t;
@@ -1623,7 +1657,7 @@ function rollWidthForSourceRange(sourceParts, sourceClosed, startT, endT) {
   for (const cp of sourceParts.crossSectionPoints) {
     let t = cp.t;
     if (sourceClosed && endT > 1 && t < startT) t += 1;
-    if (inRange(t)) crossSectionPoints.push({ type: 'crossSection', t: roundT(mapT(t)), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
+    if (inRange(t)) crossSectionPoints.push(crossSectionCopy(roundT(mapT(t)), cp));
   }
   return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
@@ -1636,6 +1670,7 @@ function sampleRollWidthForClosedReconnect(openPath) {
   const seamWidth = round1((widthAt(pp, false, 0) + widthAt(pp, false, 1)) / 2);
   const seamCurvature = round1((TrackCore.evalCrossSectionCurvature(pp.crossSectionPoints, false, 0) + TrackCore.evalCrossSectionCurvature(pp.crossSectionPoints, false, 1)) / 2);
   const seamTightness = round1((TrackCore.evalCrossSectionTightness(pp.crossSectionPoints, false, 0) + TrackCore.evalCrossSectionTightness(pp.crossSectionPoints, false, 1)) / 2);
+  const seamThickness = round1((TrackCore.evalCrossSectionThickness(pp.crossSectionPoints, false, 0) + TrackCore.evalCrossSectionThickness(pp.crossSectionPoints, false, 1)) / 2);
   const rollPoints = [
     { type: 'roll', t: 0, roll: seamRoll },
     { type: 'roll', t: 1, roll: seamRoll }
@@ -1645,12 +1680,12 @@ function sampleRollWidthForClosedReconnect(openPath) {
     { type: 'width', t: 1, width: seamWidth }
   ];
   const crossSectionPoints = [
-    { type: 'crossSection', t: 0, curvature: seamCurvature, tightness: seamTightness },
-    { type: 'crossSection', t: 1, curvature: seamCurvature, tightness: seamTightness }
+    crossSectionPoint(0, seamCurvature, seamTightness, seamThickness),
+    crossSectionPoint(1, seamCurvature, seamTightness, seamThickness)
   ];
   for (const rp of pp.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: rp.t, roll: rp.roll });
   for (const wp of pp.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: wp.t, width: wp.width });
-  for (const cp of pp.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: cp.t, curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
+  for (const cp of pp.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push(crossSectionCopy(cp.t, cp));
   return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
 function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCount) {
@@ -1666,6 +1701,8 @@ function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCo
   const rightCurvatureAtSeam = TrackCore.evalCrossSectionCurvature(rightParts.crossSectionPoints, false, 0);
   const leftTightnessAtSeam = TrackCore.evalCrossSectionTightness(leftParts.crossSectionPoints, false, 1);
   const rightTightnessAtSeam = TrackCore.evalCrossSectionTightness(rightParts.crossSectionPoints, false, 0);
+  const leftThicknessAtSeam = TrackCore.evalCrossSectionThickness(leftParts.crossSectionPoints, false, 1);
+  const rightThicknessAtSeam = TrackCore.evalCrossSectionThickness(rightParts.crossSectionPoints, false, 0);
   const rollPoints = [
     { type: 'roll', t: 0, roll: rollDegAt(leftParts, false, 0) },
     { type: 'roll', t: 1, roll: rollDegAt(rightParts, false, 1) }
@@ -1675,8 +1712,8 @@ function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCo
     { type: 'width', t: 1, width: widthAt(rightParts, false, 1) }
   ];
   const crossSectionPoints = [
-    { type: 'crossSection', t: 0, curvature: round1(TrackCore.evalCrossSectionCurvature(leftParts.crossSectionPoints, false, 0)), tightness: round1(TrackCore.evalCrossSectionTightness(leftParts.crossSectionPoints, false, 0)) },
-    { type: 'crossSection', t: 1, curvature: round1(TrackCore.evalCrossSectionCurvature(rightParts.crossSectionPoints, false, 1)), tightness: round1(TrackCore.evalCrossSectionTightness(rightParts.crossSectionPoints, false, 1)) }
+    crossSectionSampleAt(leftParts.crossSectionPoints, false, 0, 0),
+    crossSectionSampleAt(rightParts.crossSectionPoints, false, 1, 1)
   ];
   if (seamT > 1e-5 && seamT < 1 - 1e-5) {
     // Preserve the seam as an explicit scalar control. If the two sides were
@@ -1684,14 +1721,14 @@ function sampleRollWidthFromJoinedPaths(leftPath, rightPath, seamIndex, mergedCo
     // reconnecting doesn't let Catmull-Rom smear a discontinuity far away.
     rollPoints.push({ type: 'roll', t: seamT, roll: averageRollDeg(leftRollAtSeam, rightRollAtSeam) });
     widthPoints.push({ type: 'width', t: seamT, width: round1((leftWidthAtSeam + rightWidthAtSeam) / 2) });
-    crossSectionPoints.push({ type: 'crossSection', t: seamT, curvature: round1((leftCurvatureAtSeam + rightCurvatureAtSeam) / 2), tightness: round1((leftTightnessAtSeam + rightTightnessAtSeam) / 2) });
+    crossSectionPoints.push(crossSectionPoint(seamT, round1((leftCurvatureAtSeam + rightCurvatureAtSeam) / 2), round1((leftTightnessAtSeam + rightTightnessAtSeam) / 2), round1((leftThicknessAtSeam + rightThicknessAtSeam) / 2)));
   }
   for (const rp of leftParts.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: roundT((rp.t * seamIndex) / maxG), roll: rp.roll });
   for (const rp of rightParts.rollPoints) if (rp.t > 1e-5 && rp.t < 1 - 1e-5) rollPoints.push({ type: 'roll', t: roundT((seamIndex + rp.t * rightSpan) / maxG), roll: rp.roll });
   for (const wp of leftParts.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: roundT((wp.t * seamIndex) / maxG), width: wp.width });
   for (const wp of rightParts.widthPoints) if (wp.t > 1e-5 && wp.t < 1 - 1e-5) widthPoints.push({ type: 'width', t: roundT((seamIndex + wp.t * rightSpan) / maxG), width: wp.width });
-  for (const cp of leftParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: roundT((cp.t * seamIndex) / maxG), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
-  for (const cp of rightParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push({ type: 'crossSection', t: roundT((seamIndex + cp.t * rightSpan) / maxG), curvature: cp.curvature, tightness: cp.tightness == null ? 1 : cp.tightness });
+  for (const cp of leftParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push(crossSectionCopy(roundT((cp.t * seamIndex) / maxG), cp));
+  for (const cp of rightParts.crossSectionPoints) if (cp.t > 1e-5 && cp.t < 1 - 1e-5) crossSectionPoints.push(crossSectionCopy(roundT((seamIndex + cp.t * rightSpan) / maxG), cp));
   return uniqueScalarPoints(rollPoints).concat(uniqueScalarPoints(widthPoints), uniqueScalarPoints(crossSectionPoints));
 }
 function disjointDisabledReason(path, pointIndex) {
@@ -1878,56 +1915,83 @@ function drawCrossSectionPreview(point) {
   const width = TrackCore.evalWidth(pp.widthPoints, path.closed, point.t);
   const curvature = Math.max(-1, Math.min(1, point.curvature || 0));
   const tightness = Math.max(0.2, Math.min(4, point.tightness == null ? 1 : point.tightness));
+  const thickness = Math.max(0, point.thickness == null ? TrackCore.DEFAULT_CROSS_SECTION_THICKNESS : point.thickness);
   const pad = 18;
-  const midX = w / 2, midY = h / 2;
-  const sx = (w - 2 * pad) / width;
-  const sy = (h - 2 * pad) / Math.max(width, 1);
-  const scale = Math.min(sx, sy);
+  const STEPS = 48;
   // Same profile the game's ribbon and the USD exporter use, so the preview
   // shows the surface that will actually be built.
   const heightAt = v => TrackCore.crossSectionHeight(curvature, tightness, v, width);
+
+  // Fit the whole extruded section, not just the road surface: the slab hangs
+  // `thickness` below the profile and would otherwise run off the canvas. The
+  // vertical span is measured rather than assumed, since a dished cross-section
+  // already reaches below the chord before any extrusion.
+  let hiY = 0, loY = 0;
+  for (let i = 0; i <= STEPS; i++) {
+    const y = heightAt(i / STEPS);
+    hiY = Math.max(hiY, y); loY = Math.min(loY, y);
+  }
+  loY -= thickness;
+  const midX = w / 2, midY = h / 2;
+  const scale = Math.min((w - 2 * pad) / Math.max(width, 1), (h - 2 * pad) / Math.max(hiY - loY, 1));
+  const centreY = (hiY + loY) / 2;
   const px = x => midX + x * scale;
-  const py = y => midY - y * scale;
+  const py = y => midY - (y - centreY) * scale;
+  const vx = v => px(-width / 2 + width * v);
+  const traceSurface = (offset = 0) => {
+    for (let i = 0; i <= STEPS; i++) {
+      const v = i / STEPS, x = vx(v), y = py(heightAt(v) + offset);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+  };
 
-  // background axes / flat chord
-  ctx.strokeStyle = 'rgba(111,147,168,0.45)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad, midY); ctx.lineTo(w - pad, midY); ctx.stroke();
+  // flat chord reference
+  const chordY = py(0);
+  ctx.strokeStyle = 'rgba(111,147,168,0.45)'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(pad, chordY); ctx.lineTo(w - pad, chordY); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle = '#6f93a8'; ctx.font = '10px system-ui';
-  ctx.fillText('flat', pad, midY - 4);
+  ctx.fillText('flat', pad, chordY - 4);
 
-  // filled cross-section shape from the flat chord to the curved road surface
-  ctx.beginPath();
-  ctx.moveTo(px(-width / 2), py(0));
-  const STEPS = 48;
-  for (let i = 0; i <= STEPS; i++) {
-    const v = i / STEPS;
-    ctx.lineTo(px(-width / 2 + width * v), py(heightAt(v)));
+  if (thickness > 0) {
+    // The extruded slab: road surface on top, the same profile offset below it.
+    ctx.beginPath();
+    traceSurface(0);
+    for (let i = STEPS; i >= 0; i--) {
+      const v = i / STEPS;
+      ctx.lineTo(vx(v), py(heightAt(v) - thickness));
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(120,152,184,0.28)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(164,192,220,0.55)'; ctx.lineWidth = 1; ctx.stroke();
+  } else {
+    // Zero thickness is still a legal sheet; show curvature as the area between
+    // the flat chord and the road, which is what this preview always showed.
+    ctx.beginPath();
+    ctx.moveTo(vx(0), chordY);
+    traceSurface(0);
+    ctx.lineTo(vx(1), chordY);
+    ctx.closePath();
+    ctx.fillStyle = curvature >= 0 ? 'rgba(213,140,255,0.25)' : 'rgba(255,140,213,0.25)';
+    ctx.fill();
   }
-  ctx.lineTo(px(width / 2), py(0));
-  ctx.closePath();
-  ctx.fillStyle = curvature >= 0 ? 'rgba(213,140,255,0.25)' : 'rgba(255,140,213,0.25)';
-  ctx.fill();
 
-  // road surface curve
+  // road surface curve, drawn last so it reads as the driving surface
   ctx.strokeStyle = CROSS_SECTION_COLOR; ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  for (let i = 0; i <= STEPS; i++) {
-    const v = i / STEPS;
-    const x = px(-width / 2 + width * v), y = py(heightAt(v));
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  }
-  ctx.stroke();
+  ctx.beginPath(); traceSurface(0); ctx.stroke();
 
   // edge markers and center marker
   for (const v of [0, 0.5, 1]) {
-    const x = px(-width / 2 + width * v), y = py(heightAt(v));
+    const x = vx(v), y = py(heightAt(v));
     ctx.beginPath(); ctx.arc(x, y, v === 0.5 ? 4 : 3, 0, Math.PI * 2);
     ctx.fillStyle = v === 0.5 ? '#fff' : '#d58cff'; ctx.fill();
   }
 
   ctx.fillStyle = '#cdeeff'; ctx.font = '11px system-ui';
   ctx.fillText(`curvature ${curvature.toFixed(2)} · tightness ${tightness.toFixed(2)}`, pad, h - 8);
-  ctx.textAlign = 'right'; ctx.fillText(`width ${width.toFixed(1)}`, w - pad, h - 8); ctx.textAlign = 'left';
+  ctx.textAlign = 'right';
+  ctx.fillText(`width ${width.toFixed(1)} · thick ${thickness.toFixed(1)}`, w - pad, h - 8);
+  ctx.textAlign = 'left';
 }
 
 function renderProps() {
@@ -2007,6 +2071,7 @@ function renderProps() {
         `<label>Position (%)<input type="number" data-key="t" value="${(crossSectionSel.t * 100).toFixed(1)}" step="1" min="0" max="100"></label>` +
         `<label>Curvature<input type="number" data-key="curvature" value="${crossSectionSel.curvature}" step="0.05" min="-1" max="1"></label>` +
         `<label title="Higher values pinch the curve tighter around the center; 1 is circular.">Tightness<input type="number" data-key="tightness" value="${crossSectionSel.tightness == null ? 1 : crossSectionSel.tightness}" step="0.1" min="0.2" max="4"></label>` +
+        `<label title="How far the road is extruded downward into a solid shell. 0 leaves it an infinitely thin sheet.">Thickness<input type="number" data-key="thickness" value="${crossSectionSel.thickness == null ? TrackCore.DEFAULT_CROSS_SECTION_THICKNESS : crossSectionSel.thickness}" step="0.5" min="0"></label>` +
         `<div style="margin-top:10px;color:#7fb8d8;font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cross-section preview</div>` +
         `<canvas id="crossSectionPreview" style="display:block;width:100%;height:170px;margin-top:5px;background:#071019;border:1px solid #244358;border-radius:5px"></canvas>` +
         `<button id="delCrossSectionBtn" ${pp.crossSectionPoints.length <= 2 ? 'disabled' : ''} style="margin-top:10px;width:100%;background:#4a235a;border:1px solid #d58cff;color:#f4ddff;border-radius:5px;padding:6px;cursor:pointer">Delete cross-section point (min 2)</button>`;
@@ -2019,6 +2084,7 @@ function renderProps() {
           armHistory();
           if (inp.dataset.key === 't') crossSectionSel.t = Math.max(0, Math.min(1, v / 100));
           else if (inp.dataset.key === 'tightness') crossSectionSel.tightness = Math.max(0.2, Math.min(4, v));
+          else if (inp.dataset.key === 'thickness') crossSectionSel.thickness = Math.max(0, v);
           else crossSectionSel.curvature = Math.max(-1, Math.min(1, v));
           draw();
           drawCrossSectionPreview(crossSectionSel);
@@ -2424,7 +2490,7 @@ function insertCrossSectionPoint(worldX, worldZ) {
   });
   const N = frames.length;
   const t = path.closed ? bestI / N : bestI / (N - 1);
-  const cp = { type: 'crossSection', t, curvature: +(frames[bestI].crossSectionCurvature || 0).toFixed(2), tightness: +(frames[bestI].crossSectionTightness || 1).toFixed(1) };
+  const cp = crossSectionPoint(t, +(frames[bestI].crossSectionCurvature || 0).toFixed(2), +(frames[bestI].crossSectionTightness || 1).toFixed(1), +(frames[bestI].crossSectionThickness || 0).toFixed(1));
   path.points.push(cp);
   crossSectionSel = cp; rollSel = null; widthSel = null;
   dragging = 'crossSectionTop';

@@ -34,7 +34,9 @@ test('closed curve export shares the seam ring instead of duplicating it', () =>
   const track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
   track.samples = 12;
   const scene = buildUsdScene(track, { TrackCore, crossSectionSegments: 4 });
-  assert.equal(scene.meshes.length, 1);
+  // An extruded curve exports as two prims: the road surface, then its shell.
+  assert.equal(scene.meshes.length, 2);
+  assert.equal(scene.meshes[0].material, 'RoadSurface');
   assert.equal(scene.meshes[0].points.length, 12 * (4 + 1));
   assert.equal(scene.meshes[0].faces.length, 12 * 4 * 2);
 });
@@ -126,6 +128,77 @@ test('curve export includes generated square-ish texture coordinates', () => {
   assert.ok(mesh.uvs.at(-1)[1] > 8 && mesh.uvs.at(-1)[1] < 10, `expected path length / width scale, got ${mesh.uvs.at(-1)[1]}`);
   assert.match(scene.text, /texCoord2f\[\] primvars:st/);
   assert.match(scene.text, /uniform token primvars:st:interpolation = "vertex"/);
+});
+
+/* A flat, level, straight open road: its normals are +Y, so the extruded shell's
+ * underside must sit exactly `thickness` below the surface in Y. That makes the
+ * geometry checkable by inspection rather than by reimplementing the maths. */
+function slabTrack(thickness, closed = false) {
+  return TrackCore.parseTrack(JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'slab', samples: 6,
+    paths: [{ closed, points: [
+      { type: 'position', id: 'a', pos: [0, 0, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [40, 0, 0], weight: 1 },
+      { type: 'position', id: 'c', pos: [80, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [120, 0, 0], weight: 1 },
+      { type: 'width', t: 0, width: 20 }, { type: 'width', t: 1, width: 20 },
+      { type: 'crossSection', t: 0, curvature: 0, tightness: 1, thickness },
+      { type: 'crossSection', t: 1, curvature: 0, tightness: 1, thickness }
+    ] }]
+  }));
+}
+// Y component of a face's normal; negative means the face looks downward.
+function faceNormalY(points, f) {
+  const a = points[f[0]], b = points[f[1]], c = points[f[2]];
+  return (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+}
+
+test('an extruded curve exports a shell prim beneath its surface', () => {
+  const scene = buildUsdScene(slabTrack(6), { TrackCore, crossSectionSegments: 3 });
+  assert.equal(scene.meshes.length, 2);
+  const [surface, shell] = scene.meshes;
+  assert.equal(surface.material, 'RoadSurface');
+  assert.equal(shell.material, 'RoadShell');
+  assert.match(scene.text, /def Mesh "Path_0_Shell"/);
+  assert.match(scene.text, /def Material "RoadShell"/);
+
+  // The shell reuses the exported surface ring and adds one offset ring.
+  assert.equal(shell.points.length, surface.points.length * 2);
+  assert.deepEqual([...new Set(surface.points.map(p => +p[1].toFixed(6)))], [0]);
+  assert.deepEqual([...new Set(shell.points.map(p => +p[1].toFixed(6)))].sort((x, y) => x - y), [-6, 0],
+    'underside sits exactly `thickness` below the road');
+});
+
+test('a zero-thickness curve exports no shell at all', () => {
+  const scene = buildUsdScene(slabTrack(0), { TrackCore, crossSectionSegments: 3 });
+  assert.equal(scene.meshes.length, 1, 'the old zero-thickness sheet is still available');
+  assert.equal(scene.meshes[0].material, 'RoadSurface');
+  // The material is declared unconditionally in the Materials scope, exactly as
+  // MeshRegionSurface already is for tracks with no regions; what must be absent
+  // is the shell PRIM.
+  assert.doesNotMatch(scene.text, /def Mesh "Path_0_Shell"/);
+});
+
+/* orientFacesUp cannot orient a shell -- it flips on the summed face normal, and
+ * on a closed shell the top and bottom cancel. The underside decides instead, so
+ * pin that it really does end up facing down and nothing ends up inverted. */
+test('the shell underside faces downward', () => {
+  const shell = buildUsdScene(slabTrack(6), { TrackCore, crossSectionSegments: 3 }).meshes[1];
+  const down = shell.faces.filter(f => faceNormalY(shell.points, f) < -1e-9).length;
+  const up = shell.faces.filter(f => faceNormalY(shell.points, f) > 1e-9).length;
+  assert.ok(down > 0, 'expected underside faces');
+  assert.equal(up, 0, `no shell face may point up, got ${up}`);
+});
+
+test('an open shell is capped at both ends, a closed one is not', () => {
+  const segs = 3;
+  const open = buildUsdScene(slabTrack(6, false), { TrackCore, crossSectionSegments: segs }).meshes[1];
+  const closed = buildUsdScene(slabTrack(6, true), { TrackCore, crossSectionSegments: segs }).meshes[1];
+  const rings = 6;   // track.samples
+  // closed: every ring joins the next, and it wraps shut, so no caps.
+  assert.equal(closed.faces.length, rings * segs * 2 + rings * 2 * 2);
+  // open: one fewer longitudinal join, plus two end caps of `segs` quads each.
+  assert.equal(open.faces.length, (rings - 1) * segs * 2 + (rings - 1) * 2 * 2 + 2 * segs * 2);
 });
 
 test('mesh placements are exported as separate baked Mesh prims', () => {

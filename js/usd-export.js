@@ -10,6 +10,7 @@ import * as TrackMesh from './track-mesh.js';
 const DEFAULT_CROSS_SECTION_SEGMENTS = 24;
 const ROAD_MATERIAL = 'RoadSurface';
 const MESH_MATERIAL = 'MeshRegionSurface';
+const SHELL_MATERIAL = 'RoadShell';
 
 export function sanitizeUsdIdentifier(value, fallback = 'Prim') {
   let s = String(value || '').replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
@@ -127,7 +128,72 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
     }
   }
   orientFacesUp(points, faces);
-  return { name: `Path_${pathIndex}`, material: ROAD_MATERIAL, points, faces, uvs };
+  const surface = { name: `Path_${pathIndex}`, material: ROAD_MATERIAL, points, faces, uvs };
+  const shell = buildCurveShellMesh(raw, points, ringSize, crossSectionSegments, closed, pathIndex);
+  return shell ? [surface, shell] : [surface];
+}
+
+/* The underside and side walls of an extruded road, as a prim of their own.
+ *
+ * Separate from the surface for the same reason the game keeps them in a
+ * separate mesh: the road's UV mapping stays untouched, and the substructure
+ * gets its own material. `topPoints` is reused rather than recomputed, so the
+ * shell is welded to the exact surface that was exported -- including any edge
+ * mitring already baked into it.
+ *
+ * Winding is settled here rather than by orientFacesUp, which cannot work on a
+ * closed shell: it flips everything when the summed face normal points down,
+ * and on a shell the top and bottom faces cancel, leaving the decision to
+ * numerical noise. The underside faces alone decide instead, and the walls
+ * follow whatever they choose.
+ */
+function buildCurveShellMesh(raw, topPoints, ringSize, crossSectionSegments, closed, pathIndex) {
+  if (!raw.some(f => (f.crossSectionThickness || 0) > 1e-6)) return null;
+
+  const points = topPoints.map(p => [p[0], p[1], p[2]]);
+  const under = topPoints.length;                  // index offset of the under ring
+  for (let i = 0; i < raw.length; i++) {
+    const f = raw[i];
+    const t = f.crossSectionThickness || 0;
+    for (let j = 0; j <= crossSectionSegments; j++) {
+      const p = topPoints[i * ringSize + j];
+      points.push([p[0] - f.normal.x * t, p[1] - f.normal.y * t, p[2] - f.normal.z * t]);
+    }
+  }
+
+  const bottom = [];
+  const sides = [];
+  const longSegments = closed ? raw.length : raw.length - 1;
+  for (let i = 0; i < longSegments; i++) {
+    const ni = closed ? (i + 1) % raw.length : i + 1;
+    for (let j = 0; j < crossSectionSegments; j++) {
+      const a = under + i * ringSize + j;
+      const b = under + i * ringSize + j + 1;
+      const c = under + ni * ringSize + j;
+      const d = under + ni * ringSize + j + 1;
+      bottom.push([a, c, b], [b, c, d]);           // reversed vs the surface
+    }
+    for (const j of [0, crossSectionSegments]) {   // the two edges become walls
+      const t0 = i * ringSize + j, t1 = ni * ringSize + j;
+      const u0 = under + t0, u1 = under + t1;
+      sides.push([t0, u0, t1], [u0, u1, t1]);
+    }
+  }
+  // An open curve is a cut slab and needs both ends capped; a loop wraps shut.
+  if (!closed) {
+    for (const end of [0, raw.length - 1]) {
+      for (let j = 0; j < crossSectionSegments; j++) {
+        const t0 = end * ringSize + j, t1 = end * ringSize + j + 1;
+        sides.push([t0, under + t0, t1], [under + t0, under + t1, t1]);
+      }
+    }
+  }
+
+  let sumY = 0;
+  for (const f of bottom) sumY += triangleNormalY(points, f[0], f[1], f[2]);
+  const faces = bottom.concat(sides);
+  if (sumY > 0) for (const f of faces) [f[1], f[2]] = [f[2], f[1]];   // underside must face down
+  return { name: `Path_${pathIndex}_Shell`, material: SHELL_MATERIAL, points, faces };
 }
 
 function buildMeshRegionMesh(track, placement, placementIndex, warnings) {
@@ -202,6 +268,17 @@ function writeMaterials(lines) {
   lines.push('            }');
   lines.push('            token outputs:surface.connect = </Track/Materials/MeshRegionSurface/PreviewSurface.outputs:surface>');
   lines.push('        }');
+  lines.push(`        def Material "${SHELL_MATERIAL}"`);
+  lines.push('        {');
+  lines.push('            def Shader "PreviewSurface"');
+  lines.push('            {');
+  lines.push('                uniform token info:id = "UsdPreviewSurface"');
+  lines.push('                color3f inputs:diffuseColor = (0.23, 0.36, 0.45)');
+  lines.push('                float inputs:roughness = 0.9');
+  lines.push('                token outputs:surface');
+  lines.push('            }');
+  lines.push(`            token outputs:surface.connect = </Track/Materials/${SHELL_MATERIAL}/PreviewSurface.outputs:surface>`);
+  lines.push('        }');
   lines.push('    }');
 }
 
@@ -213,8 +290,9 @@ export function buildUsdScene(track, options = {}) {
   const meshes = [];
 
   (track.paths || []).forEach((path, i) => {
-    const mesh = buildCurveMesh(TrackCore, track, path, i, crossSectionSegments, warnings);
-    if (mesh) meshes.push(mesh);
+    // A curve yields its road surface and, when extruded, a shell prim with it.
+    const built = buildCurveMesh(TrackCore, track, path, i, crossSectionSegments, warnings);
+    if (built) meshes.push(...built);
   });
   (track.meshes || []).forEach((placement, i) => {
     const mesh = buildMeshRegionMesh(track, placement, i, warnings);
