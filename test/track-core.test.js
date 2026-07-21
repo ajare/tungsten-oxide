@@ -260,3 +260,143 @@ test('crossSectionStitchPoint: a ring renders the same edge no matter which neig
   const t = 0.5; // (0.25 - 0) / (0.5 - 0)
   assert.deepEqual(foreign, [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
 });
+
+/* longitudinalBreakpoints() drives MESH-ONLY adaptive ring spacing along the
+ * path (js/track-game.js's buildPath): denser on sharp turns/hills, sparser
+ * on long straights. Physics never sees this -- it always bakes the fixed
+ * TrackCore.buildCenterline frames. */
+test('a straight, short span collapses to just its two ends', () => {
+  const posAt = g => ({ x: g * 10, y: 0, z: 0 }); // dead straight
+  const breaks = TrackCore.longitudinalBreakpoints(0, 1, posAt);
+  assert.deepEqual(breaks, [0, 1]);
+});
+
+test('a straight but long span still gets a bounded max gap', () => {
+  // Long enough that even zero sagitta must still be capped by
+  // LONGITUDINAL_MAX_DISTANCE (40 world units).
+  const posAt = g => ({ x: g * 1000, y: 0, z: 0 }); // 1000-unit straight
+  const breaks = TrackCore.longitudinalBreakpoints(0, 1, posAt);
+  assert.ok(breaks.length > 2, `expected subdivision from the distance cap alone, got ${breaks.length} breakpoints`);
+  for (let i = 1; i < breaks.length; i++) {
+    const a = posAt(breaks[i - 1]), b = posAt(breaks[i]);
+    const gap = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    assert.ok(gap <= TrackCore.LONGITUDINAL_MAX_DISTANCE + 1e-6, `gap ${gap} exceeds the max distance cap`);
+  }
+});
+
+test('a curved span subdivides from sagitta even when well under the distance cap', () => {
+  // A short circular arc: well under the 40-unit distance cap on its own, but
+  // curved enough that a single chord would deviate from the true arc.
+  const radius = 20;
+  const posAt = g => ({ x: Math.cos(g) * radius, y: 0, z: Math.sin(g) * radius });
+  const breaks = TrackCore.longitudinalBreakpoints(0, Math.PI / 2, posAt);
+  assert.ok(breaks.length > 2, `expected sagitta-driven subdivision, got ${breaks.length} breakpoints`);
+});
+
+test('breakpoints are sorted, unique, and always include both ends', () => {
+  const radius = 15;
+  const posAt = g => ({ x: Math.cos(g) * radius, y: Math.sin(g * 2) * 3, z: Math.sin(g) * radius });
+  const breaks = TrackCore.longitudinalBreakpoints(0.3, 2.1, posAt);
+  assert.equal(breaks[0], 0.3);
+  assert.equal(breaks.at(-1), 2.1);
+  for (let i = 1; i < breaks.length; i++) assert.ok(breaks[i] > breaks[i - 1], `not strictly increasing at ${i}`);
+});
+
+/* buildAdaptiveMeshFrames() is the actual mesh-only consumer: it takes the
+ * already-baked physics raw/edges and produces a separate, MESH-only
+ * frame/edge array -- never fewer than the two endpoints, denser on curves,
+ * sparser on straights, and byte-identical to physics at every frame a
+ * self-intersection fold touched. */
+function bakeFull(rawTrack, samples = N) {
+  const track = TrackCore.parseTrack(JSON.stringify(rawTrack));
+  const path = track.paths[0];
+  const parts = TrackCore.splitPoints(path.points);
+  const closed = path.closed !== false;
+  const frames = TrackCore.buildCenterline(
+    parts.controlPoints, samples, closed, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints);
+  const edges = TrackCore.buildEdges(frames, closed);
+  return { parts, closed, frames, edges };
+}
+
+function longStraightTrack() {
+  return {
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'long straight', samples: N,
+    paths: [{
+      closed: false,
+      points: [
+        { type: 'position', id: 'a', pos: [0, 0, 0], weight: 1 },
+        { type: 'position', id: 'b', pos: [1000, 0, 0], weight: 1 },
+        { type: 'position', id: 'c', pos: [2000, 0, 0], weight: 1 },
+        { type: 'position', id: 'd', pos: [3000, 0, 0], weight: 1 },
+        { type: 'width', t: 0, width: 20 }, { type: 'width', t: 1, width: 20 }
+      ]
+    }]
+  };
+}
+
+test('a long straight uses fewer mesh frames than the fixed physics baking', () => {
+  const { parts, closed, frames, edges } = bakeFull(longStraightTrack());
+  const { frames: meshFrames } = TrackCore.buildAdaptiveMeshFrames(
+    parts.controlPoints, closed, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints, frames, edges);
+  assert.ok(meshFrames.length < frames.length,
+    `expected fewer mesh frames than the ${frames.length} physics frames, got ${meshFrames.length}`);
+});
+
+test('mesh frames and mesh edges stay the same length, and always include both endpoints exactly', () => {
+  const { parts, closed, frames, edges } = bakeFull(longStraightTrack());
+  const { frames: meshFrames, edges: meshEdges } = TrackCore.buildAdaptiveMeshFrames(
+    parts.controlPoints, closed, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints, frames, edges);
+  assert.equal(meshFrames.length, meshEdges.left.length);
+  assert.equal(meshFrames.length, meshEdges.right.length);
+  assert.deepEqual(meshFrames[0].pos, frames[0].pos);
+  assert.deepEqual(meshFrames.at(-1).pos, frames.at(-1).pos);
+});
+
+test('a self-intersection fold is preserved byte-for-byte in the mesh frames, never resampled', () => {
+  const { parts, closed, frames, edges: rawEdges } = bakeFull(foldedTail());
+  const edges = TrackCore.removeLocalEdgeSelfIntersections(rawEdges, closed, false);
+  const { frames: meshFrames, edges: meshEdges } = TrackCore.buildAdaptiveMeshFrames(
+    parts.controlPoints, closed, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints, frames, edges);
+
+  // Find the fold: at least one frame whose trimmed edge differs from the
+  // plain untrimmed half-width offset (same test buildAdaptiveMeshFrames uses
+  // internally to decide what must be preserved exactly).
+  let foldIndices = 0;
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    const untrimmedLeftX = f.pos.x - f.edgeRight.x * f.halfW;
+    if (Math.abs(edges.left[i].x - untrimmedLeftX) > 1e-6) {
+      foldIndices++;
+      // This exact frame must appear, unchanged, in the mesh output.
+      const meshIdx = meshFrames.findIndex(mf => mf.pos === f.pos);
+      assert.ok(meshIdx !== -1, `fold-affected frame ${i} was not carried through into the mesh frames`);
+      assert.deepEqual(meshEdges.left[meshIdx], edges.left[i]);
+      assert.deepEqual(meshEdges.right[meshIdx], edges.right[i]);
+    }
+  }
+  assert.ok(foldIndices > 0, 'expected this fixture to actually contain a self-intersection fold');
+});
+
+test('a tightly curved closed loop gets MORE mesh frames than a coarse fixed physics baking', () => {
+  // The opposite direction from the long-straight test: a sharp, fold-free
+  // turn needs finer sampling than a coarse fixed baking to stay within the
+  // sagitta tolerance, so adaptivity must add frames here, not remove them.
+  const track = {
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'tight loop', samples: 8,
+    paths: [{
+      closed: true,
+      points: [
+        { type: 'position', pos: [30, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, 30], weight: 1 },
+        { type: 'position', pos: [-30, 0, 0], weight: 1 },
+        { type: 'position', pos: [0, 0, -30], weight: 1 },
+        { type: 'width', t: 0, width: 10 }, { type: 'width', t: 0.5, width: 10 }
+      ]
+    }]
+  };
+  const { parts, closed, frames, edges } = bakeFull(track, 8);
+  const { frames: meshFrames } = TrackCore.buildAdaptiveMeshFrames(
+    parts.controlPoints, closed, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints, frames, edges);
+  assert.ok(meshFrames.length > frames.length,
+    `expected more mesh frames than the ${frames.length} coarse physics frames, got ${meshFrames.length}`);
+});

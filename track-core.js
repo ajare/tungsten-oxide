@@ -72,6 +72,11 @@
  *                                      sampled at a v it didn't pick itself,
  *                                      or two differently-adaptive neighbors
  *                                      leave a crack at the shared ring
+ *   buildAdaptiveMeshFrames(...)     - mesh-only (never physics) adaptive
+ *                                      longitudinal ring spacing: denser on
+ *                                      sharp turns/hills, sparser on straights,
+ *                                      exactly preserving every physics frame
+ *                                      a self-intersection fold touched
  *   parseTrack(text)                 - JSON string -> validated track object
  *   serializeTrack(track)            - track object -> pretty JSON string
  *   DEFAULT_TRACK, STARTER_TRACK     - built-in tracks
@@ -425,28 +430,147 @@
   // vectors plain {x,y,z}. Consumers wrap these in their own vector type.
   // Closed paths bake N samples spanning the full loop [0, CP_N); open paths
   // bake N samples spanning [0, CP_N-1] inclusive of both endpoints.
+  //
+  // Factored out of buildCenterline's loop so js/track-game.js's adaptive
+  // longitudinal mesh sampling (buildAdaptiveMeshFrames below) can build the
+  // exact same frame shape at arbitrary extra g values, without a second,
+  // divergence-prone copy of this math.
+  function frameFromSample(sample) {
+    const { pos, tangent, roll, width } = sample;
+    const UP = { x: 0, y: 1, z: 0 };
+    const h = vnorm(vcross(UP, tangent));
+    let baseNormal = vnorm(vcross(tangent, h));
+    if (baseNormal.y < 0) baseNormal = vscale(baseNormal, -1);
+
+    // +roll lifts the LEFT edge -> roll the cross-section by -roll about tangent
+    const cosR = Math.cos(-roll), sinR = Math.sin(-roll);
+    const edgeRight = vadd(vscale(h, cosR), vscale(baseNormal, sinR));
+    const normal = vnorm(vaddScaled(vscale(baseNormal, cosR), h, -sinR));
+
+    return { ...sample, h, halfW: width / 2, edgeRight, normal };
+  }
+
   function buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints) {
     closed = closed !== false;
     N = N || N_DEFAULT;
     const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
-    const UP = { x: 0, y: 1, z: 0 };
     const out = [];
     for (let i = 0; i < N; i++) {
       const g = closed ? (i / N) * CP_N : (N > 1 ? (i / (N - 1)) * (CP_N - 1) : 0);
-      const { pos, tangent, roll, width, crossSectionCurvature, crossSectionTightness, crossSectionThickness } = evalTrack(g);
-
-      const h = vnorm(vcross(UP, tangent));
-      let baseNormal = vnorm(vcross(tangent, h));
-      if (baseNormal.y < 0) baseNormal = vscale(baseNormal, -1);
-
-      // +roll lifts the LEFT edge -> roll the cross-section by -roll about tangent
-      const cosR = Math.cos(-roll), sinR = Math.sin(-roll);
-      const edgeRight = vadd(vscale(h, cosR), vscale(baseNormal, sinR));
-      const normal = vnorm(vaddScaled(vscale(baseNormal, cosR), h, -sinR));
-
-      out.push({ pos, tangent, h, roll, width, halfW: width / 2, edgeRight, normal, crossSectionCurvature, crossSectionTightness, crossSectionThickness });
+      out.push(frameFromSample(evalTrack(g)));
     }
     return out;
+  }
+
+  // --- adaptive longitudinal mesh sampling (rendering only) -------------------
+  // Physics/collision always rides on buildCenterline's fixed, uniform-in-
+  // parameter N_DEFAULT frames -- untouched by any of this. This section is
+  // consumed ONLY by the game's mesh builder, to place MESH rings more densely
+  // on sharp turns/hills and more sparsely on long straights, mirroring
+  // crossSectionBreakpoints but along the path instead of across it.
+  const LONGITUDINAL_SAGITTA_TOLERANCE = 0.1;
+  // Even a perfectly straight run (zero sagitta forever) never gets a gap
+  // wider than this -- bounds triangle stretching/UV distortion on long
+  // straights, and implicitly bounds how much roll/width/thickness can drift
+  // between two samples even where position itself is dead straight.
+  const LONGITUDINAL_MAX_DISTANCE = 40;
+  // Defensive cap, same philosophy as CROSS_SECTION_MAX_DEPTH: the max-distance
+  // rule already guarantees termination, but this bounds it further against a
+  // pathological near-cusp where sagitta might not shrink as fast as expected.
+  const LONGITUDINAL_MAX_DEPTH = 10;
+
+  // Adaptive g-partition for one fold-free run of the centerline: recursively
+  // bisects any cell whose true 3D position (at its midpoint) deviates from a
+  // straight line between its two ends by more than
+  // LONGITUDINAL_SAGITTA_TOLERANCE, or whose chord length exceeds
+  // LONGITUDINAL_MAX_DISTANCE. Unlike crossSectionBreakpoints there is no
+  // forced base partition: a run that is both straight and short collapses to
+  // just its two ends, which is what lets a long straight use FEWER samples
+  // than the fixed baking used to produce.
+  function longitudinalBreakpoints(g0, g1, posAt) {
+    const breaks = new Set([g0, g1]);
+    const split = (a, b, depth) => {
+      const mid = (a + b) / 2;
+      const pa = posAt(a), pb = posAt(b), pm = posAt(mid);
+      const chordMid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, z: (pa.z + pb.z) / 2 };
+      const sagitta = vlen(vsub(pm, chordMid));
+      const chordLen = vlen(vsub(pb, pa));
+      if (depth < LONGITUDINAL_MAX_DEPTH && (sagitta > LONGITUDINAL_SAGITTA_TOLERANCE || chordLen > LONGITUDINAL_MAX_DISTANCE)) {
+        split(a, mid, depth + 1);
+        breaks.add(mid);
+        split(mid, b, depth + 1);
+      }
+    };
+    split(g0, g1, 0);
+    return Array.from(breaks).sort((a, b) => a - b);
+  }
+
+  // Which of buildCenterline's frames had their edge actually repositioned by
+  // self-intersection trimming (trimEdge/removeLocalEdgeSelfIntersections),
+  // by comparing the real (possibly-trimmed) edge against the plain untrimmed
+  // half-width offset. Trimming snaps a whole folded run to one shared mitre
+  // point, so any real change is well outside float noise. Every affected
+  // frame must be preserved exactly, verbatim -- these are the ONLY frames
+  // where the game's road mesh and the physics corridor must agree exactly,
+  // and adaptive resampling never touches them.
+  function foldAffectedIndices(raw, edges) {
+    const EPS = 1e-6;
+    const affected = new Array(raw.length).fill(false);
+    for (let i = 0; i < raw.length; i++) {
+      const f = raw[i];
+      const untrimmedLeft = vaddScaled(f.pos, f.edgeRight, -f.halfW);
+      const untrimmedRight = vaddScaled(f.pos, f.edgeRight, f.halfW);
+      if (vlen(vsub(edges.left[i], untrimmedLeft)) > EPS || vlen(vsub(edges.right[i], untrimmedRight)) > EPS) {
+        affected[i] = true;
+      }
+    }
+    return affected;
+  }
+
+  // Builds a MESH-ONLY frame/edge array from the already-baked physics
+  // raw/edges: every fold-affected frame (see foldAffectedIndices) is carried
+  // through byte-for-byte, so the rendered road/shell match the physics
+  // corridor exactly at every mitred corner; every fold-free run of frames in
+  // between is freely re-sampled by longitudinalBreakpoints, which can place
+  // MORE frames there (sharp bends/hills) or FEWER (long straights) than the
+  // original fixed baking. The very first and last original frame are always
+  // kept as fixed endpoints; a closed path's wrap-around join (last frame back
+  // to the first) is deliberately never merged into an adaptive run, so this
+  // never has to reason about g wrapping past CP_N.
+  function buildAdaptiveMeshFrames(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, raw, edges) {
+    const n = raw.length;
+    if (n < 3) return { frames: raw.slice(), edges: { left: edges.left.slice(), right: edges.right.slice() } };
+    const affected = foldAffectedIndices(raw, edges);
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
+    const gAt = i => closed ? (i / n) * CP_N : (n > 1 ? (i / (n - 1)) * (CP_N - 1) : 0);
+    const posAt = g => evalTrack(g).pos;
+
+    const frames = [], left = [], right = [];
+    const pushExact = i => { frames.push(raw[i]); left.push(edges.left[i]); right.push(edges.right[i]); };
+    const pushAdaptive = g => {
+      const frame = frameFromSample(evalTrack(g));
+      frames.push(frame);
+      left.push(vaddScaled(frame.pos, frame.edgeRight, -frame.halfW));
+      right.push(vaddScaled(frame.pos, frame.edgeRight, frame.halfW));
+    };
+
+    pushExact(0);
+    let i = 0;
+    const last = n - 1;
+    while (i < last) {
+      if (affected[i] || affected[i + 1]) {
+        pushExact(i + 1);
+        i++;
+        continue;
+      }
+      let j = i + 1;
+      while (j < last && !affected[j] && !affected[j + 1]) j++;
+      const breaks = longitudinalBreakpoints(gAt(i), gAt(j), posAt);
+      for (let k = 1; k < breaks.length - 1; k++) pushAdaptive(breaks[k]);
+      pushExact(j);
+      i = j;
+    }
+    return { frames, edges: { left, right } };
   }
 
   // --- edge offsetting with self-intersection trimming -----------------------
@@ -1324,6 +1448,8 @@
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     evalCrossSectionThickness: evalCrossSectionThicknessSpline, DEFAULT_CROSS_SECTION_THICKNESS,
     crossSectionHeight, crossSectionHeightDerivative, crossSectionBreakpoints, crossSectionStitchPoint,
+    frameFromSample, longitudinalBreakpoints, buildAdaptiveMeshFrames,
+    LONGITUDINAL_SAGITTA_TOLERANCE, LONGITUDINAL_MAX_DISTANCE, LONGITUDINAL_MAX_DEPTH,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,

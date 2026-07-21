@@ -181,9 +181,23 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   // the start; open paths leave the two ends unconnected. A global cross-
   // section curvature subdivides the strip across its width: 0 keeps the old
   // flat chord, 1 raises the center to a semicircular arc with the same edges.
+  //
+  // Longitudinal ring spacing is ALSO adaptive, MESH-ONLY: physics keeps riding
+  // on the fixed, uniform `raw`/`edges` above (untouched -- centerline,
+  // wallOffsets, guard rails all still read those), but the visual road
+  // surface + shell are built from a separate, denser-or-sparser frame array
+  // that TrackCore.buildAdaptiveMeshFrames derives from them. Every frame a
+  // self-intersection fold (or a disjoint-seam endpoint override, above) moved
+  // is carried through byte-for-byte, so the rendered corner always matches
+  // the physics corridor exactly there; everywhere else -- most of a typical
+  // track -- rings are freely added on sharp bends/hills or thinned out on
+  // long straights. See TrackCore.buildAdaptiveMeshFrames and CLAUDE.md.
+  const meshBake = TrackCore.buildAdaptiveMeshFrames(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, raw, edges);
+  const meshRaw = meshBake.frames, meshEdges = meshBake.edges;
+  const meshN = meshRaw.length;
   const roadMaterial = () => new THREE.MeshBasicMaterial({ color: 0x7fb4d4, side: THREE.DoubleSide });
   const surfacePoint = (frameIndex, v) => {
-    const left = edges.left[frameIndex], right = edges.right[frameIndex], f = raw[frameIndex];
+    const left = meshEdges.left[frameIndex], right = meshEdges.right[frameIndex], f = meshRaw[frameIndex];
     const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
     const chordWidth = Math.hypot(chord.x, chord.y, chord.z) || 1;
     const h = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
@@ -210,23 +224,23 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   const pushPoint = p => pos.push(p[0], p[1], p[2]);
   const pushUv = (u, v) => uv.push(u, v);
   const distances = [0];
-  for (let i = 1; i < raw.length; i++) {
-    const a = raw[i - 1].pos, b = raw[i].pos;
+  for (let i = 1; i < meshRaw.length; i++) {
+    const a = meshRaw[i - 1].pos, b = meshRaw[i].pos;
     distances[i] = distances[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
   }
-  const avgWidth = raw.reduce((sum, f) => sum + Math.max(1, f.width || 1), 0) / Math.max(1, raw.length);
-  const segCount = closed ? N : N - 1;
-  const ringBreaks = raw.map((f, i) => {
-    const left = edges.left[i], right = edges.right[i];
+  const avgWidth = meshRaw.reduce((sum, f) => sum + Math.max(1, f.width || 1), 0) / Math.max(1, meshRaw.length);
+  const segCount = closed ? meshN : meshN - 1;
+  const ringBreaks = meshRaw.map((f, i) => {
+    const left = meshEdges.left[i], right = meshEdges.right[i];
     const chordWidth = Math.hypot(right.x - left.x, right.y - left.y, right.z - left.z) || 1;
     return crossSectionBreakpoints(f.crossSectionCurvature, f.crossSectionTightness, chordWidth);
   });
   const ringPoint = (ring, v) => TrackCore.crossSectionStitchPoint(ringBreaks[ring], v, vv => surfacePoint(ring, vv));
   for (let i = 0; i < segCount; i++) {
-    const ni = closed ? (i + 1) % N : i + 1;
+    const ni = closed ? (i + 1) % meshN : i + 1;
     const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
     const t0 = distances[i] / avgWidth;
-    const t1 = (closed && ni === 0) ? ((distances[i] + Math.hypot(raw[ni].pos.x - raw[i].pos.x, raw[ni].pos.y - raw[i].pos.y, raw[ni].pos.z - raw[i].pos.z)) / avgWidth) : distances[ni] / avgWidth;
+    const t1 = (closed && ni === 0) ? ((distances[i] + Math.hypot(meshRaw[ni].pos.x - meshRaw[i].pos.x, meshRaw[ni].pos.y - meshRaw[i].pos.y, meshRaw[ni].pos.z - meshRaw[i].pos.z)) / avgWidth) : distances[ni] / avgWidth;
     for (let k = 0; k < breaks.length - 1; k++) {
       const v0 = breaks[k], v1 = breaks[k + 1];
       const a = ringPoint(i, v0), b = ringPoint(i, v1);
@@ -264,13 +278,13 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   // nothing here can change how the ship drives.
   const underPoint = (frameIndex, v) => {
     const s = surfacePoint(frameIndex, v);
-    const f = raw[frameIndex];
+    const f = meshRaw[frameIndex];
     const t = f.crossSectionThickness || 0;
     return [s[0] - f.normal.x * t, s[1] - f.normal.y * t, s[2] - f.normal.z * t];
   };
   const ringUnderPoint = (ring, v) => TrackCore.crossSectionStitchPoint(ringBreaks[ring], v, vv => underPoint(ring, vv));
   let shell = null;
-  if (raw.some(f => (f.crossSectionThickness || 0) > 1e-6)) {
+  if (meshRaw.some(f => (f.crossSectionThickness || 0) > 1e-6)) {
     const shellPos = [];
     const tri = (p, q, r) => shellPos.push(p[0], p[1], p[2], q[0], q[1], q[2], r[0], r[1], r[2]);
     // Same two-triangle split the top surface uses, so a quad here tessellates
@@ -278,7 +292,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     const quad = (p, q, r, s) => { tri(p, q, r); tri(q, s, r); };
 
     for (let i = 0; i < segCount; i++) {
-      const ni = closed ? (i + 1) % N : i + 1;
+      const ni = closed ? (i + 1) % meshN : i + 1;
       const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
       for (let k = 0; k < breaks.length - 1; k++) {
         const v0 = breaks[k], v1 = breaks[k + 1];
@@ -293,7 +307,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     // A closed loop wraps and needs none. A cap only ever touches one ring, so
     // it uses that ring's own breakpoints directly -- no union needed.
     if (!closed) {
-      for (const end of [0, N - 1]) {
+      for (const end of [0, meshN - 1]) {
         const breaks = ringBreaks[end];
         for (let k = 0; k < breaks.length - 1; k++) {
           const v0 = breaks[k], v1 = breaks[k + 1];
