@@ -1,6 +1,6 @@
 
 import * as TrackMesh from './track-mesh.js';
-import { exportTrackToUSDA, sanitizeFileStem, DEFAULT_USD_CROSS_SECTION_SEGMENTS } from './usd-export.js';
+import { exportTrackToUSDA, sanitizeFileStem } from './usd-export.js';
 
 // ---------- Editor state ----------
 // track.paths: [{ closed, points }, ...] — a track is one or more paths, each
@@ -3269,7 +3269,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 document.getElementById('exportUsdBtn').addEventListener('click', () => {
   assertNoStaleSeams();
   try {
-    const usda = exportTrackToUSDA(track, { TrackCore, crossSectionSegments: DEFAULT_USD_CROSS_SECTION_SEGMENTS });
+    const usda = exportTrackToUSDA(track, { TrackCore });
     const blob = new Blob([usda], { type: 'model/vnd.usda' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

@@ -37,13 +37,23 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // centerline samples per path
-const CROSS_SECTION_SEGMENTS = 24;     // max samples across the road width for curved cross-sections
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 // The road's cross-section profile lives in TrackCore, shared with the editor's
 // preview and the USD exporter so all three draw the same surface.
 const crossSectionHeight = TrackCore.crossSectionHeight;
 const crossSectionHeightDerivative = TrackCore.crossSectionHeightDerivative;
+const crossSectionBreakpoints = TrackCore.crossSectionBreakpoints;
+// Merge two rings' adaptive v-breakpoints so a longitudinal strip between them
+// has a vertex everywhere either ring wanted one -- both rings are continuous
+// analytic curves, so evaluating one at the other's breakpoint is exact, not
+// an approximation. That's what turns a would-be T-junction/gap into an
+// ordinary (if sometimes denser-than-either-ring-alone) quad grid.
+function unionBreakpoints(a, b) {
+  const set = new Set(a);
+  for (const v of b) set.add(v);
+  return Array.from(set).sort((x, y) => x - y);
+}
 
 let paths = [];                        // compiled paths: { closed, centerline, mesh, stripeLine, railR, railL, anchors }
 let connectedEndpointIds = new Set();  // shared/disjoint/branch endpoint point IDs that should not launch off-end
@@ -183,7 +193,19 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
       left.z + chord.z * v + f.normal.z * h
     ];
   };
-  // Fixed cross-section resolution: 24 segments across every longitudinal strip.
+  // Adaptive cross-section resolution: each ring picks its own v-breakpoints
+  // from how sharply ITS OWN curvature/tightness bend the profile (flat rings
+  // stay coarse, tightly-curved ones subdivide). A ring is shared by TWO
+  // strips (its left and right neighbor), which can each need different
+  // "foreign" v's from it -- so ring i's own edge is always drawn through
+  // ringPoint/ringUnderPoint (crossSectionStitchPoint), never surfacePoint
+  // directly, for any v that didn't come from the ring's own breakpoints.
+  // That pins the ring's rendered edge to a single, fixed polyline regardless
+  // of which strip is asking, which is what actually prevents the crack --
+  // evaluating the true analytic surface at both rings' union of v's (the
+  // obvious-looking fix) is NOT enough, because it still lets the SAME ring
+  // draw two different polylines when its two neighbors ask for different
+  // extra points.
   const pos = [], uv = [];
   const pushPoint = p => pos.push(p[0], p[1], p[2]);
   const pushUv = (u, v) => uv.push(u, v);
@@ -194,14 +216,21 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
   }
   const avgWidth = raw.reduce((sum, f) => sum + Math.max(1, f.width || 1), 0) / Math.max(1, raw.length);
   const segCount = closed ? N : N - 1;
+  const ringBreaks = raw.map((f, i) => {
+    const left = edges.left[i], right = edges.right[i];
+    const chordWidth = Math.hypot(right.x - left.x, right.y - left.y, right.z - left.z) || 1;
+    return crossSectionBreakpoints(f.crossSectionCurvature, f.crossSectionTightness, chordWidth);
+  });
+  const ringPoint = (ring, v) => TrackCore.crossSectionStitchPoint(ringBreaks[ring], v, vv => surfacePoint(ring, vv));
   for (let i = 0; i < segCount; i++) {
     const ni = closed ? (i + 1) % N : i + 1;
-    for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
-      const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
-      const a = surfacePoint(i, v0), b = surfacePoint(i, v1);
-      const c = surfacePoint(ni, v0), d = surfacePoint(ni, v1);
-      const t0 = distances[i] / avgWidth;
-      const t1 = (closed && ni === 0) ? ((distances[i] + Math.hypot(raw[ni].pos.x - raw[i].pos.x, raw[ni].pos.y - raw[i].pos.y, raw[ni].pos.z - raw[i].pos.z)) / avgWidth) : distances[ni] / avgWidth;
+    const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
+    const t0 = distances[i] / avgWidth;
+    const t1 = (closed && ni === 0) ? ((distances[i] + Math.hypot(raw[ni].pos.x - raw[i].pos.x, raw[ni].pos.y - raw[i].pos.y, raw[ni].pos.z - raw[i].pos.z)) / avgWidth) : distances[ni] / avgWidth;
+    for (let k = 0; k < breaks.length - 1; k++) {
+      const v0 = breaks[k], v1 = breaks[k + 1];
+      const a = ringPoint(i, v0), b = ringPoint(i, v1);
+      const c = ringPoint(ni, v0), d = ringPoint(ni, v1);
       pushPoint(a); pushUv(v0, t0); pushPoint(b); pushUv(v1, t0); pushPoint(c); pushUv(v0, t1);
       pushPoint(b); pushUv(v1, t0); pushPoint(d); pushUv(v1, t1); pushPoint(c); pushUv(v0, t1);
     }
@@ -239,6 +268,7 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
     const t = f.crossSectionThickness || 0;
     return [s[0] - f.normal.x * t, s[1] - f.normal.y * t, s[2] - f.normal.z * t];
   };
+  const ringUnderPoint = (ring, v) => TrackCore.crossSectionStitchPoint(ringBreaks[ring], v, vv => underPoint(ring, vv));
   let shell = null;
   if (raw.some(f => (f.crossSectionThickness || 0) > 1e-6)) {
     const shellPos = [];
@@ -249,21 +279,24 @@ function buildPath(controlPoints, closed, rollPoints, widthPoints, crossSectionP
 
     for (let i = 0; i < segCount; i++) {
       const ni = closed ? (i + 1) % N : i + 1;
-      for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
-        const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
-        const a = underPoint(i, v0), b = underPoint(i, v1);
-        const c = underPoint(ni, v0), d = underPoint(ni, v1);
+      const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
+      for (let k = 0; k < breaks.length - 1; k++) {
+        const v0 = breaks[k], v1 = breaks[k + 1];
+        const a = ringUnderPoint(i, v0), b = ringUnderPoint(i, v1);
+        const c = ringUnderPoint(ni, v0), d = ringUnderPoint(ni, v1);
         tri(a, c, b); tri(b, c, d);          // reversed vs the top, so it faces down
       }
       quad(surfacePoint(i, 0), underPoint(i, 0), surfacePoint(ni, 0), underPoint(ni, 0));
       quad(underPoint(i, 1), surfacePoint(i, 1), underPoint(ni, 1), surfacePoint(ni, 1));
     }
     // An open curve is a cut slab: cap both ends so you cannot see into it.
-    // A closed loop wraps and needs none.
+    // A closed loop wraps and needs none. A cap only ever touches one ring, so
+    // it uses that ring's own breakpoints directly -- no union needed.
     if (!closed) {
       for (const end of [0, N - 1]) {
-        for (let j = 0; j < CROSS_SECTION_SEGMENTS; j++) {
-          const v0 = j / CROSS_SECTION_SEGMENTS, v1 = (j + 1) / CROSS_SECTION_SEGMENTS;
+        const breaks = ringBreaks[end];
+        for (let k = 0; k < breaks.length - 1; k++) {
+          const v0 = breaks[k], v1 = breaks[k + 1];
           quad(surfacePoint(end, v0), underPoint(end, v0), surfacePoint(end, v1), underPoint(end, v1));
         }
       }

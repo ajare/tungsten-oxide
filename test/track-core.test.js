@@ -130,3 +130,133 @@ test('generated tracks bake edges without throwing', () => {
   assert.ok(built > 400, `expected most generated tracks to build, got ${built}`);
   assert.ok(open > 100 && closedCount > 100, `expected both kinds, got ${open} open / ${closedCount} closed`);
 });
+
+/* crossSectionBreakpoints() drives adaptive cross-section tessellation in both
+ * js/track-game.js and js/usd-export.js: it picks the v-breakpoints for one
+ * ring by recursively bisecting wherever the true profile's chord-sagitta
+ * deviation exceeds a fixed tolerance, capped at a fixed recursion depth. */
+test('a flat cross-section collapses to just its two edges', () => {
+  const breaks = TrackCore.crossSectionBreakpoints(0, 1, 24);
+  assert.deepEqual(breaks, [0, 1]);
+});
+
+test('breakpoints always include both edges and the midpoint', () => {
+  for (const [curvature, tightness] of [[1, 1], [-1, 1], [0.3, 2], [-0.6, 0.4]]) {
+    const breaks = TrackCore.crossSectionBreakpoints(curvature, tightness, 20);
+    assert.equal(breaks[0], 0);
+    assert.equal(breaks.at(-1), 1);
+    assert.ok(breaks.includes(0.5), `expected a midpoint breakpoint for curvature ${curvature}, tightness ${tightness}`);
+  }
+});
+
+test('breakpoints are sorted and strictly increasing (no duplicate or out-of-order vertices)', () => {
+  for (const [curvature, tightness] of [[1, 1], [1, 3], [-0.8, 0.3], [0.05, 1]]) {
+    const breaks = TrackCore.crossSectionBreakpoints(curvature, tightness, 30);
+    for (let i = 1; i < breaks.length; i++) assert.ok(breaks[i] > breaks[i - 1], `not strictly increasing at ${i}`);
+  }
+});
+
+test('a larger curvature magnitude (taller profile, same shape) gets more breakpoints', () => {
+  // curvature scales the profile's height linearly (crossSectionHeight), so a
+  // larger magnitude bends through more world units at every v and needs more
+  // subdivision to stay within the same absolute sagitta tolerance.
+  let prevCount = 1;
+  for (const curvature of [0.05, 0.2, 0.5, 1]) {
+    const count = TrackCore.crossSectionBreakpoints(curvature, 1, 24).length;
+    assert.ok(count >= prevCount, `expected curvature ${curvature} to need >= as many breakpoints as smaller curvatures, got ${count} < ${prevCount}`);
+    prevCount = count;
+  }
+});
+
+test('recursion is capped: breakpoint count stays bounded even for an extreme profile', () => {
+  const breaks = TrackCore.crossSectionBreakpoints(1, 4, 400);   // huge chordWidth exaggerates sagitta everywhere
+  // Base partition of 2 cells, capped at 5 levels of recursion each: at most
+  // 2 * 2^5 = 64 cells, i.e. 65 breakpoints.
+  assert.ok(breaks.length <= 65, `expected a hard cap, got ${breaks.length} breakpoints`);
+});
+
+test('every breakpoint below the recursion cap sits within a sagitta tolerance of the true profile', () => {
+  // The whole point of the algorithm: no cell should deviate (at its midpoint)
+  // from a straight line between its two ends by more than the tolerance --
+  // UNLESS it has already been bisected down to the minimum cell width the
+  // recursion cap allows, which is exactly what lets a steep edge (infinite
+  // slope at v=0/1 for some tightness values) stay bounded instead of
+  // recursing forever without ever satisfying the tolerance.
+  const MIN_WIDTH = 0.5 / 2 ** 5;   // base half-cell (0.5), halved 5 times
+  for (const [curvature, tightness] of [[1, 1], [1, 2.5], [-0.9, 0.6], [0.4, 3]]) {
+    const chordWidth = 40;
+    const breaks = TrackCore.crossSectionBreakpoints(curvature, tightness, chordWidth);
+    const height = v => TrackCore.crossSectionHeight(curvature, tightness, v, chordWidth);
+    for (let i = 1; i < breaks.length; i++) {
+      const v0 = breaks[i - 1], v1 = breaks[i], vMid = (v0 + v1) / 2;
+      if (v1 - v0 <= MIN_WIDTH + 1e-9) continue;   // hit the recursion cap
+      const deviation = Math.abs(height(vMid) - (height(v0) + height(v1)) / 2);
+      assert.ok(deviation < 0.15, `cell [${v0}, ${v1}] deviates by ${deviation} for curvature ${curvature}, tightness ${tightness}`);
+    }
+  }
+});
+
+test('a wider road (same curvature/tightness) needs at least as much subdivision', () => {
+  // The sagitta tolerance is a fixed WORLD-UNIT constant, and curvature scales
+  // the profile's height linearly with chordWidth (CLAUDE.md: curvature and
+  // tightness are scale-invariant, but the resulting rise is still a length)
+  // -- so a wider road bends through more world units for the same curvature,
+  // and needs the same or more subdivision to stay within tolerance.
+  const narrow = TrackCore.crossSectionBreakpoints(1, 2, 10);
+  const wide = TrackCore.crossSectionBreakpoints(1, 2, 500);
+  assert.ok(wide.length >= narrow.length, `expected wide >= narrow, got ${wide.length} vs ${narrow.length}`);
+});
+
+/* crossSectionStitchPoint() is what actually prevents the crack between two
+ * differently-adaptive rings: a ring shared by two neighboring strips can be
+ * asked for a "foreign" v neither its own adaptive pass, nor the OTHER
+ * neighbor, chose. Evaluating the true analytic surface there (the obvious,
+ * WRONG fix) draws that ring's edge differently depending on which neighbor
+ * asked. The correct behaviour: a v the ring owns returns the exact point;
+ * any other v is linearly interpolated between the ring's own two REAL
+ * bracketing vertices, so the ring's rendered edge is always the one fixed
+ * polyline defined solely by its own breakpoints. */
+test('crossSectionStitchPoint returns the exact point for an owned breakpoint', () => {
+  const pointAt = v => [v * 10, v * v, 0];
+  const owned = [0, 0.5, 1];
+  for (const v of owned) {
+    assert.deepEqual(TrackCore.crossSectionStitchPoint(owned, v, pointAt), pointAt(v));
+  }
+});
+
+test('crossSectionStitchPoint linearly interpolates a foreign v between its bracketing owned vertices, not the true surface', () => {
+  // A curved pointAt (y = v^2) so the true surface value at v=0.25 differs
+  // from a straight-line interpolation between v=0 and v=0.5.
+  const pointAt = v => [v * 10, v * v, 0];
+  const owned = [0, 0.5, 1];
+  const stitched = TrackCore.crossSectionStitchPoint(owned, 0.25, pointAt);
+  const trueSurface = pointAt(0.25);
+  const lerped = [
+    (pointAt(0)[0] + pointAt(0.5)[0]) / 2,
+    (pointAt(0)[1] + pointAt(0.5)[1]) / 2,
+    0
+  ];
+  assert.deepEqual(stitched, lerped);
+  assert.notDeepEqual(stitched, trueSurface, 'expected the stitched point to differ from the true (curved) surface value');
+});
+
+test('crossSectionStitchPoint: a ring renders the same edge no matter which neighbor asks for extra points', () => {
+  // Simulates the actual bug: ring i's own breakpoints are [0, 0.5, 1]. Its
+  // left neighbor's strip asks ring i for v=0.25 (a foreign v); its right
+  // neighbor's strip asks for v=0.75 (a different foreign v). Both requests
+  // must be consistent with ring i's OWN fixed polyline -- in particular,
+  // asking for 0.25 must not change what a request for v=0 or v=0.5 returns.
+  const pointAt = v => [Math.sin(v * 5) * 20, Math.cos(v * 3) * 8, v * 2];
+  const owned = [0, 0.5, 1];
+  const fromLeftStrip = v => TrackCore.crossSectionStitchPoint(owned, v, pointAt);
+  const fromRightStrip = v => TrackCore.crossSectionStitchPoint(owned, v, pointAt);
+  for (const v of [0, 0.5, 1]) {
+    assert.deepEqual(fromLeftStrip(v), fromRightStrip(v), `ring's own vertex at v=${v} must be identical regardless of context`);
+  }
+  // The foreign points themselves must be collinear with (not deviating from)
+  // the segment of the ring's own polyline they fall inside.
+  const a = pointAt(0), b = pointAt(0.5);
+  const foreign = fromLeftStrip(0.25);
+  const t = 0.5; // (0.25 - 0) / (0.5 - 0)
+  assert.deepEqual(foreign, [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+});

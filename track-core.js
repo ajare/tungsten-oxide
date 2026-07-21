@@ -60,6 +60,18 @@
  *                                    - road-surface rise above the flat chord
  *                                      (v: 0 left edge .. 1 right edge), plus
  *                                      crossSectionHeightDerivative for normals
+ *   crossSectionBreakpoints(curvature, tightness, chordWidth)
+ *                                    - adaptive v breakpoints (0..1) for one
+ *                                      cross-section ring's mesh, denser where
+ *                                      the profile curves more sharply
+ *   crossSectionStitchPoint(ownBreaks, v, pointAt)
+ *                                    - a ring's point at v, constrained to its
+ *                                      OWN polyline (ownBreaks); required
+ *                                      whenever a neighboring ring's finer
+ *                                      breakpoints force this ring to be
+ *                                      sampled at a v it didn't pick itself,
+ *                                      or two differently-adaptive neighbors
+ *                                      leave a crack at the shared ring
  *   parseTrack(text)                 - JSON string -> validated track object
  *   serializeTrack(track)            - track object -> pretty JSON string
  *   DEFAULT_TRACK, STARTER_TRACK     - built-in tracks
@@ -136,6 +148,77 @@
     const u = 2 * Math.max(0.001, Math.min(0.999, v)) - 1;
     const base = Math.sqrt(Math.max(0.000001, 1 - u * u));
     return c * (chordWidth / 2) * k * (-2 * u) * Math.pow(base, k - 2);
+  }
+
+  // How far off (in world units) the mesh is allowed to deviate from the true
+  // crossSectionHeight curve before a cell gets split. Fixed engine constant,
+  // not authored per-track -- it is a mesh-fidelity knob like
+  // CROSS_SECTION_SEGMENTS used to be, not a track-shape knob like curvature.
+  const CROSS_SECTION_SAGITTA_TOLERANCE = 0.1;
+  // Hard cap so a steep edge (slope approaches infinite at v=0/1 for some
+  // tightness values) can't blow up the triangle budget regardless of how
+  // large the sagitta error reports.
+  const CROSS_SECTION_MAX_DEPTH = 5;
+
+  // Adaptive v-partition for one cross-section ring: recursively bisects any
+  // cell whose true profile deviates (at its midpoint) from the straight line
+  // between its two ends by more than CROSS_SECTION_SAGITTA_TOLERANCE, so flat
+  // stretches of road stay coarse and tightly-curved ones get subdivided where
+  // they actually need it. Returns a sorted array of v breakpoints from 0 to 1
+  // (always including both ends), shared by the top surface, the shell
+  // underside and the shell's end caps for this ring so they all agree.
+  function crossSectionBreakpoints(curvature, tightness, chordWidth) {
+    const c = clampSignedUnit(curvature);
+    const breaks = new Set([0, 1]);
+    if (!c) return [0, 1];
+    const k = clampTightness(tightness);
+    const height = v => crossSectionHeight(c, k, v, chordWidth);
+    const split = (v0, v1, depth) => {
+      const vMid = (v0 + v1) / 2;
+      const hMid = height(vMid);
+      const hChord = (height(v0) + height(v1)) / 2;
+      if (depth < CROSS_SECTION_MAX_DEPTH && Math.abs(hMid - hChord) > CROSS_SECTION_SAGITTA_TOLERANCE) {
+        split(v0, vMid, depth + 1);
+        breaks.add(vMid);
+        split(vMid, v1, depth + 1);
+      }
+    };
+    // Base partition of 2 cells: [0, 0.5], [0.5, 1].
+    split(0, 0.5, 0);
+    breaks.add(0.5);
+    split(0.5, 1, 0);
+    return Array.from(breaks).sort((a, b) => a - b);
+  }
+
+  // A ring shared between two neighboring strips is asked for a DIFFERENT set
+  // of "foreign" v's by each neighbor (whichever neighbor is finer), since
+  // adaptivity is decided per ring independently. Evaluating the true
+  // analytic surface at a foreign v (as if it were just another sample of the
+  // same continuous curve) is WRONG despite being exact: it silently moves the
+  // ring's rendered edge depending on which neighbor asked, because the ring's
+  // OWN edge, wherever it's actually drawn, is the polyline through its own
+  // fixed breakpoints (ownBreaks) -- not the smooth curve itself. Two
+  // different sets of "extra, exact" points define two different polylines
+  // for the same edge, which is exactly the crack this function exists to
+  // prevent.
+  //
+  // The fix: for v already in ownBreaks, return the true point (pointAt(v)).
+  // For a foreign v, linearly interpolate between the ring's own two REAL
+  // neighboring vertices instead of sampling the curve directly. A lerped
+  // point is collinear with (not a deviation from) the straight edge segment
+  // already there, so inserting it does not change the ring's rendered shape
+  // at all -- meaning the ring's edge is bit-for-bit identical no matter which
+  // neighboring strip, or how many foreign v's, ask for it.
+  function crossSectionStitchPoint(ownBreaks, v, pointAt) {
+    if (ownBreaks.indexOf(v) !== -1) return pointAt(v);
+    let lo = ownBreaks[0], hi = ownBreaks[ownBreaks.length - 1];
+    for (let i = 0; i < ownBreaks.length - 1; i++) {
+      if (ownBreaks[i] <= v && v <= ownBreaks[i + 1]) { lo = ownBreaks[i]; hi = ownBreaks[i + 1]; break; }
+    }
+    if (lo === hi) return pointAt(lo);
+    const a = pointAt(lo), b = pointAt(hi);
+    const t = (v - lo) / (hi - lo);
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
   }
 
   // --- tiny plain-object vector helpers ({x,y,z}) ----------------------------
@@ -1240,7 +1323,7 @@
     evalRoll: evalRollSpline, evalWidth: evalWidthSpline,
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     evalCrossSectionThickness: evalCrossSectionThicknessSpline, DEFAULT_CROSS_SECTION_THICKNESS,
-    crossSectionHeight, crossSectionHeightDerivative,
+    crossSectionHeight, crossSectionHeightDerivative, crossSectionBreakpoints, crossSectionStitchPoint,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,

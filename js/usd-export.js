@@ -7,7 +7,6 @@
  */
 import * as TrackMesh from './track-mesh.js';
 
-const DEFAULT_CROSS_SECTION_SEGMENTS = 24;
 const ROAD_MATERIAL = 'RoadSurface';
 const MESH_MATERIAL = 'MeshRegionSurface';
 const SHELL_MATERIAL = 'RoadShell';
@@ -54,13 +53,24 @@ function orientFacesUp(points, faces) {
   if (sumY < 0) for (const f of faces) [f[1], f[2]] = [f[2], f[1]];
 }
 
+// Merge two rings' adaptive v-breakpoints so a longitudinal strip between them
+// has a vertex everywhere either ring wanted one. Both rings are continuous
+// analytic curves, so evaluating one at the other's breakpoint is exact --
+// that's what turns a would-be T-junction/gap into an ordinary quad grid, the
+// same trick js/track-game.js uses for the in-game mesh.
+function unionBreakpoints(a, b) {
+  const set = new Set(a);
+  for (const v of b) set.add(v);
+  return Array.from(set).sort((x, y) => x - y);
+}
+
 function decidersForPath(TrackCore, path, track, samples) {
   if (!TrackCore.makeSelfIntersectionDeciders) return null;
   const overrides = Array.isArray(track.selfIntersectionOverrides) ? track.selfIntersectionOverrides : [];
   return TrackCore.makeSelfIntersectionDeciders(path.controlPoints, path.closed, samples, overrides);
 }
 
-function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments, warnings) {
+function buildCurveMesh(TrackCore, track, path, pathIndex, warnings) {
   const parts = TrackCore.splitPoints(path.points || []);
   const cps = parts.controlPoints;
   if (cps.length < 2 || (path.closed !== false && cps.length < 3)) {
@@ -85,9 +95,19 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
     return null;
   }
 
-  const points = [];
-  const uvs = [];
-  const ringSize = crossSectionSegments + 1;
+  // Adaptive cross-section resolution, shared with the game: each ring picks
+  // its own v-breakpoints from how sharply ITS OWN curvature/tightness bend
+  // the profile. A ring is shared by TWO strips (its left and right
+  // neighbor), which can each need different "foreign" v's from it -- so a
+  // ring's own edge is always drawn through ringPoint (crossSectionStitchPoint),
+  // never surfacePoint directly, for any v that isn't one of the ring's own
+  // breakpoints. That pins the ring's rendered edge to a single, fixed
+  // polyline regardless of which strip is asking, which is what actually
+  // prevents a crack -- evaluating the true analytic surface at the union of
+  // both rings' v's is NOT enough, because it still lets the SAME ring draw
+  // two different polylines when its two neighbors ask for different extra
+  // points (see TrackCore.crossSectionBreakpoints/crossSectionStitchPoint and
+  // CLAUDE.md).
   const chordWidths = raw.map((_, i) => {
     const left = edges.left[i], right = edges.right[i];
     return Math.hypot(right.x - left.x, right.y - left.y, right.z - left.z) || 1;
@@ -98,38 +118,43 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
     const a = raw[i - 1].pos, b = raw[i].pos;
     distances[i] = distances[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
   }
-  for (let i = 0; i < raw.length; i++) {
+  const ringBreaks = raw.map((f, i) => TrackCore.crossSectionBreakpoints(f.crossSectionCurvature, f.crossSectionTightness, chordWidths[i]));
+  const surfacePoint = (i, v) => {
     const left = edges.left[i], right = edges.right[i], f = raw[i];
     const chord = { x: right.x - left.x, y: right.y - left.y, z: right.z - left.z };
-    const chordWidth = chordWidths[i];
-    const texV = distances[i] / representativeWidth;
-    for (let j = 0; j <= crossSectionSegments; j++) {
-      const v = j / crossSectionSegments;
-      const h = TrackCore.crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidth);
-      points.push([
-        left.x + chord.x * v + f.normal.x * h,
-        left.y + chord.y * v + f.normal.y * h,
-        left.z + chord.z * v + f.normal.z * h
-      ]);
-      uvs.push([v, texV]);
-    }
-  }
+    const h = TrackCore.crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, chordWidths[i]);
+    return [
+      left.x + chord.x * v + f.normal.x * h,
+      left.y + chord.y * v + f.normal.y * h,
+      left.z + chord.z * v + f.normal.z * h
+    ];
+  };
+  const ringPoint = (i, v) => TrackCore.crossSectionStitchPoint(ringBreaks[i], v, vv => surfacePoint(i, vv));
 
+  const points = [];
+  const uvs = [];
   const faces = [];
+  const push = (p, u, texV) => { points.push(p); uvs.push([u, texV]); return points.length - 1; };
   const longSegments = closed ? raw.length : raw.length - 1;
   for (let i = 0; i < longSegments; i++) {
     const ni = closed ? (i + 1) % raw.length : i + 1;
-    for (let j = 0; j < crossSectionSegments; j++) {
-      const a = i * ringSize + j;
-      const b = i * ringSize + j + 1;
-      const c = ni * ringSize + j;
-      const d = ni * ringSize + j + 1;
+    const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
+    const t0 = distances[i] / representativeWidth;
+    const t1 = (closed && ni === 0)
+      ? (distances[i] + Math.hypot(raw[ni].pos.x - raw[i].pos.x, raw[ni].pos.y - raw[i].pos.y, raw[ni].pos.z - raw[i].pos.z)) / representativeWidth
+      : distances[ni] / representativeWidth;
+    for (let k = 0; k < breaks.length - 1; k++) {
+      const v0 = breaks[k], v1 = breaks[k + 1];
+      const a = push(ringPoint(i, v0), v0, t0);
+      const b = push(ringPoint(i, v1), v1, t0);
+      const c = push(ringPoint(ni, v0), v0, t1);
+      const d = push(ringPoint(ni, v1), v1, t1);
       faces.push([a, b, c], [b, d, c]);
     }
   }
   orientFacesUp(points, faces);
   const surface = { name: `Path_${pathIndex}`, material: ROAD_MATERIAL, points, faces, uvs };
-  const shell = buildCurveShellMesh(raw, points, ringSize, crossSectionSegments, closed, pathIndex);
+  const shell = buildCurveShellMesh(TrackCore, surfacePoint, raw, ringBreaks, closed, pathIndex);
   return shell ? [surface, shell] : [surface];
 }
 
@@ -137,9 +162,11 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
  *
  * Separate from the surface for the same reason the game keeps them in a
  * separate mesh: the road's UV mapping stays untouched, and the substructure
- * gets its own material. `topPoints` is reused rather than recomputed, so the
- * shell is welded to the exact surface that was exported -- including any edge
- * mitring already baked into it.
+ * gets its own material. `surfacePoint` is the exact function buildCurveMesh
+ * used for the road, so the shell is welded to it -- including any edge
+ * mitring already baked in -- and shares the same adaptive breakpoints per
+ * ring, the same way js/track-game.js's shell reuses its ring's own
+ * breakpoints as the top surface.
  *
  * Winding is settled here rather than by orientFacesUp, which cannot work on a
  * closed shell: it flips everything when the summed face normal points down,
@@ -147,44 +174,48 @@ function buildCurveMesh(TrackCore, track, path, pathIndex, crossSectionSegments,
  * numerical noise. The underside faces alone decide instead, and the walls
  * follow whatever they choose.
  */
-function buildCurveShellMesh(raw, topPoints, ringSize, crossSectionSegments, closed, pathIndex) {
+function buildCurveShellMesh(TrackCore, surfacePoint, raw, ringBreaks, closed, pathIndex) {
   if (!raw.some(f => (f.crossSectionThickness || 0) > 1e-6)) return null;
 
-  const points = topPoints.map(p => [p[0], p[1], p[2]]);
-  const under = topPoints.length;                  // index offset of the under ring
-  for (let i = 0; i < raw.length; i++) {
+  const underPoint = (i, v) => {
+    const s = surfacePoint(i, v);
     const f = raw[i];
     const t = f.crossSectionThickness || 0;
-    for (let j = 0; j <= crossSectionSegments; j++) {
-      const p = topPoints[i * ringSize + j];
-      points.push([p[0] - f.normal.x * t, p[1] - f.normal.y * t, p[2] - f.normal.z * t]);
-    }
-  }
+    return [s[0] - f.normal.x * t, s[1] - f.normal.y * t, s[2] - f.normal.z * t];
+  };
+  const ringUnderPoint = (i, v) => TrackCore.crossSectionStitchPoint(ringBreaks[i], v, vv => underPoint(i, vv));
 
+  const points = [];
   const bottom = [];
   const sides = [];
+  const push = p => { points.push(p); return points.length - 1; };
+  const bottomTri = (p, q, r) => bottom.push([push(p), push(q), push(r)]);
+  const sideQuad = (p, q, r, s) => {
+    const a = push(p), b = push(q), c = push(r), d = push(s);
+    sides.push([a, b, c], [b, d, c]);
+  };
+
   const longSegments = closed ? raw.length : raw.length - 1;
   for (let i = 0; i < longSegments; i++) {
     const ni = closed ? (i + 1) % raw.length : i + 1;
-    for (let j = 0; j < crossSectionSegments; j++) {
-      const a = under + i * ringSize + j;
-      const b = under + i * ringSize + j + 1;
-      const c = under + ni * ringSize + j;
-      const d = under + ni * ringSize + j + 1;
-      bottom.push([a, c, b], [b, c, d]);           // reversed vs the surface
+    const breaks = unionBreakpoints(ringBreaks[i], ringBreaks[ni]);
+    for (let k = 0; k < breaks.length - 1; k++) {
+      const v0 = breaks[k], v1 = breaks[k + 1];
+      const a = ringUnderPoint(i, v0), b = ringUnderPoint(i, v1);
+      const c = ringUnderPoint(ni, v0), d = ringUnderPoint(ni, v1);
+      bottomTri(a, c, b); bottomTri(b, c, d);   // reversed vs the surface
     }
-    for (const j of [0, crossSectionSegments]) {   // the two edges become walls
-      const t0 = i * ringSize + j, t1 = ni * ringSize + j;
-      const u0 = under + t0, u1 = under + t1;
-      sides.push([t0, u0, t1], [u0, u1, t1]);
-    }
+    sideQuad(surfacePoint(i, 0), underPoint(i, 0), surfacePoint(ni, 0), underPoint(ni, 0));
+    sideQuad(underPoint(i, 1), surfacePoint(i, 1), underPoint(ni, 1), surfacePoint(ni, 1));
   }
   // An open curve is a cut slab and needs both ends capped; a loop wraps shut.
+  // A cap only ever touches one ring, so it uses that ring's own breakpoints.
   if (!closed) {
     for (const end of [0, raw.length - 1]) {
-      for (let j = 0; j < crossSectionSegments; j++) {
-        const t0 = end * ringSize + j, t1 = end * ringSize + j + 1;
-        sides.push([t0, under + t0, t1], [under + t0, under + t1, t1]);
+      const breaks = ringBreaks[end];
+      for (let k = 0; k < breaks.length - 1; k++) {
+        const v0 = breaks[k], v1 = breaks[k + 1];
+        sideQuad(surfacePoint(end, v0), underPoint(end, v0), surfacePoint(end, v1), underPoint(end, v1));
       }
     }
   }
@@ -285,13 +316,12 @@ function writeMaterials(lines) {
 export function buildUsdScene(track, options = {}) {
   const TrackCore = options.TrackCore || globalThis.TrackCore;
   if (!TrackCore) throw new Error('TrackCore is required for USD export');
-  const crossSectionSegments = Math.max(1, Math.floor(options.crossSectionSegments || DEFAULT_CROSS_SECTION_SEGMENTS));
   const warnings = [];
   const meshes = [];
 
   (track.paths || []).forEach((path, i) => {
     // A curve yields its road surface and, when extruded, a shell prim with it.
-    const built = buildCurveMesh(TrackCore, track, path, i, crossSectionSegments, warnings);
+    const built = buildCurveMesh(TrackCore, track, path, i, warnings);
     if (built) meshes.push(...built);
   });
   (track.meshes || []).forEach((placement, i) => {
@@ -324,5 +354,3 @@ export function buildUsdScene(track, options = {}) {
 export function exportTrackToUSDA(track, options = {}) {
   return buildUsdScene(track, options).text;
 }
-
-export const DEFAULT_USD_CROSS_SECTION_SEGMENTS = DEFAULT_CROSS_SECTION_SEGMENTS;

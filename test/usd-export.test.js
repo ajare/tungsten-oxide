@@ -33,12 +33,15 @@ test('USD export writes an ASCII Y-up scene with default Track prim and material
 test('closed curve export shares the seam ring instead of duplicating it', () => {
   const track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
   track.samples = 12;
-  const scene = buildUsdScene(track, { TrackCore, crossSectionSegments: 4 });
+  const scene = buildUsdScene(track, { TrackCore });
   // An extruded curve exports as two prims: the road surface, then its shell.
   assert.equal(scene.meshes.length, 2);
   assert.equal(scene.meshes[0].material, 'RoadSurface');
-  assert.equal(scene.meshes[0].points.length, 12 * (4 + 1));
-  assert.equal(scene.meshes[0].faces.length, 12 * 4 * 2);
+  // A closed loop wraps: exactly `samples` longitudinal joins, each built from
+  // the (possibly adaptive) union of its two rings' v-breakpoints -- with the
+  // STARTER_TRACK's flat cross section (curvature 0), every ring collapses to
+  // just its two edges, so each join is a single quad (2 triangles).
+  assert.equal(scene.meshes[0].faces.length, 12 * 2);
 });
 
 function openStraightTrack() {
@@ -90,40 +93,56 @@ function crownedStraightTrack(curvature, tightness) {
  * and editor draw a semicircular arc -- so an exported track silently stopped
  * matching the one that was authored and driven. The two agree at the centre
  * and both edges no matter what the profile is, so only intermediate v values
- * catch that class of drift. */
+ * catch that class of drift. The exporter now also picks its own adaptive
+ * v-breakpoints per ring (TrackCore.crossSectionBreakpoints), so this checks
+ * every vertex the exporter actually placed -- including whatever intermediate
+ * ones the adaptive algorithm added -- against TrackCore directly, rather than
+ * assuming a fixed segment count. */
 for (const [curvature, tightness] of [[1, 1], [1, 2.5], [-0.6, 0.4]]) {
   test(`export builds the road from TrackCore's cross-section (curvature ${curvature}, tightness ${tightness})`, () => {
-    const segments = 4;
-    const scene = buildUsdScene(crownedStraightTrack(curvature, tightness), { TrackCore, crossSectionSegments: segments });
-    const ring = scene.meshes[0].points.slice(0, segments + 1);
-
-    assert.deepEqual(
-      ring.map(p => Number(p[1].toFixed(6))),
-      Array.from({ length: segments + 1 }, (_, j) =>
-        Number(TrackCore.crossSectionHeight(curvature, tightness, j / segments, 10).toFixed(6)))
-    );
-    // Guard the guard: a profile that never leaves the chord would pass the
-    // comparison above trivially.
-    assert.ok(Math.abs(ring[segments / 2][1]) > 1, 'expected a genuinely crowned road');
+    const scene = buildUsdScene(crownedStraightTrack(curvature, tightness), { TrackCore });
+    const surface = scene.meshes[0];
+    // Every point at texV (path-distance coordinate) 0 belongs to the very
+    // first ring; every one of those must sit exactly on TrackCore's own
+    // profile at that ring's v.
+    const firstRing = new Map();
+    surface.points.forEach((p, idx) => {
+      const [v, texV] = surface.uvs[idx];
+      if (texV === 0) firstRing.set(v, p[1]);
+    });
+    // Guard the guard: fewer than the base 3 breakpoints (0, 0.5, 1) would mean
+    // the adaptive algorithm never even ran, and a profile that never leaves
+    // the chord would pass the per-point comparison below trivially.
+    assert.ok(firstRing.size >= 3, `expected at least the base breakpoints, got ${firstRing.size}`);
+    for (const [v, y] of firstRing) {
+      assert.equal(Number(y.toFixed(6)), Number(TrackCore.crossSectionHeight(curvature, tightness, v, 10).toFixed(6)));
+    }
+    assert.ok(Math.abs(firstRing.get(0.5)) > 1, 'expected a genuinely crowned road');
   });
 }
 
 test('a flat cross section leaves the road on its chord', () => {
-  const scene = buildUsdScene(crownedStraightTrack(0, 1), { TrackCore, crossSectionSegments: 4 });
+  const scene = buildUsdScene(crownedStraightTrack(0, 1), { TrackCore });
   for (const p of scene.meshes[0].points) assert.equal(p[1], 0);
 });
 
 test('open curve export has no end caps', () => {
-  const scene = buildUsdScene(openStraightTrack(), { TrackCore, crossSectionSegments: 2 });
-  assert.equal(scene.meshes[0].points.length, 8 * 3);
-  assert.equal(scene.meshes[0].faces.length, 7 * 2 * 2);
+  const scene = buildUsdScene(openStraightTrack(), { TrackCore });
+  const surface = scene.meshes[0];
+  // No crossSection points are authored (curvature 0, flat), so every ring
+  // collapses to just its two edges and each of this open path's 7
+  // longitudinal joins is exactly one quad (4 points, 2 faces); an open curve
+  // draws no wrap-around join and no end caps.
+  assert.equal(surface.faces.length, 7 * 2);
+  assert.equal(surface.points.length, 7 * 4);
 });
 
 test('curve export includes generated square-ish texture coordinates', () => {
-  const scene = buildUsdScene(openStraightTrack(), { TrackCore, crossSectionSegments: 2 });
+  const scene = buildUsdScene(openStraightTrack(), { TrackCore });
   const mesh = scene.meshes[0];
   assert.equal(mesh.uvs.length, mesh.points.length);
-  assert.deepEqual(mesh.uvs.slice(0, 3).map(uv => uv[0]), [0, 0.5, 1]);
+  const us = [...new Set(mesh.uvs.map(uv => uv[0]))].sort((a, b) => a - b);
+  assert.deepEqual(us, [0, 1], 'a flat road has no interior cross-section breakpoints');
   assert.equal(mesh.uvs[0][1], 0);
   assert.ok(mesh.uvs.at(-1)[1] > 8 && mesh.uvs.at(-1)[1] < 10, `expected path length / width scale, got ${mesh.uvs.at(-1)[1]}`);
   assert.match(scene.text, /texCoord2f\[\] primvars:st/);
@@ -154,7 +173,7 @@ function faceNormalY(points, f) {
 }
 
 test('an extruded curve exports a shell prim beneath its surface', () => {
-  const scene = buildUsdScene(slabTrack(6), { TrackCore, crossSectionSegments: 3 });
+  const scene = buildUsdScene(slabTrack(6), { TrackCore });
   assert.equal(scene.meshes.length, 2);
   const [surface, shell] = scene.meshes;
   assert.equal(surface.material, 'RoadSurface');
@@ -162,15 +181,19 @@ test('an extruded curve exports a shell prim beneath its surface', () => {
   assert.match(scene.text, /def Mesh "Path_0_Shell"/);
   assert.match(scene.text, /def Material "RoadShell"/);
 
-  // The shell reuses the exported surface ring and adds one offset ring.
-  assert.equal(shell.points.length, surface.points.length * 2);
+  // Flat cross-section (curvature 0): every ring collapses to just its two
+  // edges, so each of this open path's 5 longitudinal joins contributes 2
+  // bottom triangles (3 points apiece) plus 2 side quads (4 points apiece),
+  // and the 2 open ends cap with one more quad each.
+  assert.equal(shell.points.length, 5 * (2 * 3 + 2 * 4) + 2 * 4);
+  assert.equal(shell.faces.length, 5 * (2 + 2 * 2) + 2 * 2);
   assert.deepEqual([...new Set(surface.points.map(p => +p[1].toFixed(6)))], [0]);
   assert.deepEqual([...new Set(shell.points.map(p => +p[1].toFixed(6)))].sort((x, y) => x - y), [-6, 0],
     'underside sits exactly `thickness` below the road');
 });
 
 test('a zero-thickness curve exports no shell at all', () => {
-  const scene = buildUsdScene(slabTrack(0), { TrackCore, crossSectionSegments: 3 });
+  const scene = buildUsdScene(slabTrack(0), { TrackCore });
   assert.equal(scene.meshes.length, 1, 'the old zero-thickness sheet is still available');
   assert.equal(scene.meshes[0].material, 'RoadSurface');
   // The material is declared unconditionally in the Materials scope, exactly as
@@ -183,7 +206,7 @@ test('a zero-thickness curve exports no shell at all', () => {
  * on a closed shell the top and bottom cancel. The underside decides instead, so
  * pin that it really does end up facing down and nothing ends up inverted. */
 test('the shell underside faces downward', () => {
-  const shell = buildUsdScene(slabTrack(6), { TrackCore, crossSectionSegments: 3 }).meshes[1];
+  const shell = buildUsdScene(slabTrack(6), { TrackCore }).meshes[1];
   const down = shell.faces.filter(f => faceNormalY(shell.points, f) < -1e-9).length;
   const up = shell.faces.filter(f => faceNormalY(shell.points, f) > 1e-9).length;
   assert.ok(down > 0, 'expected underside faces');
@@ -191,14 +214,15 @@ test('the shell underside faces downward', () => {
 });
 
 test('an open shell is capped at both ends, a closed one is not', () => {
-  const segs = 3;
-  const open = buildUsdScene(slabTrack(6, false), { TrackCore, crossSectionSegments: segs }).meshes[1];
-  const closed = buildUsdScene(slabTrack(6, true), { TrackCore, crossSectionSegments: segs }).meshes[1];
+  const open = buildUsdScene(slabTrack(6, false), { TrackCore }).meshes[1];
+  const closed = buildUsdScene(slabTrack(6, true), { TrackCore }).meshes[1];
   const rings = 6;   // track.samples
+  // Flat cross-section: every ring collapses to just its two edges, so each
+  // longitudinal join is 2 bottom triangles + 2 side quads (6 faces total).
   // closed: every ring joins the next, and it wraps shut, so no caps.
-  assert.equal(closed.faces.length, rings * segs * 2 + rings * 2 * 2);
-  // open: one fewer longitudinal join, plus two end caps of `segs` quads each.
-  assert.equal(open.faces.length, (rings - 1) * segs * 2 + (rings - 1) * 2 * 2 + 2 * segs * 2);
+  assert.equal(closed.faces.length, rings * 6);
+  // open: one fewer longitudinal join, plus two end caps of one quad each.
+  assert.equal(open.faces.length, (rings - 1) * 6 + 2 * 2);
 });
 
 test('mesh placements are exported as separate baked Mesh prims', () => {
@@ -225,4 +249,87 @@ test('invalid paths are skipped with USD warning comments', () => {
 test('sanitizers produce safe USD prim names and file stems', () => {
   assert.equal(sanitizeUsdIdentifier('123 weird-name!', 'Prim'), '_123_weird_name');
   assert.equal(sanitizeFileStem('Starter Track!'), 'starter-track');
+});
+
+/* Regression test for a real crack, not a hypothetical one: a ring is shared
+ * by TWO neighboring strips, and each strip independently unions the ring's
+ * own breakpoints with whichever OTHER ring it's paired with. If both strips
+ * then evaluate this ring's TRUE analytic surface at their own "foreign" v's
+ * (v's the ring didn't pick for itself), the ring ends up drawn as two
+ * different polylines -- one per strip -- because a straight edge between two
+ * sparse points is not the same shape as a finer polyline through the same
+ * two endpoints plus real curve samples in between. The fix pins every
+ * ring's edge to a single, fixed polyline (its own breakpoints only) by
+ * linearly interpolating any foreign v between the ring's own two bracketing
+ * REAL vertices instead of resampling the curve.
+ *
+ * This independently bakes the same centerline/edges the exporter does, so it
+ * can compute the CORRECT reference height at every v the exporter actually
+ * placed a vertex at (exact at the ring's own breakpoints, lerped between
+ * them otherwise) and check every exported vertex against it directly. */
+test('a ring shared between differently-adaptive neighbors renders a single consistent edge (no crack)', () => {
+  const track = TrackCore.parseTrack(JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'crack-check', samples: 6,
+    paths: [{ closed: false, points: [
+      { type: 'position', id: 'a', pos: [0, 0, 0], weight: 1 },
+      { type: 'position', id: 'b', pos: [40, 0, 0], weight: 1 },
+      { type: 'position', id: 'c', pos: [80, 0, 0], weight: 1 },
+      { type: 'position', id: 'd', pos: [120, 0, 0], weight: 1 },
+      { type: 'position', id: 'e', pos: [160, 0, 0], weight: 1 },
+      { type: 'width', t: 0, width: 30 }, { type: 'width', t: 1, width: 30 },
+      { type: 'crossSection', t: 0, curvature: 1, tightness: 3.5 },
+      { type: 'crossSection', t: 0.5, curvature: 0.4, tightness: 1 },
+      { type: 'crossSection', t: 1, curvature: 1, tightness: 0.3 }
+    ] }]
+  }));
+
+  // Bake the same centerline/edges the exporter does internally, purely to
+  // independently compute each ring's own canonical breakpoints and a
+  // reference "stitched" height at any v.
+  const path = track.paths[0];
+  const parts = TrackCore.splitPoints(path.points);
+  const raw = TrackCore.buildCenterline(parts.controlPoints, 6, false, parts.rollPoints, parts.widthPoints, parts.crossSectionPoints);
+  const edges = TrackCore.buildEdges(raw, false);
+  const chordWidths = raw.map((_, i) => {
+    const l = edges.left[i], r = edges.right[i];
+    return Math.hypot(r.x - l.x, r.y - l.y, r.z - l.z) || 1;
+  });
+  const ringBreaks = raw.map((f, i) => TrackCore.crossSectionBreakpoints(f.crossSectionCurvature, f.crossSectionTightness, chordWidths[i]));
+  // Guard the guard: if every ring happened to need the same breakpoints,
+  // there would be no foreign v's anywhere and this test would pass vacuously.
+  assert.ok(new Set(ringBreaks.map(b => b.length)).size > 1, `expected varying breakpoint counts, got ${ringBreaks.map(b => b.length)}`);
+
+  const referenceHeight = (i, v) => {
+    const own = ringBreaks[i];
+    if (own.includes(v)) return TrackCore.crossSectionHeight(raw[i].crossSectionCurvature, raw[i].crossSectionTightness, v, chordWidths[i]);
+    let lo = own[0], hi = own[own.length - 1];
+    for (let k = 0; k < own.length - 1; k++) {
+      if (own[k] <= v && v <= own[k + 1]) { lo = own[k]; hi = own[k + 1]; break; }
+    }
+    const hLo = TrackCore.crossSectionHeight(raw[i].crossSectionCurvature, raw[i].crossSectionTightness, lo, chordWidths[i]);
+    const hHi = TrackCore.crossSectionHeight(raw[i].crossSectionCurvature, raw[i].crossSectionTightness, hi, chordWidths[i]);
+    return hLo + (hHi - hLo) * (v - lo) / (hi - lo);
+  };
+
+  const distances = [0];
+  for (let i = 1; i < raw.length; i++) {
+    const a = raw[i - 1].pos, b = raw[i].pos;
+    distances[i] = distances[i - 1] + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
+  const repWidth = chordWidths.reduce((s, w) => s + w, 0) / chordWidths.length;
+  const texVToRing = new Map(distances.map((d, i) => [Number((d / repWidth).toFixed(9)), i]));
+
+  const scene = buildUsdScene(track, { TrackCore });
+  const surface = scene.meshes[0];
+  let foreignChecked = 0;
+  surface.points.forEach((p, idx) => {
+    const [v, texV] = surface.uvs[idx];
+    const ring = texVToRing.get(Number(texV.toFixed(9)));
+    assert.ok(ring !== undefined, `couldn't map texV ${texV} back to a ring`);
+    const expected = referenceHeight(ring, v);
+    assert.ok(Math.abs(p[1] - expected) < 1e-6,
+      `ring ${ring} at v=${v}: expected height ${expected} (stitched), got ${p[1]} -- a crack`);
+    if (!ringBreaks[ring].includes(v)) foreignChecked++;
+  });
+  assert.ok(foreignChecked > 0, 'expected the union-stitching to actually exercise a foreign v somewhere');
 });
