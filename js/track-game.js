@@ -1033,10 +1033,21 @@ function landOnSurface(normal) {
   tangentize(physics.forward, normal, physics.moveDir);
 }
 
-function updatePhysics(dt) {
-  const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
-  const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
-  const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+// Largest integration step the physics is allowed to take. A long render frame
+// is split into ceil(dt / MAX_PHYSICS_STEP) equal sub-steps, so the position
+// advance and the wall/rail collision (both tested once per step) can never
+// move a fast ship far enough to tunnel a wall or skip past a corridor edge in
+// a single test. Small enough that even a slow (~20fps) frame still integrates
+// in a handful of steps; the per-step work is cheap float math and one
+// sampleTrack pass, negligible next to rendering.
+const MAX_PHYSICS_STEP = 1 / 120;
+
+// Advance the physics state by ONE integration sub-step, returning the surface
+// normal + render position the once-per-frame visual pass should use, and
+// whether a respawn fired (which aborts the rest of the frame, as the original
+// early-return did). Everything here is integration/collision; the visual work
+// (hover, orientation, camera basis, HUD) stays in updatePhysics below.
+function stepPhysics(dt, throttle, brake, steer) {
   const hasTranslation = !!(throttle || brake || Math.abs(physics.speed) > 0.001);
 
   // Longitudinal speed control
@@ -1276,8 +1287,34 @@ function updatePhysics(dt) {
     lastGrounded.valid = true;
   } else if (physics.groundPos.y < trackFloorY) {
     respawn();
-    return;
+    return { respawned: true };
   }
+  return { surfaceNormal, surfaceRenderPos, respawned: false };
+}
+
+// Read input once per frame, integrate it in fixed-size sub-steps (see
+// MAX_PHYSICS_STEP), then run the render/visual pass ONCE off the final
+// integrated state. Sub-steps are equal and sum EXACTLY to dt, so there is no
+// accumulator remainder to interpolate and normal movement stays frame-exact;
+// a typical ~60fps frame is 2 steps, a long stall a few more.
+function updatePhysics(dt) {
+  const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
+  const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
+  const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+
+  const subSteps = Math.max(1, Math.ceil(dt / MAX_PHYSICS_STEP));
+  const sdt = dt / subSteps;
+  let surfaceNormal = physics.up, surfaceRenderPos = physics.groundPos;
+  for (let i = 0; i < subSteps; i++) {
+    const r = stepPhysics(sdt, throttle, brake, steer);
+    if (r.respawned) return;   // ship already reset; skip this frame's render, matching the old early return
+    surfaceNormal = r.surfaceNormal;
+    surfaceRenderPos = r.surfaceRenderPos;
+  }
+
+  // Recomputed from the FINAL sub-step's speed (speed changes across sub-steps);
+  // feeds only the cosmetic steer-lean flair below.
+  const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
 
   const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.16;
   const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
