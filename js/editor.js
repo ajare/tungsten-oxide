@@ -87,10 +87,13 @@ const CROSS_SECTION_COLOR = '#d58cff';
 // roll were always 0) and instead colours the ribbon itself by roll value.
 let renderMode = 'banked';
 let pointFilters = { position: true, roll: true, width: true, crossSection: true };
-// Debug overlay: the fixed, uniform-in-parameter N_DEFAULT (=400) baked frames
-// that PHYSICS actually rides on (buildCenterline), rendered per path and made
-// selectable so their exact baked values can be inspected. Purely a viewer --
-// these frames are derived, not authored, so the panel is read-only.
+// Debug overlay: the uniform-in-parameter N_DEFAULT (=400) baked frames the
+// editor previews with (buildCenterline), rendered per path and made selectable
+// so their exact baked values can be inspected. The GAME rides on the same
+// curve but samples it adaptively by track length (TrackCore.adaptiveSampleCount),
+// so its live frame COUNT differs -- the shape/values shown here are identical,
+// only the density differs. Purely a viewer -- these frames are derived, not
+// authored, so the panel is read-only.
 let showPhysicsPoints = false;
 let physicsSel = null;            // { path, index } into a path's baked frames
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
@@ -992,9 +995,11 @@ function drawTop() {
     ctx.stroke(); ctx.setLineDash([]);
   }
 
-  // Physics sample points: the N_DEFAULT baked frames physics rides on, one
-  // small dot per frame per path. Drawn on top of the ribbon but beneath the
-  // authored control-point handles so editing is never obstructed.
+  // Physics sample points: the N_DEFAULT uniform reference frames the editor
+  // previews with, one small dot per frame per path (the game samples the same
+  // curve adaptively by length -- see showPhysicsPoints). Drawn on top of the
+  // ribbon but beneath the authored control-point handles so editing is never
+  // obstructed.
   if (showPhysicsPoints) {
     pathPreviews.forEach((prev, pi) => {
       prev.frames.forEach((f, i) => {
@@ -2069,7 +2074,7 @@ function renderProps() {
         rowRO('Normal', v3(frame.normal)) +
         (left ? rowRO('Left edge', v3(left)) : '') +
         (right ? rowRO('Right edge', v3(right)) : '') +
-        `<div class="hint">Read-only. These are the fixed N=${N} frames physics/collision rides on (buildCenterline). Left/right edges include self-intersection trimming, matching the game corridor.</div>`;
+        `<div class="hint">Read-only. N=${N} uniform reference frames of the curve physics/collision rides on (buildCenterline); in-game the sample count scales with track length. Left/right edges include self-intersection trimming, matching the game corridor.</div>`;
       return;
     }
   }

@@ -36,7 +36,7 @@ scene.add(sun);
 // math so the editor's preview and this geometry can never drift apart.
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
-const N = TrackCore.N_DEFAULT;         // centerline samples per path
+const N = TrackCore.N_DEFAULT;         // fallback bake size; buildTrack picks a per-path adaptive count (TrackCore.adaptiveSampleCount)
 const UP = new THREE.Vector3(0, 1, 0);
 const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
 // The road's cross-section profile lives in TrackCore, shared with the editor's
@@ -474,10 +474,16 @@ function buildTrack(track) {
   const bakedPaths = trackPaths.map(p => {
     const { controlPoints, rollPoints, widthPoints, crossSectionPoints } = TrackCore.splitPoints(p.points);
     const closed = p.closed !== false;
-    const frames = TrackCore.buildCenterline(controlPoints, N, closed, rollPoints, widthPoints, crossSectionPoints);
+    // Physics sample count scales with the path's driven length, so a 7-10 km
+    // track keeps the same corridor fidelity a ~1 km one had (see
+    // TrackCore.adaptiveSampleCount). The SAME count must feed
+    // makeSelfIntersectionDeciders below, whose frame->control-id mapping is
+    // relative to this frame count.
+    const pathN = TrackCore.adaptiveSampleCount(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
+    const frames = TrackCore.buildCenterline(controlPoints, pathN, closed, rollPoints, widthPoints, crossSectionPoints);
     const edges = TrackCore.buildEdges(frames, closed);
     const hasBranchConnection = controlPoints.some(cp => cp && branchPointIds.has(cp.id));
-    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection, texture: p.texture || null };
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection, texture: p.texture || null, pathN };
   });
   const incidentCounts = endpointIncidentCounts(bakedPaths);
   for (const [id, count] of incidentCounts) if (count >= 2) connectedEndpointIds.add(id);
@@ -487,7 +493,7 @@ function buildTrack(track) {
   const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
   paths = bakedPaths.map((p, i) => buildPath(
     p.controlPoints, p.closed, p.rollPoints, p.widthPoints, p.crossSectionPoints, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
-    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, N, overrides), p.hasBranchConnection,
+    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, p.pathN, overrides), p.hasBranchConnection,
     p.texture, p.texture && (track.textureAssets || {})[p.texture.asset]
   ));
   // Anything below every drivable surface by this much has clearly fallen off
@@ -937,11 +943,17 @@ const physics = {
   // `forward` (atan2 of its X/Z), which is all the top-down minimap needs.
   heading: 0,        // derived world-yaw azimuth of `forward` (for the minimap)
   speed: 0,                // signed scalar speed (units/sec)
-  maxSpeed: 102,     // 68 * 1.5
-  maxReverse: -24,
-  accel: 52,
-  brakeDecel: 84,
-  friction: 40,      // decel when neither throttle nor brake held -- stops quickly when let go
+  // 1 world unit = 1 metre, so maxSpeed 140 = 140 m/s (504 km/h). The
+  // longitudinal rates below are the old 102-tuned values scaled x1.373 (=
+  // 140/102) so the pedal FEEL is unchanged -- same ~2.0s to top speed, same
+  // braking punch, same coast-down -- just at the higher ceiling. turnRate/grip
+  // are angular rates (scale-invariant) and stay put, which keeps both the big
+  // new tracks and small legacy tracks driveable.
+  maxSpeed: 140,
+  maxReverse: -33,   // -24 * 1.373
+  accel: 71,         // 52 * 1.373
+  brakeDecel: 115,   // 84 * 1.373
+  friction: 55,      // 40 * 1.373 -- decel when neither throttle nor brake held
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
   wallRestitution: 0.4,    // guard-rail bounce: 0 = old dead-slide, 1 = perfectly elastic
@@ -1375,8 +1387,9 @@ function updatePhysics(dt) {
     new THREE.Quaternion().setFromEuler(new THREE.Euler(physics.visualPitch, 0, physics.visualBank, 'XYZ'))
   );
 
-  // HUD
-  const kmh = Math.round(Math.abs(physics.speed) * 4.5);
+  // HUD. 1 world unit = 1 metre (see CONTEXT.md), so speed is m/s and the
+  // km/h readout is a straight m/s * 3.6 -- 140 m/s reads 504 km/h.
+  const kmh = Math.round(Math.abs(physics.speed) * 3.6);
   document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>';
 }
 

@@ -363,7 +363,7 @@ test('defaults injected during normalization are not double-scaled', () => {
     meshes: [{ id: 'm1', asset: 'pad', x: 5, z: 5, rotation: 10, elevation: 3 }]
   });
   const migrated = TrackCore.parseTrack(noWidths);
-  assert.deepEqual(widths(migrated), [24, 24], 'default width, not 48');
+  assert.deepEqual(widths(migrated), [TrackCore.DEFAULT_WIDTH, TrackCore.DEFAULT_WIDTH], 'default width, not doubled');
   assert.equal(migrated.meshAssets.pad.railHeight, TrackCore.DEFAULT_RAIL_HEIGHT, 'default rail height, not doubled');
   // Values that WERE authored still scale.
   assert.equal(migrated.meshes[0].x, 10);

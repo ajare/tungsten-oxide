@@ -98,7 +98,7 @@
   const DEFAULT_CROSS_SECTION_THICKNESS = 4;
   const COLLISION_WALL_MARGIN = 1.8;
   const DEFAULT_RAIL_HEIGHT = 6;
-  const DEFAULT_WIDTH = 24;
+  const DEFAULT_WIDTH = 36;
   // Schema 5 doubled the world's unit scale: every length in a track (control
   // point positions, widths, elevations, mesh geometry) is twice what the same
   // track measured under schema 4, and the game's ship, speeds and gravity were
@@ -460,6 +460,39 @@
       out.push(frameFromSample(evalTrack(g)));
     }
     return out;
+  }
+
+  // --- adaptive physics sample count -----------------------------------------
+  // How many centerline frames PHYSICS/collision rides on is chosen per path
+  // from its DRIVEN length, holding sample spacing roughly constant so a longer
+  // track keeps the same corridor fidelity -- and the along-track collision
+  // tolerances (tuned against that spacing) stay valid untouched. This is
+  // deliberately separate from two other counts it is easy to conflate:
+  //   * the RENDER mesh, which is resampled adaptively and independently
+  //     (buildAdaptiveMeshFrames), so a coarse physics count never shows as a
+  //     blocky road; and
+  //   * N_DEFAULT / track.samples, which stay the USD-export ring count and the
+  //     floor here -- the exporter is untouched by this.
+  // 1 world unit = 1 metre (see CONTEXT.md), so SAMPLE_SPACING reads as metres.
+  const SAMPLE_SPACING = 6;           // target metres between physics samples
+  const SAMPLE_COUNT_MIN = N_DEFAULT; // never coarser than the legacy fixed bake
+  const SAMPLE_COUNT_MAX = 2000;      // caps per-frame sampleTrack cost on huge tracks
+
+  function estimateCenterlineLength(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints) {
+    const frames = buildCenterline(controlPoints, 200, closed, rollPoints, widthPoints, crossSectionPoints);
+    let len = 0;
+    for (let i = 1; i < frames.length; i++) len += vlen(vsub(frames[i].pos, frames[i - 1].pos));
+    if (closed && frames.length) len += vlen(vsub(frames[0].pos, frames[frames.length - 1].pos));
+    return len;
+  }
+
+  // Per-path physics sample count for the current geometry, clamped to
+  // [N_DEFAULT, SAMPLE_COUNT_MAX]. Deterministic (depends only on the control
+  // geometry), so any two consumers that call it agree.
+  function adaptiveSampleCount(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints) {
+    const len = estimateCenterlineLength(controlPoints, closed !== false, rollPoints, widthPoints, crossSectionPoints);
+    const n = Math.round(len / SAMPLE_SPACING);
+    return Math.max(SAMPLE_COUNT_MIN, Math.min(SAMPLE_COUNT_MAX, n));
   }
 
   // --- adaptive longitudinal mesh sampling (rendering only) -------------------
@@ -1374,19 +1407,24 @@
     meshAssets: {},
     meshes: [],
     textureAssets: {},
+    // The classic varied banked circuit, scaled uniformly x9 from its original
+    // ~888 m into the current 7-10 km regime (~7995 m driven). Only lengths
+    // scale -- positions, widths and cross-section thickness -- so the shape,
+    // banking and relative proportions are byte-for-byte the same track, just
+    // big. Angles (roll) and curve t are dimensionless and untouched.
     paths: [{
       closed: true,
       points: [
-        { type: 'position', pos: [180, 0, 0], weight: 1 },
-        { type: 'position', pos: [140, 8, 92], weight: 1 },
-        { type: 'position', pos: [36, 16, 120], weight: 1 },
-        { type: 'position', pos: [-68, 10, 108], weight: 1 },
-        { type: 'position', pos: [-148, 0, 60], weight: 1 },
-        { type: 'position', pos: [-184, -8, -12], weight: 1 },
-        { type: 'position', pos: [-132, -6, -80], weight: 1 },
-        { type: 'position', pos: [-32, 2, -112], weight: 1 },
-        { type: 'position', pos: [80, 6, -96], weight: 1 },
-        { type: 'position', pos: [160, 2, -44], weight: 1 },
+        { type: 'position', pos: [1620, 0, 0], weight: 1 },
+        { type: 'position', pos: [1260, 72, 828], weight: 1 },
+        { type: 'position', pos: [324, 144, 1080], weight: 1 },
+        { type: 'position', pos: [-612, 90, 972], weight: 1 },
+        { type: 'position', pos: [-1332, 0, 540], weight: 1 },
+        { type: 'position', pos: [-1656, -72, -108], weight: 1 },
+        { type: 'position', pos: [-1188, -54, -720], weight: 1 },
+        { type: 'position', pos: [-288, 18, -1008], weight: 1 },
+        { type: 'position', pos: [720, 54, -864], weight: 1 },
+        { type: 'position', pos: [1440, 18, -396], weight: 1 },
         { type: 'roll', t: 0.0, roll: 0 },
         { type: 'roll', t: 0.1, roll: -14 },
         { type: 'roll', t: 0.2, roll: -22 },
@@ -1397,18 +1435,18 @@
         { type: 'roll', t: 0.7, roll: 8 },
         { type: 'roll', t: 0.8, roll: -12 },
         { type: 'roll', t: 0.9, roll: -6 },
-        { type: 'width', t: 0.0, width: 44 },
-        { type: 'width', t: 0.1, width: 36 },
-        { type: 'width', t: 0.2, width: 28 },
-        { type: 'width', t: 0.3, width: 26 },
-        { type: 'width', t: 0.4, width: 32 },
-        { type: 'width', t: 0.5, width: 24 },
-        { type: 'width', t: 0.6, width: 24 },
-        { type: 'width', t: 0.7, width: 40 },
-        { type: 'width', t: 0.8, width: 48 },
-        { type: 'width', t: 0.9, width: 44 },
-        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS },
-        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: DEFAULT_CROSS_SECTION_THICKNESS }
+        { type: 'width', t: 0.0, width: 396 },
+        { type: 'width', t: 0.1, width: 324 },
+        { type: 'width', t: 0.2, width: 252 },
+        { type: 'width', t: 0.3, width: 234 },
+        { type: 'width', t: 0.4, width: 288 },
+        { type: 'width', t: 0.5, width: 216 },
+        { type: 'width', t: 0.6, width: 216 },
+        { type: 'width', t: 0.7, width: 360 },
+        { type: 'width', t: 0.8, width: 432 },
+        { type: 'width', t: 0.9, width: 396 },
+        { type: 'crossSection', t: 0, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: 36 },
+        { type: 'crossSection', t: 0.5, curvature: DEFAULT_CROSS_SECTION_CURVATURE, tightness: DEFAULT_CROSS_SECTION_TIGHTNESS, thickness: 36 }
       ]
     }]
   };
@@ -1422,13 +1460,27 @@
     meshAssets: {},
     meshes: [],
     textureAssets: {},
+    // A flat circle whose DRIVEN centerline length is 8,000 m. The rational
+    // cubic B-spline does not pass through its control points, so the 12 points
+    // sit on a radius (~1332.9) calibrated by baking and measuring, NOT on the
+    // 1273 m geometric radius of an 8,000 m circle -- placing them there would
+    // yield a curve ~5% short. Flat (roll 0, y 0), constant width 36 (= the
+    // default), no cross-section curvature.
     paths: [{
       closed: true,
       points: [
-        { type: 'position', pos: [80, 0, 0], weight: 1 },
-        { type: 'position', pos: [0, 0, 80], weight: 1 },
-        { type: 'position', pos: [-80, 0, 0], weight: 1 },
-        { type: 'position', pos: [0, 0, -80], weight: 1 },
+        { type: 'position', pos: [1332.907, 0, 0], weight: 1 },
+        { type: 'position', pos: [1154.331, 0, 666.453], weight: 1 },
+        { type: 'position', pos: [666.453, 0, 1154.331], weight: 1 },
+        { type: 'position', pos: [0, 0, 1332.907], weight: 1 },
+        { type: 'position', pos: [-666.453, 0, 1154.331], weight: 1 },
+        { type: 'position', pos: [-1154.331, 0, 666.453], weight: 1 },
+        { type: 'position', pos: [-1332.907, 0, 0], weight: 1 },
+        { type: 'position', pos: [-1154.331, 0, -666.453], weight: 1 },
+        { type: 'position', pos: [-666.453, 0, -1154.331], weight: 1 },
+        { type: 'position', pos: [0, 0, -1332.907], weight: 1 },
+        { type: 'position', pos: [666.453, 0, -1154.331], weight: 1 },
+        { type: 'position', pos: [1154.331, 0, -666.453], weight: 1 },
         { type: 'roll', t: 0, roll: 0 },
         { type: 'roll', t: 0.5, roll: 0 },
         { type: 'width', t: 0, width: 36 },
@@ -1448,7 +1500,7 @@
     evalCrossSectionCurvature: evalCrossSectionSpline, evalCrossSectionTightness: evalCrossSectionTightnessSpline,
     evalCrossSectionThickness: evalCrossSectionThicknessSpline, DEFAULT_CROSS_SECTION_THICKNESS,
     crossSectionHeight, crossSectionHeightDerivative, crossSectionBreakpoints, crossSectionStitchPoint,
-    frameFromSample, longitudinalBreakpoints, buildAdaptiveMeshFrames,
+    frameFromSample, longitudinalBreakpoints, buildAdaptiveMeshFrames, adaptiveSampleCount,
     LONGITUDINAL_SAGITTA_TOLERANCE, LONGITUDINAL_MAX_DISTANCE, LONGITUDINAL_MAX_DEPTH,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
