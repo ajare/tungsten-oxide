@@ -400,3 +400,31 @@ test('a tightly curved closed loop gets MORE mesh frames than a coarse fixed phy
   assert.ok(meshFrames.length > frames.length,
     `expected more mesh frames than the ${frames.length} coarse physics frames, got ${meshFrames.length}`);
 });
+
+// --- ship handling section ---------------------------------------------------
+
+test('a track with no handling section parses to the defaults', () => {
+  const track = TrackCore.parseTrack(JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'no handling',
+    paths: [{ closed: true, points: [
+      { type: 'position', pos: [80, 0, 0] }, { type: 'position', pos: [0, 0, 80] },
+      { type: 'position', pos: [-80, 0, 0] }, { type: 'position', pos: [0, 0, -80] }
+    ] }]
+  }));
+  assert.deepEqual(track.handling, TrackCore.DEFAULT_HANDLING, 'missing section -> defaults');
+});
+
+test('handling is filled field-by-field and clamped to sane ranges', () => {
+  const h = TrackCore.normalizeHandling({ maxSpeed: 200, weight: 'heavy', accel: -50, turnSpeed: 99999 });
+  assert.equal(h.maxSpeed, 200, 'valid value kept');
+  assert.equal(h.weight, TrackCore.DEFAULT_HANDLING.weight, 'non-numeric -> default');
+  assert.equal(h.accel, 5, 'below-range accel clamped up to the floor');
+  assert.equal(h.turnSpeed, 720, 'above-range turnSpeed clamped to the ceiling');
+});
+
+test('handling survives a serialize/parse round trip', () => {
+  const track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
+  track.handling = { maxSpeed: 95, accel: 40, turnSpeed: 200, weight: 2500 };
+  const round = TrackCore.parseTrack(TrackCore.serializeTrack(track));
+  assert.deepEqual(round.handling, { maxSpeed: 95, accel: 40, turnSpeed: 200, weight: 2500 });
+});

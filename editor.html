@@ -145,6 +145,20 @@
   #randomPanel .rrRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; color: #b8d8e8; }
   #randomPanel .rrRow .pair { display: inline-flex; align-items: center; gap: 5px; }
   #randomPanel input[type=number] { width: 68px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #handlingPanel {
+    position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
+    width: 300px; max-height: calc(100vh - 90px); overflow: auto;
+    background: #10202e; border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.55); padding: 10px;
+  }
+  #handlingPanel .panelHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #handlingPanel .panelHead strong { color: var(--accent); }
+  #handlingPanel .panelHead .spacer { flex: 1; }
+  #handlingPanel button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  #handlingPanel button:hover { background: #1f4c6b; }
+  #handlingPanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
+  #handlingPanel .rrRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; color: #b8d8e8; }
+  #handlingPanel input[type=number] { width: 84px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
 </style>
 </head>
 <body>
@@ -169,6 +183,7 @@
     <button id="texturesBtn" title="Load texture atlases and assign texture tiles to curves">Textures</button>
     <button id="exportBtn">Export JSON</button>
     <button id="exportUsdBtn" title="Export the current curves and mesh regions as an ASCII USD scene">Export USD</button>
+    <button id="handlingBtn" title="Configure this track's ship handling (saved in the track JSON)">Handling&hellip;</button>
     <span class="spacer" aria-hidden="true"></span>
     <button id="undoBtn" disabled title="Undo (Ctrl+Z)">&#8630; Undo</button>
     <button id="redoBtn" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z)">&#8631; Redo</button>
@@ -238,6 +253,20 @@
     <div class="rrRow"><span>Max hill height</span><input id="rrMaxHill" type="number" step="10"></div>
     <div class="rrRow"><span>Width</span><span class="pair"><input id="rrWidthMin" type="number" step="1">&ndash;<input id="rrWidthMax" type="number" step="1"></span></div>
     <div class="rrRow"><span>Max cross-section dish</span><input id="rrMaxCurvature" type="number" step="0.05" title="Maximum inward dish; curvature is sampled in [-this, 0]"></div>
+  </div>
+
+  <div id="handlingPanel">
+    <div class="panelHead">
+      <strong>Ship handling</strong>
+      <span class="spacer"></span>
+      <button id="handlingResetBtn" title="Restore default handling">Reset</button>
+      <button id="closeHandlingPanelBtn" title="Close">&times;</button>
+    </div>
+    <div class="hint">Saved in this track's JSON and used by the game. Brake, friction and reverse are fixed and not configurable. A track with no handling section drives with these defaults.</div>
+    <div class="rrRow"><span>Top speed (m/s)</span><input id="hMaxSpeed" type="number" step="5"></div>
+    <div class="rrRow"><span>Acceleration (m/s&sup2;)</span><input id="hAccel" type="number" step="5"></div>
+    <div class="rrRow"><span>Turn speed (&deg;/s)</span><input id="hTurnSpeed" type="number" step="5"></div>
+    <div class="rrRow"><span>Weight (kg)</span><input id="hWeight" type="number" step="50" title="1000 = neutral; heavier bounces less on impact, lighter bounces more"></div>
   </div>
 
   <div id="canvasWrap">

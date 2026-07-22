@@ -278,8 +278,13 @@ export function segmentCrossing(ax, az, bx, bz, cx, cz, dx, dz) {
  * schema documents as solid. Backing off toward the side the crossing came from
  * makes the rail symmetric, and costs the inside case nothing: `side` is +1
  * there, which is the arithmetic that was already running.
+ *
+ * `restitution` (0 by default -> the original pure slide) makes the wall bouncy:
+ * the into-wall velocity component is REVERSED by that fraction instead of only
+ * cancelled, so a springy (light) ship ricochets while a heavy one still slides.
+ * The game passes a weight-derived value; other callers get the old behaviour.
  */
-export function slideAlongRails(compiled, from, to, velocity, margin) {
+export function slideAlongRails(compiled, from, to, velocity, margin, restitution = 0) {
   let cur = { x: from.x, z: from.z };
   let target = { x: to.x, z: to.z };
   let hit = false;
@@ -310,7 +315,9 @@ export function slideAlongRails(compiled, from, to, velocity, margin) {
     // the approach, hence `* side`; the tangential component always survives, so
     // the ship keeps sliding either way.
     const vInto = velocity.x * rail.nx + velocity.z * rail.nz;
-    if (vInto * side > 0) { velocity.x -= rail.nx * vInto; velocity.z -= rail.nz * vInto; }
+    // Cancel (restitution 0) or reverse (restitution > 0) the into-wall part;
+    // the tangential component always survives, so the ship still slides.
+    if (vInto * side > 0) { const j = vInto * (1 + restitution); velocity.x -= rail.nx * j; velocity.z -= rail.nz * j; }
   }
   return { x: target.x, z: target.z, hit };
 }

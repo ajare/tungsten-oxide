@@ -134,6 +134,19 @@ test('driving into a rail is stopped short and loses only the into-wall speed', 
   assert.ok(Math.abs(vel.z) < 1e-9, 'normal component cancelled');
 });
 
+test('restitution reverses the into-wall speed instead of cancelling it (weight bounce)', () => {
+  const c = TM.compile(railedPad(), flatPlacement());
+  // Same head-on hit as above; the into-wall component is -20. Cancelling
+  // (restitution 0, the default) leaves 0; a perfectly elastic wall (1) fully
+  // reverses it, and a half-elastic one reverses half.
+  const elastic = { x: 0, z: -20 };
+  TM.slideAlongRails(c, { x: 15, z: 5 }, { x: 15, z: -5 }, elastic, SHIP_MARGIN, 1);
+  assert.ok(Math.abs(elastic.z - 20) < 1e-9, `elastic bounce reverses fully, got ${elastic.z}`);
+  const half = { x: 0, z: -20 };
+  TM.slideAlongRails(c, { x: 15, z: 5 }, { x: 15, z: -5 }, half, SHIP_MARGIN, 0.5);
+  assert.ok(Math.abs(half.z - 10) < 1e-9, `half-elastic reverses half, got ${half.z}`);
+});
+
 test('glancing a rail slides along it and preserves tangential speed', () => {
   const c = TM.compile(railedPad(), flatPlacement());
   const vel = { x: 20, z: -5 };

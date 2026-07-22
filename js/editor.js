@@ -540,6 +540,9 @@ function ensureTrackIds() {
   if (!track.selfIntersectionOverrides) track.selfIntersectionOverrides = [];
   if (!track.meshAssets) track.meshAssets = {};
   if (!track.meshes) track.meshes = [];
+  // Cloned built-ins / hand-built tracks may lack a handling section; fill and
+  // clamp it so the editor always has a complete one to show and serialize.
+  track.handling = TrackCore.normalizeHandling(track.handling);
   usedIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(s => s.id).filter(Boolean));
   const pointById = new Map(), pathIds = new Set();
   for (const path of track.paths) {
@@ -3552,6 +3555,34 @@ document.getElementById('randomRangesResetBtn').addEventListener('click', () => 
 for (const k in RR_FIELDS) {
   const el = document.getElementById(RR_FIELDS[k]);
   if (el) el.addEventListener('change', readRandomRangeFields);
+}
+
+// ---------- Ship handling popup (#handlingPanel) ----------
+// Per-track: edits write into track.handling and ride in the track JSON (not
+// localStorage). normalizeHandling clamps/fills, so bad input self-corrects.
+const HANDLING_FIELDS = { maxSpeed: 'hMaxSpeed', accel: 'hAccel', turnSpeed: 'hTurnSpeed', weight: 'hWeight' };
+function fillHandlingFields() {
+  const h = TrackCore.normalizeHandling(track.handling);
+  for (const k in HANDLING_FIELDS) { const el = document.getElementById(HANDLING_FIELDS[k]); if (el) el.value = h[k]; }
+}
+const handlingPanelEl = document.getElementById('handlingPanel');
+document.getElementById('handlingBtn').addEventListener('click', () => { fillHandlingFields(); handlingPanelEl.style.display = 'block'; });
+document.getElementById('closeHandlingPanelBtn').addEventListener('click', () => { handlingPanelEl.style.display = 'none'; });
+document.getElementById('handlingResetBtn').addEventListener('click', () => {
+  pushUndo();
+  track.handling = { ...TrackCore.DEFAULT_HANDLING };
+  fillHandlingFields();
+  refresh();
+});
+for (const k in HANDLING_FIELDS) {
+  const el = document.getElementById(HANDLING_FIELDS[k]);
+  if (!el) continue;
+  el.addEventListener('change', () => {
+    pushUndo();
+    track.handling = TrackCore.normalizeHandling({ ...track.handling, [k]: el.value });
+    fillHandlingFields();   // reflect any clamping back into the field
+    refresh();
+  });
 }
 document.getElementById('exportBtn').addEventListener('click', () => {
   assertNoStaleSeams();

@@ -34,7 +34,10 @@
  *            disjointSeams: [{ id, pointId, kind, ... }],
  *            meshAssets: { <assetId>: { name, railHeight, mesh } },
  *            meshes: [ { id, asset, x, z, rotation, elevation } ],
+ *            handling: { maxSpeed, accel, turnSpeed, weight },
  *            start: { path, point, reverse } }
+ * `handling` is the per-track ship config the game reads (m/s, m/s^2, deg/s,
+ * kg); a track without it drives on DEFAULT_HANDLING. See normalizeHandling.
  * meshAssets/meshes carry flat drivable MESH REGIONS imported from the
  * geometry-js editor (schema 4+; older tracks simply have none). track-core.js
  * only validates and carries them -- js/track-mesh.js owns the geometry and the
@@ -99,6 +102,15 @@
   const COLLISION_WALL_MARGIN = 1.8;
   const DEFAULT_RAIL_HEIGHT = 6;
   const DEFAULT_WIDTH = 36;
+  // Per-track ship handling. Configurable in the editor, saved in the track
+  // JSON, read by the game; a track without a `handling` section drives with
+  // exactly these values. maxSpeed/accel are m/s and m/s^2 (1 unit = 1 metre),
+  // turnSpeed is DEGREES per second (friendlier to author than rad/s; the game
+  // converts), weight is kilograms. weight 1000 is the neutral point the
+  // collision reaction is tuned around -- heavier bounces less, lighter more.
+  // Brake/friction/reverse are deliberately NOT here: they stay fixed engine
+  // constants (see js/track-game.js).
+  const DEFAULT_HANDLING = { maxSpeed: 140, accel: 71, turnSpeed: 137.5, weight: 1000 };
   // Schema 5 doubled the world's unit scale: every length in a track (control
   // point positions, widths, elevations, mesh geometry) is twice what the same
   // track measured under schema 4, and the game's ship, speeds and gravity were
@@ -117,6 +129,23 @@
     if (typeof n !== 'number' || !isFinite(n)) return fallback;
     return typeof min === 'number' ? Math.max(min, n) : n;
   };
+  const clampRange = (v, lo, hi, fallback) => {
+    v = Number(v);
+    return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
+  };
+  // Fill in and clamp a track's handling section. A missing/partial/garbage
+  // section falls back field-by-field to DEFAULT_HANDLING, which is how "no
+  // handling in the JSON -> defaults" is realised: parseTrack always runs this,
+  // so every downstream consumer sees a complete, sane object.
+  function normalizeHandling(raw) {
+    const r = (raw && typeof raw === 'object') ? raw : {};
+    return {
+      maxSpeed: clampRange(r.maxSpeed, 10, 1000, DEFAULT_HANDLING.maxSpeed),
+      accel: clampRange(r.accel, 5, 1000, DEFAULT_HANDLING.accel),
+      turnSpeed: clampRange(r.turnSpeed, 10, 720, DEFAULT_HANDLING.turnSpeed),
+      weight: clampRange(r.weight, 50, 100000, DEFAULT_HANDLING.weight)
+    };
+  }
   const clampSignedUnit = n => (typeof n === 'number' && isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0);
   const clampTightness = n => (typeof n === 'number' && isFinite(n) ? Math.max(0.2, Math.min(4, n)) : DEFAULT_CROSS_SECTION_TIGHTNESS);
   // No upper bound: a deliberately deep shell is a legitimate look, and unlike
@@ -1359,6 +1388,7 @@
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
         .map(normalizeSelfIntersectionOverride).filter(Boolean),
+      handling: normalizeHandling(data && data.handling),
       start: normalizeStart(data && data.start, paths)
     };
   }
@@ -1388,6 +1418,7 @@
       '  "version": ' + TRACK_SCHEMA_VERSION + ',\n' +
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
+      '  "handling": ' + JSON.stringify(normalizeHandling(track.handling)) + ',\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
@@ -1505,6 +1536,7 @@
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,
+    DEFAULT_HANDLING, normalizeHandling,
     TRACK_SCHEMA_VERSION, UNIT_SCALE_SCHEMA_VERSION,
     // expose a deep-clone helper so callers never share point references
     cloneTrack: t => JSON.parse(JSON.stringify(t))

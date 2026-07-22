@@ -463,6 +463,10 @@ function buildTrack(track) {
   const branchPointIds = inferBranchPointIds(trackPaths, track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
+  // Apply this track's ship handling (falls back to defaults when the JSON has
+  // no `handling` section). Runs on every (re)build, so a live editor import
+  // updates the ship immediately.
+  applyHandling(track);
   connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
 
   // Drop any previously-built geometry before rebuilding.
@@ -660,10 +664,47 @@ function surfaceOwnerAt(x, z, shipY, corridorSample) {
   return Math.abs(meshHit.region.elevation - shipY) <= Math.abs(corridorY - shipY) ? meshHit.region : null;
 }
 
+// ---------- Per-track ship handling ----------
+// maxSpeed/accel/turnRate and the ship mass come from the track's `handling`
+// section (TrackCore fills defaults when it is absent, so this always gets a
+// complete object). brakeDecel/friction/maxReverse/grip are deliberately NOT
+// touched -- they stay the fixed engine constants set on the physics object.
+const HANDLING_BASE_WEIGHT = 1000;   // kg; the weight the collision reaction is tuned around
+function applyHandling(track) {
+  const h = TrackCore.normalizeHandling(track && track.handling);
+  physics.maxSpeed = h.maxSpeed;
+  physics.accel = h.accel;
+  physics.turnRate = h.turnSpeed * Math.PI / 180;   // authored in deg/s, integrated in rad/s
+  physics.weight = h.weight;
+}
+// Weight-scaled wall bounciness. m = weight / neutral: a heavy ship (m > 1)
+// bounces less, a light one (m < 1) more, capped so it never approaches a
+// perfect-elastic ping. At the neutral weight this is exactly the base 0.4.
+function weightRestitution() {
+  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
+  return Math.max(0, Math.min(0.9, physics.wallRestitution / m));
+}
+// Fraction of speed kept after a wall impact -- heavier ships shrug it off and
+// keep more, lighter ones scrub more. At the neutral weight this is the old 0.98.
+function weightSpeedRetain() {
+  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
+  return Math.max(0.85, Math.min(0.999, 1 - 0.02 / m));
+}
+// Hover-kick/shake proportional to impact MOMENTUM (weight x normal impact
+// speed), so a heavier or faster hit jolts the ship more. Reuses the landing
+// spring so it eases out the same way a hard landing does.
+function addImpactJolt(normalImpactSpeed) {
+  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
+  const momentum = m * Math.max(0, normalImpactSpeed);
+  physics.landingBounce += Math.min(2.0, momentum * 0.012);
+  physics.landingBounceVel += Math.min(10, momentum * 0.05);
+}
+
 // Swept rail collision lives in track-mesh.js (pure geometry, shared and
-// testable); this just binds it to the ship's collision margin.
+// testable); this just binds it to the ship's collision margin and the ship's
+// current weight-derived bounciness.
 const slideAlongRails = (region, from, to, velocity) =>
-  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN);
+  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN, weightRestitution());
 
 // Sample a smooth, interpolated track frame at a horizontal position. Searches
 // ALL path segments for the nearest projected point, then interpolates within
@@ -956,7 +997,8 @@ const physics = {
   friction: 55,      // 40 * 1.373 -- decel when neither throttle nor brake held
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
-  wallRestitution: 0.4,    // guard-rail bounce: 0 = old dead-slide, 1 = perfectly elastic
+  wallRestitution: 0.4,    // BASE guard-rail bounce at the neutral weight; scaled per weight (weightRestitution)
+  weight: 1000,            // ship mass (kg); 1000 = neutral. Heavier bounces less, lighter more
   bobTime: 0,
   visualBank: 0,           // smoothed steer-lean (rad)
   visualPitch: 0,          // smoothed accel-pitch (rad)
@@ -1133,10 +1175,12 @@ function stepPhysics(dt, throttle, brake, steer) {
       if (physics.groundPos.y >= region.elevation + region.railHeight) continue;
       if (!TrackMesh.withinBounds(region.compiled, px, pz, TrackCore.COLLISION_WALL_MARGIN)) continue;
       const velocity = { x: ax, z: az };
+      const before = Math.hypot(ax, az);
       const moved = slideAlongRails(region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
       if (!moved.hit) continue;
       px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
-      physics.speed = Math.hypot(ax, az) * 0.98;
+      physics.speed = Math.hypot(ax, az) * weightSpeedRetain();
+      addImpactJolt(before - Math.hypot(ax, az));
       if (physics.speed > 1e-6) physics.moveDir.set(ax, 0, az).normalize();   // horizontal air travel dir
     }
 
@@ -1175,8 +1219,10 @@ function stepPhysics(dt, throttle, brake, steer) {
     const velocity = { x: vx, z: vz };
     const moved = slideAlongRails(meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
     if (moved.hit) {
-      physics.speed = Math.hypot(velocity.x, velocity.z) * 0.98;
+      const before = Math.hypot(vx, vz), after = Math.hypot(velocity.x, velocity.z);
+      physics.speed = after * weightSpeedRetain();
       if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();   // region is flat: horizontal
+      addImpactJolt(before - after);
     }
 
     const stillOn = TrackMesh.containsWorldPoint(meshRegion.compiled, moved.x, moved.z)
@@ -1248,8 +1294,12 @@ function stepPhysics(dt, throttle, brake, steer) {
         // velocity about it keeps the ship on the surface AND works on a bank.
         _wallN.copy(er).multiplyScalar(hitSign);   // er is already a unit vector
         const into = vel.dot(_wallN);
-        if (into > 0) vel.addScaledVector(_wallN, -into * (1 + physics.wallRestitution));
-        physics.speed = vel.length() * 0.98;
+        if (into > 0) {
+          // Weight-scaled bounce, plus a momentum-scaled jolt on a real impact.
+          vel.addScaledVector(_wallN, -into * (1 + weightRestitution()));
+          addImpactJolt(into);
+        }
+        physics.speed = vel.length() * weightSpeedRetain();
         if (physics.speed > 1e-6) physics.moveDir.copy(vel).normalize();
       }
 
