@@ -3347,6 +3347,212 @@ document.getElementById('newBtn').addEventListener('click', () => {
   invalidateMeshCache();
   refresh();
 });
+
+// ---------- Random track generator ----------
+// A "Random" button builds a fresh closed-loop track at the complexity the
+// slider sets; the ranges the complexity scales within are configured in a
+// small popup (#randomPanel) and persisted to localStorage. Determinism: a
+// seeded PRNG (mulberry32) means a given seed+complexity always reproduces the
+// same track -- each click rolls a new seed and shows it, and typing a seed
+// back in (Enter/blur) rebuilds that exact one.
+const RANDOM_RANGE_DEFAULTS = Object.freeze({
+  lengthMin: 8000, lengthMax: 9000,
+  turnsMin: 6, turnsMax: 22,
+  maxBanking: 25, maxHill: 300,
+  widthMin: 28, widthMax: 52, maxCurvature: 0.5
+});
+const RANDOM_RANGES_KEY = 'web3d.randomRanges';
+function clampNum(v, lo, hi, d) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; }
+function sanitizeRandomRanges(r) {
+  const d = RANDOM_RANGE_DEFAULTS;
+  const out = {
+    lengthMin: clampNum(r.lengthMin, 500, 100000, d.lengthMin),
+    lengthMax: clampNum(r.lengthMax, 500, 100000, d.lengthMax),
+    turnsMin: Math.round(clampNum(r.turnsMin, 4, 40, d.turnsMin)),
+    turnsMax: Math.round(clampNum(r.turnsMax, 4, 40, d.turnsMax)),
+    maxBanking: clampNum(r.maxBanking, 0, 60, d.maxBanking),
+    maxHill: clampNum(r.maxHill, 0, 5000, d.maxHill),
+    widthMin: clampNum(r.widthMin, 1, 2000, d.widthMin),
+    widthMax: clampNum(r.widthMax, 1, 2000, d.widthMax),
+    maxCurvature: clampNum(r.maxCurvature, 0, 1, d.maxCurvature)
+  };
+  // Keep each pair ordered so lerps behave, whatever the user typed.
+  if (out.lengthMax < out.lengthMin) out.lengthMax = out.lengthMin;
+  if (out.turnsMax < out.turnsMin) out.turnsMax = out.turnsMin;
+  if (out.widthMax < out.widthMin) out.widthMax = out.widthMin;
+  return out;
+}
+function loadRandomRanges() {
+  try {
+    const s = localStorage.getItem(RANDOM_RANGES_KEY);
+    if (s) return sanitizeRandomRanges({ ...RANDOM_RANGE_DEFAULTS, ...JSON.parse(s) });
+  } catch (e) { /* corrupt/blocked storage -> defaults */ }
+  return { ...RANDOM_RANGE_DEFAULTS };
+}
+function saveRandomRanges() { try { localStorage.setItem(RANDOM_RANGES_KEY, JSON.stringify(randomRanges)); } catch (e) { /* ignore */ } }
+let randomRanges = loadRandomRanges();
+
+// Small deterministic PRNG: same seed -> same stream. Enough for track shape.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Driven length of a closed loop of bare control points (y ignored by passing
+// them through as-is), used to calibrate a generated loop to a target length.
+function measureLoopLength(controlPoints) {
+  const frames = TrackCore.buildCenterline(controlPoints, 400, true);
+  let len = 0;
+  for (let i = 1; i < frames.length; i++) {
+    const a = frames[i - 1].pos, b = frames[i].pos;
+    len += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
+  const a = frames[frames.length - 1].pos, b = frames[0].pos;
+  return len + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+}
+
+function generateRandomTrack(complexity, seed, ranges) {
+  const rnd = mulberry32(seed >>> 0);
+  const t = (Math.max(1, Math.min(10, complexity)) - 1) / 9;   // 0..1
+  const turnsMin = Math.max(4, Math.round(ranges.turnsMin));
+  const turnsMax = Math.max(turnsMin, Math.round(ranges.turnsMax));
+  const N = Math.max(4, Math.round(turnsMin + (turnsMax - turnsMin) * t));
+
+  // Points at STRICTLY INCREASING angle around a centre -> guaranteed simple
+  // (non-self-crossing) loop. Radius jitter (growing with complexity) is what
+  // makes the turns; the angle jitter (< half the spacing) stays monotonic.
+  const baseR = 1000, jitterAmp = 0.12 + 0.42 * t, spacing = (Math.PI * 2) / N;
+  const xs = [], zs = [];
+  for (let i = 0; i < N; i++) {
+    const ang = i * spacing + (rnd() - 0.5) * 0.8 * spacing;
+    const r = baseR * (1 + (rnd() - 0.5) * 2 * jitterAmp);
+    xs.push(Math.cos(ang) * r); zs.push(Math.sin(ang) * r);
+  }
+  // Calibrate the horizontal size to a random target length within the band.
+  const flatCps = xs.map((x, i) => ({ pos: [x, 0, zs[i]], weight: 1 }));
+  const L0 = measureLoopLength(flatCps);
+  const targetLen = ranges.lengthMin + (ranges.lengthMax - ranges.lengthMin) * rnd();
+  const scale = L0 > 1e-6 ? targetLen / L0 : 1;
+  for (let i = 0; i < N; i++) { xs[i] *= scale; zs[i] *= scale; }
+
+  // Smooth rolling hills: a few low-frequency sinusoids around the loop, summed
+  // and normalised, so elevation is continuous through the closed wrap. Applied
+  // AFTER length calibration so maxHill stays a true world-unit cap.
+  const nH = 2 + Math.floor(rnd() * 3), harm = [];
+  for (let k = 0; k < nH; k++) harm.push({ freq: 1 + Math.floor(rnd() * 4), phase: rnd() * Math.PI * 2, amp: 0.4 + 0.6 * rnd() });
+  const ampSum = harm.reduce((s, h) => s + h.amp, 0) || 1;
+  const hillAmp = ranges.maxHill * t;
+  const ys = [];
+  for (let i = 0; i < N; i++) {
+    const frac = i / N; let y = 0;
+    for (const h of harm) y += h.amp * Math.sin(frac * Math.PI * 2 * h.freq + h.phase);
+    ys.push((y / ampSum) * hillAmp);
+  }
+  // The hills add a few % of 3D length on top of the flat calibration, which
+  // could push a track past the band. Correct with one final UNIFORM scale so
+  // the true driven length lands in [lengthMin, lengthMax]; because it is
+  // uniform it also keeps hill height at or just under maxHill (corr <= 1).
+  const fullCps = xs.map((x, i) => ({ pos: [x, ys[i], zs[i]], weight: 1 }));
+  const L3d = measureLoopLength(fullCps);
+  const corr = L3d > 1e-6 ? targetLen / L3d : 1;
+  for (let i = 0; i < N; i++) { xs[i] *= corr; zs[i] *= corr; ys[i] *= corr; }
+
+  const width0 = TrackCore.DEFAULT_WIDTH;
+  const points = [];
+  for (let i = 0; i < N; i++) points.push({ type: 'position', pos: [xs[i], ys[i], zs[i]], weight: 1 });
+  // Banking: lean INTO each corner. The signed turn metric
+  // m = in_z*out_x - in_x*out_z is > 0 for a right-hand turn, which is exactly
+  // the sign of +roll (which lifts the LEFT edge -> banks into a right turn)
+  // per track-core.js. Magnitude from turn sharpness (asin m), capped at
+  // maxBanking, faded in by complexity.
+  for (let i = 0; i < N; i++) {
+    const pm = (i - 1 + N) % N, pp = (i + 1) % N;
+    const inx = xs[i] - xs[pm], inz = zs[i] - zs[pm];
+    const outx = xs[pp] - xs[i], outz = zs[pp] - zs[i];
+    const inl = Math.hypot(inx, inz) || 1, outl = Math.hypot(outx, outz) || 1;
+    const m = Math.max(-1, Math.min(1, (inz * outx - inx * outz) / (inl * outl)));
+    const turn = Math.asin(m);   // radians, + = right-hand turn
+    const roll = Math.max(-ranges.maxBanking, Math.min(ranges.maxBanking, (turn / 0.6) * ranges.maxBanking)) * t;
+    points.push({ type: 'roll', t: i / N, roll });
+  }
+  // Width varies smoothly (the width spline interpolates), blended from a
+  // constant default toward the full range by complexity.
+  for (let i = 0; i < N; i++) {
+    const sample = ranges.widthMin + (ranges.widthMax - ranges.widthMin) * rnd();
+    points.push({ type: 'width', t: i / N, width: Math.max(1, width0 + (sample - width0) * t) });
+  }
+  // Curvature is dish-only: sampled in [-maxCurvature*t, 0], so at full
+  // complexity with the default 0.5 max it stays within [-0.5, 0] (the road
+  // only ever dishes inward, never crowns).
+  for (let i = 0; i < N; i++) {
+    const curvature = -rnd() * ranges.maxCurvature * t;
+    points.push({ type: 'crossSection', t: i / N, curvature, tightness: 1, thickness: TrackCore.DEFAULT_CROSS_SECTION_THICKNESS });
+  }
+  return {
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Random Track',
+    start: { path: 0, point: 0, reverse: false },
+    disjointSeams: [], junctions: [], selfIntersectionOverrides: [],
+    meshAssets: {}, meshes: [], textureAssets: {},
+    paths: [{ id: null, closed: true, points }]
+  };
+}
+
+const randomSeedEl = document.getElementById('randomSeed');
+const randomComplexityEl = document.getElementById('randomComplexity');
+const randomComplexityValEl = document.getElementById('randomComplexityVal');
+const RANDOM_SEED_MAX = 999999;
+const newRandomSeed = () => Math.floor(Math.random() * (RANDOM_SEED_MAX + 1));
+randomSeedEl.value = newRandomSeed();
+randomComplexityEl.addEventListener('input', () => { randomComplexityValEl.textContent = randomComplexityEl.value; });
+
+function applyRandomTrack(seed) {
+  pushUndo();
+  const complexity = Number(randomComplexityEl.value) || 5;
+  track = generateRandomTrack(complexity, seed, randomRanges);
+  ensureTrackIds();
+  assertNoStaleSeams();
+  selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; crossSectionSel = null; topPan = { x: 0, y: 0 };
+  clearMeshSelection();
+  invalidateMeshCache();
+  refresh();
+}
+document.getElementById('randomBtn').addEventListener('click', () => {
+  const seed = newRandomSeed();
+  randomSeedEl.value = seed;
+  applyRandomTrack(seed);
+});
+randomSeedEl.addEventListener('change', () => {
+  const seed = Math.round(clampNum(randomSeedEl.value, 0, RANDOM_SEED_MAX, newRandomSeed()));
+  randomSeedEl.value = seed;
+  applyRandomTrack(seed);
+});
+
+// Ranges popup (#randomPanel): edit the bounds complexity scales within.
+const RR_FIELDS = {
+  lengthMin: 'rrLengthMin', lengthMax: 'rrLengthMax', turnsMin: 'rrTurnsMin', turnsMax: 'rrTurnsMax',
+  maxBanking: 'rrMaxBanking', maxHill: 'rrMaxHill', widthMin: 'rrWidthMin', widthMax: 'rrWidthMax', maxCurvature: 'rrMaxCurvature'
+};
+function fillRandomRangeFields() {
+  for (const k in RR_FIELDS) { const el = document.getElementById(RR_FIELDS[k]); if (el) el.value = randomRanges[k]; }
+}
+function readRandomRangeFields() {
+  const raw = {};
+  for (const k in RR_FIELDS) { const el = document.getElementById(RR_FIELDS[k]); raw[k] = el ? el.value : randomRanges[k]; }
+  randomRanges = sanitizeRandomRanges(raw);
+  saveRandomRanges();
+}
+const randomPanelEl = document.getElementById('randomPanel');
+document.getElementById('randomRangesBtn').addEventListener('click', () => { fillRandomRangeFields(); randomPanelEl.style.display = 'block'; });
+document.getElementById('closeRandomPanelBtn').addEventListener('click', () => { readRandomRangeFields(); fillRandomRangeFields(); randomPanelEl.style.display = 'none'; });
+document.getElementById('randomRangesResetBtn').addEventListener('click', () => { randomRanges = { ...RANDOM_RANGE_DEFAULTS }; saveRandomRanges(); fillRandomRangeFields(); });
+for (const k in RR_FIELDS) {
+  const el = document.getElementById(RR_FIELDS[k]);
+  if (el) el.addEventListener('change', readRandomRangeFields);
+}
 document.getElementById('exportBtn').addEventListener('click', () => {
   assertNoStaleSeams();
   const json = TrackCore.serializeTrack(track);
