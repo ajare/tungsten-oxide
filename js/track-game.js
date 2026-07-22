@@ -593,13 +593,22 @@ const SURFACE_SNAP_UP = 3;
 // How far below the lowest drivable surface counts as "fallen off for good".
 const RESPAWN_FALL_DEPTH = 100;
 
-// Project a horizontal position onto a corridor sample's cross-section,
-// returning the lateral offset `s` and the drivable range bounded by the
-// rendered physical walls (the trimmed edge offsets, inset by the ship margin).
-function projectToSurface(sample, px, pz) {
+// Project a FULL 3D position onto a corridor sample's cross-section, returning
+// the lateral offset `s` and the drivable range bounded by the rendered
+// physical walls (the trimmed edge offsets, inset by the ship margin).
+//
+// `edgeRight` is a unit vector, so the lateral offset is simply the 3D dot
+// product of the displacement with it -- no division, and no degeneracy at any
+// roll. (This replaces an earlier X/Z-only version that divided by cos^2(roll),
+// which blew up as the road verticalized near 90deg roll: with only X/Z known,
+// recovering `s` meant inverting a map that becomes singular exactly there.
+// Feeding the real 3D point -- the ship's Y is tracked now that velocity lives
+// in the surface tangent plane -- makes the reconstruction exact at every roll.)
+// The caller MUST pass the ship's actual Y; passing the centerline's Y would
+// reintroduce the old degeneracy through the back door.
+function projectToSurface(sample, px, py, pz) {
   const er = sample.edgeRight;
-  const cosR2 = er.x * er.x + er.z * er.z || 1;          // = cos^2(roll)
-  const s = ((px - sample.pos.x) * er.x + (pz - sample.pos.z) * er.z) / cosR2;
+  const s = (px - sample.pos.x) * er.x + (py - sample.pos.y) * er.y + (pz - sample.pos.z) * er.z;
   let loS = sample.sLeft + TrackCore.COLLISION_WALL_MARGIN;    // inner limit of the left edge (negative side)
   let hiS = sample.sRight - TrackCore.COLLISION_WALL_MARGIN;   // inner limit of the right edge (positive side)
   if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
@@ -636,7 +645,7 @@ const _meshSurfacePos = new THREE.Vector3();
 function surfaceOwnerAt(x, z, shipY, corridorSample) {
   const meshHit = meshRegionAt(x, z, shipY);
   if (!meshHit) return null;
-  const proj = projectToSurface(corridorSample, x, z);
+  const proj = projectToSurface(corridorSample, x, shipY, z);
   if (!corridorContains(corridorSample, x, z, proj)) return meshHit.region;
   const corridorY = curvedSurfaceFrame(corridorSample, proj.s).pos.y;
   return Math.abs(meshHit.region.elevation - shipY) <= Math.abs(corridorY - shipY) ? meshHit.region : null;
@@ -689,7 +698,12 @@ function curvedSurfaceFrame(sample, s) {
 // all (which is what running off an open end means).
 const SEGMENT_ALONG_TOL = 0.5;
 
-function sampleTrack(x, z) {
+// `y` is the ship's actual height, used only for the 3D lateral-membership
+// test (see below). Segment SELECTION stays X/Z-nearest: under pure banking the
+// centerline itself is not vertical, so its X/Z footprint still identifies the
+// segment unambiguously -- it is the cross-section that verticalizes, and that
+// is exactly what the 3D lateral test handles.
+function sampleTrack(x, y, z) {
   let fallback = { path: paths[0], a: 0, b: 1, t: 0, d: Infinity };
   let bestUnder = null;
   for (const path of paths) {
@@ -720,8 +734,10 @@ function sampleTrack(x, z) {
       const cx = a.pos.x + (b.pos.x - a.pos.x) * t;
       const cy = a.pos.y + (b.pos.y - a.pos.y) * t;
       const cz = a.pos.z + (b.pos.z - a.pos.z) * t;
-      const cosR2 = erx * erx + erz * erz || 1;
-      const lateral = ((x - cx) * erx + (z - cz) * erz) / cosR2;
+      // 3D lateral offset onto the unit edgeRight -- exact at any roll, matching
+      // projectToSurface. On flat ground ery = 0, so this reduces to the old
+      // X/Z dot; on a bank the ship's real Y is what keeps `s` honest.
+      const lateral = (x - cx) * erx + (y - cy) * ery + (z - cz) * erz;
       let loS = (a.sLeft + (b.sLeft - a.sLeft) * t) + TrackCore.COLLISION_WALL_MARGIN;
       let hiS = (a.sRight + (b.sRight - a.sRight) * t) - TrackCore.COLLISION_WALL_MARGIN;
       if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; }
@@ -813,14 +829,17 @@ function respawn() {
   if (!lastGrounded.valid) { resetShip(); return; }
   physics.groundPos.copy(lastGrounded.pos);
   physics.heading = lastGrounded.heading;
-  physics.velocityAngle = lastGrounded.heading;
   physics.speed = 0;
   physics.airborne = false;
   physics.verticalVel = 0;
   physics.landingBounce = 0;
   physics.landingBounceVel = 0;
   physics.visualGroundPos.copy(lastGrounded.pos);
+  // Respawn re-establishes the tangent-frame vectors from the stored azimuth.
+  // Recovery always lands on solid, level-enough ground, so a horizontal facing
+  // is fine; the next frame's reprojection re-flattens it onto the real surface.
   physics.forward.set(Math.sin(lastGrounded.heading), 0, Math.cos(lastGrounded.heading));
+  physics.moveDir.copy(physics.forward);
   physics.right.set(Math.cos(lastGrounded.heading), 0, -Math.sin(lastGrounded.heading));
 }
 
@@ -847,7 +866,6 @@ function resetShip() {
   let heading = Math.atan2(s.tangent.x, s.tangent.z);
   if (trackStart.reverse) heading += Math.PI;
   physics.heading = heading;
-  physics.velocityAngle = heading;
   physics.speed = 0;
   physics.visualBank = 0;
   physics.visualPitch = 0;
@@ -858,8 +876,13 @@ function resetShip() {
   physics.up.copy(startSurface.normal);
   physics.visualGroundPos.copy(startSurface.pos);
   physics.visualUp.copy(physics.up);
+  // Seed the tangent-frame vectors: nose along the start tangent flattened onto
+  // the start surface, travel direction matching. tangentize keeps them valid
+  // even if the start sample is banked.
   physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
-  physics.right.set(Math.cos(heading), 0, -Math.sin(heading));
+  tangentize(physics.forward, startSurface.normal, physics.forward);
+  physics.moveDir.copy(physics.forward);
+  physics.right.crossVectors(startSurface.normal, physics.forward).normalize();
   lastGrounded.pos.copy(physics.groundPos);
   lastGrounded.heading = heading;
   lastGrounded.valid = true;
@@ -900,8 +923,13 @@ function isDown(...codes) { return codes.some(c => keys[c]); }
 
 // ---------- Wipeout-style hover physics ----------
 const physics = {
-  heading: 0,        // facing direction (radians) — set by resetShip()
-  velocityAngle: 0,  // direction the vehicle is actually moving
+  // Facing/motion are TANGENT-PLANE unit vectors, not world-yaw scalars, so the
+  // ship can be oriented and move on an arbitrarily-rolled (even vertical or
+  // inverted) surface. `forward`/`right`/`up` form the ship's basis; `moveDir`
+  // is where it's actually travelling (lags `forward` under hard turns -> the
+  // wipeout drift). `heading` is kept only as a derived world azimuth of
+  // `forward` (atan2 of its X/Z), which is all the top-down minimap needs.
+  heading: 0,        // derived world-yaw azimuth of `forward` (for the minimap)
   speed: 0,                // signed scalar speed (units/sec)
   maxSpeed: 102,     // 68 * 1.5
   maxReverse: -24,
@@ -910,6 +938,7 @@ const physics = {
   friction: 40,      // decel when neither throttle nor brake held -- stops quickly when let go
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
+  wallRestitution: 0.4,    // guard-rail bounce: 0 = old dead-slide, 1 = perfectly elastic
   bobTime: 0,
   visualBank: 0,           // smoothed steer-lean (rad)
   visualPitch: 0,          // smoothed accel-pitch (rad)
@@ -930,17 +959,72 @@ const physics = {
   // visibly popping.
   visualGroundPos: new THREE.Vector3(),
   visualUp: new THREE.Vector3(0, 1, 0),
+  // Actual travel direction, a unit vector in the surface tangent plane. Chases
+  // `forward` (see grip below); `velocity = moveDir * speed` is a full 3D vector
+  // that gains a vertical component on a banked surface, which is what lets the
+  // ship climb toward a rolled edge instead of only ever sliding horizontally.
+  moveDir: new THREE.Vector3(0, 0, 1),
   airborne: false,
   verticalVel: 0,
   gravity: 60,
   landingBounce: 0,
   landingBounceVel: 0
 };
+// Scratch vectors reused each frame so the physics loop allocates nothing.
+const _vel = new THREE.Vector3();
+const _newPos = new THREE.Vector3();
+const _wallN = new THREE.Vector3();
+const _launchVel = new THREE.Vector3();
 
-function lerpAngle(a, b, t) {
-  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
-  if (diff < -Math.PI) diff += Math.PI * 2;
-  return a + diff * t;
+// --- surface-relative motion helpers (see "roll near 90deg" note below) ------
+// The ship's facing and motion are 3D unit vectors that live in the TANGENT
+// PLANE of the surface it's on, not world-yaw scalars. That's what lets it
+// drive across and along a vertical (90deg-rolled) wall and through a loop:
+// world-yaw can only ever describe an azimuth, which cannot point up/down a
+// vertical surface, so a horizontal-velocity model degenerates exactly there.
+const _tanTmp = new THREE.Vector3();
+// Re-project unit-ish `v` into the plane tangent to unit normal `n` and
+// renormalize, keeping a facing/motion vector on the surface as the surface
+// tilts underneath it frame to frame. Falls back to `fallback` when `v` is
+// (near) parallel to `n` -- e.g. a cross-track direction on a surface that has
+// just gone vertical -- so it never returns a zero/NaN vector.
+function tangentize(v, n, fallback) {
+  _tanTmp.copy(v).addScaledVector(n, -v.dot(n));
+  if (_tanTmp.lengthSq() < 1e-9) { return v.copy(fallback); }
+  return v.copy(_tanTmp).normalize();
+}
+const _saCross = new THREE.Vector3();
+// Signed angle (radians) rotating unit `a` onto unit `b` about unit `axis`,
+// with a and b assumed ~perpendicular to axis. On flat ground (axis = +Y) this
+// is exactly the yaw delta the old lerpAngle steering used.
+function signedAngleAbout(a, b, axis) {
+  const d = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+  const ang = Math.acos(d);
+  _saCross.crossVectors(a, b);
+  return _saCross.dot(axis) < 0 ? -ang : ang;
+}
+// Enter the ballistic state from a 3D launch velocity: its vertical component
+// seeds `verticalVel` (so launching off a banked ramp or wall arcs correctly --
+// the old code always zeroed this, which was only right for a level launch),
+// and its horizontal part becomes the constant-in-air travel direction/speed.
+function beginAirborne(vel3D) {
+  physics.airborne = true;
+  physics.verticalVel = vel3D.y;
+  const horiz = Math.hypot(vel3D.x, vel3D.z);
+  physics.speed = horiz;
+  if (horiz > 1e-6) physics.moveDir.set(vel3D.x / horiz, 0, vel3D.z / horiz);
+  else tangentize(physics.moveDir, UP, physics.forward);   // launched straight up: keep a horizontal azimuth
+}
+// Re-contact a surface: drop the vertical velocity (as before) and re-flatten
+// the horizontal travel/facing directions onto the landed surface's tangent
+// plane so they immediately follow its bank. Horizontal speed is preserved,
+// matching the old landing behaviour; on a flat surface (normal +Y) this is a
+// no-op beyond clearing the airborne flags.
+function landOnSurface(normal) {
+  physics.airborne = false;
+  physics.verticalVel = 0;
+  tangentize(physics.moveDir, normal, physics.forward);
+  tangentize(physics.forward, normal, physics.moveDir);
 }
 
 function updatePhysics(dt) {
@@ -962,39 +1046,52 @@ function updatePhysics(dt) {
   }
   physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, physics.maxSpeed);
 
-  // Steering: turn rate scales down slightly at top speed for stability,
-  // and inverts naturally when reversing.
-  // `heading` is a WORLD-space yaw, but the driver's frame of reference is the
-  // road surface. Once the track banks past vertical (roll > 90deg, up to
-  // ~180deg inverted) the surface normal points downward and the ship/camera
-  // are upside down, so a fixed world-yaw turn reads as reversed to the
-  // driver. Flip the steer by the sign of the surface normal's vertical
-  // component so "left" stays the driver's left through inverted sections.
-  const upSign = physics.up.y < 0 ? -1 : 1;
   const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
-  const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
-  physics.heading += steer * effectiveTurn * dt * upSign;
 
-  // Hover "grip": velocity direction chases heading, but lags behind under
-  // hard turns at speed -> gives the classic wipeout slide/drift feel.
-  const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
-  physics.velocityAngle = lerpAngle(physics.velocityAngle, physics.heading, Math.min(gripThisFrame * dt, 1));
-
-  // Integrate/reproject the hover-free ground reference only while the ship is
-  // translating (throttle/brake/coasting). Steering in place should rotate the
-  // ship without reprojecting groundPos: reprojecting a stationary point onto a
-  // banked/sloped cross-section can introduce tiny X/Z corrections that look
-  // like movement while turning on the spot.
-  let c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
+  // Sample the surface under the ship FIRST: its normal is the axis we steer and
+  // drift about, so turning is defined in the driver's frame at any roll.
+  let c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
   let surfaceNormal = c.normal;
   let surfaceRenderPos = physics.groundPos;
-  const vx = Math.sin(physics.velocityAngle) * physics.speed;
-  const vz = Math.cos(physics.velocityAngle) * physics.speed;
 
   // Which surface owns the ship right now -- a flat mesh region, or the spline
   // corridor? Whichever sits nearer in Y wins, so a mesh bridge passing over a
   // ribbon never hijacks the ship driving underneath it.
   const meshRegion = surfaceOwnerAt(physics.groundPos.x, physics.groundPos.z, physics.groundPos.y, c);
+
+  // The plane the ship turns and travels in: the corridor surface normal on a
+  // ribbon, world +Y on a flat mesh region, and world +Y while airborne
+  // (gravity's frame -- air steering is world-horizontal). Rotating `forward`
+  // about THIS axis is the driver-correct turn on any roll, including past
+  // vertical and inverted -- which is why the old world-yaw `upSign` flip is
+  // gone: on an inverted surface the normal points down, so a rotation about it
+  // already flips the turn the way the (upside-down) driver perceives it.
+  const steerAxis = (physics.airborne || meshRegion) ? UP : surfaceNormal;
+
+  // Steering: turn rate eases off slightly at top speed, and reverses sign in
+  // reverse. Rotate the facing vector about the surface normal, then re-flatten
+  // it onto the (possibly newly-tilted) tangent plane.
+  const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
+  physics.forward.applyAxisAngle(steerAxis, steer * effectiveTurn * dt);
+  tangentize(physics.forward, steerAxis, physics.forward);
+
+  // Hover "grip": travel direction chases facing, lagging under hard turns at
+  // speed -> the classic wipeout drift. Rotate moveDir a fraction of the way
+  // toward forward about the same axis (on flat ground this is exactly the old
+  // lerpAngle(velocityAngle, heading, ...)), then re-flatten onto the tangent.
+  const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
+  const toForward = signedAngleAbout(physics.moveDir, physics.forward, steerAxis);
+  physics.moveDir.applyAxisAngle(steerAxis, toForward * Math.min(gripThisFrame * dt, 1));
+  tangentize(physics.moveDir, steerAxis, physics.forward);
+
+  // Velocity is a full 3D vector along the tangent travel direction, so on a
+  // banked surface it gains the vertical component that lets the ship climb
+  // toward a rolled edge instead of only ever sliding along the ground plane.
+  // `vx`/`vz` are its horizontal part, reused by the airborne and mesh-region
+  // code (which integrate in world X/Z). On flat ground moveDir is horizontal,
+  // so vx/vz equal the old sin/cos(velocityAngle)*speed exactly.
+  const vel = _vel.copy(physics.moveDir).multiplyScalar(physics.speed);
+  const vx = vel.x, vz = vel.z;
 
   if (physics.airborne) {
     let ax = vx, az = vz;
@@ -1011,7 +1108,7 @@ function updatePhysics(dt) {
       if (!moved.hit) continue;
       px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
       physics.speed = Math.hypot(ax, az) * 0.98;
-      if (Math.abs(physics.speed) > 1e-6) physics.velocityAngle = Math.atan2(ax, az);
+      if (physics.speed > 1e-6) physics.moveDir.set(ax, 0, az).normalize();   // horizontal air travel dir
     }
 
     physics.verticalVel -= physics.gravity * dt;
@@ -1020,25 +1117,23 @@ function updatePhysics(dt) {
     const landing = meshRegionAt(px, pz, physics.groundPos.y);
     if (landing && physics.groundPos.y <= landing.region.elevation) {
       const impactSpeed = Math.max(0, -physics.verticalVel);
-      physics.airborne = false;
-      physics.verticalVel = 0;
+      landOnSurface(UP);
       physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
       physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
       physics.groundPos.set(px, landing.region.elevation, pz);
       surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
       surfaceNormal = UP;
     } else {
-      c = sampleTrack(px, pz);
-      const proj = projectToSurface(c, px, pz);
-      const { er, s } = proj;
+      c = sampleTrack(px, physics.groundPos.y, pz);
+      const proj = projectToSurface(c, px, physics.groundPos.y, pz);
+      const { s } = proj;
       const surface = curvedSurfaceFrame(c, s);
       if (corridorContains(c, px, pz, proj) && physics.groundPos.y <= surface.pos.y) {
         const impactSpeed = Math.max(0, -physics.verticalVel);
-        physics.airborne = false;
-        physics.verticalVel = 0;
+        landOnSurface(surface.normal);
         physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
         physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
-        physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+        physics.groundPos.copy(surface.pos);
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
       }
@@ -1052,7 +1147,7 @@ function updatePhysics(dt) {
     const moved = slideAlongRails(meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
     if (moved.hit) {
       physics.speed = Math.hypot(velocity.x, velocity.z) * 0.98;
-      if (Math.abs(physics.speed) > 1e-6) physics.velocityAngle = Math.atan2(velocity.x, velocity.z);
+      if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();   // region is flat: horizontal
     }
 
     const stillOn = TrackMesh.containsWorldPoint(meshRegion.compiled, moved.x, moved.z)
@@ -1066,44 +1161,48 @@ function updatePhysics(dt) {
     } else {
       // Left the region across a bare edge. Drive onto the corridor if one
       // meets this region at a compatible height, otherwise it was a ledge.
-      c = sampleTrack(moved.x, moved.z);
-      const proj = projectToSurface(c, moved.x, moved.z);
-      const { er, s } = proj;
+      c = sampleTrack(moved.x, meshRegion.elevation, moved.z);
+      const proj = projectToSurface(c, moved.x, meshRegion.elevation, moved.z);
+      const { s } = proj;
       const surface = corridorContains(c, moved.x, moved.z, proj) ? curvedSurfaceFrame(c, s) : null;
       if (surface && Math.abs(surface.pos.y - meshRegion.elevation) <= SURFACE_SNAP_UP) {
-        physics.groundPos.set(c.pos.x + er.x * s, surface.pos.y, c.pos.z + er.z * s);
+        physics.groundPos.copy(surface.pos);
+        // Region travel is horizontal; re-flatten it onto the (possibly banked)
+        // corridor surface so the ship follows the ribbon instead of the plane.
+        tangentize(physics.moveDir, surface.normal, physics.forward);
+        tangentize(physics.forward, surface.normal, physics.moveDir);
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
       } else {
-        physics.airborne = true;
-        physics.verticalVel = 0;
+        beginAirborne(_launchVel.copy(physics.moveDir).multiplyScalar(physics.speed));
         physics.groundPos.set(moved.x, meshRegion.elevation, moved.z);
       }
     }
   } else if (hasTranslation) {
-    let px = physics.groundPos.x + vx * dt;
-    let pz = physics.groundPos.z + vz * dt;
+    // Advance the FULL 3D position by the tangent-plane velocity, so on a bank
+    // the ship climbs toward its rolled edge (vel.y != 0 there) rather than only
+    // sliding along the ground plane and relying on reprojection to guess Y.
+    const newPos = _newPos.copy(physics.groundPos).addScaledVector(vel, dt);
 
-    // First test the proposed move against the track segment we were already
-    // riding. If that move crosses its wall, resolve against THIS segment before
-    // allowing sampleTrack() to choose another overlapping branch. Otherwise,
-    // holding into a wall can tunnel through to a different nearby/overlapping
-    // ribbon whose corridor contains the post-wall position.
+    // First test the proposed move against the segment we were already riding.
+    // If it crosses that segment's wall, resolve against THIS segment before
+    // sampleTrack() can pick another overlapping branch whose corridor happens
+    // to contain the post-wall position (which would tunnel the ship across).
     const current = c;
-    let projection = projectToSurface(current, px, pz);
+    let projection = projectToSurface(current, newPos.x, newPos.y, newPos.z);
     let forceCurrentWall = !current.offEnd && (projection.s > projection.hiS || projection.s < projection.loS);
 
     if (!forceCurrentWall) {
-      c = sampleTrack(px, pz);
-      projection = projectToSurface(c, px, pz);
+      c = sampleTrack(newPos.x, newPos.y, newPos.z);
+      projection = projectToSurface(c, newPos.x, newPos.y, newPos.z);
     }
 
     if (!forceCurrentWall && c.offEnd) {
-      // Leaving an open curve: stop projecting to the clamped endpoint and let
-      // the craft continue ballistically until its X/Z is over a curve again.
-      physics.airborne = true;
-      physics.verticalVel = 0;
-      physics.groundPos.set(px, physics.groundPos.y, pz);
+      // Leaving an open curve: go ballistic from the current 3D velocity (its
+      // vertical part matters if the end was banked or on a slope) until the
+      // ship's X/Z is back over a curve.
+      beginAirborne(vel);
+      physics.groundPos.copy(newPos);
     } else {
       const { er, s, loS, hiS } = projection;
 
@@ -1112,20 +1211,25 @@ function updatePhysics(dt) {
       let finalS = s;
       if (hitSign) {
         finalS = THREE.MathUtils.clamp(s, loS, hiS);
-        // Slide along the wall we hit: cancel only the velocity component pushing
-        // into it (with light scrub), so the ship glides instead of stopping dead.
-        const nl = Math.hypot(er.x, er.z) || 1;
-        const wnx = (er.x / nl) * hitSign, wnz = (er.z / nl) * hitSign; // outward normal of hit wall
-        let vX = Math.sin(physics.velocityAngle) * physics.speed;
-        let vZ = Math.cos(physics.velocityAngle) * physics.speed;
-        const into = vX * wnx + vZ * wnz;
-        if (into > 0) { vX -= wnx * into; vZ -= wnz * into; }
-        physics.speed = Math.hypot(vX, vZ) * 0.98;
-        physics.velocityAngle = Math.atan2(vX, vZ);
+        // Bounce off the guard rail: reflect the velocity component pushing into
+        // the wall (scaled by wallRestitution) instead of cancelling it, so a
+        // square hit bounces back while a glancing one still mostly slides. The
+        // wall's inward normal is the (unit, 3D) edgeRight signed by the side
+        // hit; edgeRight is tangent to the surface, so reflecting the 3D
+        // velocity about it keeps the ship on the surface AND works on a bank.
+        _wallN.copy(er).multiplyScalar(hitSign);   // er is already a unit vector
+        const into = vel.dot(_wallN);
+        if (into > 0) vel.addScaledVector(_wallN, -into * (1 + physics.wallRestitution));
+        physics.speed = vel.length() * 0.98;
+        if (physics.speed > 1e-6) physics.moveDir.copy(vel).normalize();
       }
 
       const surface = curvedSurfaceFrame(c, finalS);
-      physics.groundPos.set(c.pos.x + er.x * finalS, surface.pos.y, c.pos.z + er.z * finalS);
+      physics.groundPos.copy(surface.pos);
+      // No re-tangentize here: next frame's top-of-frame steering/grip flattens
+      // forward/moveDir onto the new normal, once. Keeping tangentization to a
+      // single projection per frame is what stops the facing precessing onto the
+      // track tangent (see the render block and the parked branch).
       surfaceRenderPos = surface.pos;
       surfaceNormal = surface.normal;
     }
@@ -1137,11 +1241,16 @@ function updatePhysics(dt) {
     surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
     surfaceNormal = UP;
   } else if (!physics.airborne && !hasTranslation) {
-    c = sampleTrack(physics.groundPos.x, physics.groundPos.z);
-    const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.z);
+    c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
+    const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
     const finalS = THREE.MathUtils.clamp(s, loS, hiS);
     const surface = curvedSurfaceFrame(c, finalS);
-    physics.groundPos.set(c.pos.x + c.edgeRight.x * finalS, surface.pos.y, c.pos.z + c.edgeRight.z * finalS);
+    physics.groundPos.copy(surface.pos);
+    // No re-tangentize here: parked, the surface normal isn't changing, and the
+    // top-of-frame steering/grip already flattened forward/moveDir onto it.
+    // Re-projecting again (against a curvedSurfaceFrame normal that can differ
+    // slightly from the sample normal) is what let the nose creep toward the
+    // track tangent while stationary.
     surfaceRenderPos = surface.pos;
     surfaceNormal = surface.normal;
   }
@@ -1191,18 +1300,29 @@ function updatePhysics(dt) {
   );
   physics.up.copy(physics.visualUp);
 
-  // Orient the ship to the road: nose along heading, "up" along surface normal.
+  // Orient the ship to the road: nose along the (tangent-plane) facing vector,
+  // "up" along the smoothed surface normal. Flatten a COPY of physics.forward
+  // onto the render up purely to build a clean orthonormal basis for display.
   const up = physics.visualUp;
-  const fwd = new THREE.Vector3(Math.sin(physics.heading), 0, Math.cos(physics.heading));
-  fwd.addScaledVector(up, -fwd.dot(up)).normalize();
+  const fwd = new THREE.Vector3().copy(physics.forward);
+  fwd.addScaledVector(up, -fwd.dot(up));
+  if (fwd.lengthSq() < 1e-9) fwd.copy(physics.moveDir);   // guard a degenerate flatten
+  fwd.normalize();
   const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
   const forward = new THREE.Vector3().crossVectors(right, up).normalize();
   shipGroup.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
-  // Keep this exact orthonormal basis around for the chase camera, so it
-  // always sits directly behind/above the ship using the SAME up/forward --
-  // not a separately-computed (and potentially non-orthogonal) pair.
+  // Deliberately DO NOT write this basis back into physics.forward. It was
+  // flattened onto `visualUp`, which lags the true surface normal by a tiny
+  // asymptotic amount; feeding it back re-projected the facing onto a slightly
+  // different plane every frame, and since every surface normal along the path
+  // is perpendicular to the track tangent, those planes all share that tangent
+  // -- so repeated projection slowly precessed the nose onto it. That was the
+  // ship rotating to face along the track when parked near 90deg roll. Steering
+  // is the ONLY thing that turns physics.forward now; the camera reads it
+  // directly and the sub-degree gap from this display basis is invisible.
   physics.right.copy(right);
-  physics.forward.copy(forward);
+  // Derived world azimuth of the nose -- all the top-down minimap consumes.
+  physics.heading = Math.atan2(forward.x, forward.z);
 
   // Extra hover flair: lean into the steer, pitch back under acceleration.
   const targetBank = THREE.MathUtils.clamp(-steer * speedRatio * 0.5, -0.5, 0.5);

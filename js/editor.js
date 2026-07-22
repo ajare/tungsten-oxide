@@ -3280,6 +3280,13 @@ document.getElementById('exportUsdBtn').addEventListener('click', () => {
     alert('Could not export USD: ' + (err.message || err));
   }
 });
+// A plain <a href="track.html"> would only ever show whatever the LAST edit
+// happened to persist -- which, on a fresh page load with no edits yet (a new
+// track, or a track just imported before any further change), is nothing at
+// all, or a stale track left over from a previous session. Persisting right
+// before navigation guarantees the game tab always opens the track exactly as
+// it stands right now, not "as of the last edit that happened to run refresh()".
+document.getElementById('openGameLink').addEventListener('click', () => { persistEditorTrack(); });
 document.getElementById('joinBtn').addEventListener('click', performJoin);
 document.getElementById('deleteCurveBtn').addEventListener('click', deleteSelectedCurve);
 document.getElementById('undoBtn').addEventListener('click', undo);
