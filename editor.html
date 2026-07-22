@@ -97,6 +97,13 @@
     width: 24px; height: 130px; margin: 0;
     writing-mode: vertical-rl; direction: rtl; accent-color: var(--accent);
   }
+  #topHomeBtn {
+    width: 28px; height: 28px; padding: 0; margin-top: 2px;
+    display: flex; align-items: center; justify-content: center;
+    background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 5px; font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  #topHomeBtn:hover { background: #1f4c6b; }
   #texturePanel {
     position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
     width: 360px; max-height: calc(100vh - 90px); overflow: auto;
@@ -157,6 +164,8 @@
       <label style="color:#b6ff3c"><input id="showWidthChk" type="checkbox" checked> Width</label>
       <label style="color:#d58cff"><input id="showCrossSectionChk" type="checkbox" checked> Cross-section</label>
     </div>
+    <button id="showPhysicsBtn" title="Generate and show the 400 baked frames physics rides on, as selectable dots">Show Physics Pts</button>
+    <button id="hidePhysicsBtn" title="Hide the physics sample points" disabled>Hide Physics Pts</button>
     <span class="spacer" aria-hidden="true"></span>
     <label title="Top-down grid size">Grid
       <select id="gridSizeSelect">
@@ -193,6 +202,7 @@
       <div class="zoomLabel">+</div>
       <input id="topZoomSlider" type="range" min="-100" max="100" value="0" step="1" aria-label="Top-down zoom">
       <div class="zoomLabel">&minus;</div>
+      <button id="topHomeBtn" type="button" title="Reset zoom and view to origin" aria-label="Reset view">&#8962;</button>
     </div>
   </div>
 

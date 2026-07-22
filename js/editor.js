@@ -87,6 +87,12 @@ const CROSS_SECTION_COLOR = '#d58cff';
 // roll were always 0) and instead colours the ribbon itself by roll value.
 let renderMode = 'banked';
 let pointFilters = { position: true, roll: true, width: true, crossSection: true };
+// Debug overlay: the fixed, uniform-in-parameter N_DEFAULT (=400) baked frames
+// that PHYSICS actually rides on (buildCenterline), rendered per path and made
+// selectable so their exact baked values can be inspected. Purely a viewer --
+// these frames are derived, not authored, so the panel is read-only.
+let showPhysicsPoints = false;
+let physicsSel = null;            // { path, index } into a path's baked frames
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
 let gridSize = 32;
 let snapToGrid = false;
@@ -984,6 +990,27 @@ function drawTop() {
     ctx.beginPath(); ctx.moveTo(centerPts[0].x, centerPts[0].y);
     for (let i = 1; i < centerPts.length; i++) ctx.lineTo(centerPts[i].x, centerPts[i].y);
     ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // Physics sample points: the N_DEFAULT baked frames physics rides on, one
+  // small dot per frame per path. Drawn on top of the ribbon but beneath the
+  // authored control-point handles so editing is never obstructed.
+  if (showPhysicsPoints) {
+    pathPreviews.forEach((prev, pi) => {
+      prev.frames.forEach((f, i) => {
+        const s = worldToScreen(f.pos.x, f.pos.z);
+        const isSel = physicsSel && physicsSel.path === pi && physicsSel.index === i;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, isSel ? 5 : 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = isSel ? '#ff5ea8' : '#ff9c3c';
+        ctx.fill();
+        if (isSel) {
+          ctx.lineWidth = 2; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+          ctx.fillStyle = '#ffd7ea'; ctx.font = '10px system-ui';
+          ctx.fillText(`phys ${pi}.${i}`, s.x + 8, s.y - 6);
+        }
+      });
+    });
   }
 
   // self-intersection markers: one dot per detected crossing, coloured by
@@ -2013,6 +2040,40 @@ function renderProps() {
     document.getElementById('typeSelect').addEventListener('change', (e) => convertSelectedPoint(e.target.value));
   };
 
+  // Physics sample point (debug overlay). Read-only: these frames are baked
+  // from the authored curve by buildCenterline, not stored, so there is nothing
+  // to edit here -- the panel just exposes the exact values physics consumes.
+  if (physicsSel) {
+    const prev = pathPreviews[physicsSel.path];
+    const frame = prev && prev.frames[physicsSel.index];
+    if (!prev || !frame) { physicsSel = null; }
+    else {
+      const path = track.paths[physicsSel.path];
+      const closed = path ? path.closed !== false : true;
+      const N = prev.frames.length;
+      const t = closed ? physicsSel.index / N : (N > 1 ? physicsSel.index / (N - 1) : 0);
+      const v3 = v => `${v.x.toFixed(3)}, ${v.y.toFixed(3)}, ${v.z.toFixed(3)}`;
+      const rowRO = (label, val) =>
+        `<label style="cursor:default"><span>${label}</span><span style="color:#ffb877;font-variant-numeric:tabular-nums">${val}</span></label>`;
+      const left = prev.edges.left[physicsSel.index], right = prev.edges.right[physicsSel.index];
+      body.innerHTML =
+        `<div style="margin-bottom:6px;color:#ff9c3c">Physics sample <b>${physicsSel.path}.${physicsSel.index}</b></div>` +
+        `<div style="margin-bottom:8px;color:#6f93a8;font-size:11px">baked frame ${physicsSel.index + 1} of ${N} &middot; ${closed ? 'closed' : 'open'} path</div>` +
+        rowRO('t (param)', t.toFixed(4)) +
+        rowRO('Position', v3(frame.pos)) +
+        rowRO('Tangent', v3(frame.tangent)) +
+        rowRO('Roll&deg;', (frame.roll * 180 / Math.PI).toFixed(2)) +
+        rowRO('Width', frame.width.toFixed(3)) +
+        rowRO('Half width', frame.halfW.toFixed(3)) +
+        rowRO('Edge right', v3(frame.edgeRight)) +
+        rowRO('Normal', v3(frame.normal)) +
+        (left ? rowRO('Left edge', v3(left)) : '') +
+        (right ? rowRO('Right edge', v3(right)) : '') +
+        `<div class="hint">Read-only. These are the fixed N=${N} frames physics/collision rides on (buildCenterline). Left/right edges include self-intersection trimming, matching the game corridor.</div>`;
+      return;
+    }
+  }
+
   // Mesh regions own the panel whenever one is selected. Rail height is a
   // property of the ASSET, so editing it here changes every placement of that
   // shape -- matching where the rail flags themselves live.
@@ -2365,6 +2426,21 @@ function nodeAtTop(sx, sy) {
     }
   }
   return null;
+}
+// Nearest baked physics frame (across all paths) to the cursor, when the debug
+// overlay is on. Iterates the same frames drawTop renders; small threshold
+// because the dots are dense.
+function physicsPointAtTop(sx, sy) {
+  if (!showPhysicsPoints) return null;
+  let best = null, bestD = 8; // px
+  pathPreviews.forEach((prev, pi) => {
+    prev.frames.forEach((f, i) => {
+      const s = worldToScreen(f.pos.x, f.pos.z);
+      const d = Math.hypot(sx - s.x, sy - s.y);
+      if (d < bestD) { bestD = d; best = { path: pi, index: i }; }
+    });
+  });
+  return best;
 }
 // Nearest segment (control point i -> i+1, wrapping only if closed) across all
 // paths, for right-click segment selection (deletion).
@@ -2952,13 +3028,13 @@ topCanvas.addEventListener('mousedown', (e) => {
   }
   if (e.button !== 0) return;
   const crossSectionHandleHit = crossSectionHandleAtTop(x, y);
-  if (crossSectionHandleHit && !e.shiftKey) { dragMutated = false; crossSectionSel = crossSectionHandleHit; widthSel = null; rollSel = null; segSel = null; dragging = 'crossSectionTop'; refresh(); return; }
+  if (crossSectionHandleHit && !e.shiftKey) { dragMutated = false; crossSectionSel = crossSectionHandleHit; widthSel = null; rollSel = null; segSel = null; physicsSel = null; dragging = 'crossSectionTop'; refresh(); return; }
   const widthHandleHit = widthHandleAtTop(x, y);
-  if (widthHandleHit && !e.shiftKey) { dragMutated = false; widthSel = widthHandleHit; rollSel = null; crossSectionSel = null; segSel = null; dragging = 'widthTop'; refresh(); return; }
+  if (widthHandleHit && !e.shiftKey) { dragMutated = false; widthSel = widthHandleHit; rollSel = null; crossSectionSel = null; segSel = null; physicsSel = null; dragging = 'widthTop'; refresh(); return; }
   const rollHandleHit = rollHandleAtTop(x, y);
-  if (rollHandleHit && !e.shiftKey) { dragMutated = false; rollSel = rollHandleHit; widthSel = null; crossSectionSel = null; segSel = null; dragging = 'rollTop'; refresh(); return; }
+  if (rollHandleHit && !e.shiftKey) { dragMutated = false; rollSel = rollHandleHit; widthSel = null; crossSectionSel = null; segSel = null; physicsSel = null; dragging = 'rollTop'; refresh(); return; }
   const rollHit = rollNodeAtTop(x, y);
-  if (rollHit && !e.shiftKey) { rollSel = rollHit; widthSel = null; segSel = null; refresh(); return; }
+  if (rollHit && !e.shiftKey) { rollSel = rollHit; widthSel = null; segSel = null; physicsSel = null; refresh(); return; }
   if (!e.shiftKey) {
     const crossingHit = crossingMarkerAtTop(x, y);
     if (crossingHit) { cycleCrossingOverride(crossingHit); return; }
@@ -2984,7 +3060,18 @@ topCanvas.addEventListener('mousedown', (e) => {
     refresh();
     return;
   }
-  if (hit) { dragMutated = false; selectPosition(hit.path, hit.point); segSel = null; rollSel = null; widthSel = null; crossSectionSel = null; dragging = 'top'; refresh(); return; }
+  if (hit) { dragMutated = false; selectPosition(hit.path, hit.point); segSel = null; rollSel = null; widthSel = null; crossSectionSel = null; physicsSel = null; dragging = 'top'; refresh(); return; }
+  // Physics sample points (debug overlay) are picked after authored control
+  // points so editing is never obstructed, but before mesh regions. They are
+  // read-only: select to inspect, no drag.
+  const physHit = physicsPointAtTop(x, y);
+  if (physHit && !e.shiftKey) {
+    physicsSel = physHit;
+    selectedPointId = null; segSel = null; rollSel = null; widthSel = null; crossSectionSel = null; clearMeshSelection();
+    hideAddPointMenu();
+    refresh();
+    return;
+  }
   // Mesh regions are picked last, after every path handle: they are large
   // targets and must never steal a click from a control point drawn on top.
   {
@@ -2992,7 +3079,7 @@ topCanvas.addEventListener('mousedown', (e) => {
     const meshHit = meshAtWorld(w.x, w.z);
     if (meshHit) {
       dragMutated = false;
-      selectedPointId = null; segSel = null; rollSel = null; widthSel = null; crossSectionSel = null;
+      selectedPointId = null; segSel = null; rollSel = null; widthSel = null; crossSectionSel = null; physicsSel = null;
       selectedMeshId = meshHit.placement.id;
       railSel = null;
       if (e.shiftKey) {
@@ -3287,6 +3374,15 @@ document.getElementById('exportUsdBtn').addEventListener('click', () => {
 // before navigation guarantees the game tab always opens the track exactly as
 // it stands right now, not "as of the last edit that happened to run refresh()".
 document.getElementById('openGameLink').addEventListener('click', () => { persistEditorTrack(); });
+function setPhysicsPointsVisible(visible) {
+  showPhysicsPoints = visible;
+  if (!visible) physicsSel = null;
+  document.getElementById('showPhysicsBtn').disabled = visible;
+  document.getElementById('hidePhysicsBtn').disabled = !visible;
+  refresh();
+}
+document.getElementById('showPhysicsBtn').addEventListener('click', () => setPhysicsPointsVisible(true));
+document.getElementById('hidePhysicsBtn').addEventListener('click', () => setPhysicsPointsVisible(false));
 document.getElementById('joinBtn').addEventListener('click', performJoin);
 document.getElementById('deleteCurveBtn').addEventListener('click', deleteSelectedCurve);
 document.getElementById('undoBtn').addEventListener('click', undo);
@@ -3323,6 +3419,14 @@ function zoomTopAt(x, y, zoomValue) {
 }
 topZoomSlider.addEventListener('input', (e) => {
   setTopZoomSliderValue(Number(e.target.value));
+  draw();
+});
+// Home: reset the top-down view to its default framing -- zoom back to 1x and
+// clear the pan offset, which re-centres on the auto-fit track bounds.
+document.getElementById('topHomeBtn').addEventListener('click', () => {
+  hideAddPointMenu();
+  setTopZoomSliderValue(0);
+  topPan = { x: 0, y: 0 };
   draw();
 });
 function updatePointFilters() {
