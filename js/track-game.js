@@ -629,9 +629,12 @@ const CORRIDOR_ALONG_TOL = 8;
  * matters now that mesh regions let the ship be somewhere with no ribbon
  * anywhere near it: without the along-tangent check, leaving a mesh ledge
  * teleports the ship onto whichever distant ribbon happened to be nearest. */
-function corridorContains(sample, x, z, proj) {
+function corridorContains(sample, x, y, z, proj) {
   if (sample.offEnd || proj.s < proj.loS || proj.s > proj.hiS) return false;
-  const along = (x - sample.pos.x) * sample.tangent.x + (z - sample.pos.z) * sample.tangent.z;
+  // 3D along-tangent, so this stays meaningful where the centerline itself goes
+  // vertical (a loop): an X/Z-only dot would collapse to ~0 there and never
+  // reject a point off the segment's end.
+  const along = (x - sample.pos.x) * sample.tangent.x + (y - sample.pos.y) * sample.tangent.y + (z - sample.pos.z) * sample.tangent.z;
   return Math.abs(along) <= CORRIDOR_ALONG_TOL;
 }
 
@@ -646,7 +649,7 @@ function surfaceOwnerAt(x, z, shipY, corridorSample) {
   const meshHit = meshRegionAt(x, z, shipY);
   if (!meshHit) return null;
   const proj = projectToSurface(corridorSample, x, shipY, z);
-  if (!corridorContains(corridorSample, x, z, proj)) return meshHit.region;
+  if (!corridorContains(corridorSample, x, shipY, z, proj)) return meshHit.region;
   const corridorY = curvedSurfaceFrame(corridorSample, proj.s).pos.y;
   return Math.abs(meshHit.region.elevation - shipY) <= Math.abs(corridorY - shipY) ? meshHit.region : null;
 }
@@ -698,11 +701,14 @@ function curvedSurfaceFrame(sample, s) {
 // all (which is what running off an open end means).
 const SEGMENT_ALONG_TOL = 0.5;
 
-// `y` is the ship's actual height, used only for the 3D lateral-membership
-// test (see below). Segment SELECTION stays X/Z-nearest: under pure banking the
-// centerline itself is not vertical, so its X/Z footprint still identifies the
-// segment unambiguously -- it is the cross-section that verticalizes, and that
-// is exactly what the 3D lateral test handles.
+// Selection is fully 3D: the ship's position projects onto each centerline
+// segment in 3D and the nearest by 3D distance wins. This is what makes a
+// vertical loop drivable -- where the centerline itself goes straight up, the
+// ascending and descending sides share an X/Z column, so an X/Z-footprint search
+// could not tell top-of-loop from bottom-of-loop. It also sharpens overlapping
+// flyovers: the vertically-nearest ribbon is picked, not merely one that shares
+// the X/Z column. `y` is the ship's real height, required by both the 3D
+// distance and the 3D lateral-membership test below.
 function sampleTrack(x, y, z) {
   let fallback = { path: paths[0], a: 0, b: 1, t: 0, d: Infinity };
   let bestUnder = null;
@@ -712,14 +718,14 @@ function sampleTrack(x, y, z) {
     for (let i = 0; i < segCount; i++) {
       const j = path.closed ? (i + 1) % M : i + 1;
       const a = cl[i], b = cl[j];
-      const sx = b.pos.x - a.pos.x, sz = b.pos.z - a.pos.z;
-      const segLen2 = sx * sx + sz * sz;
+      const sx = b.pos.x - a.pos.x, sy = b.pos.y - a.pos.y, sz = b.pos.z - a.pos.z;
+      const segLen2 = sx * sx + sy * sy + sz * sz;
       const t = segLen2 > 0
-        ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (z - a.pos.z) * sz) / segLen2, 0, 1)
+        ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (y - a.pos.y) * sy + (z - a.pos.z) * sz) / segLen2, 0, 1)
         : 0;
-      const px = a.pos.x + sx * t, pz = a.pos.z + sz * t;
-      const dx = x - px, dz = z - pz;
-      const d = dx * dx + dz * dz;
+      const px = a.pos.x + sx * t, py = a.pos.y + sy * t, pz = a.pos.z + sz * t;
+      const dx = x - px, dy = y - py, dz = z - pz;
+      const d = dx * dx + dy * dy + dz * dz;
       if (d < fallback.d) fallback = { path, a: i, b: j, t, d };
 
       // If multiple road ribbons overlap under the ship, use only the closest
@@ -746,11 +752,11 @@ function sampleTrack(x, y, z) {
         if (i === 0 && t <= 1e-4) {
           const e = cl[0];
           wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.start) &&
-            ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+            ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) < 0;
         } else if (j === M - 1 && t >= 1 - 1e-4) {
           const e = cl[M - 1];
           wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.end) &&
-            ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+            ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) > 0;
         }
       }
       // Being within the lateral bounds is not the same as being OVER this
@@ -763,7 +769,7 @@ function sampleTrack(x, y, z) {
       // gets reprojected backwards instead of launching off the end. Require
       // the projection to be a genuine perpendicular foot, which it is exactly
       // when `t` did not clamp.
-      const alongSeg = segLen2 > 0 ? ((x - px) * sx + (z - pz) * sz) / Math.sqrt(segLen2) : 0;
+      const alongSeg = segLen2 > 0 ? ((x - px) * sx + (y - py) * sy + (z - pz) * sz) / Math.sqrt(segLen2) : 0;
       const overSegment = Math.abs(alongSeg) <= SEGMENT_ALONG_TOL;
       if (overSegment && !wouldOffEnd && lateral >= loS && lateral <= hiS && (!bestUnder || d < bestUnder.d)) bestUnder = { path, a: i, b: j, t, d };
     }
@@ -789,11 +795,11 @@ function sampleTrack(x, y, z) {
     if (bestA === 0 && t <= 1e-4) {
       const e = bestPath.centerline[0];
       _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.start) &&
-        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) < 0;
+        ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) < 0;
     } else if (bestB === M - 1 && t >= 1 - 1e-4) {
       const e = bestPath.centerline[M - 1];
       _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.end) &&
-        ((x - e.pos.x) * e.tangent.x + (z - e.pos.z) * e.tangent.z) > 0;
+        ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) > 0;
     }
   }
   return _sample;
@@ -1128,7 +1134,7 @@ function updatePhysics(dt) {
       const proj = projectToSurface(c, px, physics.groundPos.y, pz);
       const { s } = proj;
       const surface = curvedSurfaceFrame(c, s);
-      if (corridorContains(c, px, pz, proj) && physics.groundPos.y <= surface.pos.y) {
+      if (corridorContains(c, px, physics.groundPos.y, pz, proj) && physics.groundPos.y <= surface.pos.y) {
         const impactSpeed = Math.max(0, -physics.verticalVel);
         landOnSurface(surface.normal);
         physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
@@ -1164,7 +1170,7 @@ function updatePhysics(dt) {
       c = sampleTrack(moved.x, meshRegion.elevation, moved.z);
       const proj = projectToSurface(c, moved.x, meshRegion.elevation, moved.z);
       const { s } = proj;
-      const surface = corridorContains(c, moved.x, moved.z, proj) ? curvedSurfaceFrame(c, s) : null;
+      const surface = corridorContains(c, moved.x, meshRegion.elevation, moved.z, proj) ? curvedSurfaceFrame(c, s) : null;
       if (surface && Math.abs(surface.pos.y - meshRegion.elevation) <= SURFACE_SNAP_UP) {
         physics.groundPos.copy(surface.pos);
         // Region travel is horizontal; re-flatten it onto the (possibly banked)
