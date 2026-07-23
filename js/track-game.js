@@ -500,6 +500,8 @@ function buildTrack(track) {
     TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, p.pathN, overrides), p.hasBranchConnection,
     p.texture, p.texture && (track.textureAssets || {})[p.texture.asset]
   ));
+  // Zones ride on top of the finished paths + mesh regions.
+  buildZones(track, bakedPaths);
   // Anything below every drivable surface by this much has clearly fallen off
   // and is never coming back, so it triggers an automatic respawn.
   let lowest = Infinity;
@@ -520,6 +522,27 @@ function buildTrack(track) {
 // over one drops the ship into the same ballistic code an open curve's end uses.
 const MESH_SURFACE_COLOR = 0x6a4f96;
 const MESH_RAIL_COLOR = 0xd8b400;
+
+// ---------- Zones ----------
+// Flat rectangular areas floating just above a surface that fire an effect when
+// driven over (see track-core.js). Rendered as a solid colour by effect type;
+// physics/detection is separate (see detectZoneTriggers/triggerBoost).
+let zones = [];
+const ZONE_HOVER = 0.15;                 // units above the surface, so they sit clear of z-fighting
+const ZONE_RELEASE = 1;                  // seconds for the boost's smooth release back to max
+const ZONE_COLORS = { velocityChange: 0xffa520, startGrid: 0xcfd6dd };
+
+function zoneMeshFromPositions(pos, effect) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color: ZONE_COLORS[effect] || 0xffffff, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.72, depthWrite: false
+  }));
+  mesh.renderOrder = 5;   // drawn over the road surface it floats on
+  return mesh;
+}
 
 function buildMeshRegions(track) {
   for (const region of meshRegions) { disposeObject(region.surface); disposeObject(region.railMesh); }
@@ -579,6 +602,130 @@ function buildMeshRegions(track) {
     }
 
     meshRegions.push({ compiled, elevation, railHeight, surface, railMesh });
+  }
+}
+
+// (Re)build the zone meshes and the compiled records physics tests against.
+// Path zones reuse TrackCore.zonePathStrip (the same strip the editor previews)
+// and keep the g-window it returns for detection; mesh zones are a flat rotated
+// rectangle at the region's elevation. Called from buildTrack once `paths` and
+// `meshRegions` exist; `bakedPaths` carries each path's control/roll/width/
+// cross points (index-aligned with `paths`).
+function buildZones(track, bakedPaths) {
+  for (const z of zones) disposeObject(z.mesh);
+  zones = [];
+  for (const zone of track.zones || []) {
+    const host = zone.host || {};
+    if (host.kind === 'mesh') {
+      const region = meshRegions.find(r => r.compiled && r.compiled.id === host.meshId);
+      if (!region) continue;
+      const y = region.elevation + ZONE_HOVER;
+      const rot = (host.rotation || 0) * Math.PI / 180;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const hl = Math.max(0.25, (zone.length || 0) / 2), hw = Math.max(0.25, (zone.width || 0) / 2);
+      // length runs along the local x-axis, width along local z (matches worldToLocal in detection).
+      const corner = (lx, lz) => ({ x: host.x + lx * cos - lz * sin, z: host.z + lx * sin + lz * cos });
+      const c00 = corner(-hl, -hw), c10 = corner(hl, -hw), c11 = corner(hl, hw), c01 = corner(-hl, hw);
+      const pos = [];
+      const tri = (p, q, r) => pos.push(p.x, y, p.z, q.x, y, q.z, r.x, y, r.z);
+      tri(c00, c10, c11); tri(c00, c11, c01);
+      const mesh = zoneMeshFromPositions(pos, zone.effect); scene.add(mesh);
+      zones.push({
+        kind: 'mesh', effect: zone.effect, factor: zone.factor, duration: zone.duration,
+        hostRegion: region, x: host.x, z: host.z, rot, halfLen: hl, halfWidth: hw, wasInside: false, mesh
+      });
+    } else {
+      const idx = bakedPaths.findIndex(bp => bp.id === host.pathId);
+      if (idx < 0) continue;
+      const bp = bakedPaths[idx];
+      const strip = TrackCore.zonePathStrip(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, zone, ZONE_HOVER);
+      const pos = [];
+      for (let i = 0; i < strip.left.length - 1; i++) {
+        const a = strip.left[i], b = strip.right[i], c = strip.left[i + 1], d = strip.right[i + 1];
+        pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        pos.push(b.x, b.y, b.z, d.x, d.y, d.z, c.x, c.y, c.z);
+      }
+      const mesh = zoneMeshFromPositions(pos, zone.effect); scene.add(mesh);
+      zones.push({
+        kind: 'path', effect: zone.effect, factor: zone.factor, duration: zone.duration,
+        hostPath: paths[idx], gLo: strip.gLo, gHi: strip.gHi, gMax: strip.gMax, closed: strip.closed,
+        lateral: host.lateral || 0, halfWidth: Math.max(0.25, (zone.width || 0) / 2), wasInside: false, mesh
+      });
+    }
+  }
+}
+
+// The ship's evaluator parameter g on the path a sample landed on, recovered
+// from the segment (a->b, segT) sampleTrack recorded. Matches buildCenterline's
+// frame->g mapping so it lines up with the zone's own gLo/gHi window.
+function shipParamG(sample) {
+  const p = sample.pathObj;
+  if (!p) return 0;
+  const M = p.centerline.length, CP_N = p.anchors.length;
+  const gAt = i => p.closed ? (i / M) * CP_N : (M > 1 ? (i / (M - 1)) * (CP_N - 1) : 0);
+  const ga = gAt(sample.a);
+  let gb = gAt(sample.b);
+  if (p.closed && sample.b < sample.a) gb += CP_N;   // the wrap segment M-1 -> 0
+  return ga + (gb - ga) * sample.segT;
+}
+
+// Effective speed cap this frame: the raised boost cap while a boost is running,
+// otherwise the normal per-track max.
+function effectiveMaxSpeed() {
+  return physics.boostActive ? Math.max(physics.maxSpeed, physics.boostEffCap) : physics.maxSpeed;
+}
+function clearBoost() {
+  physics.boostActive = false; physics.boostReleasing = false;
+  physics.boostHold = 0; physics.boostReleaseT = 0; physics.boostCap = 0; physics.boostEffCap = 0;
+  for (const z of zones) z.wasInside = false;
+}
+// Start a boost: kick speed up to the target cap and hold it, then release.
+// The global lock (boostActive) means a second pad is ignored until this ends,
+// which is the "fire once on enter" rule.
+function triggerBoost(zone) {
+  if (physics.boostActive) return;
+  physics.boostActive = true;
+  physics.boostReleasing = false;
+  physics.boostHold = zone.duration || TrackCore.DEFAULT_BOOST_DURATION;
+  physics.boostReleaseT = ZONE_RELEASE;
+  physics.boostCap = (zone.factor || TrackCore.DEFAULT_BOOST_FACTOR) * physics.maxSpeed;
+  physics.boostEffCap = physics.boostCap;
+  if (physics.speed > 0) physics.speed = Math.max(physics.speed, physics.boostCap);   // forward boost only
+}
+function tickBoost(dt) {
+  if (!physics.boostActive) return;
+  if (!physics.boostReleasing) {
+    physics.boostHold -= dt;
+    physics.boostEffCap = physics.boostCap;
+    if (physics.boostHold <= 0) { physics.boostReleasing = true; physics.boostReleaseT = ZONE_RELEASE; }
+  } else {
+    physics.boostReleaseT -= dt;
+    const frac = Math.max(0, Math.min(1, physics.boostReleaseT / ZONE_RELEASE));
+    physics.boostEffCap = physics.maxSpeed + (physics.boostCap - physics.maxSpeed) * frac;
+    if (physics.boostReleaseT <= 0) { physics.boostActive = false; physics.boostEffCap = physics.maxSpeed; }
+  }
+}
+// Fire a zone's effect the frame the ship first enters it (was-outside -> inside),
+// while grounded on that zone's host surface. A path zone needs the ship on its
+// path and within its along-window + lateral band; a mesh zone needs the ship on
+// its region and inside the rotated rectangle.
+function detectZoneTriggers(sample, meshRegion) {
+  for (const z of zones) {
+    let inside = false;
+    if (z.kind === 'path') {
+      if (!meshRegion && sample && sample.pathObj === z.hostPath) {
+        const proj = projectToSurface(sample, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
+        inside = TrackCore.zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
+          Math.abs(proj.s - z.lateral) <= z.halfWidth;
+      }
+    } else if (meshRegion === z.hostRegion) {
+      const dx = physics.groundPos.x - z.x, dz = physics.groundPos.z - z.z;
+      const cos = Math.cos(z.rot), sin = Math.sin(z.rot);
+      const lx = dx * cos + dz * sin, lz = -dx * sin + dz * cos;   // world -> zone local
+      inside = Math.abs(lx) <= z.halfLen && Math.abs(lz) <= z.halfWidth;
+    }
+    if (inside && !z.wasInside && z.effect === 'velocityChange') triggerBoost(z);
+    z.wasInside = inside;
   }
 }
 
@@ -717,7 +864,11 @@ const _sample = {
   edgeRight: new THREE.Vector3(),
   normal: new THREE.Vector3(),
   halfW: 0, sLeft: 0, sRight: 0, crossSectionCurvature: 0, crossSectionTightness: 1,
-  offEnd: false
+  offEnd: false,
+  // Which compiled path this sample landed on and the segment (a->b, param segT)
+  // it was projected onto -- carried so zone detection can recover the ship's
+  // evaluator parameter g on that path (see shipParamG).
+  pathObj: null, a: 0, b: 1, segT: 0
 };
 function curvedSurfaceHeight(sample, s) {
   const lo = sample.sLeft, hi = sample.sRight;
@@ -826,6 +977,7 @@ function sampleTrack(x, y, z) {
   const cl = bestPath.centerline;
   const a = cl[bestA], b = cl[bestB];
   const t = best.t;
+  _sample.pathObj = bestPath; _sample.a = bestA; _sample.b = bestB; _sample.segT = t;
 
   _sample.pos.copy(a.pos).lerp(b.pos, t);
   _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
@@ -894,6 +1046,15 @@ function respawn() {
   physics.forward.set(Math.sin(lastGrounded.heading), 0, Math.cos(lastGrounded.heading));
   physics.moveDir.copy(physics.forward);
   physics.right.set(Math.cos(lastGrounded.heading), 0, -Math.sin(lastGrounded.heading));
+  clearBoost();
+  // Reset the surface up too, to match the horizontal facing above. Unlike
+  // resetShip this is deliberately world-up rather than the sampled normal:
+  // the frame is being re-seeded flat, and the next updatePhysics eases
+  // physics.visualUp back onto the real surface normal (dt*18). Left unset,
+  // both retained whatever tilted/inverted value they drifted to mid-fall, so
+  // the camera and ship orientation lurched for a frame after every respawn.
+  physics.up.set(0, 1, 0);
+  physics.visualUp.set(0, 1, 0);
 }
 
 function resetShip() {
@@ -939,6 +1100,7 @@ function resetShip() {
   lastGrounded.pos.copy(physics.groundPos);
   lastGrounded.heading = heading;
   lastGrounded.valid = true;
+  clearBoost();
 }
 
 // ---------- Input ----------
@@ -1028,7 +1190,18 @@ const physics = {
   verticalVel: 0,
   gravity: 60,
   landingBounce: 0,
-  landingBounceVel: 0
+  landingBounceVel: 0,
+  // Boost-zone state. While active, the speed clamp uses boostEffCap (>= maxSpeed)
+  // instead of maxSpeed: it holds at boostCap for boostHold seconds, then eases
+  // back to maxSpeed over BOOST_RELEASE (the "smooth release"). boostActive stays
+  // true through the release, which is the global lock that makes a boost "fire
+  // once on enter and ignore further triggers until it ends."
+  boostActive: false,
+  boostReleasing: false,
+  boostHold: 0,
+  boostReleaseT: 0,
+  boostCap: 0,
+  boostEffCap: 0
 };
 // Scratch vectors reused each frame so the physics loop allocates nothing.
 const _vel = new THREE.Vector3();
@@ -1115,9 +1288,13 @@ function stepPhysics(dt, throttle, brake, steer) {
     if (physics.speed > 0) physics.speed = Math.max(0, physics.speed - decay);
     else physics.speed = Math.min(0, physics.speed + decay);
   }
-  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, physics.maxSpeed);
+  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, effectiveMaxSpeed());
 
-  const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
+  // Clamped to [0,1] on purpose: during a boost speed exceeds maxSpeed, and the
+  // steering/grip/lean terms below must not be driven past their tuned range
+  // (a raw ratio > 1 would flip the turn-rate falloff negative). The HUD reads
+  // the true speed separately.
+  const speedRatio = Math.min(1, Math.abs(physics.speed) / physics.maxSpeed);
 
   // Sample the surface under the ship FIRST: its normal is the axis we steer and
   // drift about, so turning is defined in the driver's frame at any roll.
@@ -1343,6 +1520,11 @@ function stepPhysics(dt, throttle, brake, steer) {
   // Remember where the ship last had solid ground under it. Falling off a bare
   // mesh edge is routine, so recovery returns you to where you fell rather than
   // all the way back to the start line.
+  // Zones: the boost timer advances every sub-step (it keeps running through the
+  // air), but a trigger only fires while grounded on the zone's host surface.
+  tickBoost(dt);
+  if (!physics.airborne) detectZoneTriggers(c, meshRegion);
+
   if (!physics.airborne) {
     lastGrounded.pos.copy(physics.groundPos);
     lastGrounded.heading = physics.heading;
@@ -1375,8 +1557,9 @@ function updatePhysics(dt) {
   }
 
   // Recomputed from the FINAL sub-step's speed (speed changes across sub-steps);
-  // feeds only the cosmetic steer-lean flair below.
-  const speedRatio = Math.abs(physics.speed) / physics.maxSpeed;
+  // feeds only the cosmetic steer-lean flair below. Clamped like the physics
+  // one so a boost's over-max speed doesn't overdrive the lean.
+  const speedRatio = Math.min(1, Math.abs(physics.speed) / physics.maxSpeed);
 
   const expectedStep = Math.abs(physics.speed) * dt * 1.5 + 0.16;
   const renderDelta = physics.visualGroundPos.distanceTo(surfaceRenderPos);
@@ -1440,7 +1623,8 @@ function updatePhysics(dt) {
   // HUD. 1 world unit = 1 metre (see CONTEXT.md), so speed is m/s and the
   // km/h readout is a straight m/s * 3.6 -- 140 m/s reads 504 km/h.
   const kmh = Math.round(Math.abs(physics.speed) * 3.6);
-  document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>';
+  document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>' +
+    (physics.boostActive ? ' <span style="color:#ffb020">▲ BOOST</span>' : '');
 }
 
 // ---------- Chase camera (rigidly fixed behind and above the ship) ----------
@@ -1705,6 +1889,7 @@ fileInput.addEventListener('change', async (e) => {
 window.__game = {
   get meshRegions() { return meshRegions; },
   get paths() { return paths; },
+  get zones() { return zones; },
   get physics() { return physics; },
   get trackFloorY() { return trackFloorY; },
   respawn

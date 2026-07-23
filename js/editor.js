@@ -128,6 +128,8 @@ let selectedMeshId = null;          // placement id
 let railSel = null;                 // { meshId, edgeId } in Rails mode
 let meshDragOffset = null;
 let meshRotateStart = null;         // { originRotation, startAngle } for shift-drag rotation
+let selectedZoneId = null;          // selected zone (shares the props panel with points/meshes)
+let zoneDragOffset = null;          // { dx, dz } for dragging a mesh-hosted zone
 
 function invalidateMeshCache() { meshCache = new Map(); }
 
@@ -170,7 +172,7 @@ function compiledMeshes() {
   return out;
 }
 
-function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; }
+function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; selectedZoneId = null; zoneDragOffset = null; }
 
 // ---------- Texture assets ----------
 let texturePanelOpen = false;
@@ -408,6 +410,7 @@ function deleteSelectedMesh() {
   track.meshes = meshPlacements().filter(m => m.id !== placement.id);
   clearMeshSelection();
   invalidateMeshCache();
+  removeStaleSeams();   // drop any zones that were hosted on this region
   updateUndoRedoButtons();
   refresh();
 }
@@ -540,6 +543,7 @@ function ensureTrackIds() {
   if (!track.selfIntersectionOverrides) track.selfIntersectionOverrides = [];
   if (!track.meshAssets) track.meshAssets = {};
   if (!track.meshes) track.meshes = [];
+  if (!Array.isArray(track.zones)) track.zones = [];
   // Cloned built-ins / hand-built tracks may lack a handling section; fill and
   // clamp it so the editor always has a complete one to show and serialize.
   track.handling = TrackCore.normalizeHandling(track.handling);
@@ -555,6 +559,15 @@ function ensureTrackIds() {
       if (pointById.has(p.id)) path.points[i] = pointById.get(p.id);
       else { pointById.set(p.id, p); usedIds.add(p.id); }
     }
+  }
+  // Zones: drop any whose host path/mesh is gone, then give each a stable id.
+  const zonePathIds = new Set(track.paths.map(p => p.id).filter(Boolean));
+  const zoneMeshIds = new Set((track.meshes || []).map(m => m.id).filter(Boolean));
+  track.zones = (track.zones || []).filter(z => z && z.host &&
+    (z.host.kind === 'mesh' ? zoneMeshIds.has(z.host.meshId) : zonePathIds.has(z.host.pathId)));
+  for (const z of track.zones) {
+    if (!z.id || usedIds.has(z.id)) z.id = newId('z');
+    usedIds.add(z.id);
   }
 }
 ensureTrackIds();
@@ -997,6 +1010,10 @@ function drawTop() {
     for (let i = 1; i < centerPts.length; i++) ctx.lineTo(centerPts[i].x, centerPts[i].y);
     ctx.stroke(); ctx.setLineDash([]);
   }
+
+  // Zones: solid fills floating on the track, drawn above the ribbons but below
+  // the physics dots and control-point handles so editing is never obstructed.
+  drawZones(ctx);
 
   // Physics sample points: the N_DEFAULT uniform reference frames the editor
   // previews with, one small dot per frame per path (the game samples the same
@@ -1581,8 +1598,13 @@ function removeStaleSeams() {
   const beforeO = (track.selfIntersectionOverrides || []).length;
   const ids = allPositionIds();
   track.selfIntersectionOverrides = (track.selfIntersectionOverrides || []).filter(o => overrideIsValid(o, ids));
+  const beforeZ = (track.zones || []).length;
+  const zPathIds = new Set(track.paths.map(p => p.id).filter(Boolean));
+  const zMeshIds = new Set((track.meshes || []).map(m => m.id).filter(Boolean));
+  track.zones = (track.zones || []).filter(z => z && z.host &&
+    (z.host.kind === 'mesh' ? zMeshIds.has(z.host.meshId) : zPathIds.has(z.host.pathId)));
   return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length)
-    + (beforeO - track.selfIntersectionOverrides.length);
+    + (beforeO - track.selfIntersectionOverrides.length) + (beforeZ - track.zones.length);
 }
 function assertNoStaleSeams() {
   const removed = removeStaleSeams();
@@ -2126,6 +2148,65 @@ function renderProps() {
       });
     });
     document.getElementById('delMeshBtn').addEventListener('click', deleteSelectedMesh);
+    return;
+  }
+
+  // Grabbing a roll/width/cross handle sets one of those selections; let it win
+  // the panel over a still-selected zone rather than showing a stale zone panel.
+  const zone = (!crossSectionSel && !widthSel && !rollSel) ? selectedZone() : null;
+  if (zone) {
+    const host = zone.host || {};
+    const isBoost = zone.effect === 'velocityChange';
+    const zrow = (key, label, val, step, extra = '') =>
+      `<label>${label}<input type="number" data-zkey="${key}" value="${val}" step="${step}" ${extra}></label>`;
+    const hostRows = host.kind === 'mesh'
+      ? `<div style="margin:6px 0;color:#6f93a8;font-size:11px">On mesh region <b>${host.meshId}</b> (y follows the region)</div>` +
+        zrow('x', 'X', host.x, 0.5) + zrow('z', 'Z', host.z, 0.5) + zrow('rotation', 'Rotation°', host.rotation || 0, 5)
+      : `<div style="margin:6px 0;color:#6f93a8;font-size:11px">On path <b>${host.pathId}</b></div>` +
+        zrow('t', 'Position (%)', (host.t * 100).toFixed(1), 1, 'min="0" max="100"') +
+        zrow('lateral', 'Lateral offset', host.lateral || 0, 1);
+    const boostRows = isBoost
+      ? zrow('factor', 'Boost ×maxSpeed', zone.factor == null ? TrackCore.DEFAULT_BOOST_FACTOR : zone.factor, 0.1, 'min="0.1" max="5"') +
+        zrow('duration', 'Duration (s)', zone.duration == null ? TrackCore.DEFAULT_BOOST_DURATION : zone.duration, 0.5, 'min="0.1" max="30"')
+      : '';
+    body.innerHTML =
+      `<div style="margin-bottom:6px;color:#ffb060">Zone <b>${zone.id}</b></div>` +
+      `<label>Effect<select id="zoneEffect">` +
+      `<option value="velocityChange"${isBoost ? ' selected' : ''}>Boost (velocity change)</option>` +
+      `<option value="startGrid"${!isBoost ? ' selected' : ''}>Start grid</option></select></label>` +
+      zrow('width', 'Width (across)', zone.width, 1, 'min="0.5"') +
+      zrow('length', 'Length (along)', zone.length, 1, 'min="0.5"') +
+      hostRows + boostRows +
+      `<div class="hint">Drag the zone in the top-down view to move it. Boost pads kick the ship to ${isBoost ? (zone.factor == null ? TrackCore.DEFAULT_BOOST_FACTOR : zone.factor) : '—'}× max speed for their duration, then ease back.</div>` +
+      `<button id="delZoneBtn" style="margin-top:10px;width:100%;background:#5a2f1f;border:1px solid #c64;color:#ffd7bd;border-radius:5px;padding:6px;cursor:pointer">Delete zone</button>`;
+    document.getElementById('zoneEffect').addEventListener('change', (e) => {
+      pushUndo();
+      zone.effect = e.target.value === 'startGrid' ? 'startGrid' : 'velocityChange';
+      if (zone.effect === 'velocityChange') {
+        if (zone.factor == null) zone.factor = TrackCore.DEFAULT_BOOST_FACTOR;
+        if (zone.duration == null) zone.duration = TrackCore.DEFAULT_BOOST_DURATION;
+      } else { delete zone.factor; delete zone.duration; }
+      refresh();
+    });
+    body.querySelectorAll('input[data-zkey]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const v = parseFloat(inp.value);
+        if (!isFinite(v)) return;
+        armHistory();
+        const k = inp.dataset.zkey;
+        if (k === 'width') zone.width = Math.max(0.5, v);
+        else if (k === 'length') zone.length = Math.max(0.5, v);
+        else if (k === 't') zone.host.t = Math.max(0, Math.min(1, v / 100));
+        else if (k === 'lateral') zone.host.lateral = v;
+        else if (k === 'x') zone.host.x = v;
+        else if (k === 'z') zone.host.z = v;
+        else if (k === 'rotation') zone.host.rotation = v;
+        else if (k === 'factor') zone.factor = Math.max(0.1, Math.min(5, v));
+        else if (k === 'duration') zone.duration = Math.max(0.1, Math.min(30, v));
+        draw();
+      });
+    });
+    document.getElementById('delZoneBtn').addEventListener('click', deleteSelectedZone);
     return;
   }
 
@@ -2841,7 +2922,7 @@ let menuToken = 0;
 function showAddPointMenu(clientX, clientY, worldX, worldZ) {
   pendingAdd = { worldX, worldZ };
   addPointMenu.style.left = Math.min(clientX, window.innerWidth - 140) + 'px';
-  addPointMenu.style.top = Math.min(clientY, window.innerHeight - 120) + 'px';
+  addPointMenu.style.top = Math.min(clientY, window.innerHeight - 210) + 'px';
   addPointMenu.style.display = 'flex';
   // The menu opens immediately with the paste option hidden, then reveals it
   // if the clipboard turns out to hold something. Awaiting the check first
@@ -2906,6 +2987,11 @@ addPointMenu.addEventListener('click', (e) => {
   if (e.target.dataset.action === 'pasteMesh') {
     hideAddPointMenu();
     importMeshFromClipboard({ x: worldX, z: worldZ });
+    return;
+  }
+  if (e.target.dataset.action === 'addZone') {
+    hideAddPointMenu();
+    addZoneAt(worldX, worldZ, e.target.dataset.effect);
     return;
   }
   const type = e.target.dataset.type;
@@ -3080,6 +3166,22 @@ topCanvas.addEventListener('mousedown', (e) => {
     refresh();
     return;
   }
+  // Zones float on the track: picked after control-point/physics handles (so
+  // they never steal a handle click) but before the large mesh regions (so a
+  // zone sitting on a region stays selectable over it).
+  if (!e.shiftKey) {
+    const zoneHit = zoneAtTop(x, y);
+    if (zoneHit) {
+      dragMutated = false;
+      selectZone(zoneHit.id);
+      const w = screenToWorld(x, y);
+      zoneDragOffset = zoneHit.host.kind === 'mesh' ? { dx: zoneHit.host.x - w.x, dz: zoneHit.host.z - w.z } : null;
+      dragging = 'zoneTop';
+      hideAddPointMenu();
+      refresh();
+      return;
+    }
+  }
   // Mesh regions are picked last, after every path handle: they are large
   // targets and must never steal a click from a control point drawn on top.
   {
@@ -3231,6 +3333,21 @@ window.addEventListener('mousemove', (e) => {
       widthSel.width = Math.max(1, Math.round(Math.abs(dist) * 2 * 10) / 10);
       refresh();
     }
+  } else if (dragging === 'zoneTop') {
+    const zone = selectedZone();
+    if (zone) {
+      if (!dragMutated) { pushUndo(); dragMutated = true; }
+      const { x, y } = localPos(topCanvas, e);
+      const w = snapWorldXZ(screenToWorld(x, y));
+      if (zone.host.kind === 'mesh') {
+        zone.host.x = Math.round((w.x + (zoneDragOffset ? zoneDragOffset.dx : 0)) * 10) / 10;
+        zone.host.z = Math.round((w.z + (zoneDragOffset ? zoneDragOffset.dz : 0)) * 10) / 10;
+      } else {
+        const near = nearestPathPlacement(w.x, w.z);
+        if (near) { zone.host.pathId = near.pathId; zone.host.t = Math.round(near.t * 1000) / 1000; zone.host.lateral = near.lateral; }
+      }
+      refresh();
+    }
   } else if (dragging === 'joinDrag') {
     const { x, y } = localPos(topCanvas, e);
     joinDragScreen = { x, y };
@@ -3254,7 +3371,7 @@ window.addEventListener('mouseup', () => {
     draw();
   }
   releaseTopViewFreeze();
-  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null; meshRotateStart = null;
+  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null; meshRotateStart = null; zoneDragOffset = null;
 });
 
 // ---------- Elevation mouse ----------
@@ -3303,6 +3420,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (selectedMeshId) { deleteSelectedMesh(); return; }
+    if (selectedZoneId) { deleteSelectedZone(); return; }
     if (crossSectionSel) {
       const path = curPath();
       if (parts(path).crossSectionPoints.length <= 2) { alert('A path needs at least 2 cross-section points.'); return; }
@@ -3584,6 +3702,134 @@ for (const k in HANDLING_FIELDS) {
     refresh();
   });
 }
+
+// ---------- Zones ----------
+// Flat rectangular areas floating on a surface (see track-core.js): a boost pad
+// or a start-grid marker. Added from the right-click "Add zone" submenu,
+// selected/dragged in Edit mode, edited in the props panel. Rendered as a solid
+// fill by effect type. Geometry comes from TrackCore.zonePathStrip so the
+// preview matches exactly what the game builds and drives over.
+const ZONE_FILL = { velocityChange: 'rgba(255,165,32,0.42)', startGrid: 'rgba(207,214,221,0.38)' };
+const ZONE_STROKE = { velocityChange: '#ffb020', startGrid: '#cfd6dd' };
+function zonesList() { if (!Array.isArray(track.zones)) track.zones = []; return track.zones; }
+function findZone(id) { return zonesList().find(z => z.id === id) || null; }
+function selectedZone() { return selectedZoneId ? findZone(selectedZoneId) : null; }
+function pathById(id) { return track.paths.find(p => p.id === id) || null; }
+
+function selectZone(id) {
+  selectedZoneId = id;
+  selectedMeshId = null; railSel = null;
+  rollSel = null; widthSel = null; crossSectionSel = null; segSel = null; physicsSel = null;
+}
+
+// Project a world XZ point onto the nearest path, returning the host descriptor
+// { pathId, t, lateral } a path zone stores. Lateral is the signed offset onto
+// the frame's edgeRight (XZ), matching the axis zonePathStrip offsets along.
+function nearestPathPlacement(wx, wz) {
+  let best = null;
+  for (const path of track.paths) {
+    if (!path.id) continue;
+    const pp = parts(path);
+    const ev = TrackCore.makeEvaluator(pp.controlPoints, path.closed, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints);
+    const gMax = path.closed ? ev.CP_N : ev.CP_N - 1;
+    const STEPS = Math.max(24, ev.CP_N * 24);
+    for (let i = 0; i <= STEPS; i++) {
+      const g = (i / STEPS) * gMax;
+      const s = ev.evalTrack(g);
+      const d = (s.pos.x - wx) ** 2 + (s.pos.z - wz) ** 2;
+      if (!best || d < best.d) best = { d, path, pathId: path.id, g, gMax, ev };
+    }
+  }
+  if (!best) return null;
+  const f = TrackCore.frameFromSample(best.ev.evalTrack(best.g));
+  const lateral = (wx - f.pos.x) * f.edgeRight.x + (wz - f.pos.z) * f.edgeRight.z;
+  return { pathId: best.pathId, t: best.gMax > 0 ? best.g / best.gMax : 0, lateral: Math.round(lateral * 10) / 10 };
+}
+
+// Add a zone at a clicked world point: a mesh zone if the click is on a region,
+// otherwise a path zone anchored to the nearest path.
+function addZoneAt(wx, wz, effect) {
+  effect = effect === 'startGrid' ? 'startGrid' : 'velocityChange';
+  const meshHit = meshAtWorld(wx, wz);
+  let host;
+  if (meshHit) {
+    host = { kind: 'mesh', meshId: meshHit.placement.id, x: Math.round(wx * 10) / 10, z: Math.round(wz * 10) / 10, rotation: 0 };
+  } else {
+    const near = nearestPathPlacement(wx, wz);
+    if (!near) { alert('Add a path or mesh region before placing a zone.'); return; }
+    host = { kind: 'path', pathId: near.pathId, t: Math.round(near.t * 1000) / 1000, lateral: near.lateral };
+  }
+  pushUndo();
+  const zone = { id: newId('z'), effect, width: TrackCore.DEFAULT_ZONE_WIDTH, length: TrackCore.DEFAULT_ZONE_LENGTH, host };
+  if (effect === 'velocityChange') { zone.factor = TrackCore.DEFAULT_BOOST_FACTOR; zone.duration = TrackCore.DEFAULT_BOOST_DURATION; }
+  zonesList().push(zone);
+  selectZone(zone.id);
+  refresh();
+}
+
+function deleteSelectedZone() {
+  const zone = selectedZone();
+  if (!zone) return;
+  pushUndo();
+  track.zones = zonesList().filter(z => z.id !== zone.id);
+  selectedZoneId = null;
+  refresh();
+}
+
+// The zone's outline as an ordered ring of world {x,y,z}: a rotated rectangle
+// for a mesh zone, the surface-conforming strip (left + reversed right) for a
+// path zone. hover 0 -- the top-down view is flat.
+function zoneOutlineWorld(zone) {
+  const host = zone.host || {};
+  if (host.kind === 'mesh') {
+    const rot = (host.rotation || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
+    const hl = Math.max(0.25, (zone.length || 0) / 2), hw = Math.max(0.25, (zone.width || 0) / 2);
+    const corner = (lx, lz) => ({ x: host.x + lx * cos - lz * sin, z: host.z + lx * sin + lz * cos });
+    return [corner(-hl, -hw), corner(hl, -hw), corner(hl, hw), corner(-hl, hw)];
+  }
+  const path = pathById(host.pathId);
+  if (!path) return null;
+  const pp = parts(path);
+  const strip = TrackCore.zonePathStrip(pp.controlPoints, path.closed, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, zone, 0);
+  const out = strip.left.slice();
+  for (let i = strip.right.length - 1; i >= 0; i--) out.push(strip.right[i]);
+  return out;
+}
+
+function pointInScreenPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+// Topmost zone under a screen point, or null.
+function zoneAtTop(sx, sy) {
+  const list = zonesList();
+  for (let k = list.length - 1; k >= 0; k--) {
+    const outline = zoneOutlineWorld(list[k]);
+    if (!outline || outline.length < 3) continue;
+    const pts = outline.map(p => worldToScreen(p.x, p.z));
+    if (pointInScreenPoly(sx, sy, pts)) return list[k];
+  }
+  return null;
+}
+function drawZones(ctx) {
+  for (const zone of zonesList()) {
+    const outline = zoneOutlineWorld(zone);
+    if (!outline || outline.length < 3) continue;
+    ctx.beginPath();
+    outline.forEach((p, i) => { const s = worldToScreen(p.x, p.z); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
+    ctx.closePath();
+    ctx.fillStyle = ZONE_FILL[zone.effect] || 'rgba(255,255,255,0.35)';
+    ctx.fill();
+    ctx.strokeStyle = ZONE_STROKE[zone.effect] || '#fff';
+    ctx.lineWidth = zone.id === selectedZoneId ? 3 : 1.5;
+    ctx.stroke();
+  }
+}
+
 document.getElementById('exportBtn').addEventListener('click', () => {
   assertNoStaleSeams();
   const json = TrackCore.serializeTrack(track);

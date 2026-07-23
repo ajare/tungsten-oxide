@@ -428,3 +428,104 @@ test('handling survives a serialize/parse round trip', () => {
   const round = TrackCore.parseTrack(TrackCore.serializeTrack(track));
   assert.deepEqual(round.handling, { maxSpeed: 95, accel: 40, turnSpeed: 200, weight: 2500 });
 });
+
+// --- zones -------------------------------------------------------------------
+
+function zoneTrackJson(zones) {
+  return JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'zoned',
+    meshAssets: {}, meshes: [],
+    paths: [{ id: 'path1', closed: true, points: [
+      { type: 'position', id: 'a', pos: [80, 0, 0] }, { type: 'position', id: 'b', pos: [0, 0, 80] },
+      { type: 'position', id: 'c', pos: [-80, 0, 0] }, { type: 'position', id: 'd', pos: [0, 0, -80] }
+    ] }],
+    zones
+  });
+}
+
+test('a track with no zones parses to an empty array', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson(undefined));
+  assert.deepEqual(track.zones, []);
+});
+
+test('a path zone with a valid host survives and gets boost defaults', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson([
+    { effect: 'velocityChange', host: { kind: 'path', pathId: 'path1', t: 0.25, lateral: 3 } }
+  ]));
+  assert.equal(track.zones.length, 1);
+  const z = track.zones[0];
+  assert.equal(z.effect, 'velocityChange');
+  assert.equal(z.host.pathId, 'path1');
+  assert.equal(z.host.t, 0.25);
+  assert.equal(z.factor, TrackCore.DEFAULT_BOOST_FACTOR);
+  assert.equal(z.duration, TrackCore.DEFAULT_BOOST_DURATION);
+  assert.ok(typeof z.id === 'string' && z.id, 'gets an id');
+});
+
+test('a zone whose host id does not exist is dropped', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson([
+    { effect: 'velocityChange', host: { kind: 'path', pathId: 'ghost' } },
+    { effect: 'velocityChange', host: { kind: 'mesh', meshId: 'nope' } }
+  ]));
+  assert.deepEqual(track.zones, [], 'both dangling hosts dropped');
+});
+
+test('a startGrid zone carries no boost params, and factor/duration clamp', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson([
+    { effect: 'startGrid', host: { kind: 'path', pathId: 'path1', t: 0 } },
+    { effect: 'velocityChange', factor: 999, duration: -3, host: { kind: 'path', pathId: 'path1', t: 0.5 } }
+  ]));
+  assert.equal(track.zones[0].effect, 'startGrid');
+  assert.equal(track.zones[0].factor, undefined, 'startGrid has no factor');
+  assert.equal(track.zones[1].factor, 5, 'factor clamped to ceiling');
+  assert.equal(track.zones[1].duration, 0.1, 'duration clamped to floor');
+});
+
+test('zones survive a serialize/parse round trip', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson([
+    { effect: 'velocityChange', width: 20, length: 50, factor: 1.8, duration: 3, host: { kind: 'path', pathId: 'path1', t: 0.4, lateral: -5 } }
+  ]));
+  const round = TrackCore.parseTrack(TrackCore.serializeTrack(track));
+  assert.deepEqual(round.zones, track.zones);
+});
+
+test('zonePathStrip returns finite, equal-length edges and a real g-window', () => {
+  const track = TrackCore.parseTrack(zoneTrackJson([]));
+  const pp = TrackCore.splitPoints(track.paths[0].points);
+  const zone = { width: 20, length: 60, host: { kind: 'path', pathId: 'path1', t: 0.3, lateral: 4 } };
+  const strip = TrackCore.zonePathStrip(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, zone, 0.15);
+  assert.equal(strip.left.length, strip.right.length);
+  assert.ok(strip.left.length >= 2);
+  assert.ok(strip.left.every(finitePoint) && strip.right.every(finitePoint));
+  assert.ok(strip.gHi > strip.gLo, 'non-empty along-window');
+});
+
+test('a path zone along-window spans its authored length in arc units', () => {
+  // The strip's [gLo, gHi] must cover ~= zone.length of true arc, regardless of
+  // how coarse the control-point spacing is (a short pad on a big loop). Pins
+  // the endpoint interpolation that stops the walk from overshooting a whole step.
+  const track = TrackCore.cloneTrack(TrackCore.STARTER_TRACK);
+  const zone = { effect: 'velocityChange', width: 20, length: 60, host: { kind: 'path', pathId: 'p0', t: 0.25, lateral: 0 } };
+  const pp = TrackCore.splitPoints(track.paths[0].points);
+  const strip = TrackCore.zonePathStrip(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, zone, 0);
+  const ev = TrackCore.makeEvaluator(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints);
+  const gMax = ev.CP_N, STEPS = 20000;
+  let arc = 0, prev = null;
+  for (let i = 0; i <= STEPS; i++) {
+    const g = (i / STEPS) * gMax, p = ev.evalTrack(g).pos;
+    if (prev && TrackCore.zoneAlongContains(g, strip.gLo, strip.gHi, strip.gMax, true)) {
+      arc += Math.hypot(p.x - prev.x, p.y - prev.y, p.z - prev.z);
+    }
+    prev = p;
+  }
+  assert.ok(Math.abs(arc - 60) < 8, `expected ~60 units of arc in the window, got ${arc.toFixed(1)}`);
+});
+
+test('zoneAlongContains handles the closed-path wrap window', () => {
+  // window straddling the wrap: [CP_N - 0.2, CP_N + 0.2] on a 4-cp loop.
+  const gMax = 4;
+  assert.equal(TrackCore.zoneAlongContains(0.0, 3.8, 4.2, gMax, true), true, 'g=0 is inside a wrap window');
+  assert.equal(TrackCore.zoneAlongContains(3.9, 3.8, 4.2, gMax, true), true);
+  assert.equal(TrackCore.zoneAlongContains(2.0, 3.8, 4.2, gMax, true), false, 'far side is outside');
+  assert.equal(TrackCore.zoneAlongContains(0.5, 0.2, 0.8, gMax, false), true, 'open path, plain range');
+});

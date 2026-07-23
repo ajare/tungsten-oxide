@@ -35,7 +35,13 @@
  *            meshAssets: { <assetId>: { name, railHeight, mesh } },
  *            meshes: [ { id, asset, x, z, rotation, elevation } ],
  *            handling: { maxSpeed, accel, turnSpeed, weight },
+ *            zones: [{ id, effect, width, length, host, ...effectParams }],
  *            start: { path, point, reverse } }
+ * `zones` are flat rectangular areas floating on a surface that fire an effect
+ * when driven over. Each is hosted on a path (host.kind 'path', by t + lateral
+ * offset, oriented along the track) or a mesh region (host.kind 'mesh', by
+ * world x/z + yaw at the region's elevation). effect 'velocityChange' carries
+ * { factor, duration }; 'startGrid' is a visual marker. See normalizeZones.
  * `handling` is the per-track ship config the game reads (m/s, m/s^2, deg/s,
  * kg); a track without it drives on DEFAULT_HANDLING. See normalizeHandling.
  * meshAssets/meshes carry flat drivable MESH REGIONS imported from the
@@ -116,7 +122,7 @@
   // track measured under schema 4, and the game's ship, speeds and gravity were
   // scaled to match. Nothing about how a track looks or drives changed -- only
   // the absolute units. Older files are converted once, on load.
-  const TRACK_SCHEMA_VERSION = 6;
+  const TRACK_SCHEMA_VERSION = 7;
   const LEGACY_UNIT_SCALE = 2;
   // The unit doubling happened at schema 5 and only there, so the migration is
   // keyed to that version and NOT to TRACK_SCHEMA_VERSION. Those were the same
@@ -1322,6 +1328,130 @@
     return data;
   }
 
+  // --- zones -----------------------------------------------------------------
+  // Flat rectangular areas that float just above a surface and fire an effect
+  // when the ship drives onto them (schema 7). A zone is hosted EITHER on a
+  // spline path -- positioned by t (0..1 along the path) and a signed lateral
+  // offset in units, oriented to follow the track -- OR on a mesh region --
+  // positioned by world x/z with its own yaw, sitting at that region's
+  // elevation. `width` is the across-track extent, `length` the along-track
+  // extent, both world units. effect 'velocityChange' boosts the ship (factor x
+  // maxSpeed for `duration` s, then a smooth release); 'startGrid' is a purely
+  // visual marker for now. Zones only ever exist in schema >= 7 files, so they
+  // are never touched by the pre-schema-5 unit migration -- every length here is
+  // already in current units.
+  const DEFAULT_ZONE_WIDTH = 24;
+  const DEFAULT_ZONE_LENGTH = 40;
+  const DEFAULT_BOOST_FACTOR = 1.5;
+  const DEFAULT_BOOST_DURATION = 2;
+
+  function normalizeZone(raw, i, pathIds, meshIds) {
+    if (!raw || typeof raw !== 'object') return null;
+    const host = raw.host && typeof raw.host === 'object' ? raw.host : null;
+    if (!host) return null;
+    const effect = raw.effect === 'startGrid' ? 'startGrid' : 'velocityChange';
+    const width = Math.max(0.5, finiteOr(raw.width, DEFAULT_ZONE_WIDTH, 0.5));
+    const length = Math.max(0.5, finiteOr(raw.length, DEFAULT_ZONE_LENGTH, 0.5));
+    let normHost;
+    if (host.kind === 'mesh') {
+      if (typeof host.meshId !== 'string' || !meshIds.has(host.meshId)) return null;
+      normHost = { kind: 'mesh', meshId: host.meshId, x: finiteOr(host.x, 0), z: finiteOr(host.z, 0), rotation: finiteOr(host.rotation, 0) };
+    } else {
+      if (typeof host.pathId !== 'string' || !pathIds.has(host.pathId)) return null;
+      normHost = { kind: 'path', pathId: host.pathId, t: clampRange(host.t, 0, 1, 0.5), lateral: finiteOr(host.lateral, 0) };
+    }
+    const zone = {
+      id: (typeof raw.id === 'string' && raw.id) ? raw.id : 'z' + (i + 1),
+      effect, width, length, host: normHost
+    };
+    if (effect === 'velocityChange') {
+      zone.factor = clampRange(raw.factor, 0.1, 5, DEFAULT_BOOST_FACTOR);
+      zone.duration = clampRange(raw.duration, 0.1, 30, DEFAULT_BOOST_DURATION);
+    }
+    return zone;
+  }
+
+  // Validate zones against the track's paths and mesh placements, dropping any
+  // whose host id no longer exists (same policy as a dangling mesh placement).
+  function normalizeZones(rawZones, paths, meshes) {
+    const pathIds = new Set((paths || []).map(p => p && p.id).filter(Boolean));
+    const meshIds = new Set((meshes || []).map(m => m && m.id).filter(Boolean));
+    const out = [];
+    (Array.isArray(rawZones) ? rawZones : []).forEach((z, i) => {
+      const n = normalizeZone(z, i, pathIds, meshIds);
+      if (n) out.push(n);
+    });
+    return out;
+  }
+
+  // Build a surface-conforming strip (two edge polylines, world space) for a
+  // PATH-hosted zone, plus the evaluator g-window [gLo, gHi] the game reuses for
+  // trigger detection. The strip follows the road's curve and banking over the
+  // zone's LENGTH (measured as true 3D arc length outward from the center t),
+  // offset laterally by the zone's `lateral`, and hovers `hover` units above the
+  // surface along the frame normal. Shared by the game mesh and the editor
+  // preview so the two can never drift.
+  function zonePathStrip(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, zone, hover) {
+    closed = closed !== false;
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
+    const gMax = (closed ? CP_N : CP_N - 1) || 1;
+    const host = zone.host || {};
+    const gCenter = clampRange(host.t, 0, 1, 0.5) * gMax;
+    const halfLen = Math.max(0.25, (zone.length || 0) / 2);
+    const lateral = finiteOr(host.lateral, 0);
+    const halfW = Math.max(0.25, (zone.width || 0) / 2);
+    const hv = hover || 0;
+    const clampG = g => closed ? g : Math.max(0, Math.min(gMax, g));
+    // Step fine enough that a chord approximates the arc well AND that the
+    // endpoint interpolation below is accurate even for a short zone on a big
+    // loop (where one whole g-step can be tens of units of arc).
+    const step = gMax / Math.max(600, CP_N * 60);
+    // Walk outward from the center accumulating true 3D arc length until half
+    // the zone length is covered, interpolating the final partial step so the
+    // returned g lands exactly at halfLen (not a whole step past it).
+    const walk = dir => {
+      let g = gCenter, prev = evalTrack(clampG(g)).pos, acc = 0;
+      for (let i = 0; i < 40000; i++) {
+        const gNext = g + dir * step;
+        const p = evalTrack(clampG(gNext)).pos;
+        const d = Math.hypot(p.x - prev.x, p.y - prev.y, p.z - prev.z);
+        if (acc + d >= halfLen) {
+          const frac = d > 1e-9 ? (halfLen - acc) / d : 0;
+          return g + dir * step * frac;
+        }
+        acc += d; prev = p; g = gNext;
+        if (!closed && (g <= 0 || g >= gMax)) return clampG(g);
+      }
+      return g;
+    };
+    const gLo = walk(-1), gHi = walk(1);
+    // One strip cross-section roughly every 6 units of the zone's length, so it
+    // conforms to a curve without over-tessellating a straight pad.
+    const K = Math.max(2, Math.min(96, Math.round((zone.length || 0) / 6) || 2));
+    const left = [], right = [];
+    for (let i = 0; i <= K; i++) {
+      const g = gLo + (gHi - gLo) * (i / K);
+      const f = frameFromSample(evalTrack(clampG(g)));
+      const mid = vaddScaled(vaddScaled(f.pos, f.edgeRight, lateral), f.normal, hv);
+      left.push(vaddScaled(mid, f.edgeRight, -halfW));
+      right.push(vaddScaled(mid, f.edgeRight, halfW));
+    }
+    return { left, right, gLo, gHi, gMax, closed };
+  }
+
+  // Is the ship's evaluator parameter gShip within a path zone's [gLo, gHi]
+  // window? For a closed path the window may be expressed outside [0, CP_N)
+  // (it can straddle the wrap), so gShip is shifted by whole cycles into the
+  // window's neighbourhood before the range test.
+  function zoneAlongContains(gShip, gLo, gHi, gMax, closed) {
+    if (!closed) return gShip >= gLo - 1e-9 && gShip <= gHi + 1e-9;
+    const center = (gLo + gHi) / 2;
+    let g = gShip;
+    while (g < center - gMax / 2) g += gMax;
+    while (g > center + gMax / 2) g -= gMax;
+    return g >= gLo - 1e-9 && g <= gHi + 1e-9;
+  }
+
   // Accepts either the current { paths: [{closed, points}, ...] } schema, the
   // pre-refactor three-array schema, or the legacy single-closed-loop
   // { controlPoints: [...] } schema (see normalizePath).
@@ -1384,6 +1514,7 @@
       meshAssets,
       meshes,
       textureAssets,
+      zones: normalizeZones(data && data.zones, paths, meshes),
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
@@ -1419,6 +1550,7 @@
       '  "name": ' + JSON.stringify(track.name || 'Untitled Track') + ',\n' +
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "handling": ' + JSON.stringify(normalizeHandling(track.handling)) + ',\n' +
+      '  "zones": ' + JSON.stringify(track.zones || []) + ',\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
@@ -1437,6 +1569,7 @@
     junctions: [],
     meshAssets: {},
     meshes: [],
+    zones: [],
     textureAssets: {},
     // The classic varied banked circuit, scaled uniformly x9 from its original
     // ~888 m into the current 7-10 km regime (~7995 m driven). Only lengths
@@ -1490,6 +1623,7 @@
     junctions: [],
     meshAssets: {},
     meshes: [],
+    zones: [],
     textureAssets: {},
     // A flat circle whose DRIVEN centerline length is 8,000 m. The rational
     // cubic B-spline does not pass through its control points, so the 12 points
@@ -1533,6 +1667,8 @@
     crossSectionHeight, crossSectionHeightDerivative, crossSectionBreakpoints, crossSectionStitchPoint,
     frameFromSample, longitudinalBreakpoints, buildAdaptiveMeshFrames, adaptiveSampleCount,
     LONGITUDINAL_SAGITTA_TOLERANCE, LONGITUDINAL_MAX_DISTANCE, LONGITUDINAL_MAX_DEPTH,
+    normalizeZones, zonePathStrip, zoneAlongContains,
+    DEFAULT_ZONE_WIDTH, DEFAULT_ZONE_LENGTH, DEFAULT_BOOST_FACTOR, DEFAULT_BOOST_DURATION,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,
