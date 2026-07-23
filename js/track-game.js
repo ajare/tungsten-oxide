@@ -502,6 +502,7 @@ function buildTrack(track) {
   ));
   // Zones ride on top of the finished paths + mesh regions.
   buildZones(track, bakedPaths);
+  buildTriggers(track, bakedPaths);
   // Anything below every drivable surface by this much has clearly fallen off
   // and is never coming back, so it triggers an automatic respawn.
   let lowest = Infinity;
@@ -763,6 +764,155 @@ function detectZoneTriggers(sample, meshRegion) {
     }
     if (inside && !z.wasInside && z.effect === 'velocityChange') triggerBoost(z);
     z.wasInside = inside;
+  }
+}
+
+// ---------- Triggers ----------
+// Vertical gate quads the ship passes THROUGH (see track-core.js). Never
+// rendered in normal play; a debug view (J) draws each as a translucent quad
+// with a direction arrow, coloured by armed state and flashing on fire. The
+// 'dummy' type has no mechanical effect -- firing only logs + flashes.
+let triggers = [];
+let showTriggers = false;
+const TRIGGER_ARMED_COLOR = 0x33dd66;      // green: ready to fire
+const TRIGGER_DISARMED_COLOR = 0xdd3333;   // red: fired, waiting to re-arm
+const TRIGGER_FLASH_TIME = 0.4;            // seconds a fire flash lasts
+const TRIGGER_REARM_MARGIN = 3;            // units past the plane that counts as "clear"
+const _prevTriggerPos = new THREE.Vector3();
+const _trigColBase = new THREE.Color();
+const _trigColFlash = new THREE.Color(0xffffff);
+
+function disposeTriggerDebug(tr) {
+  if (!tr.group) return;
+  scene.remove(tr.group);
+  tr.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  tr.group = null;
+}
+
+// Build the debug quad + direction arrow(s) for one compiled trigger, hidden
+// unless the J debug view is on.
+function buildTriggerDebugMesh(rec, direction) {
+  const c = rec.center, r = rec.right, u = rec.up, f = rec.fwd, hw = rec.halfWidth, h = rec.height;
+  const corner = (sr, su) => [c.x + r.x * sr * hw + u.x * su * h, c.y + r.y * sr * hw + u.y * su * h, c.z + r.z * sr * hw + u.z * su * h];
+  const c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
+  const pos = [];
+  const tri = (a, b, cc) => pos.push(a[0], a[1], a[2], b[0], b[1], b[2], cc[0], cc[1], cc[2]);
+  tri(c0, c1, c2); tri(c0, c2, c3);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  const quadMat = new THREE.MeshBasicMaterial({ color: TRIGGER_ARMED_COLOR, side: THREE.DoubleSide, transparent: true, opacity: 0.3, depthWrite: false });
+  const quad = new THREE.Mesh(g, quadMat); quad.renderOrder = 6;
+
+  const mid = [c.x + u.x * h * 0.5, c.y + u.y * h * 0.5, c.z + u.z * h * 0.5];
+  const aLen = Math.max(3, hw * 0.5), barb = aLen * 0.35;
+  const arrowPos = [];
+  const addArrow = (sgn) => {
+    const tip = [mid[0] + f.x * aLen * sgn, mid[1] + f.y * aLen * sgn, mid[2] + f.z * aLen * sgn];
+    arrowPos.push(mid[0], mid[1], mid[2], tip[0], tip[1], tip[2]);
+    for (const side of [1, -1]) {
+      arrowPos.push(tip[0], tip[1], tip[2],
+        tip[0] - f.x * barb * sgn + r.x * barb * side, tip[1] - f.y * barb * sgn + r.y * barb * side, tip[2] - f.z * barb * sgn + r.z * barb * side);
+    }
+  };
+  if (direction === 'both' || direction === 'forward') addArrow(1);
+  if (direction === 'both' || direction === 'backward') addArrow(-1);
+  const ag = new THREE.BufferGeometry();
+  ag.setAttribute('position', new THREE.Float32BufferAttribute(arrowPos, 3));
+  const arrowMat = new THREE.LineBasicMaterial({ color: TRIGGER_ARMED_COLOR, transparent: true, depthTest: false });
+  const arrow = new THREE.LineSegments(ag, arrowMat); arrow.renderOrder = 7;
+
+  const group = new THREE.Group();
+  group.add(quad); group.add(arrow);
+  group.visible = showTriggers;
+  scene.add(group);
+  rec.group = group; rec.quadMat = quadMat; rec.arrowMat = arrowMat;
+}
+
+// (Re)build the compiled trigger records + debug meshes. Path triggers get their
+// gate frame from the shared TrackCore.triggerPathFrame; mesh triggers are a
+// flat gate at the region's elevation whose normal is set by `rotation`.
+function buildTriggers(track, bakedPaths) {
+  for (const tr of triggers) disposeTriggerDebug(tr);
+  triggers = [];
+  for (const trig of track.triggers || []) {
+    const host = trig.host || {};
+    let frame;
+    if (host.kind === 'mesh') {
+      const region = meshRegions.find(r => r.compiled && r.compiled.id === host.meshId);
+      if (!region) continue;
+      const rot = (trig.rotation || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
+      frame = { center: { x: host.x, y: region.elevation, z: host.z }, fwd: { x: sin, y: 0, z: cos }, right: { x: cos, y: 0, z: -sin }, up: { x: 0, y: 1, z: 0 } };
+    } else {
+      const bp = bakedPaths.find(b => b.id === host.pathId);
+      if (!bp) continue;
+      frame = TrackCore.triggerPathFrame(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, trig);
+    }
+    const rec = {
+      id: trig.id, type: trig.type, direction: trig.direction,
+      center: new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
+      right: new THREE.Vector3(frame.right.x, frame.right.y, frame.right.z),
+      up: new THREE.Vector3(frame.up.x, frame.up.y, frame.up.z),
+      fwd: new THREE.Vector3(frame.fwd.x, frame.fwd.y, frame.fwd.z),
+      halfWidth: Math.max(0.25, (trig.width || 0) / 2), height: Math.max(0.25, trig.height || 0),
+      armed: true, flash: 0
+    };
+    buildTriggerDebugMesh(rec, trig.direction);
+    triggers.push(rec);
+  }
+  _prevTriggerPos.copy(physics.groundPos);
+}
+
+function fireTrigger(rec, dir) {
+  rec.flash = TRIGGER_FLASH_TIME;
+  // 'dummy' does nothing mechanical -- this is the only feedback there is.
+  console.log(`[trigger] ${rec.id} fired (${dir})`);
+}
+
+// Swept crossing of the ship segment p0->p1 against every trigger gate. Fires
+// once on an allowed crossing while armed, then disarms until the ship is clear
+// of the gate (off its width x height footprint, or past the plane by the
+// re-arm margin). Runs airborne too -- a gate can be crossed in the air.
+function detectTriggers(p0, p1) {
+  for (const tr of triggers) {
+    const c = tr.center;
+    const d0 = (p0.x - c.x) * tr.fwd.x + (p0.y - c.y) * tr.fwd.y + (p0.z - c.z) * tr.fwd.z;
+    const d1 = (p1.x - c.x) * tr.fwd.x + (p1.y - c.y) * tr.fwd.y + (p1.z - c.z) * tr.fwd.z;
+    const rr = (p1.x - c.x) * tr.right.x + (p1.y - c.y) * tr.right.y + (p1.z - c.z) * tr.right.z;
+    const uu = (p1.x - c.x) * tr.up.x + (p1.y - c.y) * tr.up.y + (p1.z - c.z) * tr.up.z;
+    if (!tr.armed && (Math.abs(rr) > tr.halfWidth || uu < 0 || uu > tr.height || Math.abs(d1) > TRIGGER_REARM_MARGIN)) tr.armed = true;
+    if (tr.armed && d0 !== d1 && ((d0 <= 0 && d1 > 0) || (d0 >= 0 && d1 < 0))) {
+      const t = d0 / (d0 - d1);
+      const xr = (p0.x + (p1.x - p0.x) * t - c.x), yr = (p0.y + (p1.y - p0.y) * t - c.y), zr = (p0.z + (p1.z - p0.z) * t - c.z);
+      const lr = xr * tr.right.x + yr * tr.right.y + zr * tr.right.z;
+      const lu = xr * tr.up.x + yr * tr.up.y + zr * tr.up.z;
+      if (Math.abs(lr) <= tr.halfWidth && lu >= 0 && lu <= tr.height) {
+        const dir = d1 > d0 ? 'forward' : 'backward';
+        if (tr.direction === 'both' || tr.direction === dir) { fireTrigger(tr, dir); tr.armed = false; }
+      }
+    }
+  }
+}
+
+// Re-arm all triggers and reseed the swept-segment anchor, so a teleport
+// (reset/respawn) never registers as a crossing.
+function resetTriggers() {
+  _prevTriggerPos.copy(physics.groundPos);
+  for (const tr of triggers) { tr.armed = true; tr.flash = 0; }
+}
+
+// Decay fire flashes and, while the debug view is on, colour each gate by armed
+// state (brightening toward white during a flash).
+function updateTriggerDebug(dt) {
+  for (const tr of triggers) {
+    if (tr.flash > 0) tr.flash = Math.max(0, tr.flash - dt);
+    if (!showTriggers || !tr.quadMat) continue;
+    _trigColBase.setHex(tr.armed ? TRIGGER_ARMED_COLOR : TRIGGER_DISARMED_COLOR);
+    const k = tr.flash / TRIGGER_FLASH_TIME;
+    _trigColBase.lerp(_trigColFlash, k);
+    tr.quadMat.color.copy(_trigColBase);
+    tr.arrowMat.color.copy(_trigColBase);
+    tr.quadMat.opacity = 0.3 + 0.55 * k;
   }
 }
 
@@ -1084,6 +1234,7 @@ function respawn() {
   physics.moveDir.copy(physics.forward);
   physics.right.set(Math.cos(lastGrounded.heading), 0, -Math.sin(lastGrounded.heading));
   clearBoost();
+  resetTriggers();
   // Reset the surface up too, to match the horizontal facing above. Unlike
   // resetShip this is deliberately world-up rather than the sampled normal:
   // the frame is being re-seeded flat, and the next updatePhysics eases
@@ -1138,6 +1289,7 @@ function resetShip() {
   lastGrounded.heading = heading;
   lastGrounded.valid = true;
   clearBoost();
+  resetTriggers();
 }
 
 // ---------- Input ----------
@@ -1168,6 +1320,12 @@ window.addEventListener('keydown', (e) => {
     for (const region of meshRegions) if (region.surface) region.surface.material.wireframe = showWireframe;
   }
   if (e.code === 'KeyR' && !e.repeat) respawn();
+  // J: toggle the trigger debug view (off by default; triggers are otherwise
+  // never rendered).
+  if (e.code === 'KeyJ' && !e.repeat) {
+    showTriggers = !showTriggers;
+    for (const tr of triggers) if (tr.group) tr.group.visible = showTriggers;
+  }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; keys[e.key] = false; });
 
@@ -1562,6 +1720,10 @@ function stepPhysics(dt, throttle, brake, steer) {
   tickBoost(dt);
   if (!physics.airborne) detectZoneTriggers(c, meshRegion);
 
+  // Triggers: swept crossing over this sub-step's motion (grounded OR airborne).
+  detectTriggers(_prevTriggerPos, physics.groundPos);
+  _prevTriggerPos.copy(physics.groundPos);
+
   if (!physics.airborne) {
     lastGrounded.pos.copy(physics.groundPos);
     lastGrounded.heading = physics.heading;
@@ -1927,6 +2089,7 @@ window.__game = {
   get meshRegions() { return meshRegions; },
   get paths() { return paths; },
   get zones() { return zones; },
+  get triggers() { return triggers; },
   get physics() { return physics; },
   get trackFloorY() { return trackFloorY; },
   respawn
@@ -1939,6 +2102,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePhysics(dt);
   updateCamera(dt);
+  updateTriggerDebug(dt);
   drawMinimap();
   renderer.render(scene, camera);
 }

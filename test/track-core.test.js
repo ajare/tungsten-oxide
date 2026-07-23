@@ -529,3 +529,77 @@ test('zoneAlongContains handles the closed-path wrap window', () => {
   assert.equal(TrackCore.zoneAlongContains(2.0, 3.8, 4.2, gMax, true), false, 'far side is outside');
   assert.equal(TrackCore.zoneAlongContains(0.5, 0.2, 0.8, gMax, false), true, 'open path, plain range');
 });
+
+// --- triggers ----------------------------------------------------------------
+
+function triggerTrackJson(triggers) {
+  return JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'triggered',
+    meshAssets: {}, meshes: [],
+    paths: [{ id: 'path1', closed: true, points: [
+      { type: 'position', id: 'a', pos: [80, 0, 0] }, { type: 'position', id: 'b', pos: [0, 0, 80] },
+      { type: 'position', id: 'c', pos: [-80, 0, 0] }, { type: 'position', id: 'd', pos: [0, 0, -80] }
+    ] }],
+    triggers
+  });
+}
+
+test('a track with no triggers parses to an empty array', () => {
+  assert.deepEqual(TrackCore.parseTrack(triggerTrackJson(undefined)).triggers, []);
+});
+
+test('a path trigger normalizes with defaults and a valid direction', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([
+    { host: { kind: 'path', pathId: 'path1', t: 0.5 }, direction: 'sideways' }
+  ]));
+  const tr = track.triggers[0];
+  assert.equal(tr.type, 'dummy');
+  assert.equal(tr.host.pathId, 'path1');
+  assert.equal(tr.width, TrackCore.DEFAULT_TRIGGER_WIDTH);
+  assert.equal(tr.height, TrackCore.DEFAULT_TRIGGER_HEIGHT);
+  assert.equal(tr.direction, 'both', 'unknown direction falls back to both');
+  assert.ok(typeof tr.id === 'string' && tr.id);
+});
+
+test('a trigger whose host id is gone is dropped', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([
+    { host: { kind: 'path', pathId: 'ghost' } }, { host: { kind: 'mesh', meshId: 'nope' } }
+  ]));
+  assert.deepEqual(track.triggers, []);
+});
+
+test('triggers survive a serialize/parse round trip', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([
+    { host: { kind: 'path', pathId: 'path1', t: 0.25 }, width: 30, height: 8, rotation: 15, direction: 'forward' }
+  ]));
+  const round = TrackCore.parseTrack(TrackCore.serializeTrack(track));
+  assert.deepEqual(round.triggers, track.triggers);
+});
+
+test('triggerPathFrame returns an orthonormal, finite gate frame', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([]));
+  const pp = TrackCore.splitPoints(track.paths[0].points);
+  const trigger = { host: { kind: 'path', pathId: 'path1', t: 0.25 }, width: 40, height: 12, rotation: 0, direction: 'both' };
+  const fr = TrackCore.triggerPathFrame(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, trigger);
+  const fin = v => Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const len = v => Math.hypot(v.x, v.y, v.z);
+  assert.ok(fin(fr.center) && fin(fr.right) && fin(fr.up) && fin(fr.fwd));
+  for (const v of [fr.right, fr.up, fr.fwd]) assert.ok(Math.abs(len(v) - 1) < 1e-6, 'unit axes');
+  assert.ok(Math.abs(dot(fr.right, fr.up)) < 1e-6 && Math.abs(dot(fr.right, fr.fwd)) < 1e-6 && Math.abs(dot(fr.up, fr.fwd)) < 1e-6, 'orthogonal axes');
+  // On this flat loop the gate is world-vertical: up is +Y, fwd/right are horizontal.
+  assert.ok(Math.abs(fr.up.y - 1) < 1e-6, 'up is +Y on flat ground');
+  assert.ok(Math.abs(fr.fwd.y) < 1e-6 && Math.abs(fr.right.y) < 1e-6, 'fwd/right horizontal on flat ground');
+});
+
+test('triggerPathFrame yaw rotates fwd/right about up but not up itself', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([]));
+  const pp = TrackCore.splitPoints(track.paths[0].points);
+  const base = { host: { kind: 'path', pathId: 'path1', t: 0.25 }, width: 40, height: 12, rotation: 0, direction: 'both' };
+  const yaw = { ...base, rotation: 90 };
+  const a = TrackCore.triggerPathFrame(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, base);
+  const b = TrackCore.triggerPathFrame(pp.controlPoints, true, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, yaw);
+  const dot = (u, v) => u.x * v.x + u.y * v.y + u.z * v.z;
+  assert.ok(Math.abs(dot(a.up, b.up) - 1) < 1e-6, 'up unchanged by yaw');
+  assert.ok(Math.abs(dot(a.fwd, b.fwd)) < 1e-6, 'fwd rotated ~90deg off its old direction');
+});

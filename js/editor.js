@@ -137,6 +137,8 @@ let meshDragOffset = null;
 let meshRotateStart = null;         // { originRotation, startAngle } for shift-drag rotation
 let selectedZoneId = null;          // selected zone (shares the props panel with points/meshes)
 let zoneDragOffset = null;          // { dx, dz } for dragging a mesh-hosted zone
+let selectedTriggerId = null;       // selected trigger (also shares the props panel)
+let triggerDragOffset = null;       // { dx, dz } for dragging a mesh-hosted trigger
 
 function invalidateMeshCache() { meshCache = new Map(); }
 
@@ -179,7 +181,7 @@ function compiledMeshes() {
   return out;
 }
 
-function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; selectedZoneId = null; zoneDragOffset = null; }
+function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragOffset = null; meshRotateStart = null; selectedZoneId = null; zoneDragOffset = null; selectedTriggerId = null; triggerDragOffset = null; }
 
 // ---------- Texture assets ----------
 let texturePanelOpen = false;
@@ -551,6 +553,7 @@ function ensureTrackIds() {
   if (!track.meshAssets) track.meshAssets = {};
   if (!track.meshes) track.meshes = [];
   if (!Array.isArray(track.zones)) track.zones = [];
+  if (!Array.isArray(track.triggers)) track.triggers = [];
   // Cloned built-ins / hand-built tracks may lack a handling section; fill and
   // clamp it so the editor always has a complete one to show and serialize.
   track.handling = TrackCore.normalizeHandling(track.handling);
@@ -575,6 +578,13 @@ function ensureTrackIds() {
   for (const z of track.zones) {
     if (!z.id || usedIds.has(z.id)) z.id = newId('z');
     usedIds.add(z.id);
+  }
+  // Triggers: same host-pruning + id-stabilising as zones.
+  track.triggers = (track.triggers || []).filter(tr => tr && tr.host &&
+    (tr.host.kind === 'mesh' ? zoneMeshIds.has(tr.host.meshId) : zonePathIds.has(tr.host.pathId)));
+  for (const tr of track.triggers) {
+    if (!tr.id || usedIds.has(tr.id)) tr.id = newId('tr');
+    usedIds.add(tr.id);
   }
 }
 ensureTrackIds();
@@ -1021,6 +1031,8 @@ function drawTop() {
   // Zones: solid fills floating on the track, drawn above the ribbons but below
   // the physics dots and control-point handles so editing is never obstructed.
   drawZones(ctx);
+  // Triggers: gate lines across the track, same layering.
+  drawTriggers(ctx);
 
   // Physics sample points: the N_DEFAULT uniform reference frames the editor
   // previews with, one small dot per frame per path (the game samples the same
@@ -1610,8 +1622,12 @@ function removeStaleSeams() {
   const zMeshIds = new Set((track.meshes || []).map(m => m.id).filter(Boolean));
   track.zones = (track.zones || []).filter(z => z && z.host &&
     (z.host.kind === 'mesh' ? zMeshIds.has(z.host.meshId) : zPathIds.has(z.host.pathId)));
+  const beforeT = (track.triggers || []).length;
+  track.triggers = (track.triggers || []).filter(tr => tr && tr.host &&
+    (tr.host.kind === 'mesh' ? zMeshIds.has(tr.host.meshId) : zPathIds.has(tr.host.pathId)));
   return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length)
-    + (beforeO - track.selfIntersectionOverrides.length) + (beforeZ - track.zones.length);
+    + (beforeO - track.selfIntersectionOverrides.length) + (beforeZ - track.zones.length)
+    + (beforeT - track.triggers.length);
 }
 function assertNoStaleSeams() {
   const removed = removeStaleSeams();
@@ -2214,6 +2230,52 @@ function renderProps() {
       });
     });
     document.getElementById('delZoneBtn').addEventListener('click', deleteSelectedZone);
+    return;
+  }
+
+  const trigger = (!crossSectionSel && !widthSel && !rollSel) ? selectedTrigger() : null;
+  if (trigger) {
+    const host = trigger.host || {};
+    const trow = (key, label, val, step, extra = '') =>
+      `<label>${label}<input type="number" data-tkey="${key}" value="${val}" step="${step}" ${extra}></label>`;
+    const hostRows = host.kind === 'mesh'
+      ? `<div style="margin:6px 0;color:#6f93a8;font-size:11px">On mesh region <b>${host.meshId}</b> (y follows the region)</div>` +
+        trow('x', 'X', host.x, 0.5) + trow('z', 'Z', host.z, 0.5)
+      : `<div style="margin:6px 0;color:#6f93a8;font-size:11px">On path <b>${host.pathId}</b></div>` +
+        trow('t', 'Position (%)', (host.t * 100).toFixed(1), 1, 'min="0" max="100"');
+    body.innerHTML =
+      `<div style="margin-bottom:6px;color:#ff5ea8">Trigger <b>${trigger.id}</b></div>` +
+      `<div style="margin-bottom:8px;color:#6f93a8;font-size:11px">Type: dummy (no effect yet) &middot; fires on pass-through &middot; debug view: <b>J</b> in the game</div>` +
+      trow('width', 'Width (across)', trigger.width, 1, 'min="0.5"') +
+      trow('height', 'Height (up)', trigger.height, 1, 'min="0.5"') +
+      trow('rotation', 'Rotation°', trigger.rotation || 0, 5) +
+      `<label>Direction<select id="triggerDir">` +
+      ['both', 'forward', 'backward'].map(d => `<option value="${d}"${trigger.direction === d ? ' selected' : ''}>${d}</option>`).join('') +
+      `</select></label>` +
+      hostRows +
+      `<div class="hint">A vertical gate across the track; fires once when the ship passes through, re-arming after it leaves. Arrow(s) show the allowed direction(s).</div>` +
+      `<button id="delTriggerBtn" style="margin-top:10px;width:100%;background:#5a1f3a;border:1px solid #c46;color:#ffd0e6;border-radius:5px;padding:6px;cursor:pointer">Delete trigger</button>`;
+    document.getElementById('triggerDir').addEventListener('change', (e) => {
+      pushUndo();
+      trigger.direction = ['both', 'forward', 'backward'].includes(e.target.value) ? e.target.value : 'both';
+      refresh();
+    });
+    body.querySelectorAll('input[data-tkey]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const v = parseFloat(inp.value);
+        if (!isFinite(v)) return;
+        armHistory();
+        const k = inp.dataset.tkey;
+        if (k === 'width') trigger.width = Math.max(0.5, v);
+        else if (k === 'height') trigger.height = Math.max(0.5, v);
+        else if (k === 'rotation') trigger.rotation = v;
+        else if (k === 't') trigger.host.t = Math.max(0, Math.min(1, v / 100));
+        else if (k === 'x') trigger.host.x = v;
+        else if (k === 'z') trigger.host.z = v;
+        draw();
+      });
+    });
+    document.getElementById('delTriggerBtn').addEventListener('click', deleteSelectedTrigger);
     return;
   }
 
@@ -2929,7 +2991,7 @@ let menuToken = 0;
 function showAddPointMenu(clientX, clientY, worldX, worldZ) {
   pendingAdd = { worldX, worldZ };
   addPointMenu.style.left = Math.min(clientX, window.innerWidth - 140) + 'px';
-  addPointMenu.style.top = Math.min(clientY, window.innerHeight - 210) + 'px';
+  addPointMenu.style.top = Math.min(clientY, window.innerHeight - 260) + 'px';
   addPointMenu.style.display = 'flex';
   // The menu opens immediately with the paste option hidden, then reveals it
   // if the clipboard turns out to hold something. Awaiting the check first
@@ -2999,6 +3061,11 @@ addPointMenu.addEventListener('click', (e) => {
   if (e.target.dataset.action === 'addZone') {
     hideAddPointMenu();
     addZoneAt(worldX, worldZ, e.target.dataset.effect);
+    return;
+  }
+  if (e.target.dataset.action === 'addTrigger') {
+    hideAddPointMenu();
+    addTriggerAt(worldX, worldZ);
     return;
   }
   const type = e.target.dataset.type;
@@ -3189,6 +3256,20 @@ topCanvas.addEventListener('mousedown', (e) => {
       return;
     }
   }
+  // Triggers: gate lines, picked alongside zones (before the big mesh regions).
+  if (!e.shiftKey) {
+    const trigHit = triggerAtTop(x, y);
+    if (trigHit) {
+      dragMutated = false;
+      selectTrigger(trigHit.id);
+      const w = screenToWorld(x, y);
+      triggerDragOffset = trigHit.host.kind === 'mesh' ? { dx: trigHit.host.x - w.x, dz: trigHit.host.z - w.z } : null;
+      dragging = 'triggerTop';
+      hideAddPointMenu();
+      refresh();
+      return;
+    }
+  }
   // Mesh regions are picked last, after every path handle: they are large
   // targets and must never steal a click from a control point drawn on top.
   {
@@ -3355,6 +3436,21 @@ window.addEventListener('mousemove', (e) => {
       }
       refresh();
     }
+  } else if (dragging === 'triggerTop') {
+    const tr = selectedTrigger();
+    if (tr) {
+      if (!dragMutated) { pushUndo(); dragMutated = true; }
+      const { x, y } = localPos(topCanvas, e);
+      const w = snapWorldXZ(screenToWorld(x, y));
+      if (tr.host.kind === 'mesh') {
+        tr.host.x = Math.round((w.x + (triggerDragOffset ? triggerDragOffset.dx : 0)) * 10) / 10;
+        tr.host.z = Math.round((w.z + (triggerDragOffset ? triggerDragOffset.dz : 0)) * 10) / 10;
+      } else {
+        const near = nearestPathPlacement(w.x, w.z);
+        if (near) { tr.host.pathId = near.pathId; tr.host.t = Math.round(near.t * 1000) / 1000; }
+      }
+      refresh();
+    }
   } else if (dragging === 'joinDrag') {
     const { x, y } = localPos(topCanvas, e);
     joinDragScreen = { x, y };
@@ -3378,7 +3474,7 @@ window.addEventListener('mouseup', () => {
     draw();
   }
   releaseTopViewFreeze();
-  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null; meshRotateStart = null; zoneDragOffset = null;
+  dragging = null; panLast = null; dragMutated = false; meshDragOffset = null; meshRotateStart = null; zoneDragOffset = null; triggerDragOffset = null;
 });
 
 // ---------- Elevation mouse ----------
@@ -3428,6 +3524,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (selectedMeshId) { deleteSelectedMesh(); return; }
     if (selectedZoneId) { deleteSelectedZone(); return; }
+    if (selectedTriggerId) { deleteSelectedTrigger(); return; }
     if (crossSectionSel) {
       const path = curPath();
       if (parts(path).crossSectionPoints.length <= 2) { alert('A path needs at least 2 cross-section points.'); return; }
@@ -3847,6 +3944,116 @@ function drawZones(ctx) {
     ctx.strokeStyle = ZONE_STROKE[zone.effect] || '#fff';
     ctx.lineWidth = zone.id === selectedZoneId ? 3 : 1.5;
     ctx.stroke();
+  }
+}
+
+// ---------- Triggers ----------
+// Vertical gate quads the ship passes through (see track-core.js). Drawn
+// top-down as a line across the track with a direction arrow; the height isn't
+// visible from above. Added from the right-click "Add trigger" entry.
+const TRIGGER_COLOR = '#ff5ea8';
+function triggersList() { if (!Array.isArray(track.triggers)) track.triggers = []; return track.triggers; }
+function findTrigger(id) { return triggersList().find(t => t.id === id) || null; }
+function selectedTrigger() { return selectedTriggerId ? findTrigger(selectedTriggerId) : null; }
+
+function selectTrigger(id) {
+  selectedTriggerId = id;
+  selectedMeshId = null; railSel = null; selectedZoneId = null;
+  rollSel = null; widthSel = null; crossSectionSel = null; segSel = null; physicsSel = null;
+}
+
+// The trigger's top-down frame (X/Z): center, the unit-ish `right` axis (its
+// world edgeRight projected to X/Z, foreshortened where banked) and the `fwd`
+// (normal) axis, plus the half-width. Path triggers use the shared
+// TrackCore.triggerPathFrame; mesh triggers are a flat gate whose normal is set
+// by rotation.
+function triggerFrameXZ(trigger) {
+  const host = trigger.host || {};
+  const hw = Math.max(0.25, (trigger.width || 0) / 2);
+  if (host.kind === 'mesh') {
+    const rot = (trigger.rotation || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
+    return { cx: host.x, cz: host.z, rx: cos, rz: -sin, fx: sin, fz: cos, hw };
+  }
+  const path = pathById(host.pathId);
+  if (!path) return null;
+  const pp = parts(path);
+  const fr = TrackCore.triggerPathFrame(pp.controlPoints, path.closed, pp.rollPoints, pp.widthPoints, pp.crossSectionPoints, trigger);
+  return { cx: fr.center.x, cz: fr.center.z, rx: fr.right.x, rz: fr.right.z, fx: fr.fwd.x, fz: fr.fwd.z, hw };
+}
+
+function addTriggerAt(wx, wz) {
+  const meshHit = meshAtWorld(wx, wz);
+  let host, width;
+  if (meshHit) {
+    host = { kind: 'mesh', meshId: meshHit.placement.id, x: Math.round(wx * 10) / 10, z: Math.round(wz * 10) / 10 };
+    width = TrackCore.DEFAULT_TRIGGER_WIDTH;
+  } else {
+    const near = nearestPathPlacement(wx, wz);
+    if (!near) { alert('Add a path or mesh region before placing a trigger.'); return; }
+    host = { kind: 'path', pathId: near.pathId, t: Math.round(near.t * 1000) / 1000 };
+    // Default to the road width at that t, so the gate spans the track.
+    const path = pathById(near.pathId), pp = parts(path);
+    width = Math.round(TrackCore.evalWidth(pp.widthPoints, path.closed, near.t));
+  }
+  pushUndo();
+  const trigger = { id: newId('tr'), type: 'dummy', host, width, height: TrackCore.DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' };
+  triggersList().push(trigger);
+  selectTrigger(trigger.id);
+  refresh();
+}
+
+function deleteSelectedTrigger() {
+  const tr = selectedTrigger();
+  if (!tr) return;
+  pushUndo();
+  track.triggers = triggersList().filter(t => t.id !== tr.id);
+  selectedTriggerId = null;
+  refresh();
+}
+
+function distToScreenSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+function triggerAtTop(sx, sy) {
+  const list = triggersList();
+  for (let k = list.length - 1; k >= 0; k--) {
+    const fr = triggerFrameXZ(list[k]);
+    if (!fr) continue;
+    const a = worldToScreen(fr.cx - fr.rx * fr.hw, fr.cz - fr.rz * fr.hw);
+    const b = worldToScreen(fr.cx + fr.rx * fr.hw, fr.cz + fr.rz * fr.hw);
+    if (distToScreenSegment(sx, sy, a.x, a.y, b.x, b.y) <= 8) return list[k];
+  }
+  return null;
+}
+function drawTriggers(ctx) {
+  for (const trigger of triggersList()) {
+    const fr = triggerFrameXZ(trigger);
+    if (!fr) continue;
+    const a = worldToScreen(fr.cx - fr.rx * fr.hw, fr.cz - fr.rz * fr.hw);
+    const b = worldToScreen(fr.cx + fr.rx * fr.hw, fr.cz + fr.rz * fr.hw);
+    const sel = trigger.id === selectedTriggerId;
+    ctx.setLineDash([]);
+    ctx.strokeStyle = TRIGGER_COLOR; ctx.lineWidth = sel ? 4 : 2.5;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    // Direction arrow(s) from the center along the normal (X/Z -> screen 1:1).
+    const cS = worldToScreen(fr.cx, fr.cz);
+    const aLen = 14;
+    const drawArrow = (sgn) => {
+      const dx = fr.fx * sgn, dz = fr.fz * sgn, len = Math.hypot(dx, dz) || 1;
+      const ex = cS.x + (dx / len) * aLen, ey = cS.y + (dz / len) * aLen;
+      ctx.beginPath(); ctx.moveTo(cS.x, cS.y); ctx.lineTo(ex, ey); ctx.stroke();
+      const ang = Math.atan2(ey - cS.y, ex - cS.x);
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - Math.cos(ang - 0.4) * 6, ey - Math.sin(ang - 0.4) * 6);
+      ctx.lineTo(ex - Math.cos(ang + 0.4) * 6, ey - Math.sin(ang + 0.4) * 6);
+      ctx.closePath(); ctx.fillStyle = TRIGGER_COLOR; ctx.fill();
+    };
+    if (trigger.direction === 'both' || trigger.direction === 'forward') drawArrow(1);
+    if (trigger.direction === 'both' || trigger.direction === 'backward') drawArrow(-1);
+    ctx.fillStyle = TRIGGER_COLOR;
+    for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, sel ? 4 : 3, 0, Math.PI * 2); ctx.fill(); }
   }
 }
 

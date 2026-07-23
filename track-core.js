@@ -36,7 +36,11 @@
  *            meshes: [ { id, asset, x, z, rotation, elevation } ],
  *            handling: { maxSpeed, accel, turnSpeed, weight },
  *            zones: [{ id, effect, width, length, host, ...effectParams }],
+ *            triggers: [{ id, type, host, width, height, rotation, direction }],
  *            start: { path, point, reverse } }
+ * `triggers` are vertical gate quads that fire when the ship passes THROUGH
+ * them (host on a path by t, or a mesh by x/z), banking-aligned, one/both
+ * direction, debug-rendered only. See normalizeTriggers/triggerPathFrame.
  * `zones` are flat rectangular areas floating on a surface that fire an effect
  * when driven over. Each is hosted on a path (host.kind 'path', by t + lateral
  * offset, oriented along the track) or a mesh region (host.kind 'mesh', by
@@ -122,7 +126,7 @@
   // track measured under schema 4, and the game's ship, speeds and gravity were
   // scaled to match. Nothing about how a track looks or drives changed -- only
   // the absolute units. Older files are converted once, on load.
-  const TRACK_SCHEMA_VERSION = 7;
+  const TRACK_SCHEMA_VERSION = 8;
   const LEGACY_UNIT_SCALE = 2;
   // The unit doubling happened at schema 5 and only there, so the migration is
   // keyed to that version and NOT to TRACK_SCHEMA_VERSION. Those were the same
@@ -1452,6 +1456,80 @@
     return g >= gLo - 1e-9 && g <= gHi + 1e-9;
   }
 
+  // --- triggers --------------------------------------------------------------
+  // Vertical quads ("gates") across the track or a mesh region that fire when
+  // the ship passes THROUGH them (schema 8), as opposed to zones, which are flat
+  // and fire when driven over. The quad's normal is the track tangent, so you
+  // drive through its face; it is banking-aligned (width along the banked
+  // edgeRight, height along the surface normal), so it leans and follows the
+  // camber. `rotation` yaws it about the surface normal off the square-across
+  // base. `direction` gates which way through counts ('both'|'forward'|
+  // 'backward', relative to the normal). Not rendered in game (debug-only, J).
+  // Only ever in schema >= 8 files, so untouched by the pre-schema-5 unit
+  // migration. The single 'dummy' type has no mechanical effect yet.
+  const DEFAULT_TRIGGER_WIDTH = 40;
+  const DEFAULT_TRIGGER_HEIGHT = 12;
+
+  function normalizeTrigger(raw, i, pathIds, meshIds) {
+    if (!raw || typeof raw !== 'object') return null;
+    const host = raw.host && typeof raw.host === 'object' ? raw.host : null;
+    if (!host) return null;
+    let normHost;
+    if (host.kind === 'mesh') {
+      if (typeof host.meshId !== 'string' || !meshIds.has(host.meshId)) return null;
+      normHost = { kind: 'mesh', meshId: host.meshId, x: finiteOr(host.x, 0), z: finiteOr(host.z, 0) };
+    } else {
+      if (typeof host.pathId !== 'string' || !pathIds.has(host.pathId)) return null;
+      normHost = { kind: 'path', pathId: host.pathId, t: clampRange(host.t, 0, 1, 0.5) };
+    }
+    const direction = (raw.direction === 'forward' || raw.direction === 'backward') ? raw.direction : 'both';
+    return {
+      id: (typeof raw.id === 'string' && raw.id) ? raw.id : 'tr' + (i + 1),
+      type: 'dummy',
+      host: normHost,
+      width: Math.max(0.5, finiteOr(raw.width, DEFAULT_TRIGGER_WIDTH, 0.5)),
+      height: Math.max(0.5, finiteOr(raw.height, DEFAULT_TRIGGER_HEIGHT, 0.5)),
+      rotation: finiteOr(raw.rotation, 0),
+      direction
+    };
+  }
+  function normalizeTriggers(rawTriggers, paths, meshes) {
+    const pathIds = new Set((paths || []).map(p => p && p.id).filter(Boolean));
+    const meshIds = new Set((meshes || []).map(m => m && m.id).filter(Boolean));
+    const out = [];
+    (Array.isArray(rawTriggers) ? rawTriggers : []).forEach((tr, i) => {
+      const n = normalizeTrigger(tr, i, pathIds, meshIds);
+      if (n) out.push(n);
+    });
+    return out;
+  }
+
+  // World-space frame of a PATH-hosted trigger's gate, baked once and shared by
+  // the game (detection + debug render) and the editor (top-down line): the
+  // driving-surface center at the trigger's t, plus unit `right` (along the
+  // banked edgeRight), `up` (surface normal) and `fwd` (the gate normal, = the
+  // track tangent), all yawed by `rotation` about `up`. The gate spans
+  // center +- width/2 along `right` and 0..height along `up`.
+  function triggerPathFrame(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints, trigger) {
+    closed = closed !== false;
+    const { evalTrack, CP_N } = makeEvaluator(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
+    const gMax = (closed ? CP_N : CP_N - 1) || 1;
+    const host = trigger.host || {};
+    const f = frameFromSample(evalTrack(clampRange(host.t, 0, 1, 0.5) * gMax));
+    // Center on the actual driving surface at the centerline (v=0.5). The
+    // cross-section slope is zero at the center, so the surface normal there is
+    // exactly f.normal -- no separate normal recomputation needed.
+    const lift = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, 0.5, f.width || 1);
+    const center = vaddScaled(f.pos, f.normal, lift);
+    // Yaw the base frame (fwd=tangent, right=edgeRight) about up=normal. In
+    // frameFromSample's orthonormal frame, up x fwd = right, so:
+    const rot = (trigger.rotation || 0) * DEG2RAD;
+    const c = Math.cos(rot), s = Math.sin(rot);
+    const fwd = vnorm(vadd(vscale(f.tangent, c), vscale(f.edgeRight, s)));
+    const right = vnorm(vsub(vscale(f.edgeRight, c), vscale(f.tangent, s)));
+    return { center, right, up: vnorm(f.normal), fwd };
+  }
+
   // Accepts either the current { paths: [{closed, points}, ...] } schema, the
   // pre-refactor three-array schema, or the legacy single-closed-loop
   // { controlPoints: [...] } schema (see normalizePath).
@@ -1515,6 +1593,7 @@
       meshes,
       textureAssets,
       zones: normalizeZones(data && data.zones, paths, meshes),
+      triggers: normalizeTriggers(data && data.triggers, paths, meshes),
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
@@ -1551,6 +1630,7 @@
       '  "start": { "path": ' + start.path + ', "point": ' + start.point + ', "reverse": ' + start.reverse + ' },\n' +
       '  "handling": ' + JSON.stringify(normalizeHandling(track.handling)) + ',\n' +
       '  "zones": ' + JSON.stringify(track.zones || []) + ',\n' +
+      '  "triggers": ' + JSON.stringify(track.triggers || []) + ',\n' +
       '  "disjointSeams": ' + JSON.stringify(track.disjointSeams || []) + ',\n' +
       '  "junctions": ' + JSON.stringify(track.junctions || []) + ',\n' +
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
@@ -1570,6 +1650,7 @@
     meshAssets: {},
     meshes: [],
     zones: [],
+    triggers: [],
     textureAssets: {},
     // The classic varied banked circuit, scaled uniformly x9 from its original
     // ~888 m into the current 7-10 km regime (~7995 m driven). Only lengths
@@ -1624,6 +1705,7 @@
     meshAssets: {},
     meshes: [],
     zones: [],
+    triggers: [],
     textureAssets: {},
     // A flat circle whose DRIVEN centerline length is 8,000 m. The rational
     // cubic B-spline does not pass through its control points, so the 12 points
@@ -1669,6 +1751,7 @@
     LONGITUDINAL_SAGITTA_TOLERANCE, LONGITUDINAL_MAX_DISTANCE, LONGITUDINAL_MAX_DEPTH,
     normalizeZones, zonePathStrip, zoneAlongContains,
     DEFAULT_ZONE_WIDTH, DEFAULT_ZONE_LENGTH, DEFAULT_BOOST_FACTOR, DEFAULT_BOOST_DURATION,
+    normalizeTriggers, triggerPathFrame, DEFAULT_TRIGGER_WIDTH, DEFAULT_TRIGGER_HEIGHT,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,
