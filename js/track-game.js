@@ -1,5 +1,6 @@
 
 import * as TrackMesh from './track-mesh.js';
+import { DEFAULT_SHIP_COUNT, gridSlot } from './ship-grid.js';
 
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
@@ -98,7 +99,7 @@ function extractTileTexture(asset, tile) {
       resolve(tex);
     };
     img.onerror = () => reject(new Error('could not load texture image'));
-    img.src = asset.dataUrl;
+    img.src = asset.path;
   });
 }
 
@@ -463,10 +464,6 @@ function buildTrack(track) {
   const branchPointIds = inferBranchPointIds(trackPaths, track.junctions || []);
   trackName = track.name || '';
   trackStart = track.start || { path: 0, point: 0, reverse: false };
-  // Apply this track's ship handling (falls back to defaults when the JSON has
-  // no `handling` section). Runs on every (re)build, so a live editor import
-  // updates the ship immediately.
-  applyHandling(track);
   connectedEndpointIds = new Set((track.disjointSeams || []).concat(track.junctions || []).map(j => j.pointId));
 
   // Drop any previously-built geometry before rebuilding.
@@ -503,7 +500,6 @@ function buildTrack(track) {
   // Zones ride on top of the finished paths + mesh regions.
   buildZones(track, bakedPaths);
   buildTriggers(track, bakedPaths);
-  resetRace(track);
   // Anything below every drivable surface by this much has clearly fallen off
   // and is never coming back, so it triggers an automatic respawn.
   let lowest = Infinity;
@@ -511,7 +507,7 @@ function buildTrack(track) {
   for (const region of meshRegions) lowest = Math.min(lowest, region.elevation);
   trackFloorY = (isFinite(lowest) ? lowest : 0) - RESPAWN_FALL_DEPTH;
 
-  resetShip();
+  buildRoster(track);
   const label = document.getElementById('trackName');
   if (label) label.textContent = trackName;
   computeMinimapBounds();
@@ -658,8 +654,8 @@ function buildZones(track, bakedPaths) {
       tri(c00, c10, c11); tri(c00, c11, c01);
       const mesh = zoneMeshFromPositions(pos, uv, zone.effect); scene.add(mesh);
       zones.push({
-        kind: 'mesh', effect: zone.effect, factor: zone.factor, duration: zone.duration,
-        hostRegion: region, x: host.x, z: host.z, rot, halfLen: hl, halfWidth: hw, wasInside: false, mesh
+        id: zone.id, kind: 'mesh', effect: zone.effect, factor: zone.factor, duration: zone.duration,
+        hostRegion: region, x: host.x, z: host.z, rot, halfLen: hl, halfWidth: hw, mesh
       });
     } else {
       const idx = bakedPaths.findIndex(bp => bp.id === host.pathId);
@@ -686,9 +682,9 @@ function buildZones(track, bakedPaths) {
       }
       const mesh = zoneMeshFromPositions(pos, uv, zone.effect); scene.add(mesh);
       zones.push({
-        kind: 'path', effect: zone.effect, factor: zone.factor, duration: zone.duration,
+        id: zone.id, kind: 'path', effect: zone.effect, factor: zone.factor, duration: zone.duration,
         hostPath: paths[idx], gLo: strip.gLo, gHi: strip.gHi, gMax: strip.gMax, closed: strip.closed,
-        lateral: host.lateral || 0, halfWidth: Math.max(0.25, (zone.width || 0) / 2), wasInside: false, mesh
+        lateral: host.lateral || 0, halfWidth: Math.max(0.25, (zone.width || 0) / 2), mesh
       });
     }
   }
@@ -710,18 +706,18 @@ function shipParamG(sample) {
 
 // Effective speed cap this frame: the raised boost cap while a boost is running,
 // otherwise the normal per-track max.
-function effectiveMaxSpeed() {
+function effectiveMaxSpeed(physics) {
   return physics.boostActive ? Math.max(physics.maxSpeed, physics.boostEffCap) : physics.maxSpeed;
 }
-function clearBoost() {
+function clearBoost(ship) {
+  const physics = ship.physics;
   physics.boostActive = false; physics.boostReleasing = false;
   physics.boostHold = 0; physics.boostReleaseT = 0; physics.boostCap = 0; physics.boostEffCap = 0;
-  for (const z of zones) z.wasInside = false;
+  ship.zoneInside.clear();
 }
-// Start a boost: kick speed up to the target cap and hold it, then release.
-// The global lock (boostActive) means a second pad is ignored until this ends,
-// which is the "fire once on enter" rule.
-function triggerBoost(zone) {
+// Start a boost for one ship. Each ship owns its lock and cap state.
+function triggerBoost(ship, zone) {
+  const physics = ship.physics;
   if (physics.boostActive) return;
   physics.boostActive = true;
   physics.boostReleasing = false;
@@ -729,9 +725,10 @@ function triggerBoost(zone) {
   physics.boostReleaseT = ZONE_RELEASE;
   physics.boostCap = (zone.factor || TrackCore.DEFAULT_BOOST_FACTOR) * physics.maxSpeed;
   physics.boostEffCap = physics.boostCap;
-  if (physics.speed > 0) physics.speed = Math.max(physics.speed, physics.boostCap);   // forward boost only
+  if (physics.speed > 0) physics.speed = Math.max(physics.speed, physics.boostCap);
 }
-function tickBoost(dt) {
+function tickBoost(ship, dt) {
+  const physics = ship.physics;
   if (!physics.boostActive) return;
   if (!physics.boostReleasing) {
     physics.boostHold -= dt;
@@ -744,11 +741,8 @@ function tickBoost(dt) {
     if (physics.boostReleaseT <= 0) { physics.boostActive = false; physics.boostEffCap = physics.maxSpeed; }
   }
 }
-// Fire a zone's effect the frame the ship first enters it (was-outside -> inside),
-// while grounded on that zone's host surface. A path zone needs the ship on its
-// path and within its along-window + lateral band; a mesh zone needs the ship on
-// its region and inside the rotated rectangle.
-function detectZoneTriggers(sample, meshRegion) {
+function detectZoneTriggers(ship, sample, meshRegion) {
+  const physics = ship.physics;
   for (const z of zones) {
     let inside = false;
     if (z.kind === 'path') {
@@ -760,11 +754,12 @@ function detectZoneTriggers(sample, meshRegion) {
     } else if (meshRegion === z.hostRegion) {
       const dx = physics.groundPos.x - z.x, dz = physics.groundPos.z - z.z;
       const cos = Math.cos(z.rot), sin = Math.sin(z.rot);
-      const lx = dx * cos + dz * sin, lz = -dx * sin + dz * cos;   // world -> zone local
+      const lx = dx * cos + dz * sin, lz = -dx * sin + dz * cos;
       inside = Math.abs(lx) <= z.halfLen && Math.abs(lz) <= z.halfWidth;
     }
-    if (inside && !z.wasInside && z.effect === 'velocityChange') triggerBoost(z);
-    z.wasInside = inside;
+    const wasInside = ship.zoneInside.get(z.id) || false;
+    if (inside && !wasInside && z.effect === 'velocityChange') triggerBoost(ship, z);
+    ship.zoneInside.set(z.id, inside);
   }
 }
 
@@ -774,31 +769,24 @@ function detectZoneTriggers(sample, meshRegion) {
 // with a direction arrow, coloured by armed state and flashing on fire. Dummy
 // triggers only log; checkpoints drive lap progress and recovery.
 let triggers = [];
+let ships = [];
+let playerShip = null;
 const CHECKPOINT_FLASH_MS = 500;
-const race = {
-  laps: 0, hit: new Set(), intermediateIds: [], finishId: null,
-  totalStartedAt: 0, lapStartedAt: 0, flashUntil: 0
-};
-const lastCheckpoint = {
-  valid: false, triggerId: null, pos: new THREE.Vector3(),
-  forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0)
-};
 
-function resetRace(track) {
+function createRaceState(track, now) {
   const checkpoints = (track.triggers || []).filter(tr => tr.type === 'checkpoint');
-  race.laps = 0;
-  race.hit.clear();
-  race.intermediateIds = checkpoints.filter(tr => tr.role !== 'finish').map(tr => tr.id);
-  race.finishId = (checkpoints.find(tr => tr.role === 'finish') || {}).id || null;
-  race.totalStartedAt = race.lapStartedAt = performance.now();
-  race.flashUntil = 0;
-  lastCheckpoint.valid = false;
-  rebuildCheckpointLights();
+  return {
+    laps: 0, hit: new Set(),
+    intermediateIds: checkpoints.filter(tr => tr.role !== 'finish').map(tr => tr.id),
+    finishId: (checkpoints.find(tr => tr.role === 'finish') || {}).id || null,
+    totalStartedAt: now, lapStartedAt: now, flashUntil: 0
+  };
 }
 
 function rebuildCheckpointLights() {
   const row = document.getElementById('checkpointLights');
-  if (!row) return;
+  if (!row || !playerShip) return;
+  const race = playerShip.race;
   row.replaceChildren();
   for (const id of race.intermediateIds.concat(race.finishId ? [race.finishId] : [])) {
     const light = document.createElement('span');
@@ -817,6 +805,8 @@ function formatRaceTime(ms) {
 }
 
 function updateRaceHud(now = performance.now()) {
+  if (!playerShip) return;
+  const race = playerShip.race;
   const flashing = now < race.flashUntil;
   const lapCount = document.getElementById('lapCount');
   const lapTime = document.getElementById('lapTime');
@@ -833,7 +823,6 @@ const TRIGGER_ARMED_COLOR = 0x33dd66;      // green: ready to fire
 const TRIGGER_DISARMED_COLOR = 0xdd3333;   // red: fired, waiting to re-arm
 const TRIGGER_FLASH_TIME = 0.4;            // seconds a fire flash lasts
 const TRIGGER_REARM_MARGIN = 3;            // units past the plane that counts as "clear"
-const _prevTriggerPos = new THREE.Vector3();
 const _trigColBase = new THREE.Color();
 const _trigColFlash = new THREE.Color(0xffffff);
 
@@ -909,29 +898,27 @@ function buildTriggers(track, bakedPaths) {
       right: new THREE.Vector3(frame.right.x, frame.right.y, frame.right.z),
       up: new THREE.Vector3(frame.up.x, frame.up.y, frame.up.z),
       fwd: new THREE.Vector3(frame.fwd.x, frame.fwd.y, frame.fwd.z),
-      halfWidth: Math.max(0.25, (trig.width || 0) / 2), height: Math.max(0.25, trig.height || 0),
-      armed: true, flash: 0
+      halfWidth: Math.max(0.25, (trig.width || 0) / 2), height: Math.max(0.25, trig.height || 0)
     };
     buildTriggerDebugMesh(rec, trig.direction);
     triggers.push(rec);
   }
-  _prevTriggerPos.copy(physics.groundPos);
 }
 
-function fireTrigger(rec, dir) {
-  rec.flash = TRIGGER_FLASH_TIME;
-  console.log(`[trigger] ${rec.id} fired (${dir})`);
+function fireTrigger(ship, rec, dir) {
+  const state = ship.triggerStates.get(rec.id);
+  if (ship === playerShip) state.flash = TRIGGER_FLASH_TIME;
+  console.log(`[trigger][${ship.id}] ${rec.id} fired (${dir})`);
   if (rec.type !== 'checkpoint') return;
 
-  // Every valid checkpoint crossing, including a premature Finish, becomes the
-  // recovery pose. The gate center is safer than the ship's lateral crossing
-  // point; a both-direction gate remembers which way it was crossed.
-  lastCheckpoint.valid = true;
-  lastCheckpoint.triggerId = rec.id;
-  lastCheckpoint.pos.copy(rec.center);
-  lastCheckpoint.up.copy(rec.up);
-  lastCheckpoint.forward.copy(rec.fwd).multiplyScalar(dir === 'backward' ? -1 : 1);
+  const checkpoint = ship.lastCheckpoint;
+  checkpoint.valid = true;
+  checkpoint.triggerId = rec.id;
+  checkpoint.pos.copy(rec.center);
+  checkpoint.up.copy(rec.up);
+  checkpoint.forward.copy(rec.fwd).multiplyScalar(dir === 'backward' ? -1 : 1);
 
+  const race = ship.race;
   if (rec.role !== 'finish') {
     race.hit.add(rec.id);
     return;
@@ -949,42 +936,42 @@ function fireTrigger(rec, dir) {
 // once on an allowed crossing while armed, then disarms until the ship is clear
 // of the gate (off its width x height footprint, or past the plane by the
 // re-arm margin). Runs airborne too -- a gate can be crossed in the air.
-function detectTriggers(p0, p1) {
+function detectTriggers(ship, p0, p1) {
   for (const tr of triggers) {
+    const state = ship.triggerStates.get(tr.id);
     const c = tr.center;
     const d0 = (p0.x - c.x) * tr.fwd.x + (p0.y - c.y) * tr.fwd.y + (p0.z - c.z) * tr.fwd.z;
     const d1 = (p1.x - c.x) * tr.fwd.x + (p1.y - c.y) * tr.fwd.y + (p1.z - c.z) * tr.fwd.z;
     const rr = (p1.x - c.x) * tr.right.x + (p1.y - c.y) * tr.right.y + (p1.z - c.z) * tr.right.z;
     const uu = (p1.x - c.x) * tr.up.x + (p1.y - c.y) * tr.up.y + (p1.z - c.z) * tr.up.z;
-    if (!tr.armed && (Math.abs(rr) > tr.halfWidth || uu < 0 || uu > tr.height || Math.abs(d1) > TRIGGER_REARM_MARGIN)) tr.armed = true;
-    if (tr.armed && d0 !== d1 && ((d0 <= 0 && d1 > 0) || (d0 >= 0 && d1 < 0))) {
+    if (!state.armed && (Math.abs(rr) > tr.halfWidth || uu < 0 || uu > tr.height || Math.abs(d1) > TRIGGER_REARM_MARGIN)) state.armed = true;
+    if (state.armed && d0 !== d1 && ((d0 <= 0 && d1 > 0) || (d0 >= 0 && d1 < 0))) {
       const t = d0 / (d0 - d1);
       const xr = (p0.x + (p1.x - p0.x) * t - c.x), yr = (p0.y + (p1.y - p0.y) * t - c.y), zr = (p0.z + (p1.z - p0.z) * t - c.z);
       const lr = xr * tr.right.x + yr * tr.right.y + zr * tr.right.z;
       const lu = xr * tr.up.x + yr * tr.up.y + zr * tr.up.z;
       if (Math.abs(lr) <= tr.halfWidth && lu >= 0 && lu <= tr.height) {
         const dir = d1 > d0 ? 'forward' : 'backward';
-        if (tr.direction === 'both' || tr.direction === dir) { fireTrigger(tr, dir); tr.armed = false; }
+        if (tr.direction === 'both' || tr.direction === dir) { fireTrigger(ship, tr, dir); state.armed = false; }
       }
     }
   }
 }
 
-// Re-arm all triggers and reseed the swept-segment anchor, so a teleport
-// (reset/respawn) never registers as a crossing.
-function resetTriggers(disarmedId = null) {
-  _prevTriggerPos.copy(physics.groundPos);
-  for (const tr of triggers) { tr.armed = tr.id !== disarmedId; tr.flash = 0; }
+function resetTriggers(ship, disarmedId = null) {
+  ship.prevTriggerPos.copy(ship.physics.groundPos);
+  for (const tr of triggers) ship.triggerStates.set(tr.id, { armed: tr.id !== disarmedId, flash: 0 });
 }
 
-// Decay fire flashes and, while the debug view is on, colour each gate by armed
-// state (brightening toward white during a flash).
+// The shared debug mesh reflects only the player's independent trigger state.
 function updateTriggerDebug(dt) {
+  if (!playerShip) return;
   for (const tr of triggers) {
-    if (tr.flash > 0) tr.flash = Math.max(0, tr.flash - dt);
+    const state = playerShip.triggerStates.get(tr.id) || { armed: true, flash: 0 };
+    if (state.flash > 0) state.flash = Math.max(0, state.flash - dt);
     if (!showTriggers || !tr.quadMat) continue;
-    _trigColBase.setHex(tr.armed ? TRIGGER_ARMED_COLOR : TRIGGER_DISARMED_COLOR);
-    const k = tr.flash / TRIGGER_FLASH_TIME;
+    _trigColBase.setHex(state.armed ? TRIGGER_ARMED_COLOR : TRIGGER_DISARMED_COLOR);
+    const k = state.flash / TRIGGER_FLASH_TIME;
     _trigColBase.lerp(_trigColFlash, k);
     tr.quadMat.color.copy(_trigColBase);
     tr.arrowMat.color.copy(_trigColBase);
@@ -1080,30 +1067,30 @@ function surfaceOwnerAt(x, z, shipY, corridorSample) {
 // complete object). brakeDecel/friction/maxReverse/grip are deliberately NOT
 // touched -- they stay the fixed engine constants set on the physics object.
 const HANDLING_BASE_WEIGHT = 1000;   // kg; the weight the collision reaction is tuned around
-function applyHandling(track) {
+function applyHandling(track, physics) {
   const h = TrackCore.normalizeHandling(track && track.handling);
   physics.maxSpeed = h.maxSpeed;
   physics.accel = h.accel;
-  physics.turnRate = h.turnSpeed * Math.PI / 180;   // authored in deg/s, integrated in rad/s
+  physics.turnRate = h.turnSpeed * Math.PI / 180;
   physics.weight = h.weight;
 }
 // Weight-scaled wall bounciness. m = weight / neutral: a heavy ship (m > 1)
 // bounces less, a light one (m < 1) more, capped so it never approaches a
 // perfect-elastic ping. At the neutral weight this is exactly the base 0.4.
-function weightRestitution() {
+function weightRestitution(physics) {
   const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
   return Math.max(0, Math.min(0.9, physics.wallRestitution / m));
 }
 // Fraction of speed kept after a wall impact -- heavier ships shrug it off and
 // keep more, lighter ones scrub more. At the neutral weight this is the old 0.98.
-function weightSpeedRetain() {
+function weightSpeedRetain(physics) {
   const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
   return Math.max(0.85, Math.min(0.999, 1 - 0.02 / m));
 }
 // Hover-kick/shake proportional to impact MOMENTUM (weight x normal impact
 // speed), so a heavier or faster hit jolts the ship more. Reuses the landing
 // spring so it eases out the same way a hard landing does.
-function addImpactJolt(normalImpactSpeed) {
+function addImpactJolt(physics, normalImpactSpeed) {
   const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
   const momentum = m * Math.max(0, normalImpactSpeed);
   physics.landingBounce += Math.min(2.0, momentum * 0.012);
@@ -1113,8 +1100,8 @@ function addImpactJolt(normalImpactSpeed) {
 // Swept rail collision lives in track-mesh.js (pure geometry, shared and
 // testable); this just binds it to the ship's collision margin and the ship's
 // current weight-derived bounciness.
-const slideAlongRails = (region, from, to, velocity) =>
-  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN, weightRestitution());
+const slideAlongRails = (physics, region, from, to, velocity) =>
+  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN, weightRestitution(physics));
 
 // Sample a smooth, interpolated track frame at a horizontal position. Searches
 // ALL path segments for the nearest projected point, then interpolates within
@@ -1267,97 +1254,154 @@ function sampleTrack(x, y, z) {
   return _sample;
 }
 
-// ---------- Player vehicle ----------
-const shipGroup = new THREE.Group();
+// ---------- Ships / starting grid ----------
 const bodyGeo = new THREE.BoxGeometry(2.4, 0.8, 4.0);
-const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd85f14, metalness: 0.35, roughness: 0.4, emissive: 0x331400, emissiveIntensity: 0.15, flatShading: true });
-const body = new THREE.Mesh(bodyGeo, bodyMat);
-body.position.y = 0.3;
-shipGroup.add(body);
-
-// nose accent so orientation is obvious
 const noseGeo = new THREE.ConeGeometry(0.7, 1.6, 4);
-const noseMat = new THREE.MeshStandardMaterial({ color: 0x00a8cc, emissive: 0x004866, emissiveIntensity: 0.25, flatShading: true });
-const nose = new THREE.Mesh(noseGeo, noseMat);
-nose.rotation.x = Math.PI / 2;
-nose.rotation.y = Math.PI / 4;
-nose.position.set(0, 0.3, 1.25);
-shipGroup.add(nose);
-
-scene.add(shipGroup);
-
-// Place the ship at control point 0's region, facing along the track, and clear
-// its motion. Called by buildTrack() on load and on every JSON import.
-
-/* Put the ship at the last checkpoint gate center, or at the authored start if
- * no checkpoint has been crossed yet. Lap progress and wall-clock timers stay. */
-function respawn() {
-  if (!lastCheckpoint.valid) { resetShip(); return; }
-  physics.groundPos.copy(lastCheckpoint.pos);
-  physics.heading = Math.atan2(lastCheckpoint.forward.x, lastCheckpoint.forward.z);
-  physics.speed = 0;
-  physics.airborne = false;
-  physics.verticalVel = 0;
-  physics.landingBounce = 0;
-  physics.landingBounceVel = 0;
-  physics.visualGroundPos.copy(lastCheckpoint.pos);
-  physics.forward.copy(lastCheckpoint.forward);
-  physics.moveDir.copy(physics.forward);
-  physics.up.copy(lastCheckpoint.up);
-  physics.right.crossVectors(physics.up, physics.forward).normalize();
-  physics.visualUp.copy(physics.up);
-  clearBoost();
-  // Keep this gate disarmed until the ship clears it, otherwise moving away
-  // from a respawn exactly on its plane would count as another crossing.
-  resetTriggers(lastCheckpoint.triggerId);
+const SHIP_HALF_WIDTH = 1.2;
+const SHIP_COLORS = [0xd85f14, 0x3f8cff, 0x45c96b, 0xe5c642, 0xa66cff, 0xff5ca8, 0x38ced1, 0xf28b30];
+function shipColor(index) {
+  if (index < SHIP_COLORS.length) return SHIP_COLORS[index];
+  return new THREE.Color().setHSL((index * 0.61803398875) % 1, 0.68, 0.55).getHex();
 }
 
-function resetShip() {
-  // Start at the chosen control point (the spline doesn't pass exactly through
-  // its control points, so find the closest baked sample rather than assuming
-  // it's sample `point`), on the chosen path, facing its natural tangent
-  // direction or the reverse of it.
+function makeShipGroup(color, player) {
+  const group = new THREE.Group();
+  const bodyColor = new THREE.Color(color);
+  const body = new THREE.Mesh(bodyGeo, new THREE.MeshStandardMaterial({
+    color: bodyColor, metalness: 0.35, roughness: 0.4,
+    emissive: bodyColor.clone().multiplyScalar(0.18), emissiveIntensity: 0.15, flatShading: true
+  }));
+  body.position.y = 0.3; group.add(body);
+  const noseColor = player ? new THREE.Color(0x00a8cc) : bodyColor.clone().offsetHSL(0, -0.05, 0.18);
+  const nose = new THREE.Mesh(noseGeo, new THREE.MeshStandardMaterial({
+    color: noseColor, emissive: noseColor.clone().multiplyScalar(0.28), emissiveIntensity: 0.25, flatShading: true
+  }));
+  nose.rotation.x = Math.PI / 2; nose.rotation.y = Math.PI / 4;
+  nose.position.set(0, 0.3, 1.25); group.add(nose);
+  scene.add(group);
+  return group;
+}
+
+function disposeShips() {
+  for (const ship of ships) {
+    scene.remove(ship.group);
+    ship.group.traverse(o => { if (o.material) o.material.dispose(); });
+  }
+  ships = []; playerShip = null;
+}
+
+function interpolatedGridFrame(path, startIndex, distanceBehind) {
+  const cl = path.centerline, count = cl.length;
+  const step = trackStart.reverse ? 1 : -1;
+  let at = startIndex, remaining = distanceBehind, next = at, frac = 0;
+  for (let n = 0; n < count && remaining > 1e-9; n++) {
+    const candidate = path.closed ? (at + step + count) % count : at + step;
+    if (candidate < 0 || candidate >= count) break;
+    const len = cl[at].pos.distanceTo(cl[candidate].pos);
+    if (remaining <= len && len > 0) { next = candidate; frac = remaining / len; remaining = 0; break; }
+    remaining -= len; at = candidate; next = at; frac = 0;
+  }
+  const a = cl[at], b = cl[next];
+  const lerpVec = key => a[key].clone().lerp(b[key], frac).normalize();
+  return {
+    pos: a.pos.clone().lerp(b.pos, frac), tangent: lerpVec('tangent'), edgeRight: lerpVec('edgeRight'), normal: lerpVec('normal'),
+    sLeft: a.sLeft + (b.sLeft - a.sLeft) * frac, sRight: a.sRight + (b.sRight - a.sRight) * frac,
+    crossSectionCurvature: a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * frac,
+    crossSectionTightness: a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * frac
+  };
+}
+
+function startingGridPoses(count) {
   const pathIndex = THREE.MathUtils.clamp(trackStart.path, 0, paths.length - 1);
-  const startPath = paths[pathIndex];
-  const pointIndex = THREE.MathUtils.clamp(trackStart.point, 0, startPath.anchors.length - 1);
-  const anchor = startPath.anchors[pointIndex];
-  const cl = startPath.centerline;
+  const path = paths[pathIndex];
+  const pointIndex = THREE.MathUtils.clamp(trackStart.point, 0, path.anchors.length - 1);
+  const anchor = path.anchors[pointIndex];
   let startIndex = 0, bestD = Infinity;
-  for (let i = 0; i < cl.length; i++) {
-    const d = cl[i].pos.distanceToSquared(anchor);
+  for (let i = 0; i < path.centerline.length; i++) {
+    const d = path.centerline[i].pos.distanceToSquared(anchor);
     if (d < bestD) { bestD = d; startIndex = i; }
   }
-  const s = cl[startIndex];
-  // Centre of the track, following the actual cross-section geometry if enabled.
-  const startSurface = curvedSurfaceFrame(s, 0);
-  physics.groundPos.set(s.pos.x, startSurface.pos.y, s.pos.z);
-  shipGroup.position.copy(startSurface.pos).addScaledVector(startSurface.normal, 1);
-  let heading = Math.atan2(s.tangent.x, s.tangent.z);
-  if (trackStart.reverse) heading += Math.PI;
-  physics.heading = heading;
-  physics.speed = 0;
-  physics.visualBank = 0;
-  physics.visualPitch = 0;
-  physics.airborne = false;
-  physics.verticalVel = 0;
-  physics.landingBounce = 0;
-  physics.landingBounceVel = 0;
-  physics.up.copy(startSurface.normal);
-  physics.visualGroundPos.copy(startSurface.pos);
-  physics.visualUp.copy(physics.up);
-  // Seed the tangent-frame vectors: nose along the start tangent flattened onto
-  // the start surface, travel direction matching. tangentize keeps them valid
-  // even if the start sample is banked.
-  physics.forward.set(Math.sin(heading), 0, Math.cos(heading));
-  tangentize(physics.forward, startSurface.normal, physics.forward);
-  physics.moveDir.copy(physics.forward);
-  physics.right.crossVectors(startSurface.normal, physics.forward).normalize();
-  clearBoost();
-  resetTriggers();
+  return Array.from({ length: count }, (_, i) => {
+    const rough = gridSlot(i);
+    const frame = interpolatedGridFrame(path, startIndex, rough.behind);
+    const lo = frame.sLeft + TrackCore.COLLISION_WALL_MARGIN + SHIP_HALF_WIDTH;
+    const hi = frame.sRight - TrackCore.COLLISION_WALL_MARGIN - SHIP_HALF_WIDTH;
+    const slot = gridSlot(i, { lateralLimit: Math.max(0, Math.min(-lo, hi)) });
+    let surface = curvedSurfaceFrame(frame, slot.lateral);
+    let canonical = frame;
+    // Settle the analytically-placed slot onto the exact same sampled surface
+    // the parked physics branch uses, so an idle ship does not creep while the
+    // two representations converge over its first frames.
+    for (let n = 0; n < 3; n++) {
+      canonical = sampleTrack(surface.pos.x, surface.pos.y, surface.pos.z);
+      const proj = projectToSurface(canonical, surface.pos.x, surface.pos.y, surface.pos.z);
+      surface = curvedSurfaceFrame(canonical, THREE.MathUtils.clamp(proj.s, proj.loS, proj.hiS));
+    }
+    const forward = canonical.tangent.clone().multiplyScalar(trackStart.reverse ? -1 : 1).normalize();
+    tangentize(forward, surface.normal, forward);
+    return { pos: surface.pos, up: surface.normal, forward, slot };
+  });
+}
+
+function createShip(index, track, now) {
+  const isPlayer = index === 0;
+  const color = shipColor(index);
+  return {
+    id: isPlayer ? 'player' : `ai-${index}`,
+    controllerKind: isPlayer ? 'player' : 'ai',
+    controller: isPlayer ? playerController : idleController,
+    color,
+    group: makeShipGroup(color, isPlayer),
+    physics: createPhysicsState(),
+    zoneInside: new Map(), triggerStates: new Map(), prevTriggerPos: new THREE.Vector3(),
+    race: createRaceState(track, now),
+    lastCheckpoint: { valid: false, triggerId: null, pos: new THREE.Vector3(), forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0) },
+    startPose: null
+  };
+}
+
+function placeShipAtPose(ship, pose, disarmedId = null) {
+  const physics = ship.physics;
+  physics.groundPos.copy(pose.pos);
+  physics.visualGroundPos.copy(pose.pos);
+  physics.forward.copy(pose.forward);
+  physics.moveDir.copy(pose.forward);
+  physics.up.copy(pose.up); physics.visualUp.copy(pose.up);
+  physics.right.crossVectors(pose.up, pose.forward).normalize();
+  physics.heading = Math.atan2(pose.forward.x, pose.forward.z);
+  physics.speed = 0; physics.airborne = false; physics.verticalVel = 0;
+  physics.visualBank = 0; physics.visualPitch = 0;
+  physics.landingBounce = 0; physics.landingBounceVel = 0;
+  ship.group.position.copy(pose.pos).addScaledVector(pose.up, 1);
+  clearBoost(ship);
+  resetTriggers(ship, disarmedId);
+}
+
+function respawn(ship = playerShip) {
+  if (typeof ship === 'string') ship = ships.find(s => s.id === ship);
+  if (!ship) return;
+  const checkpoint = ship.lastCheckpoint;
+  const pose = checkpoint.valid ? checkpoint : ship.startPose;
+  placeShipAtPose(ship, pose, checkpoint.valid ? checkpoint.triggerId : null);
+}
+
+function buildRoster(track, count = DEFAULT_SHIP_COUNT) {
+  disposeShips();
+  const now = performance.now();
+  ships = Array.from({ length: count }, (_, i) => createShip(i, track, now));
+  playerShip = ships[0] || null;
+  const poses = startingGridPoses(ships.length);
+  ships.forEach((ship, i) => {
+    applyHandling(track, ship.physics);
+    ship.startPose = poses[i];
+    placeShipAtPose(ship, ship.startPose);
+  });
+  rebuildCheckpointLights();
 }
 
 // ---------- Input ----------
 const keys = {};
+let playerRespawnRequested = false;
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   // `e.code` is a PHYSICAL key position (right for WASD, the deliberate
@@ -1383,7 +1427,7 @@ window.addEventListener('keydown', (e) => {
     // which also exposes the imported mesh's triangulation.
     for (const region of meshRegions) if (region.surface) region.surface.material.wireframe = showWireframe;
   }
-  if (e.code === 'KeyR' && !e.repeat) respawn();
+  if (e.code === 'KeyR' && !e.repeat) playerRespawnRequested = true;
   // J: toggle the trigger debug view (off by default; triggers are otherwise
   // never rendered).
   if (e.code === 'KeyJ' && !e.repeat) {
@@ -1395,8 +1439,24 @@ window.addEventListener('keyup', (e) => { keys[e.code] = false; keys[e.key] = fa
 
 function isDown(...codes) { return codes.some(c => keys[c]); }
 
+const playerController = {
+  kind: 'player',
+  intent() {
+    const out = {
+      throttle: isDown('KeyW', 'ArrowUp') ? 1 : 0,
+      brake: isDown('KeyS', 'ArrowDown') ? 1 : 0,
+      steer: (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0),
+      respawn: playerRespawnRequested
+    };
+    playerRespawnRequested = false;
+    return out;
+  }
+};
+const IDLE_INTENT = Object.freeze({ throttle: 0, brake: 0, steer: 0, respawn: false });
+const idleController = { kind: 'ai', intent: () => IDLE_INTENT };
+
 // ---------- Wipeout-style hover physics ----------
-const physics = {
+function createPhysicsState() { return {
   // Facing/motion are TANGENT-PLANE unit vectors, not world-yaw scalars, so the
   // ship can be oriented and move on an arbitrarily-rolled (even vertical or
   // inverted) surface. `forward`/`right`/`up` form the ship's basis; `moveDir`
@@ -1453,15 +1513,15 @@ const physics = {
   // Boost-zone state. While active, the speed clamp uses boostEffCap (>= maxSpeed)
   // instead of maxSpeed: it holds at boostCap for boostHold seconds, then eases
   // back to maxSpeed over BOOST_RELEASE (the "smooth release"). boostActive stays
-  // true through the release, which is the global lock that makes a boost "fire
-  // once on enter and ignore further triggers until it ends."
+  // true through the release, which is this ship's lock that makes a boost
+  // fire once on enter and ignore further pads until it ends.
   boostActive: false,
   boostReleasing: false,
   boostHold: 0,
   boostReleaseT: 0,
   boostCap: 0,
   boostEffCap: 0
-};
+}; }
 // Scratch vectors reused each frame so the physics loop allocates nothing.
 const _vel = new THREE.Vector3();
 const _newPos = new THREE.Vector3();
@@ -1499,7 +1559,8 @@ function signedAngleAbout(a, b, axis) {
 // seeds `verticalVel` (so launching off a banked ramp or wall arcs correctly --
 // the old code always zeroed this, which was only right for a level launch),
 // and its horizontal part becomes the constant-in-air travel direction/speed.
-function beginAirborne(vel3D) {
+function beginAirborne(ship, vel3D) {
+  const physics = ship.physics;
   physics.airborne = true;
   physics.verticalVel = vel3D.y;
   const horiz = Math.hypot(vel3D.x, vel3D.z);
@@ -1512,7 +1573,8 @@ function beginAirborne(vel3D) {
 // plane so they immediately follow its bank. Horizontal speed is preserved,
 // matching the old landing behaviour; on a flat surface (normal +Y) this is a
 // no-op beyond clearing the airborne flags.
-function landOnSurface(normal) {
+function landOnSurface(ship, normal) {
+  const physics = ship.physics;
   physics.airborne = false;
   physics.verticalVel = 0;
   tangentize(physics.moveDir, normal, physics.forward);
@@ -1532,8 +1594,9 @@ const MAX_PHYSICS_STEP = 1 / 120;
 // normal + render position the once-per-frame visual pass should use, and
 // whether a respawn fired (which aborts the rest of the frame, as the original
 // early-return did). Everything here is integration/collision; the visual work
-// (hover, orientation, camera basis, HUD) stays in updatePhysics below.
-function stepPhysics(dt, throttle, brake, steer) {
+// (hover, orientation, camera basis, HUD) stays in updateShip below.
+function stepPhysics(ship, dt, throttle, brake, steer) {
+  const physics = ship.physics;
   const hasTranslation = !!(throttle || brake || Math.abs(physics.speed) > 0.001);
 
   // Longitudinal speed control
@@ -1547,7 +1610,7 @@ function stepPhysics(dt, throttle, brake, steer) {
     if (physics.speed > 0) physics.speed = Math.max(0, physics.speed - decay);
     else physics.speed = Math.min(0, physics.speed + decay);
   }
-  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, effectiveMaxSpeed());
+  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, effectiveMaxSpeed(physics));
 
   // Clamped to [0,1] on purpose: during a boost speed exceeds maxSpeed, and the
   // steering/grip/lean terms below must not be driven past their tuned range
@@ -1612,11 +1675,11 @@ function stepPhysics(dt, throttle, brake, steer) {
       if (!TrackMesh.withinBounds(region.compiled, px, pz, TrackCore.COLLISION_WALL_MARGIN)) continue;
       const velocity = { x: ax, z: az };
       const before = Math.hypot(ax, az);
-      const moved = slideAlongRails(region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
+      const moved = slideAlongRails(physics, region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
       if (!moved.hit) continue;
       px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
-      physics.speed = Math.hypot(ax, az) * weightSpeedRetain();
-      addImpactJolt(before - Math.hypot(ax, az));
+      physics.speed = Math.hypot(ax, az) * weightSpeedRetain(physics);
+      addImpactJolt(physics, before - Math.hypot(ax, az));
       if (physics.speed > 1e-6) physics.moveDir.set(ax, 0, az).normalize();   // horizontal air travel dir
     }
 
@@ -1626,7 +1689,7 @@ function stepPhysics(dt, throttle, brake, steer) {
     const landing = meshRegionAt(px, pz, physics.groundPos.y);
     if (landing && physics.groundPos.y <= landing.region.elevation) {
       const impactSpeed = Math.max(0, -physics.verticalVel);
-      landOnSurface(UP);
+      landOnSurface(ship, UP);
       physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
       physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
       physics.groundPos.set(px, landing.region.elevation, pz);
@@ -1639,7 +1702,7 @@ function stepPhysics(dt, throttle, brake, steer) {
       const surface = curvedSurfaceFrame(c, s);
       if (corridorContains(c, px, physics.groundPos.y, pz, proj) && physics.groundPos.y <= surface.pos.y) {
         const impactSpeed = Math.max(0, -physics.verticalVel);
-        landOnSurface(surface.normal);
+        landOnSurface(ship, surface.normal);
         physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
         physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
         physics.groundPos.copy(surface.pos);
@@ -1653,12 +1716,12 @@ function stepPhysics(dt, throttle, brake, steer) {
     // meaning on an arbitrary polygon.
     const from = { x: physics.groundPos.x, z: physics.groundPos.z };
     const velocity = { x: vx, z: vz };
-    const moved = slideAlongRails(meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
+    const moved = slideAlongRails(physics, meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
     if (moved.hit) {
       const before = Math.hypot(vx, vz), after = Math.hypot(velocity.x, velocity.z);
-      physics.speed = after * weightSpeedRetain();
+      physics.speed = after * weightSpeedRetain(physics);
       if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();   // region is flat: horizontal
-      addImpactJolt(before - after);
+      addImpactJolt(physics, before - after);
     }
 
     const stillOn = TrackMesh.containsWorldPoint(meshRegion.compiled, moved.x, moved.z)
@@ -1685,7 +1748,7 @@ function stepPhysics(dt, throttle, brake, steer) {
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
       } else {
-        beginAirborne(_launchVel.copy(physics.moveDir).multiplyScalar(physics.speed));
+        beginAirborne(ship, _launchVel.copy(physics.moveDir).multiplyScalar(physics.speed));
         physics.groundPos.set(moved.x, meshRegion.elevation, moved.z);
       }
     }
@@ -1712,7 +1775,7 @@ function stepPhysics(dt, throttle, brake, steer) {
       // Leaving an open curve: go ballistic from the current 3D velocity (its
       // vertical part matters if the end was banked or on a slope) until the
       // ship's X/Z is back over a curve.
-      beginAirborne(vel);
+      beginAirborne(ship, vel);
       physics.groundPos.copy(newPos);
     } else {
       const { er, s, loS, hiS } = projection;
@@ -1733,9 +1796,9 @@ function stepPhysics(dt, throttle, brake, steer) {
         if (into > 0) {
           // Weight-scaled bounce, plus a momentum-scaled jolt on a real impact.
           vel.addScaledVector(_wallN, -into * (1 + weightRestitution()));
-          addImpactJolt(into);
+          addImpactJolt(physics, into);
         }
-        physics.speed = vel.length() * weightSpeedRetain();
+        physics.speed = vel.length() * weightSpeedRetain(physics);
         if (physics.speed > 1e-6) physics.moveDir.copy(vel).normalize();
       }
 
@@ -1757,17 +1820,22 @@ function stepPhysics(dt, throttle, brake, steer) {
     surfaceNormal = UP;
   } else if (!physics.airborne && !hasTranslation) {
     c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-    const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-    const finalS = THREE.MathUtils.clamp(s, loS, hiS);
-    const surface = curvedSurfaceFrame(c, finalS);
-    physics.groundPos.copy(surface.pos);
-    // No re-tangentize here: parked, the surface normal isn't changing, and the
-    // top-of-frame steering/grip already flattened forward/moveDir onto it.
-    // Re-projecting again (against a curvedSurfaceFrame normal that can differ
-    // slightly from the sample normal) is what let the nose creep toward the
-    // track tangent while stationary.
-    surfaceRenderPos = surface.pos;
-    surfaceNormal = surface.normal;
+    if (ship.controller === idleController) {
+      // The placeholder AI explicitly holds its authored grid pose. It still
+      // runs physics and interaction detection; once an external effect gives
+      // it speed, the normal translating branches take over.
+      surfaceRenderPos = physics.groundPos;
+      surfaceNormal = physics.up;
+    } else {
+      const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
+      const finalS = THREE.MathUtils.clamp(s, loS, hiS);
+      const surface = curvedSurfaceFrame(c, finalS);
+      physics.groundPos.copy(surface.pos);
+      // No re-tangentize here: parked, the surface normal isn't changing, and the
+      // top-of-frame steering/grip already flattened forward/moveDir onto it.
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
+    }
   }
 
   // Sit on the surface, hovering a little along the surface normal. groundPos
@@ -1778,15 +1846,15 @@ function stepPhysics(dt, throttle, brake, steer) {
   // normal movement stays responsive while seam pops are eased out.
   // Zones: the boost timer advances every sub-step (it keeps running through the
   // air), but a trigger only fires while grounded on the zone's host surface.
-  tickBoost(dt);
-  if (!physics.airborne) detectZoneTriggers(c, meshRegion);
+  tickBoost(ship, dt);
+  if (!physics.airborne) detectZoneTriggers(ship, c, meshRegion);
 
   // Triggers: swept crossing over this sub-step's motion (grounded OR airborne).
-  detectTriggers(_prevTriggerPos, physics.groundPos);
-  _prevTriggerPos.copy(physics.groundPos);
+  detectTriggers(ship, ship.prevTriggerPos, physics.groundPos);
+  ship.prevTriggerPos.copy(physics.groundPos);
 
   if (physics.airborne && physics.groundPos.y < trackFloorY) {
-    respawn();
+    respawn(ship);
     return { respawned: true };
   }
   return { surfaceNormal, surfaceRenderPos, respawned: false };
@@ -1797,16 +1865,20 @@ function stepPhysics(dt, throttle, brake, steer) {
 // integrated state. Sub-steps are equal and sum EXACTLY to dt, so there is no
 // accumulator remainder to interpolate and normal movement stays frame-exact;
 // a typical ~60fps frame is 2 steps, a long stall a few more.
-function updatePhysics(dt) {
-  const throttle = isDown('KeyW', 'ArrowUp') ? 1 : 0;
-  const brake = isDown('KeyS', 'ArrowDown') ? 1 : 0;
-  const steer = (isDown('KeyD', 'ArrowRight') ? -1 : 0) + (isDown('KeyA', 'ArrowLeft') ? 1 : 0);
+function updateShip(ship, dt, intent) {
+  const physics = ship.physics, shipGroup = ship.group;
+  const { throttle, brake, steer } = intent;
+  if (intent.respawn) { respawn(ship); return; }
 
-  const subSteps = Math.max(1, Math.ceil(dt / MAX_PHYSICS_STEP));
+  // A parked placeholder AI has no swept movement to tunnel or skip, so one
+  // full physics/detection step per render frame is sufficient. Moving ships
+  // retain the exact original fixed-size sub-stepping.
+  const stationaryIdle = ship.controller === idleController && !physics.airborne && Math.abs(physics.speed) <= 0.001 && !throttle && !brake;
+  const subSteps = stationaryIdle ? 1 : Math.max(1, Math.ceil(dt / MAX_PHYSICS_STEP));
   const sdt = dt / subSteps;
   let surfaceNormal = physics.up, surfaceRenderPos = physics.groundPos;
   for (let i = 0; i < subSteps; i++) {
-    const r = stepPhysics(sdt, throttle, brake, steer);
+    const r = stepPhysics(ship, sdt, throttle, brake, steer);
     if (r.respawned) return;   // ship already reset; skip this frame's render, matching the old early return
     surfaceNormal = r.surfaceNormal;
     surfaceRenderPos = r.surfaceRenderPos;
@@ -1836,7 +1908,10 @@ function updatePhysics(dt) {
   }
 
   physics.bobTime += dt;
-  const hover = 1 + Math.sin(physics.bobTime * 6) * 0.06 + physics.landingBounce;
+  // The idle controller promises a genuinely stationary placeholder: suppress
+  // even the cosmetic hover oscillation, which reads as a small forward creep
+  // in the perspective camera despite groundPos being bit-for-bit unchanged.
+  const hover = stationaryIdle ? 1 : 1 + Math.sin(physics.bobTime * 6) * 0.06 + physics.landingBounce;
   shipGroup.position.set(
     physics.visualGroundPos.x + physics.visualUp.x * hover,
     physics.visualGroundPos.y + physics.visualUp.y * hover,
@@ -1878,9 +1953,11 @@ function updatePhysics(dt) {
 
   // HUD. 1 world unit = 1 metre (see CONTEXT.md), so speed is m/s and the
   // km/h readout is a straight m/s * 3.6 -- 140 m/s reads 504 km/h.
-  const kmh = Math.round(Math.abs(physics.speed) * 3.6);
-  document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>' +
-    (physics.boostActive ? ' <span style="color:#ffb020">▲ BOOST</span>' : '');
+  if (ship === playerShip) {
+    const kmh = Math.round(Math.abs(physics.speed) * 3.6);
+    document.getElementById('speed').innerHTML = kmh + ' <span>km/h</span>' +
+      (physics.boostActive ? ' <span style="color:#ffb020">▲ BOOST</span>' : '');
+  }
 }
 
 // ---------- Chase camera (rigidly fixed behind and above the ship) ----------
@@ -1922,6 +1999,8 @@ const LOOK_AT_UP_MAX = 12;
 const LOOK_AT_UP_RATE = 4;    // units per second, held down
 let lookAtUp = LOOK_AT_UP_DEFAULT;
 function updateCamera(dt) {
+  if (!playerShip) return;
+  const physics = playerShip.physics;
   // By character (e.key), not physical position (e.code) -- see the keydown
   // handler for why that matters for punctuation keys specifically.
   if (isDown(']')) camZoom = Math.min(CAM_ZOOM_MAX, camZoom * (1 + CAM_ZOOM_RATE * dt));
@@ -1942,7 +2021,7 @@ function updateCamera(dt) {
   //
   // Note this basis is deliberately NOT shipGroup's actual quaternion: that
   // one also carries the cosmetic lean/pitch "flair" added at the end of
-  // updatePhysics, and following that here would make the camera bank and
+  // updateShip, and following that here would make the camera bank and
   // pitch along with it. physics.up/physics.forward are the orthonormal pair
   // the flair is layered ON TOP of, so building off them keeps the camera's
   // own motion smooth regardless of that flourish.
@@ -2041,7 +2120,8 @@ function minimapTraceRoad(ctx, toScreen, path) {
 }
 
 function drawMinimap() {
-  if (!minimapCtx) return;
+  if (!minimapCtx || !playerShip) return;
+  const physics = playerShip.physics;
   const dpr = window.devicePixelRatio || 1;
   const rect = minimapCanvas.getBoundingClientRect();
   const w = rect.width, h = rect.height;
@@ -2097,16 +2177,19 @@ function drawMinimap() {
   minimapCtx.fillStyle = 'rgba(127,180,212,0.85)';
   for (const p of paths) minimapTraceRoad(minimapCtx, toScreen, p);
 
-  // Ship position: a plain circle, deliberately no heading tick -- this is a
-  // where-am-I overview, not a second HUD.
-  const ship = toScreen(physics.groundPos.x, physics.groundPos.z);
-  minimapCtx.beginPath();
-  minimapCtx.arc(ship.x, ship.y, 4.5, 0, Math.PI * 2);
-  minimapCtx.fillStyle = '#ffcc33';
-  minimapCtx.fill();
-  minimapCtx.lineWidth = 1.5;
-  minimapCtx.strokeStyle = '#3a2400';
-  minimapCtx.stroke();
+  // AI markers use their deterministic hull colours; draw the larger player
+  // marker last so pole-position overlap never hides it.
+  for (const other of ships) {
+    if (other === playerShip) continue;
+    const marker = toScreen(other.physics.groundPos.x, other.physics.groundPos.z);
+    minimapCtx.beginPath(); minimapCtx.arc(marker.x, marker.y, 3, 0, Math.PI * 2);
+    minimapCtx.fillStyle = '#' + other.color.toString(16).padStart(6, '0'); minimapCtx.fill();
+    minimapCtx.lineWidth = 1; minimapCtx.strokeStyle = '#101820'; minimapCtx.stroke();
+  }
+  const marker = toScreen(physics.groundPos.x, physics.groundPos.z);
+  minimapCtx.beginPath(); minimapCtx.arc(marker.x, marker.y, 4.5, 0, Math.PI * 2);
+  minimapCtx.fillStyle = '#ffcc33'; minimapCtx.fill();
+  minimapCtx.lineWidth = 1.5; minimapCtx.strokeStyle = '#3a2400'; minimapCtx.stroke();
 }
 
 // ---------- Track loading: built-in default + JSON import --------------------
@@ -2147,8 +2230,9 @@ window.__game = {
   get paths() { return paths; },
   get zones() { return zones; },
   get triggers() { return triggers; },
-  get race() { return race; },
-  get physics() { return physics; },
+  get ships() { return ships; },
+  get race() { return playerShip && playerShip.race; },
+  get physics() { return playerShip && playerShip.physics; },
   get trackFloorY() { return trackFloorY; },
   respawn
 };
@@ -2158,7 +2242,7 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
-  updatePhysics(dt);
+  for (const ship of ships) updateShip(ship, dt, ship.controller.intent(ship, dt));
   updateCamera(dt);
   updateTriggerDebug(dt);
   updateRaceHud();

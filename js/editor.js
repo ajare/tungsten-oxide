@@ -186,6 +186,8 @@ function clearMeshSelection() { selectedMeshId = null; railSel = null; meshDragO
 // ---------- Texture assets ----------
 let texturePanelOpen = false;
 let textureTileEditArmed = null;
+// File-dialog selections get an in-memory preview URL, never serialized.
+const texturePreviewUrls = new Map();
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function textureAssets() { if (!track.textureAssets || typeof track.textureAssets !== 'object') track.textureAssets = {}; return track.textureAssets; }
 function textureAssetEntries() { return Object.entries(textureAssets()); }
@@ -230,36 +232,43 @@ function deleteTextureAsset(assetId) {
   if (!asset) return;
   if (!confirm(`Delete texture image "${asset.name}" and clear curves using it?`)) return;
   pushUndo();
+  const previewUrl = texturePreviewUrls.get(assetId);
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); texturePreviewUrls.delete(assetId); }
   delete textureAssets()[assetId];
   for (const path of track.paths || []) if (path.texture && path.texture.asset === assetId) path.texture = null;
   refresh();
 }
-function imageSizeFromDataUrl(dataUrl) {
+function imageSizeFromPath(path) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
-    img.onerror = () => reject(new Error('image could not be decoded'));
-    img.src = dataUrl;
+    img.onerror = () => reject(new Error(`image could not be loaded from "${path}"`));
+    img.src = path;
   });
 }
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('could not read file'));
-    reader.readAsDataURL(file);
-  });
+function textureNameFromPath(path) {
+  const clean = path.split(/[?#]/, 1)[0];
+  return clean.split(/[\\/]/).filter(Boolean).pop() || 'texture';
 }
-async function loadTextureImageFile(file) {
+function addTextureAsset(path, size) {
+  pushUndo();
+  const name = textureNameFromPath(path);
+  const id = uniqueTextureAssetId(name);
+  textureAssets()[id] = { name, path, width: size.width, height: size.height, tileWidth: size.width, tileHeight: size.height };
+  texturePanelOpen = true;
+  refresh();
+  return id;
+}
+async function loadTextureFileReference(file) {
+  const path = (file.webkitRelativePath || file.name || '').trim();
+  if (!path) return;
+  const objectUrl = URL.createObjectURL(file);
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const size = await imageSizeFromDataUrl(dataUrl);
-    pushUndo();
-    const id = uniqueTextureAssetId(file.name);
-    textureAssets()[id] = { name: file.name || id, dataUrl, width: size.width, height: size.height, tileWidth: size.width, tileHeight: size.height };
-    texturePanelOpen = true;
-    refresh();
+    const id = addTextureAsset(path, await imageSizeFromPath(objectUrl));
+    texturePreviewUrls.set(id, objectUrl);
+    renderTexturePanel();
   } catch (err) {
+    URL.revokeObjectURL(objectUrl);
     alert('Could not load image: ' + (err.message || err));
   }
 }
@@ -283,11 +292,12 @@ function renderTexturePanel() {
       const selectedClass = selected && selected.asset === id && selected.tile === tile ? ' selected' : '';
       const bgSize = `${asset.width / asset.tileWidth * 48}px ${asset.height / asset.tileHeight * 48}px`;
       const bgPos = `-${x * 48}px -${y * 48}px`;
-      return `<button class="tile${selectedClass}" data-asset="${id}" data-tile="${tile}" title="Texture ${tile}" style="background-image:url(${asset.dataUrl});background-size:${bgSize};background-position:${bgPos}"></button>`;
+      const imagePath = escapeHtml((texturePreviewUrls.get(id) || asset.path).replace(/'/g, '%27'));
+      return `<button class="tile${selectedClass}" data-asset="${id}" data-tile="${tile}" title="Texture ${tile}" style="background-image:url('${imagePath}');background-size:${bgSize};background-position:${bgPos}"></button>`;
     }).join('');
     return `<div class="asset" data-asset="${id}">
       <div class="assetTitle"><span class="name">${escapeHtml(asset.name)}</span><span class="spacer"></span><button data-action="deleteTexture" data-asset="${id}">Delete</button></div>
-      <div class="assetMeta">Image: ${asset.width} × ${asset.height} px<br>Textures: ${count} (${cols} × ${rows})</div>
+      <div class="assetMeta">Path: ${escapeHtml(asset.path)}<br>Image: ${asset.width} × ${asset.height} px<br>Textures: ${count} (${cols} × ${rows})</div>
       <label>Tile W <input type="number" min="1" max="${asset.width}" value="${asset.tileWidth}" data-action="tileSize" data-asset="${id}" data-key="tileWidth"></label>
       <label>Tile H <input type="number" min="1" max="${asset.height}" value="${asset.tileHeight}" data-action="tileSize" data-asset="${id}" data-key="tileHeight"></label>
       <div class="tiles">${tiles}</div>
@@ -4249,13 +4259,13 @@ document.getElementById('pasteMeshBtn').addEventListener('click', () => importMe
 const textureFileInput = document.getElementById('textureFileInput');
 document.getElementById('texturesBtn').addEventListener('click', () => { texturePanelOpen = true; renderTexturePanel(); });
 document.getElementById('closeTexturePanelBtn').addEventListener('click', () => { texturePanelOpen = false; renderTexturePanel(); });
-document.getElementById('loadTextureBtn').addEventListener('click', () => textureFileInput.click());
-document.getElementById('clearCurveTextureBtn').addEventListener('click', clearCurrentCurveTexture);
+document.getElementById('browseTextureBtn').addEventListener('click', () => textureFileInput.click());
 textureFileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
-  if (file) await loadTextureImageFile(file);
+  if (file) await loadTextureFileReference(file);
   e.target.value = '';
 });
+document.getElementById('clearCurveTextureBtn').addEventListener('click', clearCurrentCurveTexture);
 document.getElementById('textureAssetList').addEventListener('click', (e) => {
   const tile = e.target.closest('.tile');
   if (tile) {

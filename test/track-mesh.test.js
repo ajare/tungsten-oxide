@@ -504,7 +504,7 @@ test('mesh asset geometry and rail height scale with the track', () => {
 test('texture assets and curve assignments survive track round trip', () => {
   const t = TrackCore.parseTrack(trackFixture());
   t.textureAssets = {
-    asphalt: { name: 'asphalt.png', dataUrl: 'data:image/png;base64,abc', width: 64, height: 32, tileWidth: 16, tileHeight: 16 }
+    asphalt: { name: 'asphalt.png', path: 'textures/asphalt.png', width: 64, height: 32, tileWidth: 16, tileHeight: 16 }
   };
   t.paths[0].texture = { asset: 'asphalt', tile: 3 };
   const reloaded = TrackCore.parseTrack(TrackCore.serializeTrack(t));
@@ -512,10 +512,22 @@ test('texture assets and curve assignments survive track round trip', () => {
   assert.deepEqual(reloaded.paths[0].texture, { asset: 'asphalt', tile: 3 });
 });
 
+test('legacy embedded texture data migrates to a filename reference and is never serialized', () => {
+  const raw = JSON.parse(trackFixture());
+  raw.textureAssets = {
+    old: { name: 'old.png', dataUrl: 'data:image/png;base64,abc', width: 8, height: 8, tileWidth: 8, tileHeight: 8 }
+  };
+  const parsed = TrackCore.parseTrack(JSON.stringify(raw));
+  assert.deepEqual(parsed.textureAssets.old, { name: 'old.png', path: 'old.png', width: 8, height: 8, tileWidth: 8, tileHeight: 8 });
+  const saved = TrackCore.serializeTrack(parsed);
+  assert.equal(saved.includes('data:image'), false);
+  assert.equal(saved.includes('dataUrl'), false);
+});
+
 test('invalid curve texture assignments are cleared on load', () => {
   const raw = JSON.parse(trackFixture());
   raw.textureAssets = {
-    atlas: { name: 'atlas.png', dataUrl: 'data:image/png;base64,abc', width: 32, height: 32, tileWidth: 16, tileHeight: 16 }
+    atlas: { name: 'atlas.png', path: 'textures/atlas.png', width: 32, height: 32, tileWidth: 16, tileHeight: 16 }
   };
   raw.paths[0].texture = { asset: 'atlas', tile: 4 };
   const t = TrackCore.parseTrack(JSON.stringify(raw));

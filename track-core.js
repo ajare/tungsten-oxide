@@ -34,6 +34,7 @@
  *            disjointSeams: [{ id, pointId, kind, ... }],
  *            meshAssets: { <assetId>: { name, railHeight, mesh } },
  *            meshes: [ { id, asset, x, z, rotation, elevation } ],
+ *            textureAssets: { <assetId>: { name, path, width, height, tileWidth, tileHeight } },
  *            handling: { maxSpeed, accel, turnSpeed, weight },
  *            zones: [{ id, effect, width, length, host, ...effectParams }],
  *            triggers: [{ id, type, role?, host, width, height, rotation, direction }],
@@ -126,7 +127,7 @@
   // track measured under schema 4, and the game's ship, speeds and gravity were
   // scaled to match. Nothing about how a track looks or drives changed -- only
   // the absolute units. Older files are converted once, on load.
-  const TRACK_SCHEMA_VERSION = 9;
+  const TRACK_SCHEMA_VERSION = 10;
   const LEGACY_UNIT_SCALE = 2;
   // The unit doubling happened at schema 5 and only there, so the migration is
   // keyed to that version and NOT to TRACK_SCHEMA_VERSION. Those were the same
@@ -1223,12 +1224,20 @@
     const out = {};
     if (!raw || typeof raw !== 'object') return out;
     for (const [id, entry] of Object.entries(raw)) {
-      if (!id || !entry || typeof entry !== 'object' || typeof entry.dataUrl !== 'string' || !entry.dataUrl) continue;
+      if (!id || !entry || typeof entry !== 'object') continue;
+      const name = typeof entry.name === 'string' && entry.name ? entry.name : id;
+      // Schema 10 stores only a loadable path. For an older embedded dataUrl
+      // asset, retain its filename as the best relative-path migration instead
+      // of ever writing the encoded image bytes back out.
+      const path = typeof entry.path === 'string' && entry.path.trim()
+        ? entry.path.trim()
+        : (typeof entry.dataUrl === 'string' && entry.dataUrl ? name : '');
+      if (!path) continue;
       const width = Math.max(1, Math.floor(finiteOr(entry.width, 1, 1)));
       const height = Math.max(1, Math.floor(finiteOr(entry.height, 1, 1)));
       out[id] = {
-        name: typeof entry.name === 'string' && entry.name ? entry.name : id,
-        dataUrl: entry.dataUrl,
+        name,
+        path,
         width,
         height,
         tileWidth: Math.max(1, Math.min(width, Math.floor(finiteOr(entry.tileWidth, width, 1)))),
@@ -1695,6 +1704,7 @@
     }).join(',\n');
     const start = normalizeStart(track.start, track.paths);
     const assets = referencedMeshAssets(track);
+    const normalizedTextureAssets = normalizeTextureAssets(track.textureAssets);
     const meshesJson = (track.meshes || [])
       .map(m => '    { "id": ' + JSON.stringify(m.id) + ', "asset": ' + JSON.stringify(m.asset) +
         ', "x": ' + m.x + ', "z": ' + m.z + ', "rotation": ' + m.rotation + ', "elevation": ' + m.elevation + ' }')
@@ -1714,7 +1724,7 @@
       '  "selfIntersectionOverrides": ' + JSON.stringify(track.selfIntersectionOverrides || []) + ',\n' +
       '  "meshAssets": {' + (assetsJson ? '\n' + assetsJson + '\n  ' : '') + '},\n' +
       '  "meshes": [' + (meshesJson ? '\n' + meshesJson + '\n  ' : '') + '],\n' +
-      '  "textureAssets": ' + JSON.stringify(track.textureAssets || {}, null, 2).replace(/\n/g, '\n  ') + ',\n' +
+      '  "textureAssets": ' + JSON.stringify(normalizedTextureAssets, null, 2).replace(/\n/g, '\n  ') + ',\n' +
       '  "paths": [\n' + pathsJson + '\n  ]\n}\n';
   }
 

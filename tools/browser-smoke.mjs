@@ -67,6 +67,22 @@ const meshFile = JSON.stringify({
 
 await visit('editor.html loads', 'editor.html');
 
+await visit('editor: texture file dialog saves a reference, not embedded image data', 'editor.html', async (page) => {
+  await page.click('#texturesBtn');
+  await page.setInputFiles('#textureFileInput', join(ROOT, 'assets/test-1.png'));
+  await page.waitForTimeout(300);
+  const result = await page.evaluate(() => {
+    const assets = Object.values(window.__editor.track.textureAssets || {});
+    const json = window.TrackCore.serializeTrack(window.__editor.track);
+    return { assets, json };
+  });
+  if (result.assets.length !== 1 || result.assets[0].path !== 'test-1.png')
+    throw new Error('file dialog selection did not store its filename reference: ' + JSON.stringify(result.assets));
+  if ('dataUrl' in result.assets[0] || result.json.includes('data:image') || result.json.includes('dataUrl'))
+    throw new Error('texture image data leaked into track JSON');
+  return 'saved test-1.png without image bytes';
+});
+
 await visit('editor: import mesh, move, rail, export', 'editor.html', async (page) => {
   await page.setInputFiles('#meshFileInput', { name: 'pad.json', mimeType: 'application/json', buffer: Buffer.from(meshFile) });
   await page.waitForTimeout(400);
@@ -148,6 +164,76 @@ await visit('editor: right-click does not read the clipboard', 'editor.html', as
   return `menu 0 reads, paste 1 read (permission: ${state})`;
 });
 
+await visit('game: creates one player and seven independently simulated idle AI ships', 'track.html', async (page) => {
+  await page.evaluate(() => {
+    localStorage.setItem('web3d.currentTrack',
+      window.TrackCore.serializeTrack(window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK)));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const before = await page.evaluate(() => window.__game.ships.map(s => ({
+    id: s.id, kind: s.controllerKind, color: s.color,
+    pos: s.physics.groundPos.toArray(), groupPos: s.group.position.toArray(),
+    bodyColor: s.group.children[0].material.color.getHex()
+  })));
+  if (before.length !== 8) throw new Error('expected 8 ships, got ' + before.length);
+  if (before[0].id !== 'player' || before[0].kind !== 'player') throw new Error('first ship is not the player');
+  if (before.slice(1).some((s, i) => s.id !== `ai-${i + 1}` || s.kind !== 'ai')) throw new Error('AI ids/controller kinds are wrong');
+  if (new Set(before.slice(1).map(s => s.color)).size !== 7) throw new Error('AI colours are not unique');
+  if (before.some(s => s.color !== s.bodyColor)) throw new Error('runtime colour does not match rendered hull');
+
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
+  await page.waitForTimeout(2000);
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+  const after = await page.evaluate(() => window.__game.ships.map(s => ({
+    pos: s.physics.groundPos.toArray(), groupPos: s.group.position.toArray()
+  })));
+  const moved = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  if (moved(before[0].pos, after[0].pos) < 5) throw new Error('player controls did not move the player');
+  for (let i = 1; i < after.length; i++) {
+    const distance = moved(before[i].pos, after[i].pos);
+    if (distance > 0.1) throw new Error(`${before[i].id} physics moved ${distance.toFixed(3)} m under player input`);
+    const visualDistance = moved(before[i].groupPos, after[i].groupPos);
+    if (visualDistance > 0.001) throw new Error(`${before[i].id} rendered group moved ${visualDistance.toFixed(3)} m while idle`);
+  }
+  return '8 ships, unique colours, AI remained idle';
+});
+
+await visit('game: zones and triggers keep independent per-ship state', 'track.html', async (page) => {
+  await page.evaluate(() => {
+    const t = window.TrackCore.cloneTrack(window.TrackCore.STARTER_TRACK);
+    t.zones = [{ id: 'player-zone', effect: 'startGrid', width: 2, length: 4,
+      host: { kind: 'path', pathId: 'starter-path', t: 0, lateral: -2.5 } }];
+    localStorage.setItem('web3d.currentTrack', window.TrackCore.serializeTrack(t));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  const zones = await page.evaluate(() => window.__game.ships.map(s => ({ id: s.id, inside: s.zoneInside.get('player-zone') })));
+  if (!zones[0].inside) throw new Error('player did not independently enter its start zone');
+  if (zones.slice(1).some(s => s.inside)) throw new Error('an AI ship inherited the player zone state: ' + JSON.stringify(zones));
+
+  await page.evaluate(() => {
+    const game = window.__game, ai = game.ships[1];
+    const finish = game.triggers.find(t => t.role === 'finish');
+    ai.prevTriggerPos.copy(finish.center).addScaledVector(finish.fwd, -1);
+    ai.physics.groundPos.copy(finish.center).addScaledVector(finish.fwd, 1);
+    ai.physics.visualGroundPos.copy(ai.physics.groundPos);
+  });
+  await page.waitForTimeout(150);
+  const triggerState = await page.evaluate(() => {
+    const game = window.__game, finish = game.triggers.find(t => t.role === 'finish');
+    return {
+      playerArmed: game.ships[0].triggerStates.get(finish.id).armed,
+      playerCheckpoint: game.ships[0].lastCheckpoint.valid,
+      aiArmed: game.ships[1].triggerStates.get(finish.id).armed,
+      aiCheckpoint: game.ships[1].lastCheckpoint.valid
+    };
+  });
+  if (!triggerState.aiCheckpoint || triggerState.aiArmed) throw new Error('AI trigger state did not fire independently: ' + JSON.stringify(triggerState));
+  if (triggerState.playerCheckpoint || !triggerState.playerArmed) throw new Error('AI crossing changed player trigger state: ' + JSON.stringify(triggerState));
+  return 'zone and checkpoint state remained ship-local';
+});
+
 await visit('track.html loads and builds a mesh region', 'track.html', async (page) => {
   await page.evaluate((mesh) => {
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
@@ -186,7 +272,7 @@ await visit('game: drives on a mesh region and is stopped by rails', 'track.html
     const p = window.__game.physics;
     p.groundPos.set(605, 5, 5);
     p.airborne = false; p.verticalVel = 0;
-    p.heading = Math.PI; p.velocityAngle = Math.PI; p.speed = 60;
+    p.heading = Math.PI; p.forward.set(0, 0, -1); p.moveDir.copy(p.forward); p.speed = 60;
   });
   await page.waitForTimeout(1500);
 
@@ -230,14 +316,14 @@ await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', as
     const p = window.__game.physics;
     p.groundPos.set(605, 5, 5);
     p.airborne = false; p.verticalVel = 0;
-    p.heading = Math.PI; p.velocityAngle = Math.PI; p.speed = 60;
+    p.heading = Math.PI; p.forward.set(0, 0, -1); p.moveDir.copy(p.forward); p.speed = 60;
   });
   await page.waitForTimeout(400);
   const mid = await page.evaluate(() => ({ airborne: window.__game.physics.airborne, y: window.__game.physics.groundPos.y }));
   if (!mid.airborne && mid.y === 5) throw new Error('ship never left the bare edge: ' + JSON.stringify(mid));
 
   // Let it fall past the respawn threshold and confirm it is recovered.
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(4000);
   const after = await page.evaluate(() => {
     const p = window.__game.physics;
     return { airborne: p.airborne, x: p.groundPos.x, y: p.groundPos.y, z: p.groundPos.z };
@@ -325,8 +411,8 @@ await visit('regression: mesh-free track still drives normally', 'track.html', a
   if (end.speed < 10) throw new Error('ship did not accelerate, speed=' + end.speed);
   const travelled = Math.hypot(end.x - start.x, end.z - start.z);
   if (travelled < 20) throw new Error('ship barely moved, travelled=' + travelled.toFixed(1));
-  // DEFAULT_TRACK spans roughly +/-190 at schema-5 scale; far outside means it flew off.
-  if (Math.hypot(end.x, end.z) > 320) throw new Error('ship left the track area: ' + JSON.stringify(end));
+  // DEFAULT_TRACK spans roughly +/-1700 in current units; far outside means it flew off.
+  if (Math.hypot(end.x, end.z) > 2200) throw new Error('ship left the track area: ' + JSON.stringify(end));
   // "Keep the feel" means the HUD readout is unchanged by the unit rescale:
   // raw speed doubled, so its display factor was halved to compensate.
   // Read both in one evaluate: sampling them separately skews while decelerating.
@@ -334,7 +420,7 @@ await visit('regression: mesh-free track still drives normally', 'track.html', a
     kmh: parseInt(document.getElementById('speed').textContent, 10),
     raw: Math.abs(window.__game.physics.speed)
   }));
-  const expected = Math.round(raw * 4.5);
+  const expected = Math.round(raw * 3.6);
   if (Math.abs(kmh - expected) > 2) throw new Error(`HUD ${kmh} != expected ${expected} for raw ${raw}`);
   return `lapped ${travelled.toFixed(0)}u at ${end.speed.toFixed(0)} u/s, HUD ${kmh} km/h, never airborne`;
 });
@@ -367,7 +453,7 @@ async function driveOffEnd(page, { fromZ, heading, expectBeyond }) {
     const p = window.__game.physics;
     p.groundPos.set(0, 0, fromZ);
     p.airborne = false; p.verticalVel = 0; p.landingBounce = 0; p.landingBounceVel = 0;
-    p.heading = heading; p.velocityAngle = heading; p.speed = 60;
+    p.heading = heading; p.forward.set(Math.sin(heading), 0, Math.cos(heading)); p.moveDir.copy(p.forward); p.speed = 60;
   }, { fromZ, heading });
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
   let launched = false, maxReach = fromZ;
