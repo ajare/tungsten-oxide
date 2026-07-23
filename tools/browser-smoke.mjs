@@ -208,7 +208,7 @@ await visit('game: drives on a mesh region and is stopped by rails', 'track.html
 });
 
 // Same pad with NO rails: driving off the edge must become a fall, then the
-// auto-respawn must recover it.
+// auto-respawn must recover at the authored start (no checkpoint was crossed).
 await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', async (page) => {
   await page.evaluate((mesh) => {
     const t = window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK);
@@ -222,6 +222,10 @@ await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', as
   if (await page.evaluate(() => window.__game.meshRegions[0].compiled.rails.length) !== 0)
     throw new Error('expected no rails on this pad');
 
+  const start = await page.evaluate(() => {
+    const p = window.__game.physics.groundPos;
+    return { x: p.x, y: p.y, z: p.z };
+  });
   await page.evaluate(() => {
     const p = window.__game.physics;
     p.groundPos.set(605, 5, 5);
@@ -234,11 +238,15 @@ await visit('game: bare edge is a ledge, and respawn recovers', 'track.html', as
 
   // Let it fall past the respawn threshold and confirm it is recovered.
   await page.waitForTimeout(2500);
-  const after = await page.evaluate(() => ({ airborne: window.__game.physics.airborne, y: window.__game.physics.groundPos.y }));
+  const after = await page.evaluate(() => {
+    const p = window.__game.physics;
+    return { airborne: p.airborne, x: p.groundPos.x, y: p.groundPos.y, z: p.groundPos.z };
+  });
   if (after.y < -100) throw new Error('never respawned, y=' + after.y);
-  if (Math.abs(after.y - 5) > 1e-6) throw new Error('respawn should restore the last grounded spot on the pad, y=' + after.y);
+  if (Math.hypot(after.x - start.x, after.y - start.y, after.z - start.z) > 1)
+    throw new Error('respawn should return to the authored start before any checkpoint: ' + JSON.stringify({ start, after }));
   if (after.airborne) throw new Error('still airborne after respawn');
-  return `fell off bare edge, respawned onto the pad at y=${after.y.toFixed(2)}`;
+  return `fell off bare edge, respawned at the authored start y=${after.y.toFixed(2)}`;
 });
 
 

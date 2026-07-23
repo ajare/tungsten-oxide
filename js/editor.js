@@ -579,9 +579,9 @@ function ensureTrackIds() {
     if (!z.id || usedIds.has(z.id)) z.id = newId('z');
     usedIds.add(z.id);
   }
-  // Triggers: same host-pruning + id-stabilising as zones.
-  track.triggers = (track.triggers || []).filter(tr => tr && tr.host &&
-    (tr.host.kind === 'mesh' ? zoneMeshIds.has(tr.host.meshId) : zonePathIds.has(tr.host.pathId)));
+  // Triggers: same host-pruning + id-stabilising as zones. Normalization also
+  // enforces the single-Finish invariant and repairs a missing Finish.
+  track.triggers = TrackCore.normalizeTriggers(track.triggers, track.paths, track.meshes, track.start);
   for (const tr of track.triggers) {
     if (!tr.id || usedIds.has(tr.id)) tr.id = newId('tr');
     usedIds.add(tr.id);
@@ -1625,9 +1625,13 @@ function removeStaleSeams() {
   const beforeT = (track.triggers || []).length;
   track.triggers = (track.triggers || []).filter(tr => tr && tr.host &&
     (tr.host.kind === 'mesh' ? zMeshIds.has(tr.host.meshId) : zPathIds.has(tr.host.pathId)));
+  const removedT = beforeT - track.triggers.length;
+  // Deleting a Finish-hosting path immediately repairs the one-Finish
+  // invariant on the surviving start path.
+  track.triggers = TrackCore.normalizeTriggers(track.triggers, track.paths, track.meshes, track.start);
   return (before - track.disjointSeams.length) + (beforeJ - track.junctions.length)
     + (beforeO - track.selfIntersectionOverrides.length) + (beforeZ - track.zones.length)
-    + (beforeT - track.triggers.length);
+    + removedT;
 }
 function assertNoStaleSeams() {
   const removed = removeStaleSeams();
@@ -2243,9 +2247,12 @@ function renderProps() {
         trow('x', 'X', host.x, 0.5) + trow('z', 'Z', host.z, 0.5)
       : `<div style="margin:6px 0;color:#6f93a8;font-size:11px">On path <b>${host.pathId}</b></div>` +
         trow('t', 'Position (%)', (host.t * 100).toFixed(1), 1, 'min="0" max="100"');
+    const isCheckpoint = trigger.type === 'checkpoint';
+    const isFinish = isCheckpoint && trigger.role === 'finish';
     body.innerHTML =
-      `<div style="margin-bottom:6px;color:#ff5ea8">Trigger <b>${trigger.id}</b></div>` +
-      `<div style="margin-bottom:8px;color:#6f93a8;font-size:11px">Type: dummy (no effect yet) &middot; fires on pass-through &middot; debug view: <b>J</b> in the game</div>` +
+      `<div style="margin-bottom:6px;color:${isCheckpoint ? '#7fe7ff' : '#ff5ea8'}">Trigger <b>${trigger.id}</b></div>` +
+      `<div style="margin-bottom:8px;color:#6f93a8;font-size:11px">Type: ${isCheckpoint ? 'checkpoint' : 'dummy'} &middot; fires on pass-through &middot; debug view: <b>J</b> in the game</div>` +
+      (isCheckpoint ? `<label>Role<select id="checkpointRole"><option value="intermediate"${!isFinish ? ' selected' : ''}>Intermediate</option><option value="finish"${isFinish ? ' selected' : ''}>Finish</option></select></label>` : '') +
       trow('width', 'Width (across)', trigger.width, 1, 'min="0.5"') +
       trow('height', 'Height (up)', trigger.height, 1, 'min="0.5"') +
       trow('rotation', 'Rotation°', trigger.rotation || 0, 5) +
@@ -2254,7 +2261,22 @@ function renderProps() {
       `</select></label>` +
       hostRows +
       `<div class="hint">A vertical gate across the track; fires once when the ship passes through, re-arming after it leaves. Arrow(s) show the allowed direction(s).</div>` +
-      `<button id="delTriggerBtn" style="margin-top:10px;width:100%;background:#5a1f3a;border:1px solid #c46;color:#ffd0e6;border-radius:5px;padding:6px;cursor:pointer">Delete trigger</button>`;
+      `<button id="delTriggerBtn" ${isFinish ? 'disabled title="Designate another Finish first"' : ''} style="margin-top:10px;width:100%;background:#5a1f3a;border:1px solid #c46;color:#ffd0e6;border-radius:5px;padding:6px;cursor:pointer">Delete trigger</button>`;
+    if (isCheckpoint) document.getElementById('checkpointRole').addEventListener('change', (e) => {
+      const role = e.target.value;
+      if (isFinish && role === 'intermediate') {
+        alert('Designate another checkpoint as Finish first.');
+        e.target.value = 'finish';
+        return;
+      }
+      if (role === trigger.role) return;
+      pushUndo();
+      if (role === 'finish') {
+        for (const tr of triggersList()) if (tr.type === 'checkpoint' && tr.role === 'finish') tr.role = 'intermediate';
+      }
+      trigger.role = role;
+      refresh();
+    });
     document.getElementById('triggerDir').addEventListener('change', (e) => {
       pushUndo();
       trigger.direction = ['both', 'forward', 'backward'].includes(e.target.value) ? e.target.value : 'both';
@@ -3065,7 +3087,7 @@ addPointMenu.addEventListener('click', (e) => {
   }
   if (e.target.dataset.action === 'addTrigger') {
     hideAddPointMenu();
-    addTriggerAt(worldX, worldZ);
+    addTriggerAt(worldX, worldZ, e.target.dataset.triggerType);
     return;
   }
   const type = e.target.dataset.type;
@@ -3952,6 +3974,10 @@ function drawZones(ctx) {
 // top-down as a line across the track with a direction arrow; the height isn't
 // visible from above. Added from the right-click "Add trigger" entry.
 const TRIGGER_COLOR = '#ff5ea8';
+function triggerColor(trigger) {
+  if (trigger.type !== 'checkpoint') return TRIGGER_COLOR;
+  return trigger.role === 'finish' ? '#ffd34f' : '#7fe7ff';
+}
 function triggersList() { if (!Array.isArray(track.triggers)) track.triggers = []; return track.triggers; }
 function findTrigger(id) { return triggersList().find(t => t.id === id) || null; }
 function selectedTrigger() { return selectedTriggerId ? findTrigger(selectedTriggerId) : null; }
@@ -3981,7 +4007,7 @@ function triggerFrameXZ(trigger) {
   return { cx: fr.center.x, cz: fr.center.z, rx: fr.right.x, rz: fr.right.z, fx: fr.fwd.x, fz: fr.fwd.z, hw };
 }
 
-function addTriggerAt(wx, wz) {
+function addTriggerAt(wx, wz, type = 'dummy') {
   const meshHit = meshAtWorld(wx, wz);
   let host, width;
   if (meshHit) {
@@ -3996,7 +4022,8 @@ function addTriggerAt(wx, wz) {
     width = Math.round(TrackCore.evalWidth(pp.widthPoints, path.closed, near.t));
   }
   pushUndo();
-  const trigger = { id: newId('tr'), type: 'dummy', host, width, height: TrackCore.DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' };
+  const trigger = { id: newId('tr'), type: type === 'checkpoint' ? 'checkpoint' : 'dummy', host, width, height: TrackCore.DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' };
+  if (trigger.type === 'checkpoint') trigger.role = 'intermediate';
   triggersList().push(trigger);
   selectTrigger(trigger.id);
   refresh();
@@ -4005,6 +4032,10 @@ function addTriggerAt(wx, wz) {
 function deleteSelectedTrigger() {
   const tr = selectedTrigger();
   if (!tr) return;
+  if (tr.type === 'checkpoint' && tr.role === 'finish') {
+    alert('Designate another checkpoint as Finish before deleting this one.');
+    return;
+  }
   pushUndo();
   track.triggers = triggersList().filter(t => t.id !== tr.id);
   selectedTriggerId = null;
@@ -4034,8 +4065,9 @@ function drawTriggers(ctx) {
     const a = worldToScreen(fr.cx - fr.rx * fr.hw, fr.cz - fr.rz * fr.hw);
     const b = worldToScreen(fr.cx + fr.rx * fr.hw, fr.cz + fr.rz * fr.hw);
     const sel = trigger.id === selectedTriggerId;
+    const color = triggerColor(trigger);
     ctx.setLineDash([]);
-    ctx.strokeStyle = TRIGGER_COLOR; ctx.lineWidth = sel ? 4 : 2.5;
+    ctx.strokeStyle = color; ctx.lineWidth = sel ? 4 : 2.5;
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     // Direction arrow(s) from the center along the normal (X/Z -> screen 1:1).
     const cS = worldToScreen(fr.cx, fr.cz);
@@ -4048,11 +4080,11 @@ function drawTriggers(ctx) {
       ctx.beginPath(); ctx.moveTo(ex, ey);
       ctx.lineTo(ex - Math.cos(ang - 0.4) * 6, ey - Math.sin(ang - 0.4) * 6);
       ctx.lineTo(ex - Math.cos(ang + 0.4) * 6, ey - Math.sin(ang + 0.4) * 6);
-      ctx.closePath(); ctx.fillStyle = TRIGGER_COLOR; ctx.fill();
+      ctx.closePath(); ctx.fillStyle = color; ctx.fill();
     };
     if (trigger.direction === 'both' || trigger.direction === 'forward') drawArrow(1);
     if (trigger.direction === 'both' || trigger.direction === 'backward') drawArrow(-1);
-    ctx.fillStyle = TRIGGER_COLOR;
+    ctx.fillStyle = color;
     for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, sel ? 4 : 3, 0, Math.PI * 2); ctx.fill(); }
   }
 }

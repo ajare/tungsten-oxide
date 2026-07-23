@@ -544,8 +544,14 @@ function triggerTrackJson(triggers) {
   });
 }
 
-test('a track with no triggers parses to an empty array', () => {
-  assert.deepEqual(TrackCore.parseTrack(triggerTrackJson(undefined)).triggers, []);
+test('a track with no triggers receives one automatic Finish checkpoint', () => {
+  const triggers = TrackCore.parseTrack(triggerTrackJson(undefined)).triggers;
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].type, 'checkpoint');
+  assert.equal(triggers[0].role, 'finish');
+  assert.equal(triggers[0].host.pathId, 'path1');
+  assert.equal(triggers[0].direction, 'forward');
+  assert.ok(triggers[0].host.t > 0 && triggers[0].host.t < 0.1, 'Finish is just ahead of the start');
 });
 
 test('a path trigger normalizes with defaults and a valid direction', () => {
@@ -561,11 +567,13 @@ test('a path trigger normalizes with defaults and a valid direction', () => {
   assert.ok(typeof tr.id === 'string' && tr.id);
 });
 
-test('a trigger whose host id is gone is dropped', () => {
+test('triggers whose host ids are gone are dropped before Finish repair', () => {
   const track = TrackCore.parseTrack(triggerTrackJson([
     { host: { kind: 'path', pathId: 'ghost' } }, { host: { kind: 'mesh', meshId: 'nope' } }
   ]));
-  assert.deepEqual(track.triggers, []);
+  assert.equal(track.triggers.length, 1);
+  assert.equal(track.triggers[0].role, 'finish');
+  assert.equal(track.triggers[0].host.pathId, 'path1');
 });
 
 test('triggers survive a serialize/parse round trip', () => {
@@ -574,6 +582,45 @@ test('triggers survive a serialize/parse round trip', () => {
   ]));
   const round = TrackCore.parseTrack(TrackCore.serializeTrack(track));
   assert.deepEqual(round.triggers, track.triggers);
+});
+
+test('checkpoint roles normalize with exactly one authored Finish', () => {
+  const track = TrackCore.parseTrack(triggerTrackJson([
+    { id: 'cp1', type: 'checkpoint', role: 'finish', host: { kind: 'path', pathId: 'path1', t: 0.1 } },
+    { id: 'cp2', type: 'checkpoint', role: 'finish', host: { kind: 'path', pathId: 'path1', t: 0.5 } },
+    { id: 'cp3', type: 'checkpoint', role: 'intermediate', host: { kind: 'path', pathId: 'path1', t: 0.8 } }
+  ]));
+  assert.deepEqual(track.triggers.map(t => [t.id, t.type, t.role]), [
+    ['cp1', 'checkpoint', 'finish'], ['cp2', 'checkpoint', 'intermediate'], ['cp3', 'checkpoint', 'intermediate']
+  ]);
+});
+
+test('the editor starter track has one Finish and three evenly-spaced intermediates', () => {
+  const checkpoints = TrackCore.STARTER_TRACK.triggers.filter(t => t.type === 'checkpoint');
+  assert.equal(checkpoints.filter(t => t.role === 'finish').length, 1);
+  assert.equal(checkpoints.filter(t => t.role === 'intermediate').length, 3);
+  assert.deepEqual(checkpoints.filter(t => t.role === 'intermediate').map(t => t.host.t), [0.2525, 0.5025, 0.7525]);
+});
+
+test('built-in Finish checkpoints are authored 20 m ahead of their starts', () => {
+  for (const builtIn of [TrackCore.DEFAULT_TRACK, TrackCore.STARTER_TRACK]) {
+    const expected = TrackCore.automaticFinishDescriptor(builtIn.paths, builtIn.start);
+    const finish = builtIn.triggers.find(t => t.type === 'checkpoint' && t.role === 'finish');
+    assert.ok(Math.abs(finish.host.t - expected.host.t) < 1e-5, `${builtIn.name} Finish t matches the 20 m placement`);
+    assert.equal(finish.direction, expected.direction);
+  }
+});
+
+test('automatic Finish placement reverses only when an open-path start faces out of its endpoint', () => {
+  const json = JSON.stringify({
+    version: TrackCore.TRACK_SCHEMA_VERSION,
+    start: { path: 0, point: 3, reverse: false },
+    paths: [{ id: 'open', closed: false, points: [0, 10, 20, 30].map((x, i) =>
+      ({ type: 'position', id: 'p' + i, pos: [x, 0, 0], weight: 1 })) }]
+  });
+  const finish = TrackCore.parseTrack(json).triggers[0];
+  assert.equal(finish.direction, 'backward');
+  assert.ok(finish.host.t < 1, 'the repaired Finish is placed behind the endpoint');
 });
 
 test('triggerPathFrame returns an orthonormal, finite gate frame', () => {

@@ -146,13 +146,21 @@ Flat rectangular areas that float just above a surface and fire an effect when t
 
 ## Architecture: triggers (`track.triggers`)
 
-Vertical gate quads the ship passes **through** (schema 8), as opposed to zones (flat, driven over). `{ id, type, host, width, height, rotation, direction }`:
+Vertical gate quads the ship passes **through** (schema 8), as opposed to zones (flat, driven over). Schema 9 added checkpoint triggers. `{ id, type, role?, host, width, height, rotation, direction }`:
 
 - **Frame is banking-aligned** — the gate's normal is the track tangent (`fwd`), width runs along the banked `edgeRight` (`right`), height along the surface normal (`up`), yawed by `rotation` about `up`. `TrackCore.triggerPathFrame` bakes this once (shared by the game's detection/debug render and the editor's top-down line); mesh triggers are a flat gate at the region's elevation whose normal comes from `rotation`. Centered on the centerline (no lateral offset).
-- **Host** is `{kind:'path', pathId, t}` or `{kind:'mesh', meshId, x, z}`; `normalizeTriggers` drops dangling hosts. `direction ∈ {both, forward, backward}` relative to `fwd`; `type` is `'dummy'` (no effect — firing only `console.log`s + flashes the debug view).
-- **Detection (`detectTriggers`, `js/track-game.js`, every sub-step, grounded or airborne)** is a **swept** crossing of the ship segment `_prevTriggerPos → groundPos` against the gate plane: on a sign-flip of the signed distance to the plane, the crossing point must be within `|right| ≤ width/2` and `0 ≤ up ≤ height`. Fires once while `armed` (direction permitting) then disarms; **re-arms** when the ship is off the width×height footprint *or* more than `TRIGGER_REARM_MARGIN` past the plane. `resetTriggers` (on reset/respawn) reseeds `_prevTriggerPos` so teleports never fire, and re-arms all.
+- **Host** is `{kind:'path', pathId, t}` or `{kind:'mesh', meshId, x, z}`; `normalizeTriggers` drops dangling hosts. `direction ∈ {both, forward, backward}` relative to `fwd`; `type` is `'dummy'` (log/flash only) or `'checkpoint'` (lap progress and recovery).
+- **Detection (`detectTriggers`, `js/track-game.js`, every sub-step, grounded or airborne)** is a **swept** crossing of the ship segment `_prevTriggerPos → groundPos` against the gate plane: on a sign-flip of the signed distance to the plane, the crossing point must be within `|right| ≤ width/2` and `0 ≤ up ≤ height`. Fires once while `armed` (direction permitting) then disarms; **re-arms** when the ship is off the width×height footprint *or* more than `TRIGGER_REARM_MARGIN` past the plane. `resetTriggers` (on reset/respawn) reseeds `_prevTriggerPos` so teleports never fire; checkpoint respawn keeps that gate disarmed until the ship clears it.
 - **Not rendered in play.** `J` toggles `showTriggers`: a translucent quad + direction arrow(s), green (armed) / red (disarmed), brightening to white on a fire flash (`updateTriggerDebug`, ticked in `animate`).
-- **Editor:** right-click → **Add trigger** (path-trigger width defaults to the road width at `t`). Drawn top-down as a **line** across the track with a direction arrow; select/drag to move (`t` or `x/z`), props edit width/height/rotation/direction; `ensureTrackIds`/`removeStaleSeams` prune dangling ones. **`J` is taken by the game's trigger debug view** — don't reuse it.
+- **Editor:** right-click → **Add trigger ▸ Dummy / Checkpoint** (path-trigger width defaults to the road width at `t`). Drawn top-down as a **line** across the track with a direction arrow; select/drag to move (`t` or `x/z`), props edit width/height/rotation/direction and checkpoint role; `ensureTrackIds`/`removeStaleSeams` prune dangling ones. **`J` is taken by the game's trigger debug view** — don't reuse it.
+
+### Checkpoint race progress
+
+A checkpoint trigger has `type:'checkpoint'` and `role:'finish'|'intermediate'`. Every normalized track has exactly one Finish: missing Finishes are synthesized 20 m ahead of `start` in its driven direction, and extra Finishes are demoted in authored order. Intermediates may be hit in any order; all must be hit before a subsequent valid Finish crossing counts a lap. Premature Finish crossings still update recovery but do not mark Finish or clear progress.
+
+Every valid checkpoint crossing stores the gate-center pose and crossing direction. Manual recovery and fall recovery return there, preserving current-lap progress and wall-clock timers; before the first crossing they return to `start`. Checkpoints use the normal swept trigger detection, including airborne crossings, and remain invisible outside the `J` debug view.
+
+The top-left race HUD shows unlabeled red/green checkpoint circles (Finish last), completed laps, current-lap wall time, and total wall time. Lap completion flashes all circles green for 0.5 s while logical progress resets immediately. `STARTER_TRACK` authors one Finish plus three evenly spaced intermediates.
 
 ## Editor conventions (`js/editor.js`)
 

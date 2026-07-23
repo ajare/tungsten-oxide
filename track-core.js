@@ -36,7 +36,7 @@
  *            meshes: [ { id, asset, x, z, rotation, elevation } ],
  *            handling: { maxSpeed, accel, turnSpeed, weight },
  *            zones: [{ id, effect, width, length, host, ...effectParams }],
- *            triggers: [{ id, type, host, width, height, rotation, direction }],
+ *            triggers: [{ id, type, role?, host, width, height, rotation, direction }],
  *            start: { path, point, reverse } }
  * `triggers` are vertical gate quads that fire when the ship passes THROUGH
  * them (host on a path by t, or a mesh by x/z), banking-aligned, one/both
@@ -126,7 +126,7 @@
   // track measured under schema 4, and the game's ship, speeds and gravity were
   // scaled to match. Nothing about how a track looks or drives changed -- only
   // the absolute units. Older files are converted once, on load.
-  const TRACK_SCHEMA_VERSION = 8;
+  const TRACK_SCHEMA_VERSION = 9;
   const LEGACY_UNIT_SCALE = 2;
   // The unit doubling happened at schema 5 and only there, so the migration is
   // keyed to that version and NOT to TRACK_SCHEMA_VERSION. Those were the same
@@ -1466,9 +1466,10 @@
   // base. `direction` gates which way through counts ('both'|'forward'|
   // 'backward', relative to the normal). Not rendered in game (debug-only, J).
   // Only ever in schema >= 8 files, so untouched by the pre-schema-5 unit
-  // migration. The single 'dummy' type has no mechanical effect yet.
+  // migration. Dummy gates only log; checkpoint gates carry lap/recovery roles.
   const DEFAULT_TRIGGER_WIDTH = 40;
   const DEFAULT_TRIGGER_HEIGHT = 12;
+  const DEFAULT_FINISH_DISTANCE = 20;
 
   function normalizeTrigger(raw, i, pathIds, meshIds) {
     if (!raw || typeof raw !== 'object') return null;
@@ -1483,17 +1484,72 @@
       normHost = { kind: 'path', pathId: host.pathId, t: clampRange(host.t, 0, 1, 0.5) };
     }
     const direction = (raw.direction === 'forward' || raw.direction === 'backward') ? raw.direction : 'both';
-    return {
+    const type = raw.type === 'checkpoint' ? 'checkpoint' : 'dummy';
+    const out = {
       id: (typeof raw.id === 'string' && raw.id) ? raw.id : 'tr' + (i + 1),
-      type: 'dummy',
+      type,
       host: normHost,
       width: Math.max(0.5, finiteOr(raw.width, DEFAULT_TRIGGER_WIDTH, 0.5)),
       height: Math.max(0.5, finiteOr(raw.height, DEFAULT_TRIGGER_HEIGHT, 0.5)),
       rotation: finiteOr(raw.rotation, 0),
       direction
     };
+    if (type === 'checkpoint') out.role = raw.role === 'finish' ? 'finish' : 'intermediate';
+    return out;
   }
-  function normalizeTriggers(rawTriggers, paths, meshes) {
+
+  // Find a gate position by walking true baked centerline distance from the
+  // ship's start sample. Open paths clamp at their endpoint; only a start that
+  // is already at that endpoint falls back to the opposite direction.
+  function automaticFinishDescriptor(paths, rawStart, distance = DEFAULT_FINISH_DISTANCE) {
+    const start = normalizeStart(rawStart, paths);
+    const path = paths[start.path];
+    const { controlPoints, rollPoints, widthPoints, crossSectionPoints } = splitPoints(path.points);
+    const closed = path.closed !== false;
+    // Match the game's start-sample bake exactly, then interpolate within its
+    // ~6 m segments to place the gate at the requested arc distance.
+    const sampleCount = adaptiveSampleCount(controlPoints, closed, rollPoints, widthPoints, crossSectionPoints);
+    const frames = buildCenterline(controlPoints, sampleCount, closed, rollPoints, widthPoints, crossSectionPoints);
+    const anchor = controlPoints[start.point].pos;
+    let index = 0, best = Infinity;
+    for (let i = 0; i < frames.length; i++) {
+      const p = frames[i].pos;
+      const d = (p.x - anchor[0]) ** 2 + (p.y - anchor[1]) ** 2 + (p.z - anchor[2]) ** 2;
+      if (d < best) { best = d; index = i; }
+    }
+    let step = start.reverse ? -1 : 1;
+    let repaired = false;
+    const canStep = s => closed || (index + s >= 0 && index + s < frames.length);
+    if (!canStep(step)) { step = -step; repaired = true; }
+    let travelled = 0, at = index, frac = 0;
+    const maxSteps = closed ? frames.length : frames.length - 1;
+    for (let n = 0; n < maxSteps && (closed || at + step >= 0 && at + step < frames.length); n++) {
+      const next = closed ? (at + step + frames.length) % frames.length : at + step;
+      const a = frames[at].pos, b = frames[next].pos;
+      const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      if (travelled + seg >= distance && seg > 0) { frac = (distance - travelled) / seg; break; }
+      travelled += seg; at = next; frac = 0;
+    }
+    const next = closed ? (at + step + frames.length) % frames.length : Math.max(0, Math.min(frames.length - 1, at + step));
+    const tAt = closed ? at / frames.length : at / (frames.length - 1);
+    let tNext = closed ? next / frames.length : next / (frames.length - 1);
+    if (closed && step > 0 && next < at) tNext += 1;
+    if (closed && step < 0 && next > at) tNext -= 1;
+    const rawT = tAt + (tNext - tAt) * frac;
+    const t = closed ? ((rawT % 1) + 1) % 1 : Math.max(0, Math.min(1, rawT));
+    const width = evalWidthSpline(widthPoints, closed, t);
+    const reverse = repaired ? !start.reverse : start.reverse;
+    return {
+      host: { kind: 'path', pathId: path.id, t },
+      width,
+      direction: reverse ? 'backward' : 'forward'
+    };
+  }
+
+  // Checkpoints impose one global Finish invariant. Imports with multiple
+  // Finishes keep the first in authored order; checkpoint-free legacy tracks
+  // receive a Finish 20 m ahead of their start.
+  function normalizeTriggers(rawTriggers, paths, meshes, start) {
     const pathIds = new Set((paths || []).map(p => p && p.id).filter(Boolean));
     const meshIds = new Set((meshes || []).map(m => m && m.id).filter(Boolean));
     const out = [];
@@ -1501,6 +1557,20 @@
       const n = normalizeTrigger(tr, i, pathIds, meshIds);
       if (n) out.push(n);
     });
+    let finishSeen = false;
+    for (const tr of out) {
+      if (tr.type !== 'checkpoint' || tr.role !== 'finish') continue;
+      if (finishSeen) tr.role = 'intermediate';
+      else finishSeen = true;
+    }
+    if (!finishSeen && paths && paths.length) {
+      const d = automaticFinishDescriptor(paths, start);
+      const ids = new Set(out.map(t => t.id));
+      let id = 'checkpoint-finish', suffix = 2;
+      while (ids.has(id)) id = 'checkpoint-finish-' + suffix++;
+      out.push({ id, type: 'checkpoint', role: 'finish', host: d.host, width: d.width,
+        height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: d.direction });
+    }
     return out;
   }
 
@@ -1559,6 +1629,13 @@
       }
       return path;
     });
+    // Path-hosted schema objects need stable ids before they are normalized.
+    const usedPathIds = new Set();
+    paths.forEach((path, i) => {
+      let id = path.id || 'path' + (i + 1), suffix = 2;
+      while (usedPathIds.has(id)) id = 'path' + (i + 1) + '-' + suffix++;
+      path.id = id; usedPathIds.add(id);
+    });
     // Assign/stabilize position-point identities and make duplicate IDs share
     // the same object reference in memory. Old tracks without IDs get fresh IDs.
     const byId = new Map();
@@ -1584,6 +1661,7 @@
     const meshes = (Array.isArray(data && data.meshes) ? data.meshes : [])
       .map(normalizeMeshPlacement)
       .filter(m => m && Object.prototype.hasOwnProperty.call(meshAssets, m.asset));
+    const start = normalizeStart(data && data.start, paths);
     return {
       version: TRACK_SCHEMA_VERSION,
       name: (data && data.name) || 'Untitled Track',
@@ -1593,13 +1671,13 @@
       meshes,
       textureAssets,
       zones: normalizeZones(data && data.zones, paths, meshes),
-      triggers: normalizeTriggers(data && data.triggers, paths, meshes),
+      triggers: normalizeTriggers(data && data.triggers, paths, meshes, start),
       disjointSeams: Array.isArray(data && data.disjointSeams) ? data.disjointSeams : [],
       junctions: Array.isArray(data && data.junctions) ? data.junctions : [],
       selfIntersectionOverrides: (Array.isArray(data && data.selfIntersectionOverrides) ? data.selfIntersectionOverrides : [])
         .map(normalizeSelfIntersectionOverride).filter(Boolean),
       handling: normalizeHandling(data && data.handling),
-      start: normalizeStart(data && data.start, paths)
+      start
     };
   }
 
@@ -1650,7 +1728,7 @@
     meshAssets: {},
     meshes: [],
     zones: [],
-    triggers: [],
+    triggers: [{ id: 'default-finish', type: 'checkpoint', role: 'finish', host: { kind: 'path', pathId: 'default-path', t: 0.990754 }, width: 398.6, height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'forward' }],
     textureAssets: {},
     // The classic varied banked circuit, scaled uniformly x9 from its original
     // ~888 m into the current 7-10 km regime (~7995 m driven). Only lengths
@@ -1658,6 +1736,7 @@
     // banking and relative proportions are byte-for-byte the same track, just
     // big. Angles (roll) and curve t are dimensionless and untouched.
     paths: [{
+      id: 'default-path',
       closed: true,
       points: [
         { type: 'position', pos: [1620, 0, 0], weight: 1 },
@@ -1705,7 +1784,12 @@
     meshAssets: {},
     meshes: [],
     zones: [],
-    triggers: [],
+    triggers: [
+      { id: 'starter-finish', type: 'checkpoint', role: 'finish', host: { kind: 'path', pathId: 'starter-path', t: 0.0025 }, width: 36, height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'forward' },
+      { id: 'starter-cp1', type: 'checkpoint', role: 'intermediate', host: { kind: 'path', pathId: 'starter-path', t: 0.2525 }, width: 36, height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' },
+      { id: 'starter-cp2', type: 'checkpoint', role: 'intermediate', host: { kind: 'path', pathId: 'starter-path', t: 0.5025 }, width: 36, height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' },
+      { id: 'starter-cp3', type: 'checkpoint', role: 'intermediate', host: { kind: 'path', pathId: 'starter-path', t: 0.7525 }, width: 36, height: DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'both' }
+    ],
     textureAssets: {},
     // A flat circle whose DRIVEN centerline length is 8,000 m. The rational
     // cubic B-spline does not pass through its control points, so the 12 points
@@ -1714,6 +1798,7 @@
     // yield a curve ~5% short. Flat (roll 0, y 0), constant width 36 (= the
     // default), no cross-section curvature.
     paths: [{
+      id: 'starter-path',
       closed: true,
       points: [
         { type: 'position', pos: [1332.907, 0, 0], weight: 1 },
@@ -1751,7 +1836,8 @@
     LONGITUDINAL_SAGITTA_TOLERANCE, LONGITUDINAL_MAX_DISTANCE, LONGITUDINAL_MAX_DEPTH,
     normalizeZones, zonePathStrip, zoneAlongContains,
     DEFAULT_ZONE_WIDTH, DEFAULT_ZONE_LENGTH, DEFAULT_BOOST_FACTOR, DEFAULT_BOOST_DURATION,
-    normalizeTriggers, triggerPathFrame, DEFAULT_TRIGGER_WIDTH, DEFAULT_TRIGGER_HEIGHT,
+    normalizeTriggers, triggerPathFrame, automaticFinishDescriptor,
+    DEFAULT_TRIGGER_WIDTH, DEFAULT_TRIGGER_HEIGHT, DEFAULT_FINISH_DISTANCE,
     parseTrack, serializeTrack, normalizeStart,
     normalizeMeshAssets, normalizeMeshPlacement, referencedMeshAssets, normalizeTextureAssets,
     DEFAULT_TRACK, STARTER_TRACK, N_DEFAULT, COLLISION_WALL_MARGIN, DEFAULT_RAIL_HEIGHT, DEFAULT_WIDTH,

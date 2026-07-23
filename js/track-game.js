@@ -503,6 +503,7 @@ function buildTrack(track) {
   // Zones ride on top of the finished paths + mesh regions.
   buildZones(track, bakedPaths);
   buildTriggers(track, bakedPaths);
+  resetRace(track);
   // Anything below every drivable surface by this much has clearly fallen off
   // and is never coming back, so it triggers an automatic respawn.
   let lowest = Infinity;
@@ -767,12 +768,66 @@ function detectZoneTriggers(sample, meshRegion) {
   }
 }
 
-// ---------- Triggers ----------
+// ---------- Triggers / checkpoints ----------
 // Vertical gate quads the ship passes THROUGH (see track-core.js). Never
 // rendered in normal play; a debug view (J) draws each as a translucent quad
-// with a direction arrow, coloured by armed state and flashing on fire. The
-// 'dummy' type has no mechanical effect -- firing only logs + flashes.
+// with a direction arrow, coloured by armed state and flashing on fire. Dummy
+// triggers only log; checkpoints drive lap progress and recovery.
 let triggers = [];
+const CHECKPOINT_FLASH_MS = 500;
+const race = {
+  laps: 0, hit: new Set(), intermediateIds: [], finishId: null,
+  totalStartedAt: 0, lapStartedAt: 0, flashUntil: 0
+};
+const lastCheckpoint = {
+  valid: false, triggerId: null, pos: new THREE.Vector3(),
+  forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0)
+};
+
+function resetRace(track) {
+  const checkpoints = (track.triggers || []).filter(tr => tr.type === 'checkpoint');
+  race.laps = 0;
+  race.hit.clear();
+  race.intermediateIds = checkpoints.filter(tr => tr.role !== 'finish').map(tr => tr.id);
+  race.finishId = (checkpoints.find(tr => tr.role === 'finish') || {}).id || null;
+  race.totalStartedAt = race.lapStartedAt = performance.now();
+  race.flashUntil = 0;
+  lastCheckpoint.valid = false;
+  rebuildCheckpointLights();
+}
+
+function rebuildCheckpointLights() {
+  const row = document.getElementById('checkpointLights');
+  if (!row) return;
+  row.replaceChildren();
+  for (const id of race.intermediateIds.concat(race.finishId ? [race.finishId] : [])) {
+    const light = document.createElement('span');
+    light.className = 'checkpointLight'; light.dataset.checkpointId = id;
+    row.appendChild(light);
+  }
+}
+
+function formatRaceTime(ms) {
+  ms = Math.max(0, Math.floor(ms));
+  const hours = Math.floor(ms / 3600000); ms %= 3600000;
+  const minutes = Math.floor(ms / 60000); ms %= 60000;
+  const seconds = Math.floor(ms / 1000), millis = ms % 1000;
+  const mm = String(minutes).padStart(2, '0'), ss = String(seconds).padStart(2, '0'), mmm = String(millis).padStart(3, '0');
+  return hours ? `${hours}:${mm}:${ss}.${mmm}` : `${mm}:${ss}.${mmm}`;
+}
+
+function updateRaceHud(now = performance.now()) {
+  const flashing = now < race.flashUntil;
+  const lapCount = document.getElementById('lapCount');
+  const lapTime = document.getElementById('lapTime');
+  const totalTime = document.getElementById('totalTime');
+  if (lapCount) lapCount.textContent = race.laps;
+  if (lapTime) lapTime.textContent = formatRaceTime(now - race.lapStartedAt);
+  if (totalTime) totalTime.textContent = formatRaceTime(now - race.totalStartedAt);
+  document.querySelectorAll('#checkpointLights .checkpointLight').forEach(light => {
+    light.classList.toggle('hit', flashing || race.hit.has(light.dataset.checkpointId));
+  });
+}
 let showTriggers = false;
 const TRIGGER_ARMED_COLOR = 0x33dd66;      // green: ready to fire
 const TRIGGER_DISARMED_COLOR = 0xdd3333;   // red: fired, waiting to re-arm
@@ -849,7 +904,7 @@ function buildTriggers(track, bakedPaths) {
       frame = TrackCore.triggerPathFrame(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, trig);
     }
     const rec = {
-      id: trig.id, type: trig.type, direction: trig.direction,
+      id: trig.id, type: trig.type, role: trig.role, direction: trig.direction,
       center: new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
       right: new THREE.Vector3(frame.right.x, frame.right.y, frame.right.z),
       up: new THREE.Vector3(frame.up.x, frame.up.y, frame.up.z),
@@ -865,8 +920,29 @@ function buildTriggers(track, bakedPaths) {
 
 function fireTrigger(rec, dir) {
   rec.flash = TRIGGER_FLASH_TIME;
-  // 'dummy' does nothing mechanical -- this is the only feedback there is.
   console.log(`[trigger] ${rec.id} fired (${dir})`);
+  if (rec.type !== 'checkpoint') return;
+
+  // Every valid checkpoint crossing, including a premature Finish, becomes the
+  // recovery pose. The gate center is safer than the ship's lateral crossing
+  // point; a both-direction gate remembers which way it was crossed.
+  lastCheckpoint.valid = true;
+  lastCheckpoint.triggerId = rec.id;
+  lastCheckpoint.pos.copy(rec.center);
+  lastCheckpoint.up.copy(rec.up);
+  lastCheckpoint.forward.copy(rec.fwd).multiplyScalar(dir === 'backward' ? -1 : 1);
+
+  if (rec.role !== 'finish') {
+    race.hit.add(rec.id);
+    return;
+  }
+  if (!race.intermediateIds.every(id => race.hit.has(id))) return;
+
+  const now = performance.now();
+  race.laps++;
+  race.hit.clear();
+  race.lapStartedAt = now;
+  race.flashUntil = now + CHECKPOINT_FLASH_MS;
 }
 
 // Swept crossing of the ship segment p0->p1 against every trigger gate. Fires
@@ -896,9 +972,9 @@ function detectTriggers(p0, p1) {
 
 // Re-arm all triggers and reseed the swept-segment anchor, so a teleport
 // (reset/respawn) never registers as a crossing.
-function resetTriggers() {
+function resetTriggers(disarmedId = null) {
   _prevTriggerPos.copy(physics.groundPos);
-  for (const tr of triggers) { tr.armed = true; tr.flash = 0; }
+  for (const tr of triggers) { tr.armed = tr.id !== disarmedId; tr.flash = 0; }
 }
 
 // Decay fire flashes and, while the debug view is on, colour each gate by armed
@@ -1212,37 +1288,28 @@ scene.add(shipGroup);
 
 // Place the ship at control point 0's region, facing along the track, and clear
 // its motion. Called by buildTrack() on load and on every JSON import.
-// Last position with solid ground under it, used by respawn().
-const lastGrounded = { pos: new THREE.Vector3(), heading: 0, valid: false };
 
-/* Put the ship back on solid ground after a fall: at the spot it last had
- * ground under it, or at the start line if it has never been grounded. */
+/* Put the ship at the last checkpoint gate center, or at the authored start if
+ * no checkpoint has been crossed yet. Lap progress and wall-clock timers stay. */
 function respawn() {
-  if (!lastGrounded.valid) { resetShip(); return; }
-  physics.groundPos.copy(lastGrounded.pos);
-  physics.heading = lastGrounded.heading;
+  if (!lastCheckpoint.valid) { resetShip(); return; }
+  physics.groundPos.copy(lastCheckpoint.pos);
+  physics.heading = Math.atan2(lastCheckpoint.forward.x, lastCheckpoint.forward.z);
   physics.speed = 0;
   physics.airborne = false;
   physics.verticalVel = 0;
   physics.landingBounce = 0;
   physics.landingBounceVel = 0;
-  physics.visualGroundPos.copy(lastGrounded.pos);
-  // Respawn re-establishes the tangent-frame vectors from the stored azimuth.
-  // Recovery always lands on solid, level-enough ground, so a horizontal facing
-  // is fine; the next frame's reprojection re-flattens it onto the real surface.
-  physics.forward.set(Math.sin(lastGrounded.heading), 0, Math.cos(lastGrounded.heading));
+  physics.visualGroundPos.copy(lastCheckpoint.pos);
+  physics.forward.copy(lastCheckpoint.forward);
   physics.moveDir.copy(physics.forward);
-  physics.right.set(Math.cos(lastGrounded.heading), 0, -Math.sin(lastGrounded.heading));
+  physics.up.copy(lastCheckpoint.up);
+  physics.right.crossVectors(physics.up, physics.forward).normalize();
+  physics.visualUp.copy(physics.up);
   clearBoost();
-  resetTriggers();
-  // Reset the surface up too, to match the horizontal facing above. Unlike
-  // resetShip this is deliberately world-up rather than the sampled normal:
-  // the frame is being re-seeded flat, and the next updatePhysics eases
-  // physics.visualUp back onto the real surface normal (dt*18). Left unset,
-  // both retained whatever tilted/inverted value they drifted to mid-fall, so
-  // the camera and ship orientation lurched for a frame after every respawn.
-  physics.up.set(0, 1, 0);
-  physics.visualUp.set(0, 1, 0);
+  // Keep this gate disarmed until the ship clears it, otherwise moving away
+  // from a respawn exactly on its plane would count as another crossing.
+  resetTriggers(lastCheckpoint.triggerId);
 }
 
 function resetShip() {
@@ -1285,9 +1352,6 @@ function resetShip() {
   tangentize(physics.forward, startSurface.normal, physics.forward);
   physics.moveDir.copy(physics.forward);
   physics.right.crossVectors(startSurface.normal, physics.forward).normalize();
-  lastGrounded.pos.copy(physics.groundPos);
-  lastGrounded.heading = heading;
-  lastGrounded.valid = true;
   clearBoost();
   resetTriggers();
 }
@@ -1712,9 +1776,6 @@ function stepPhysics(dt, throttle, brake, steer) {
   // seams the nearest path segment can switch, producing a small projection
   // correction in groundPos; smooth only unexpectedly-large render deltas so
   // normal movement stays responsive while seam pops are eased out.
-  // Remember where the ship last had solid ground under it. Falling off a bare
-  // mesh edge is routine, so recovery returns you to where you fell rather than
-  // all the way back to the start line.
   // Zones: the boost timer advances every sub-step (it keeps running through the
   // air), but a trigger only fires while grounded on the zone's host surface.
   tickBoost(dt);
@@ -1724,11 +1785,7 @@ function stepPhysics(dt, throttle, brake, steer) {
   detectTriggers(_prevTriggerPos, physics.groundPos);
   _prevTriggerPos.copy(physics.groundPos);
 
-  if (!physics.airborne) {
-    lastGrounded.pos.copy(physics.groundPos);
-    lastGrounded.heading = physics.heading;
-    lastGrounded.valid = true;
-  } else if (physics.groundPos.y < trackFloorY) {
+  if (physics.airborne && physics.groundPos.y < trackFloorY) {
     respawn();
     return { respawned: true };
   }
@@ -2090,6 +2147,7 @@ window.__game = {
   get paths() { return paths; },
   get zones() { return zones; },
   get triggers() { return triggers; },
+  get race() { return race; },
   get physics() { return physics; },
   get trackFloorY() { return trackFloorY; },
   respawn
@@ -2103,6 +2161,7 @@ function animate() {
   updatePhysics(dt);
   updateCamera(dt);
   updateTriggerDebug(dt);
+  updateRaceHud();
   drawMinimap();
   renderer.render(scene, camera);
 }
