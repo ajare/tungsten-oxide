@@ -530,16 +530,39 @@ const MESH_RAIL_COLOR = 0xd8b400;
 let zones = [];
 const ZONE_HOVER = 0.15;                 // units above the surface, so they sit clear of z-fighting
 const ZONE_RELEASE = 1;                  // seconds for the boost's smooth release back to max
+const ZONE_CHECKER = 3;                  // world units per black/white square on the start grid
 const ZONE_COLORS = { velocityChange: 0xffa520, startGrid: 0xcfd6dd };
 
-function zoneMeshFromPositions(pos, effect) {
+// A black-and-white checkerboard texture for the start grid. A fresh one per
+// start-grid mesh, deliberately: disposeObject disposes each mesh's material.map
+// on rebuild, so a shared texture would be freed out from under the others.
+function makeCheckerTexture() {
+  const S = 64;   // pixels per square in the 2x2 tile
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = S * 2;
+  const cx = canvas.getContext('2d');
+  cx.fillStyle = '#f2f2f2'; cx.fillRect(0, 0, S * 2, S * 2);
+  cx.fillStyle = '#0a0a0a'; cx.fillRect(0, 0, S, S); cx.fillRect(S, S, S, S);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;   // crisp edges, no mip blur
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  else if (THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
+  return tex;
+}
+
+// A zone mesh: a checker-textured surface for the start grid (UVs scaled so one
+// texture tile spans 2*ZONE_CHECKER world units, i.e. square-in-world checks),
+// or a flat solid colour for every other effect.
+function zoneMeshFromPositions(pos, uv, effect) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (uv && uv.length) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.computeVertexNormals();
-  const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-    color: ZONE_COLORS[effect] || 0xffffff, side: THREE.DoubleSide,
-    transparent: true, opacity: 0.72, depthWrite: false
-  }));
+  const mat = effect === 'startGrid'
+    ? new THREE.MeshBasicMaterial({ map: makeCheckerTexture(), side: THREE.DoubleSide, transparent: true, opacity: 0.92, depthWrite: false })
+    : new THREE.MeshBasicMaterial({ color: ZONE_COLORS[effect] || 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.72, depthWrite: false });
+  const mesh = new THREE.Mesh(g, mat);
   mesh.renderOrder = 5;   // drawn over the road surface it floats on
   return mesh;
 }
@@ -624,12 +647,14 @@ function buildZones(track, bakedPaths) {
       const cos = Math.cos(rot), sin = Math.sin(rot);
       const hl = Math.max(0.25, (zone.length || 0) / 2), hw = Math.max(0.25, (zone.width || 0) / 2);
       // length runs along the local x-axis, width along local z (matches worldToLocal in detection).
-      const corner = (lx, lz) => ({ x: host.x + lx * cos - lz * sin, z: host.z + lx * sin + lz * cos });
+      // UVs are the local coordinates scaled so the checker squares are world-sized.
+      const uScale = 1 / (2 * ZONE_CHECKER);
+      const corner = (lx, lz) => ({ x: host.x + lx * cos - lz * sin, z: host.z + lx * sin + lz * cos, u: lx * uScale, v: lz * uScale });
       const c00 = corner(-hl, -hw), c10 = corner(hl, -hw), c11 = corner(hl, hw), c01 = corner(-hl, hw);
-      const pos = [];
-      const tri = (p, q, r) => pos.push(p.x, y, p.z, q.x, y, q.z, r.x, y, r.z);
+      const pos = [], uv = [];
+      const tri = (p, q, r) => { pos.push(p.x, y, p.z, q.x, y, q.z, r.x, y, r.z); uv.push(p.u, p.v, q.u, q.v, r.u, r.v); };
       tri(c00, c10, c11); tri(c00, c11, c01);
-      const mesh = zoneMeshFromPositions(pos, zone.effect); scene.add(mesh);
+      const mesh = zoneMeshFromPositions(pos, uv, zone.effect); scene.add(mesh);
       zones.push({
         kind: 'mesh', effect: zone.effect, factor: zone.factor, duration: zone.duration,
         hostRegion: region, x: host.x, z: host.z, rot, halfLen: hl, halfWidth: hw, wasInside: false, mesh
@@ -639,13 +664,25 @@ function buildZones(track, bakedPaths) {
       if (idx < 0) continue;
       const bp = bakedPaths[idx];
       const strip = TrackCore.zonePathStrip(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, zone, ZONE_HOVER);
-      const pos = [];
+      // u runs along the strip (cumulative centerline distance), v across it (0
+      // at the left edge, width at the right), both scaled so checks are world-sized.
+      const uScale = 1 / (2 * ZONE_CHECKER), vW = (zone.width || 0) * uScale;
+      const dist = [0];
+      for (let i = 1; i < strip.left.length; i++) {
+        const ax = (strip.left[i - 1].x + strip.right[i - 1].x) / 2, ay = (strip.left[i - 1].y + strip.right[i - 1].y) / 2, az = (strip.left[i - 1].z + strip.right[i - 1].z) / 2;
+        const bx = (strip.left[i].x + strip.right[i].x) / 2, by = (strip.left[i].y + strip.right[i].y) / 2, bz = (strip.left[i].z + strip.right[i].z) / 2;
+        dist[i] = dist[i - 1] + Math.hypot(bx - ax, by - ay, bz - az);
+      }
+      const pos = [], uv = [];
       for (let i = 0; i < strip.left.length - 1; i++) {
         const a = strip.left[i], b = strip.right[i], c = strip.left[i + 1], d = strip.right[i + 1];
+        const u0 = dist[i] * uScale, u1 = dist[i + 1] * uScale;
         pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        uv.push(u0, 0, u0, vW, u1, 0);
         pos.push(b.x, b.y, b.z, d.x, d.y, d.z, c.x, c.y, c.z);
+        uv.push(u0, vW, u1, vW, u1, 0);
       }
-      const mesh = zoneMeshFromPositions(pos, zone.effect); scene.add(mesh);
+      const mesh = zoneMeshFromPositions(pos, uv, zone.effect); scene.add(mesh);
       zones.push({
         kind: 'path', effect: zone.effect, factor: zone.factor, duration: zone.duration,
         hostPath: paths[idx], gLo: strip.gLo, gHi: strip.gHi, gMax: strip.gMax, closed: strip.closed,

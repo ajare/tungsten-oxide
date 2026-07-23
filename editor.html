@@ -94,7 +94,7 @@
   }
   #topZoomControl .zoomLabel { color: var(--accent); font-size: 11px; line-height: 1; }
   #topZoomSlider {
-    width: 24px; height: 130px; margin: 0;
+    width: 24px; height: 230px; margin: 0;
     writing-mode: vertical-rl; direction: rtl; accent-color: var(--accent);
   }
   #topHomeBtn {
@@ -274,7 +274,7 @@
     <div class="badge" id="topBadge">Top-down (X / Z) &mdash; left-click a control point to select/drag, left-drag empty space to pan, right-click empty space to add &middot; Delete to remove &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it &middot; <span style="color:#b98cff">mesh regions: click to select, drag to move; switch to Rails mode to click edges (solid = wall, dashed = ledge)</span></div>
     <div id="topZoomControl" title="Top-down zoom">
       <div class="zoomLabel">+</div>
-      <input id="topZoomSlider" type="range" min="-100" max="100" value="0" step="1" aria-label="Top-down zoom">
+      <input id="topZoomSlider" type="range" min="-100" max="250" value="0" step="1" autocomplete="off" aria-label="Top-down zoom">
       <div class="zoomLabel">&minus;</div>
       <button id="topHomeBtn" type="button" title="Reset zoom and view to origin" aria-label="Reset view">&#8962;</button>
     </div>

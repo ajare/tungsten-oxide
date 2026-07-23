@@ -97,6 +97,13 @@ let pointFilters = { position: true, roll: true, width: true, crossSection: true
 let showPhysicsPoints = false;
 let physicsSel = null;            // { path, index } into a path's baked frames
 let topZoom = 1;                  // multiplier over the auto-fit top-down view
+// Top-down zoom slider range, in slider units (50 units = one doubling, see
+// setTopZoomSliderValue). 0 = the auto-fit 1x. The upper end is generous so a
+// big-world track (7-10 km) can be zoomed right in to individual control points;
+// the lower end still pulls back below the auto-fit. Shared so the HTML, the
+// value clamp, and releaseTopViewFreeze can't drift.
+const TOP_ZOOM_SLIDER_MIN = -100;    // 2^(-100/50) = 0.25x
+const TOP_ZOOM_SLIDER_MAX = 250;     // 2^(250/50)  = 32x
 let gridSize = 32;
 let snapToGrid = false;
 let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit center
@@ -667,7 +674,7 @@ function releaseTopViewFreeze() {
   const baseScale = Math.min((view.w - 2 * margin) / spanX, (view.h - 2 * margin) / spanZ) || 1;
   topZoom = oldScale / baseScale;
   const slider = document.getElementById('topZoomSlider');
-  if (slider) slider.value = Math.max(-100, Math.min(100, Math.round(Math.log2(topZoom) * 50)));
+  if (slider) slider.value = Math.max(TOP_ZOOM_SLIDER_MIN, Math.min(TOP_ZOOM_SLIDER_MAX, Math.round(Math.log2(topZoom) * 50)));
   const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
   topPan.x = (cx - center.x) * oldScale;
   topPan.y = (cz - center.z) * oldScale;
@@ -3711,6 +3718,19 @@ for (const k in HANDLING_FIELDS) {
 // preview matches exactly what the game builds and drives over.
 const ZONE_FILL = { velocityChange: 'rgba(255,165,32,0.42)', startGrid: 'rgba(207,214,221,0.38)' };
 const ZONE_STROKE = { velocityChange: '#ffb020', startGrid: '#cfd6dd' };
+// Screen-space checker fill for start-grid zones in the top-down preview. It
+// doesn't rotate/scale with the zone (the game builds the real world-aligned
+// checker), but it clearly reads as "start grid" here. Built once.
+let _zoneCheckerPattern = null;
+function zoneCheckerPattern(ctx) {
+  if (_zoneCheckerPattern) return _zoneCheckerPattern;
+  const c = document.createElement('canvas'); c.width = c.height = 16;
+  const cx = c.getContext('2d');
+  cx.fillStyle = 'rgba(232,232,236,0.9)'; cx.fillRect(0, 0, 16, 16);
+  cx.fillStyle = 'rgba(12,12,14,0.9)'; cx.fillRect(0, 0, 8, 8); cx.fillRect(8, 8, 8, 8);
+  _zoneCheckerPattern = ctx.createPattern(c, 'repeat');
+  return _zoneCheckerPattern;
+}
 function zonesList() { if (!Array.isArray(track.zones)) track.zones = []; return track.zones; }
 function findZone(id) { return zonesList().find(z => z.id === id) || null; }
 function selectedZone() { return selectedZoneId ? findZone(selectedZoneId) : null; }
@@ -3822,7 +3842,7 @@ function drawZones(ctx) {
     ctx.beginPath();
     outline.forEach((p, i) => { const s = worldToScreen(p.x, p.z); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
     ctx.closePath();
-    ctx.fillStyle = ZONE_FILL[zone.effect] || 'rgba(255,255,255,0.35)';
+    ctx.fillStyle = zone.effect === 'startGrid' ? zoneCheckerPattern(ctx) : (ZONE_FILL[zone.effect] || 'rgba(255,255,255,0.35)');
     ctx.fill();
     ctx.strokeStyle = ZONE_STROKE[zone.effect] || '#fff';
     ctx.lineWidth = zone.id === selectedZoneId ? 3 : 1.5;
@@ -3892,9 +3912,13 @@ document.getElementById('snapGridChk').addEventListener('change', refresh);
 const topZoomSlider = document.getElementById('topZoomSlider');
 let gestureStartZoomValue = 0;
 function setTopZoomSliderValue(value) {
-  topZoomSlider.value = Math.max(-100, Math.min(100, value));
-  topZoom = Math.pow(2, Number(topZoomSlider.value) / 50); // -100..100 => 0.25x..4x
+  topZoomSlider.value = Math.max(TOP_ZOOM_SLIDER_MIN, Math.min(TOP_ZOOM_SLIDER_MAX, value));
+  topZoom = Math.pow(2, Number(topZoomSlider.value) / 50); // 50 units per doubling: -100..250 => 0.25x..32x
 }
+// On (re)load the browser may restore the range input's old value, but topZoom
+// is re-initialised to 1 (default framing) -- so the thumb sat at a stale spot
+// while the view was actually at 1x. Force them back into agreement here.
+setTopZoomSliderValue(0);
 function zoomTopAt(x, y, zoomValue) {
   hideAddPointMenu();
   const before = screenToWorld(x, y);
