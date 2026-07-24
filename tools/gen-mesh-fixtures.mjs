@@ -145,6 +145,7 @@ const fixtures = [];
 }
 
 const summaries = {};
+const compiledSummaries = {};
 for (const [filename, raw] of fixtures) {
   const normalized = TrackCore.parseTrack(JSON.stringify(raw));
   await writeFile(new URL(filename, outputDir), TrackCore.serializeTrack(normalized) + '\n');
@@ -168,12 +169,29 @@ for (const [filename, raw] of fixtures) {
     effects: normalized.zones.map(z => ({ id: z.id, effect: z.effect, kind: z.host.kind })),
     gates: normalized.triggers.map(t => ({ id: t.id, type: t.type, role: t.role || '', direction: t.direction, kind: t.host.kind }))
   };
+  const regions = normalized.meshes.map(placement => {
+    const record = normalized.meshAssets[placement.asset];
+    const compiled = TrackMesh.compile(TrackMesh.meshFromJSON(record.mesh), placement);
+    const triangleArea = compiled.triangles.reduce((sum, [a, b, c]) =>
+      sum + Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) / 2, 0);
+    return {
+      id: compiled.id, assetId: compiled.assetId, elevation: compiled.elevation, railHeight: record.railHeight,
+      bounds: compiled.bounds,
+      polygons: compiled.polygons.map(p => ({ polygonId: p.polygonId, outerCount: p.outer.length,
+        holeCounts: p.holes.map(h => h.length) })),
+      triangleCount: compiled.triangles.length, triangleArea,
+      rails: compiled.rails.map(r => ({ edgeId: r.edgeId, a: [r.a.x, r.a.z], b: [r.b.x, r.b.z],
+        normal: [r.nx, r.nz], length: r.len }))
+    };
+  });
+  compiledSummaries[filename] = regions;
   console.log(`wrote test/fixtures/mesh/${filename}`);
 }
 const expectedDir = new URL('expected/', outputDir);
 await mkdir(expectedDir, { recursive: true });
 await writeFile(new URL('normalized-summary.json', expectedDir), JSON.stringify(summaries, null, 2) + '\n');
-console.log('wrote test/fixtures/mesh/expected/normalized-summary.json');
+await writeFile(new URL('compiled-summary.json', expectedDir), JSON.stringify(compiledSummaries, null, 2) + '\n');
+console.log('wrote test/fixtures/mesh/expected loader and compiled summaries');
 
 // M3 curved/banked path oracle: full current-schema source plus selected baked
 // frames and renderer-neutral geometric invariants for native comparison.

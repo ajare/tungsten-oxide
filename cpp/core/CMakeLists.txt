@@ -1,4 +1,4 @@
-# C++ parity engine + replayer (CPP_PORT_PLAN.md milestones 1-3).
+# C++ native track engine + parity replayer.
 #
 # Build (from a Developer prompt or after vcvars):
 #   cmake -S cpp/core -B cpp/build -G Ninja
@@ -6,6 +6,12 @@
 #   ctest --test-dir cpp/build --output-on-failure
 cmake_minimum_required(VERSION 3.20)
 project(core CXX)
+
+# A standalone core configure still consumes the repository-pinned Willpower
+# sources; the combined cpp/ configure has already created this target.
+if (NOT TARGET Willpower.Geometry)
+  add_subdirectory(../willpower ${CMAKE_CURRENT_BINARY_DIR}/willpower)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,6 +36,7 @@ set(CORE_HEADERS
   include/TrackCore.hpp
   include/TrackDefinition.hpp
   include/TrackGeometry.hpp
+  include/TrackMesh.hpp
   include/Track.hpp
   include/Ship.hpp
   include/Simulation.hpp)
@@ -39,10 +46,12 @@ add_library(core STATIC
   src/TrackCore.cpp
   src/Track.cpp
   src/TrackBake.cpp
+  src/TrackMesh.cpp
   src/TrackLoader.cpp
   src/Simulation.cpp
   ${CORE_HEADERS})
 target_include_directories(core PUBLIC include PRIVATE third_party)
+target_link_libraries(core PRIVATE Willpower::Geometry)
 
 # Headers carry no build step of their own, but listing them as sources (above)
 # surfaces them in IDE project views; group them under their own filter there
@@ -53,12 +62,23 @@ add_executable(parity tests/parity_main.cpp)
 target_include_directories(parity PRIVATE third_party)
 target_link_libraries(parity PRIVATE core)
 
-# Focused loader/bake/mesh tests. M0 starts this as a shared-fixture smoke
-# harness; later mesh-port milestones add semantic geometry and physics cases
-# without making the existing parity replayer responsible for everything.
+# Focused loader, bake, topology, render-geometry, and mesh-query tests without
+# making the existing baked-world parity replayer responsible for everything.
 add_executable(track_tests tests/track_tests.cpp)
 target_include_directories(track_tests PRIVATE third_party)
 target_link_libraries(track_tests PRIVATE core)
+
+# Multi-config generators leave Willpower DLLs in sibling output directories.
+# Put runtime dependencies beside each executable so direct runs and CTest use
+# the same self-contained layout.
+if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
+  foreach(_executable parity track_tests)
+    add_custom_command(TARGET ${_executable} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:${_executable}> $<TARGET_FILE_DIR:${_executable}>
+      COMMAND_EXPAND_LISTS)
+  endforeach()
+endif()
 
 enable_testing()
 set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/traces)

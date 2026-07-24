@@ -1,7 +1,7 @@
 // Track.hpp — authored current-schema data plus the baked, world-space runtime
 // records and renderer-neutral geometry. Track::fromJson/fromFile normalizes the
-// definition and compiles its spline paths. The legacy parity harness may still
-// construct baked records directly from committed JS traces.
+// definition and compiles its spline paths and mesh placements. The legacy
+// parity harness may still construct baked records directly from committed JS traces.
 #pragma once
 #include <filesystem>
 #include <optional>
@@ -12,6 +12,7 @@
 #include "Vec3.hpp"
 #include "TrackDefinition.hpp"
 #include "TrackGeometry.hpp"
+#include "TrackMesh.hpp"
 
 namespace tox {
 
@@ -68,6 +69,7 @@ struct Track {
   double trackFloorY{-1e9};
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
+  std::vector<MeshRegion> meshRegions;
   std::vector<GeometryBatch> geometry;
 
   bool endpointConnected(const std::string& id, bool present) const;  // src/Track.cpp

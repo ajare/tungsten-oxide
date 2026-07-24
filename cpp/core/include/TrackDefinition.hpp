@@ -1,6 +1,6 @@
 // TrackDefinition.hpp — normalized, authored current-schema track records.
 // These are deliberately separate from Track.hpp's baked physics records: the
-// loader fills this runtime subset first, then TrackBake (M3) compiles it.
+// loader fills this runtime subset first, then native bake/mesh adapters compile it.
 #pragma once
 
 #include <cstdint>

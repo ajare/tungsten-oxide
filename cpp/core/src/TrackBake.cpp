@@ -4,6 +4,7 @@
 #include "TrackBake.hpp"
 #include "Simulation.hpp"
 #include "TrackCore.hpp"
+#include "TrackMesh.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -762,6 +763,8 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         o.height = t.height;
         track.triggers.push_back(o);
       }
+    compileTrackMeshes(track, warnings);
+    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
     track.trackFloorY = (std::isfinite(low) ? low : 0) - Consts::RESPAWN_FALL_DEPTH;
     return true;
   } catch (const std::exception& e) {

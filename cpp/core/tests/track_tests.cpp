@@ -89,6 +89,22 @@ void checkVec(const Vec3& got, const json& want, double tolerance, const std::st
   checkClose(got.z, want[2].get<double>(), tolerance, message + ".z");
 }
 
+void checkVec2(const Vec2d& got, const json& want, double tolerance, const std::string& message) {
+  checkClose(got.x, want[0].get<double>(), tolerance, message + ".x");
+  checkClose(got.y, want[1].get<double>(), tolerance, message + ".z");
+}
+
+double triangleArea(const MeshRegion& region) {
+  double area = 0;
+  for (const auto& triangle : region.triangles) {
+    const auto& a = triangle.points[0];
+    const auto& b = triangle.points[1];
+    const auto& c = triangle.points[2];
+    area += std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) / 2;
+  }
+  return area;
+}
+
 bool hasWarning(const TrackLoadResult& result, const std::string& code) {
   for (const auto& warning : result.warnings)
     if (warning.code == code) return true;
@@ -111,6 +127,7 @@ int main(int argc, char** argv) {
       "overlapping-elevations.json", "pad-with-hole.json", "shared-seam.json",
       "transformed-square.json"};
   const json expectedSummaries = readJson(fixtureDir / "expected" / "normalized-summary.json");
+  const json expectedCompiled = readJson(fixtureDir / "expected" / "compiled-summary.json");
   std::set<std::string> found;
 
   if (std::filesystem::is_directory(fixtureDir)) {
@@ -133,10 +150,103 @@ int main(int argc, char** argv) {
       if (expectedSummaries.contains(label))
         check(actual == expectedSummaries.at(label), label + " normalized summary matches JS\n  got:  " + dump(actual) +
                                                          "\n  want: " + dump(expectedSummaries.at(label)));
+
+      check(expectedCompiled.contains(label), label + " has a JS compiled mesh summary");
+      if (!expectedCompiled.contains(label)) continue;
+      const json& expectedRegions = expectedCompiled.at(label);
+      check(loaded.track->meshRegions.size() == expectedRegions.size(), label + " compiles every mesh placement");
+      for (std::size_t i = 0; i < std::min(loaded.track->meshRegions.size(), expectedRegions.size()); ++i) {
+        const MeshRegion& region = loaded.track->meshRegions[i];
+        const json& expected = expectedRegions[i];
+        check(region.id == expected["id"].get<std::string>() && region.assetId == expected["assetId"].get<std::string>(),
+              label + " preserves placement and asset identity");
+        checkClose(region.elevation, expected["elevation"].get<double>(), 1e-12, label + " elevation");
+        checkClose(region.railHeight, expected["railHeight"].get<double>(), 1e-12, label + " rail height");
+        checkClose(region.bounds.minX, expected["bounds"]["minX"].get<double>(), 2e-12, label + " bounds.minX");
+        checkClose(region.bounds.maxX, expected["bounds"]["maxX"].get<double>(), 2e-12, label + " bounds.maxX");
+        checkClose(region.bounds.minZ, expected["bounds"]["minZ"].get<double>(), 2e-12, label + " bounds.minZ");
+        checkClose(region.bounds.maxZ, expected["bounds"]["maxZ"].get<double>(), 2e-12, label + " bounds.maxZ");
+        check(region.polygons.size() == expected["polygons"].size(), label + " polygon count matches JS");
+        for (std::size_t p = 0; p < std::min(region.polygons.size(), expected["polygons"].size()); ++p) {
+          check(region.polygons[p].polygonId == expected["polygons"][p]["polygonId"].get<int>(), label + " polygon keeps authored id");
+          check(region.polygons[p].outer.size() == expected["polygons"][p]["outerCount"].get<std::size_t>(), label + " outer-loop topology matches JS");
+          check(region.polygons[p].holes.size() == expected["polygons"][p]["holeCounts"].size(), label + " hole count matches JS");
+          for (std::size_t h = 0; h < std::min(region.polygons[p].holes.size(), expected["polygons"][p]["holeCounts"].size()); ++h)
+            check(region.polygons[p].holes[h].size() == expected["polygons"][p]["holeCounts"][h].get<std::size_t>(),
+                  label + " hole-loop topology matches JS");
+        }
+        check(region.triangles.size() == expected["triangleCount"].get<std::size_t>(), label + " equivalent triangulation count matches JS");
+        checkClose(triangleArea(region), expected["triangleArea"].get<double>(), 2e-9, label + " triangulated area");
+        check(region.rails.size() == expected["rails"].size(), label + " rail count matches JS");
+        for (std::size_t r = 0; r < std::min(region.rails.size(), expected["rails"].size()); ++r) {
+          const MeshRail& rail = region.rails[r];
+          const json& expectedRail = expected["rails"][r];
+          check(rail.edgeId == expectedRail["edgeId"].get<int>(), label + " rail keeps authored edge id");
+          checkVec2(rail.a, expectedRail["a"], 2e-12, label + " rail.a");
+          checkVec2(rail.b, expectedRail["b"], 2e-12, label + " rail.b");
+          checkClose(rail.nx, expectedRail["normal"][0].get<double>(), 2e-12, label + " rail.nx");
+          checkClose(rail.nz, expectedRail["normal"][1].get<double>(), 2e-12, label + " rail.nz");
+          checkClose(rail.length, expectedRail["length"].get<double>(), 2e-12, label + " rail.length");
+        }
+
+        const std::string surfaceId = "mesh-" + region.id + "-surface";
+        const std::string railId = "mesh-" + region.id + "-rails";
+        const auto surface = std::find_if(loaded.track->geometry.begin(), loaded.track->geometry.end(),
+                                          [&](const auto& batch) { return batch.id == surfaceId; });
+        const auto rails = std::find_if(loaded.track->geometry.begin(), loaded.track->geometry.end(),
+                                        [&](const auto& batch) { return batch.id == railId; });
+        check(surface != loaded.track->geometry.end() && surface->kind == GeometryKind::MeshSurface,
+              label + " emits mesh surface geometry");
+        check(rails != loaded.track->geometry.end() && rails->kind == GeometryKind::MeshRail,
+              label + " emits mesh rail geometry");
+        if (surface != loaded.track->geometry.end()) {
+          check(surface->vertices.size() == region.triangles.size() * 3 && surface->indices.size() == region.triangles.size() * 3,
+                label + " surface geometry covers every Willpower triangle");
+          check(surface->materialKey == "mesh-region" && !surface->hasUv && !surface->texture,
+                label + " mesh surface keeps renderer-neutral material metadata");
+        }
+        if (rails != loaded.track->geometry.end()) {
+          check(rails->vertices.size() == region.rails.size() * 6 && rails->indices.size() == region.rails.size() * 6,
+                label + " rail geometry covers every compiled rail");
+          check(rails->materialKey == "rail" && !rails->hasUv && !rails->texture,
+                label + " mesh rails keep renderer-neutral material metadata");
+        }
+        for (const auto batch : {surface, rails}) {
+          if (batch == loaded.track->geometry.end()) continue;
+          for (std::uint32_t index : batch->indices) check(index < batch->vertices.size(), label + " mesh geometry index is valid");
+          for (const auto& vertex : batch->vertices) {
+            check(std::isfinite(vertex.position.x) && std::isfinite(vertex.position.y) && std::isfinite(vertex.position.z) &&
+                      std::isfinite(vertex.normal.x) && std::isfinite(vertex.normal.y) && std::isfinite(vertex.normal.z),
+                  label + " mesh render attributes are finite");
+            check(vertex.rgba.r == 1 && vertex.rgba.g == 1 && vertex.rgba.b == 1 && vertex.rgba.a == 1,
+                  label + " mesh render RGBA is opaque white");
+          }
+        }
+      }
     }
   }
 
   check(found == expectedFiles, "fixture inventory matches the seven shared M0 cases");
+
+  // M4 semantic queries: holes subtract, concavity remains outside, shared
+  // polygon seams are not rails, and bounds padding follows the JS contract.
+  const auto holeTrack = Track::fromFile(fixtureDir / "pad-with-hole.json");
+  if (holeTrack && !holeTrack.track->meshRegions.empty()) {
+    const MeshRegion& region = holeTrack.track->meshRegions[0];
+    check(region.contains(-20, -20), "solid area of holed mesh contains world point");
+    check(!region.contains(0, 0), "polygon hole excludes its world point");
+    check(!region.contains(40, 0), "outside point is not contained");
+    check(region.withinBounds(30.5, 0, 0.5) && !region.withinBounds(30.5, 0), "bounds query honors padding");
+  }
+  const auto concaveTrack = Track::fromFile(fixtureDir / "concave-railed-pad.json");
+  if (concaveTrack && !concaveTrack.track->meshRegions.empty()) {
+    const MeshRegion& region = concaveTrack.track->meshRegions[0];
+    check(region.contains(-20, 10), "concave mesh contains its lower arm");
+    check(!region.contains(10, 40), "concave cutout remains outside");
+  }
+  const auto seamTrack = Track::fromFile(fixtureDir / "shared-seam.json");
+  if (seamTrack && !seamTrack.track->meshRegions.empty())
+    check(seamTrack.track->meshRegions[0].rails.size() == 6, "shared interior polygon edge is not railed");
 
   // M3: independently baked curved/banked path against selected JS oracle data.
   const std::filesystem::path pathFixture = fixtureDir.parent_path() / "path" / "curved-banked.json";
@@ -262,6 +372,14 @@ int main(int argc, char** argv) {
     const auto loaded = Track::fromJson(input.dump());
     check(loaded && loaded.track->definition.meshes.empty(), "dangling mesh placement is recoverable and dropped");
     check(hasWarning(loaded, "mesh-placement-missing-asset"), "dangling mesh placement emits a structured warning");
+  }
+  {
+    json input = base;
+    input["meshAssets"]["pad"]["mesh"]["edges"][0]["vertices"][0] = 999;
+    const auto loaded = Track::fromJson(input.dump());
+    check(loaded && loaded.track->definition.meshes.size() == 1 && loaded.track->meshRegions.empty(),
+          "topologically invalid mesh remains authored but is skipped by native compilation");
+    check(hasWarning(loaded, "mesh-compile-failed"), "Willpower topology failure emits a structured warning");
   }
   {
     json input = base;
