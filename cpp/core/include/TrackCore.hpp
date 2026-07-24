@@ -3,17 +3,13 @@
 // trace serializes the already-BAKED corridor, the C++ engine never bakes a
 // track, so only the cross-section profile functions (used by curvedSurfaceFrame)
 // are needed here — plus the centralized constants (CPP_PORT_PLAN.md §8).
+//
+// The constants stay in the header (constexpr); the function bodies live in
+// src/TrackCore.cpp.
 #pragma once
-#include <algorithm>
-#include <cmath>
 
 namespace tox {
 namespace TrackCore {
-
-// THREE.MathUtils.clamp — same formula r128 uses.
-inline double clamp(double v, double lo, double hi) {
-  return std::max(lo, std::min(hi, v));
-}
 
 // --- geometry constants owned by track-core.js ---
 constexpr double COLLISION_WALL_MARGIN = 1.8;
@@ -21,47 +17,24 @@ constexpr double DEFAULT_CROSS_SECTION_TIGHTNESS = 1.0;
 constexpr double DEFAULT_BOOST_FACTOR = 1.5;
 constexpr double DEFAULT_BOOST_DURATION = 2.0;
 
+// THREE.MathUtils.clamp — same formula r128 uses.
+double clamp(double v, double lo, double hi);
+
 // clampSignedUnit / clampTightness (track-core.js). Inputs here are already
 // finite doubles from the baked trace, so the "non-finite -> fallback" branch is
 // preserved only for faithfulness.
-inline double clampSignedUnit(double n) {
-  if (!std::isfinite(n)) return 0.0;
-  return std::max(-1.0, std::min(1.0, n));
-}
-inline double clampTightness(double n) {
-  if (!std::isfinite(n)) return DEFAULT_CROSS_SECTION_TIGHTNESS;
-  return std::max(0.2, std::min(4.0, n));
-}
+double clampSignedUnit(double n);
+double clampTightness(double n);
 
 // Road-surface rise above the flat chord, as a function of v (0 left .. 1 right).
-inline double crossSectionHeight(double curvature, double tightness, double v, double chordWidth) {
-  const double c = clampSignedUnit(curvature);
-  if (c == 0.0) return 0.0;
-  const double u = 2.0 * std::max(0.0, std::min(1.0, v)) - 1.0;
-  const double base = std::sqrt(std::max(0.0, 1.0 - u * u));
-  return c * (chordWidth / 2.0) * std::pow(base, clampTightness(tightness));
-}
-
+double crossSectionHeight(double curvature, double tightness, double v, double chordWidth);
 // d(height)/dv, used to build the surface normal across the road.
-inline double crossSectionHeightDerivative(double curvature, double tightness, double v, double chordWidth) {
-  const double c = clampSignedUnit(curvature), k = clampTightness(tightness);
-  if (c == 0.0) return 0.0;
-  const double u = 2.0 * std::max(0.001, std::min(0.999, v)) - 1.0;
-  const double base = std::sqrt(std::max(0.000001, 1.0 - u * u));
-  return c * (chordWidth / 2.0) * k * (-2.0 * u) * std::pow(base, k - 2.0);
-}
+double crossSectionHeightDerivative(double curvature, double tightness, double v, double chordWidth);
 
 // Is the ship's evaluator parameter gShip within a path zone's [gLo, gHi] window?
 // For a closed path the window may straddle the wrap, so gShip is shifted by whole
 // cycles into the window's neighbourhood before the range test (track-core.js).
-inline bool zoneAlongContains(double gShip, double gLo, double gHi, double gMax, bool closed) {
-  if (!closed) return gShip >= gLo - 1e-9 && gShip <= gHi + 1e-9;
-  const double center = (gLo + gHi) / 2.0;
-  double g = gShip;
-  while (g < center - gMax / 2.0) g += gMax;
-  while (g > center + gMax / 2.0) g -= gMax;
-  return g >= gLo - 1e-9 && g <= gHi + 1e-9;
-}
+bool zoneAlongContains(double gShip, double gLo, double gHi, double gMax, bool closed);
 
 }  // namespace TrackCore
 

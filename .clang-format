@@ -1,0 +1,25 @@
+# Formatting for cpp/. Based on Google style with the tweaks the existing code
+# already follows; ColumnLimit is disabled because the physics core is a
+# deliberate line-for-line transliteration of js/track-physics.js (see
+# CPP_PORT_PLAN.md) — letting clang-format rewrap those lines would fight that
+# goal and make diffs against the JS harder to eyeball.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+
+IndentWidth: 2
+ColumnLimit: 0
+AccessModifierOffset: -2
+NamespaceIndentation: None
+
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: true
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+SortIncludes: false

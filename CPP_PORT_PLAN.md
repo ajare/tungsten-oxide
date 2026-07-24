@@ -5,7 +5,7 @@ grilling/planning session. Every decision below was made deliberately; the "Why"
 future implementer (human or agent) doesn't silently re-litigate or undo a choice. The port now
 holds per-step parity at 1 ULP over the full corpus (kinematics, guard-rail corridor, airborne
 launch/landing, zone boost, checkpoint/lap, respawn recovery) plus the bounded-trajectory smoke
-check; the calibrated tolerance is locked (§4, `cpp/tests/parity_main.cpp`). Remaining work is the
+check; the calibrated tolerance is locked (§4, `cpp/core/tests/parity_main.cpp`). Remaining work is the
 deferred mesh-region physics (§2) — not a milestone here.
 
 ---
@@ -115,7 +115,7 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
   "CMake-compatible" build the request asked for). Nothing is currently installed — MSVC + CMake must
   be installed as a first step. Pinning parity to MSVC's FP behavior now avoids re-validating later.
 - **Dependencies:**
-  - Vendor **`nlohmann/json`** (single header, committed under `cpp/third_party/nlohmann/`). Its
+  - Vendor **`nlohmann/json`** (single header, committed under `cpp/core/third_party/nlohmann/`). Its
     correctly-rounded double parsing is exactly the fiddly, silently-wrong-if-hand-rolled code we don't
     want to write.
   - **Hand-roll** the ~30-line assert/report test harness (`check_close(a, b, tol)` + pass/fail counter
@@ -124,11 +124,12 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
 - **Layout:**
   ```
   cpp/
-    include/            # Vec3, TrackCore, Track, Ship, Zone, Trigger, Simulation headers
-    src/
-    tests/              # C++ parity replayer/comparator + hand-rolled harness
-    third_party/nlohmann/
-    CMakeLists.txt
+    core/               # the "core" CMake project (physics engine, parity-tested against JS)
+      include/          # Vec3, TrackCore, Track, Ship, Zone, Trigger, Simulation headers
+      src/              # bodies for the above
+      tests/            # C++ parity replayer/comparator + hand-rolled harness
+      third_party/nlohmann/
+      CMakeLists.txt
   test/
     traces/             # committed golden .json fixtures, read by BOTH sides
     parity/             # JS trace-gen + noisy autopilot + JS<->JS parity self-check

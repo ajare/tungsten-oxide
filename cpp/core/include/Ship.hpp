@@ -47,7 +47,10 @@ struct Physics {
   Vec3 moveDir{0, 0, 1};
 };
 
-struct TriggerState { bool armed{true}; double flash{0.0}; };
+struct TriggerState {
+  bool armed{true};
+  double flash{0.0};
+};
 
 struct Checkpoint {
   bool valid{false};
@@ -66,7 +69,9 @@ struct Race {
 
 // The respawn fallback pose (mirror of track-game.js ship.startPose), used when
 // no checkpoint has been reached yet.
-struct Pose { Vec3 pos, up, forward; };
+struct Pose {
+  Vec3 pos, up, forward;
+};
 
 struct Ship {
   Physics physics;

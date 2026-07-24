@@ -20,6 +20,10 @@ A browser-based, dependency-free (aside from three.js via CDN) racing track edit
 - `cpp/` — the native C++ engine (CMake/MSVC) that ports the physics core, with a hand-rolled parity replayer. See "Physics core & C++ port".
 - `ext/geoemetry-js/` — a git submodule (`@willpower/geometry`, https://github.com/ajare/geoemetry-js), a separate self-contained ES-module mesh/geometry library with its own `package.json`, tests, and a React/Vite editor. It's linked into the root project as a local npm dependency (root `package.json` -> `"@willpower/geometry": "file:ext/geoemetry-js"`, installed via `npm install`, resolved as a symlink at `node_modules/@willpower/geometry`) so track code can `import` it as `@willpower/geometry`. See `ext/geoemetry-js/README.md` for its own commands (`npm test`, `npm --prefix editor/ui run dev`, etc.) and its own codebase map.
 
+## Editing
+
+When making changes to C++ code, make sure that you adhere to the .clang-format file in the root, running clang-format afterwards if necessary.  Do not run clang-format on any upstream code.
+
 ## Running / testing
 
 No build step: open `track.html` or `editor.html` directly, or serve the repo root statically. Run `npm install` once (after `git submodule update --init --recursive`) to link the `@willpower/geometry` local dependency.
@@ -39,9 +43,9 @@ The physics is being ported to a native C++ engine (Windows/MSVC); JS is the ref
 
 - **JS side.** `js/track-physics.js` is a *literal* transliteration of the physics that used to live in `track-game.js` — every `THREE.Vector3` became `Vec3` (`js/vec3.js`), which mirrors r128's op order exactly so the shipping game's behaviour did not shift (guarded by the browser-smoke "mesh-free track still drives normally" check). Stateful physics is the `Simulation` class; game-only trigger side effects (console log, player checkpoint flash) are injected as hooks.
 - **Golden traces.** `test/parity/` generates traces from deterministic **mesh-free** tracks driven by a seeded "noisy autopilot"; each step records the control input and the full resulting ship state. The trace serializes the already-**baked** corridor (not raw track JSON), so both engines replay against byte-identical frames — baking is removed as a parity variable and the C++ `TrackCore` port shrinks to the runtime cross-section math. `test/parity.test.js` proves the trace replays **bit-exact** in JS (determinism + lossless serialization) before any C++ runs. Traces are committed fixtures in `test/traces/`.
-- **C++ side (`cpp/`).** Header-only `Vec3`/`TrackCore`/`Track`/`Ship`/`Simulation` (a 1:1 mirror; mesh-region physics is out of scope, so the mesh branches of the step are omitted as provably-dead on the mesh-free corpus). `tests/parity_main.cpp` is the hand-rolled replayer/comparator (mixed abs+rel tolerance, worst-offender + ULP reporting); `third_party/nlohmann/json.hpp` is vendored. Build + test:
+- **C++ side (`cpp/core/`).** The `core` CMake project builds a static library, also named `core`: `Vec3`/`TrackCore`/`Track`/`Ship`/`Zone`/`Trigger`/`Simulation` split into declaration headers (`include/`, exposed `PUBLIC`) + source files (`src/`) — a 1:1 mirror; mesh-region physics is out of scope, so the mesh branches of the step are omitted as provably-dead on the mesh-free corpus. Plain-data structs (`Ship`, `Zone`, `Trigger`, `Frame`, …) live entirely in headers; `TrackCore`'s constants stay `constexpr` in its header while its functions and all class/method bodies live in `src/`. The `parity` executable (`tests/parity_main.cpp`, the hand-rolled replayer/comparator — mixed abs+rel tolerance, worst-offender + ULP reporting, plus the bounded-trajectory free-run smoke check) links the `core` library rather than compiling its sources directly; `third_party/nlohmann/json.hpp` (vendored) is private to `parity`, not part of the engine. Build + test:
   ```
-  cmake -S cpp -B cpp/build -G Ninja && cmake --build cpp/build
+  cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build
   ctest --test-dir cpp/build --output-on-failure
   ```
   (Needs a Developer environment — run after `vcvars64.bat` so CMake finds `cl`. The repo's VS install bundles CMake + Ninja.)

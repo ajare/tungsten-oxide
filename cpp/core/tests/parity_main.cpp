@@ -35,15 +35,24 @@ static Track loadTrack(const json& world) {
     Path p;
     p.closed = pj.at("closed").get<bool>();
     const auto& eid = pj.at("endpointIds");
-    if (eid.contains("start") && !eid.at("start").is_null()) { p.endpointIds.start = eid.at("start").get<std::string>(); p.endpointIds.hasStart = true; }
-    if (eid.contains("end") && !eid.at("end").is_null()) { p.endpointIds.end = eid.at("end").get<std::string>(); p.endpointIds.hasEnd = true; }
+    if (eid.contains("start") && !eid.at("start").is_null()) {
+      p.endpointIds.start = eid.at("start").get<std::string>();
+      p.endpointIds.hasStart = true;
+    }
+    if (eid.contains("end") && !eid.at("end").is_null()) {
+      p.endpointIds.end = eid.at("end").get<std::string>();
+      p.endpointIds.hasEnd = true;
+    }
     for (const auto& a : pj.at("anchors")) p.anchors.push_back(jvec(a));
     for (const auto& f : pj.at("centerline")) {
       Frame fr;
-      fr.pos = jvec(f.at("pos")); fr.tangent = jvec(f.at("tangent"));
-      fr.edgeRight = jvec(f.at("edgeRight")); fr.normal = jvec(f.at("normal"));
+      fr.pos = jvec(f.at("pos"));
+      fr.tangent = jvec(f.at("tangent"));
+      fr.edgeRight = jvec(f.at("edgeRight"));
+      fr.normal = jvec(f.at("normal"));
       fr.halfW = f.at("halfW").get<double>();
-      fr.sLeft = f.at("sLeft").get<double>(); fr.sRight = f.at("sRight").get<double>();
+      fr.sLeft = f.at("sLeft").get<double>();
+      fr.sRight = f.at("sRight").get<double>();
       fr.crossSectionCurvature = f.at("crossSectionCurvature").get<double>();
       fr.crossSectionTightness = f.at("crossSectionTightness").get<double>();
       p.centerline.push_back(fr);
@@ -58,9 +67,12 @@ static Track loadTrack(const json& world) {
     z.factor = zj.value("factor", 0.0);
     z.duration = zj.value("duration", 0.0);
     z.hostPathIndex = zj.at("hostPathIndex").get<int>();
-    z.gLo = zj.at("gLo").get<double>(); z.gHi = zj.at("gHi").get<double>();
-    z.gMax = zj.at("gMax").get<double>(); z.closed = zj.at("closed").get<bool>();
-    z.lateral = zj.at("lateral").get<double>(); z.halfWidth = zj.at("halfWidth").get<double>();
+    z.gLo = zj.at("gLo").get<double>();
+    z.gHi = zj.at("gHi").get<double>();
+    z.gMax = zj.at("gMax").get<double>();
+    z.closed = zj.at("closed").get<bool>();
+    z.lateral = zj.at("lateral").get<double>();
+    z.halfWidth = zj.at("halfWidth").get<double>();
     t.zones.push_back(std::move(z));
   }
   for (const auto& tj : world.value("triggers", json::array())) {
@@ -69,9 +81,12 @@ static Track loadTrack(const json& world) {
     tr.type = tj.value("type", std::string());
     tr.role = tj.value("role", std::string());
     tr.direction = tj.value("direction", std::string("both"));
-    tr.center = jvec(tj.at("center")); tr.right = jvec(tj.at("right"));
-    tr.up = jvec(tj.at("up")); tr.fwd = jvec(tj.at("fwd"));
-    tr.halfWidth = tj.at("halfWidth").get<double>(); tr.height = tj.at("height").get<double>();
+    tr.center = jvec(tj.at("center"));
+    tr.right = jvec(tj.at("right"));
+    tr.up = jvec(tj.at("up"));
+    tr.fwd = jvec(tj.at("fwd"));
+    tr.halfWidth = tj.at("halfWidth").get<double>();
+    tr.height = tj.at("height").get<double>();
     t.triggers.push_back(std::move(tr));
   }
   return t;
@@ -83,22 +98,46 @@ static Ship loadShip(const json& s) {
   const auto& ph = s.at("physics");
   auto D = [&](const char* k) { return ph.at(k).get<double>(); };
   auto B = [&](const char* k) { return ph.at(k).get<bool>(); };
-  p.heading = D("heading"); p.speed = D("speed"); p.maxSpeed = D("maxSpeed"); p.maxReverse = D("maxReverse");
-  p.accel = D("accel"); p.brakeDecel = D("brakeDecel"); p.friction = D("friction"); p.turnRate = D("turnRate");
-  p.grip = D("grip"); p.wallRestitution = D("wallRestitution"); p.weight = D("weight"); p.bobTime = D("bobTime");
-  p.visualBank = D("visualBank"); p.visualPitch = D("visualPitch"); p.airborne = B("airborne");
-  p.verticalVel = D("verticalVel"); p.gravity = D("gravity"); p.landingBounce = D("landingBounce");
-  p.landingBounceVel = D("landingBounceVel"); p.boostActive = B("boostActive"); p.boostReleasing = B("boostReleasing");
-  p.boostHold = D("boostHold"); p.boostReleaseT = D("boostReleaseT"); p.boostCap = D("boostCap"); p.boostEffCap = D("boostEffCap");
-  p.up = jvec(ph.at("up")); p.forward = jvec(ph.at("forward")); p.right = jvec(ph.at("right"));
-  p.groundPos = jvec(ph.at("groundPos")); p.visualGroundPos = jvec(ph.at("visualGroundPos"));
-  p.visualUp = jvec(ph.at("visualUp")); p.moveDir = jvec(ph.at("moveDir"));
+  p.heading = D("heading");
+  p.speed = D("speed");
+  p.maxSpeed = D("maxSpeed");
+  p.maxReverse = D("maxReverse");
+  p.accel = D("accel");
+  p.brakeDecel = D("brakeDecel");
+  p.friction = D("friction");
+  p.turnRate = D("turnRate");
+  p.grip = D("grip");
+  p.wallRestitution = D("wallRestitution");
+  p.weight = D("weight");
+  p.bobTime = D("bobTime");
+  p.visualBank = D("visualBank");
+  p.visualPitch = D("visualPitch");
+  p.airborne = B("airborne");
+  p.verticalVel = D("verticalVel");
+  p.gravity = D("gravity");
+  p.landingBounce = D("landingBounce");
+  p.landingBounceVel = D("landingBounceVel");
+  p.boostActive = B("boostActive");
+  p.boostReleasing = B("boostReleasing");
+  p.boostHold = D("boostHold");
+  p.boostReleaseT = D("boostReleaseT");
+  p.boostCap = D("boostCap");
+  p.boostEffCap = D("boostEffCap");
+  p.up = jvec(ph.at("up"));
+  p.forward = jvec(ph.at("forward"));
+  p.right = jvec(ph.at("right"));
+  p.groundPos = jvec(ph.at("groundPos"));
+  p.visualGroundPos = jvec(ph.at("visualGroundPos"));
+  p.visualUp = jvec(ph.at("visualUp"));
+  p.moveDir = jvec(ph.at("moveDir"));
   ship.prevTriggerPos = jvec(s.at("prevTriggerPos"));
 
   for (const auto& e : s.value("zoneInside", json::array()))
     ship.zoneInside[e[0].get<std::string>()] = e[1].get<bool>();
   for (const auto& e : s.value("triggerStates", json::array())) {
-    TriggerState st; st.armed = e[1].at("armed").get<bool>(); st.flash = e[1].at("flash").get<double>();
+    TriggerState st;
+    st.armed = e[1].at("armed").get<bool>();
+    st.flash = e[1].at("flash").get<double>();
     ship.triggerStates[e[0].get<std::string>()] = st;
   }
   const auto& cp = s.at("lastCheckpoint");
@@ -116,7 +155,7 @@ static Ship loadShip(const json& s) {
   }
   if (s.contains("startPose") && !s.at("startPose").is_null()) {
     const auto& sp = s.at("startPose");
-    ship.startPose = Pose{ jvec(sp.at("pos")), jvec(sp.at("up")), jvec(sp.at("forward")) };
+    ship.startPose = Pose{jvec(sp.at("pos")), jvec(sp.at("up")), jvec(sp.at("forward"))};
   }
   return ship;
 }
@@ -156,7 +195,7 @@ static double posDrift(const Ship& ship, const json& after) {
 // assertion is only that the trajectory tracks the JS one out to a documented
 // horizon before chaotic divergence is allowed to take over.
 static double trajectoryEnvelope(int k) {
-  return 1e-9 * std::pow(1.10, (double)k);   // 1 nm base, +10% per 1/120 s step
+  return 1e-9 * std::pow(1.10, (double)k);  // 1 nm base, +10% per 1/120 s step
 }
 
 int main(int argc, char** argv) {
@@ -174,13 +213,19 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto eat = [&](const char* flag, double& dst) {
-      if (a.rfind(flag, 0) == 0) { dst = std::stod(a.substr(std::strlen(flag))); return true; }
+      if (a.rfind(flag, 0) == 0) {
+        dst = std::stod(a.substr(std::strlen(flag)));
+        return true;
+      }
       return false;
     };
     if (eat("--atol=", atol) || eat("--rtol=", rtol) || eat("--gate=", gate)) continue;
     files.push_back(a);
   }
-  if (files.empty()) { std::cerr << "usage: parity [--atol= --rtol= --gate=] trace.json...\n"; return 2; }
+  if (files.empty()) {
+    std::cerr << "usage: parity [--atol= --rtol= --gate=] trace.json...\n";
+    return 2;
+  }
 
   // Minimum number of free-running steps every trace must track the JS
   // trajectory within trajectoryEnvelope() before chaotic divergence is
@@ -193,8 +238,12 @@ int main(int argc, char** argv) {
 
   for (const auto& file : files) {
     std::ifstream in(file);
-    if (!in) { std::cerr << "cannot open " << file << "\n"; return 2; }
-    json trace; in >> trace;
+    if (!in) {
+      std::cerr << "cannot open " << file << "\n";
+      return 2;
+    }
+    json trace;
+    in >> trace;
     const std::string name = trace.value("meta", json::object()).value("name", file);
     Track track = loadTrack(trace.at("world"));
     Simulation sim(track);
@@ -217,7 +266,7 @@ int main(int argc, char** argv) {
         const double ratio = ad / (atol + rtol * std::fabs(want));
         if (ratio > localWorstRatio) localWorstRatio = ratio;
         if (ratio > worst.ratio) {
-          worst = { ratio, ad, got, want, ulpDelta(got, want), (int)i, fld, name };
+          worst = {ratio, ad, got, want, ulpDelta(got, want), (int)i, fld, name};
         }
       };
       auto checkV = [&](const std::string& fld, const Vec3& got, const json& want) {
@@ -226,29 +275,45 @@ int main(int argc, char** argv) {
         checkD(fld + ".z", got.z, want[2].get<double>());
       };
       auto checkB = [&](const std::string& fld, bool got, bool want) {
-        if (got != want) { ++localBoolFails; std::cerr << "  BOOL MISMATCH " << name << " step " << i << " " << fld << ": got " << got << " want " << want << "\n"; }
+        if (got != want) {
+          ++localBoolFails;
+          std::cerr << "  BOOL MISMATCH " << name << " step " << i << " " << fld << ": got " << got << " want " << want << "\n";
+        }
       };
       auto checkStr = [&](const std::string& fld, const std::string& got, const std::string& want) {
-        if (got != want) { ++localBoolFails; std::cerr << "  STR MISMATCH " << name << " step " << i << " " << fld << ": got '" << got << "' want '" << want << "'\n"; }
+        if (got != want) {
+          ++localBoolFails;
+          std::cerr << "  STR MISMATCH " << name << " step " << i << " " << fld << ": got '" << got << "' want '" << want << "'\n";
+        }
       };
 
       const Physics& p = ship.physics;
-      checkD("heading", p.heading, eph.at("heading")); checkD("speed", p.speed, eph.at("speed"));
-      checkD("maxSpeed", p.maxSpeed, eph.at("maxSpeed")); checkD("maxReverse", p.maxReverse, eph.at("maxReverse"));
-      checkD("accel", p.accel, eph.at("accel")); checkD("brakeDecel", p.brakeDecel, eph.at("brakeDecel"));
-      checkD("friction", p.friction, eph.at("friction")); checkD("turnRate", p.turnRate, eph.at("turnRate"));
-      checkD("grip", p.grip, eph.at("grip")); checkD("wallRestitution", p.wallRestitution, eph.at("wallRestitution"));
+      checkD("heading", p.heading, eph.at("heading"));
+      checkD("speed", p.speed, eph.at("speed"));
+      checkD("maxSpeed", p.maxSpeed, eph.at("maxSpeed"));
+      checkD("maxReverse", p.maxReverse, eph.at("maxReverse"));
+      checkD("accel", p.accel, eph.at("accel"));
+      checkD("brakeDecel", p.brakeDecel, eph.at("brakeDecel"));
+      checkD("friction", p.friction, eph.at("friction"));
+      checkD("turnRate", p.turnRate, eph.at("turnRate"));
+      checkD("grip", p.grip, eph.at("grip"));
+      checkD("wallRestitution", p.wallRestitution, eph.at("wallRestitution"));
       checkD("weight", p.weight, eph.at("weight"));
-      checkD("verticalVel", p.verticalVel, eph.at("verticalVel")); checkD("gravity", p.gravity, eph.at("gravity"));
+      checkD("verticalVel", p.verticalVel, eph.at("verticalVel"));
+      checkD("gravity", p.gravity, eph.at("gravity"));
       checkD("landingBounce", p.landingBounce, eph.at("landingBounce"));
       checkD("landingBounceVel", p.landingBounceVel, eph.at("landingBounceVel"));
-      checkD("boostHold", p.boostHold, eph.at("boostHold")); checkD("boostReleaseT", p.boostReleaseT, eph.at("boostReleaseT"));
-      checkD("boostCap", p.boostCap, eph.at("boostCap")); checkD("boostEffCap", p.boostEffCap, eph.at("boostEffCap"));
+      checkD("boostHold", p.boostHold, eph.at("boostHold"));
+      checkD("boostReleaseT", p.boostReleaseT, eph.at("boostReleaseT"));
+      checkD("boostCap", p.boostCap, eph.at("boostCap"));
+      checkD("boostEffCap", p.boostEffCap, eph.at("boostEffCap"));
       checkB("airborne", p.airborne, eph.at("airborne").get<bool>());
       checkB("boostActive", p.boostActive, eph.at("boostActive").get<bool>());
       checkB("boostReleasing", p.boostReleasing, eph.at("boostReleasing").get<bool>());
-      checkV("up", p.up, eph.at("up")); checkV("forward", p.forward, eph.at("forward"));
-      checkV("right", p.right, eph.at("right")); checkV("groundPos", p.groundPos, eph.at("groundPos"));
+      checkV("up", p.up, eph.at("up"));
+      checkV("forward", p.forward, eph.at("forward"));
+      checkV("right", p.right, eph.at("right"));
+      checkV("groundPos", p.groundPos, eph.at("groundPos"));
       checkV("moveDir", p.moveDir, eph.at("moveDir"));
       checkV("prevTriggerPos", ship.prevTriggerPos, exp.at("prevTriggerPos"));
 
@@ -301,7 +366,11 @@ int main(int argc, char** argv) {
       sim.stepPhysics(freeShip, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
                       ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
       const double drift = posDrift(freeShip, steps[i].at("after"));
-      if (drift > trajectoryEnvelope((int)i)) { horizon = (int)i; driftAtHorizon = drift; break; }
+      if (drift > trajectoryEnvelope((int)i)) {
+        horizon = (int)i;
+        driftAtHorizon = drift;
+        break;
+      }
     }
     if (horizon < (int)steps.size())
       std::printf("      free-run: tracks JS to step %d/%zu (drift %.3g m exceeds envelope %.3g m); chaotic beyond\n",

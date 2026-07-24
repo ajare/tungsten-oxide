@@ -34,8 +34,8 @@ struct Path {
 // (JS compares the path object identity `sample.pathObj === z.hostPath`).
 struct Zone {
   std::string id;
-  std::string kind;      // "path" (mesh zones are out of scope, corpus emits none)
-  std::string effect;    // "velocityChange" | "startGrid"
+  std::string kind;    // "path" (mesh zones are out of scope, corpus emits none)
+  std::string effect;  // "velocityChange" | "startGrid"
   double factor{0.0}, duration{0.0};
   int hostPathIndex{0};
   double gLo{0.0}, gHi{0.0}, gMax{1.0};
@@ -58,9 +58,7 @@ struct Track {
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
 
-  bool endpointConnected(const std::string& id, bool present) const {
-    return present && connectedEndpointIds.count(id) != 0;
-  }
+  bool endpointConnected(const std::string& id, bool present) const;  // src/Track.cpp
 };
 
 }  // namespace tox
