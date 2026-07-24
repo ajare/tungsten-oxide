@@ -1,6 +1,7 @@
 // TrackLoader.cpp — strict current-schema JSON loading and runtime-subset
 // normalization. Historical migrations remain JavaScript/editor-only.
 #include "Track.hpp"
+#include "TrackBake.hpp"
 #include "TrackCore.hpp"
 
 #include <algorithm>
@@ -465,6 +466,7 @@ TrackLoadResult Track::fromJson(std::string_view text) {
     const json data = json::parse(text.begin(), text.end());
     Track track;
     track.definition = normalize(data, result.warnings);
+    if (!bakeTrack(track, result.warnings, result.error)) return result;
     result.track = std::move(track);
   } catch (const std::exception& error) {
     result.error = error.what();

@@ -29,6 +29,7 @@ set(CORE_HEADERS
   include/Vec3.hpp
   include/TrackCore.hpp
   include/TrackDefinition.hpp
+  include/TrackGeometry.hpp
   include/Track.hpp
   include/Ship.hpp
   include/Simulation.hpp)
@@ -37,6 +38,7 @@ add_library(core STATIC
   src/Vec3.cpp
   src/TrackCore.cpp
   src/Track.cpp
+  src/TrackBake.cpp
   src/TrackLoader.cpp
   src/Simulation.cpp
   ${CORE_HEADERS})

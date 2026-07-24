@@ -174,3 +174,59 @@ const expectedDir = new URL('expected/', outputDir);
 await mkdir(expectedDir, { recursive: true });
 await writeFile(new URL('normalized-summary.json', expectedDir), JSON.stringify(summaries, null, 2) + '\n');
 console.log('wrote test/fixtures/mesh/expected/normalized-summary.json');
+
+// M3 curved/banked path oracle: full current-schema source plus selected baked
+// frames and renderer-neutral geometric invariants for native comparison.
+globalThis.TrackCore = TrackCore;
+const { bakeTrackPhysics } = await import('../js/track-bake.js');
+const { buildTrackRenderGeometry } = await import('../js/track-render-geometry.js');
+const pathDir = new URL('../test/fixtures/path/', import.meta.url);
+await mkdir(new URL('expected/', pathDir), { recursive: true });
+const curvePoints = [];
+for (let i = 0; i < 8; i++) {
+  const a = i / 8 * Math.PI * 2;
+  curvePoints.push({ type: 'position', id: `c${i}`, pos: [100 * Math.cos(a), 8 * Math.sin(a * 2), 100 * Math.sin(a)], weight: i === 2 ? 1.4 : 1 });
+}
+curvePoints.push(
+  { type: 'roll', t: 0, roll: 18 }, { type: 'roll', t: 0.5, roll: -12 },
+  { type: 'width', t: 0, width: 30 }, { type: 'width', t: 0.5, width: 52 },
+  { type: 'crossSection', t: 0, curvature: 0.65, tightness: 1.4, thickness: 5 },
+  { type: 'crossSection', t: 0.5, curvature: -0.25, tightness: 2.2, thickness: 3 }
+);
+const curved = TrackCore.parseTrack(JSON.stringify({
+  version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Fixture - curved banked path',
+  paths: [{ id: 'curve', closed: true, texture: { asset: 'road-atlas', tile: 1 }, points: curvePoints }],
+  textureAssets: { 'road-atlas': { name: 'road.png', path: 'textures/road.png', width: 64, height: 32, tileWidth: 32, tileHeight: 32 } },
+  start: { path: 0, point: 1, reverse: true },
+  zones: [{ id: 'curve-boost', effect: 'velocityChange', width: 16, length: 28, factor: 1.6, duration: 1.25,
+    host: { kind: 'path', pathId: 'curve', t: 0.25, lateral: 2 } }],
+  triggers: [{ id: 'curve-finish', type: 'checkpoint', role: 'finish', width: 34, height: 14, rotation: 17,
+    direction: 'forward', host: { kind: 'path', pathId: 'curve', t: 0.1 } }]
+}));
+await writeFile(new URL('curved-banked.json', pathDir), TrackCore.serializeTrack(curved) + '\n');
+const bakedCurve = bakeTrackPhysics(curved);
+const renderCurve = buildTrackRenderGeometry(curved, bakedCurve);
+const v = x => [x.x, x.y, x.z];
+const pathSummaries = bakedCurve.paths.map(path => {
+  const indices = [0, Math.floor(path.centerline.length / 4), Math.floor(path.centerline.length / 2), path.centerline.length - 1];
+  return {
+    closed: path.closed, frameCount: path.centerline.length, anchors: path.anchors.map(v),
+    frames: indices.map(index => { const f = path.centerline[index]; return { index, pos: v(f.pos), tangent: v(f.tangent),
+      edgeRight: v(f.edgeRight), normal: v(f.normal), sLeft: f.sLeft, sRight: f.sRight,
+      curvature: f.crossSectionCurvature, tightness: f.crossSectionTightness }; })
+  };
+});
+const geometry = renderCurve.batches.filter(b => b.kind.startsWith('Path') || b.kind === 'ZoneSurface').map(b => {
+  const positions = b.vertices.map(x => x.position);
+  return { id: b.id, kind: b.kind, hasUv: b.hasUv, texture: b.texture,
+    vertexCount: b.vertices.length, indexCount: b.indices.length,
+    min: [0, 1, 2].map(k => Math.min(...positions.map(p => p[k]))),
+    max: [0, 1, 2].map(k => Math.max(...positions.map(p => p[k]))) };
+});
+await writeFile(new URL('curved-banked-summary.json', new URL('expected/', pathDir)), JSON.stringify({
+  paths: pathSummaries, trackFloorY: bakedCurve.trackFloorY,
+  zones: bakedCurve.zones.map(z => ({ id: z.id, kind: z.kind, hostPathIndex: z.hostPathIndex, gLo: z.gLo, gHi: z.gHi, gMax: z.gMax })),
+  triggers: bakedCurve.triggers.map(t => ({ id: t.id, center: v(t.center), right: v(t.right), up: v(t.up), fwd: v(t.fwd), halfWidth: t.halfWidth, height: t.height })),
+  geometry
+}, null, 2) + '\n');
+console.log('wrote test/fixtures/path/curved-banked.json and expected summary');

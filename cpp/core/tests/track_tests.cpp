@@ -1,6 +1,8 @@
 // track_tests.cpp — focused native track loading/bake/geometry/mesh tests.
 // M2 validates strict current-schema loading and JS-produced normalization
 // summaries. Later milestones add bake and physics assertions to this target.
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -8,6 +10,7 @@
 #include <sstream>
 #include <string>
 
+#include "Simulation.hpp"
 #include "Track.hpp"
 #include "nlohmann/json.hpp"
 
@@ -75,6 +78,17 @@ json normalizedSummary(const TrackDefinition& track) {
           {"gates", std::move(gates)}};
 }
 
+void checkClose(double got, double want, double tolerance, const std::string& message) {
+  check(std::isfinite(got) && std::fabs(got - want) <= tolerance,
+        message + ": got " + std::to_string(got) + ", want " + std::to_string(want));
+}
+
+void checkVec(const Vec3& got, const json& want, double tolerance, const std::string& message) {
+  checkClose(got.x, want[0].get<double>(), tolerance, message + ".x");
+  checkClose(got.y, want[1].get<double>(), tolerance, message + ".y");
+  checkClose(got.z, want[2].get<double>(), tolerance, message + ".z");
+}
+
 bool hasWarning(const TrackLoadResult& result, const std::string& code) {
   for (const auto& warning : result.warnings)
     if (warning.code == code) return true;
@@ -123,6 +137,95 @@ int main(int argc, char** argv) {
   }
 
   check(found == expectedFiles, "fixture inventory matches the seven shared M0 cases");
+
+  // M3: independently baked curved/banked path against selected JS oracle data.
+  const std::filesystem::path pathFixture = fixtureDir.parent_path() / "path" / "curved-banked.json";
+  const json pathExpected = readJson(fixtureDir.parent_path() / "path" / "expected" / "curved-banked-summary.json");
+  const TrackLoadResult pathLoaded = Track::fromFile(pathFixture);
+  check(static_cast<bool>(pathLoaded), "curved/banked current-schema path loads and bakes: " + pathLoaded.error);
+  if (pathLoaded) {
+    const Track& track = *pathLoaded.track;
+    check(track.paths.size() == 1, "native bake produces one path");
+    const Path& path = track.paths[0];
+    const json& expectedPath = pathExpected["paths"][0];
+    check(path.centerline.size() == expectedPath["frameCount"].get<std::size_t>(), "adaptive physics frame count matches JS");
+    check(path.anchors.size() == expectedPath["anchors"].size(), "anchor count matches JS");
+    for (std::size_t i = 0; i < path.anchors.size(); ++i) checkVec(path.anchors[i], expectedPath["anchors"][i], 1e-12, "anchor");
+    for (const auto& expectedFrame : expectedPath["frames"]) {
+      const int index = expectedFrame["index"].get<int>();
+      const Frame& frame = path.centerline[index];
+      checkVec(frame.pos, expectedFrame["pos"], 2e-11, "frame.pos");
+      checkVec(frame.tangent, expectedFrame["tangent"], 2e-11, "frame.tangent");
+      checkVec(frame.edgeRight, expectedFrame["edgeRight"], 2e-11, "frame.edgeRight");
+      checkVec(frame.normal, expectedFrame["normal"], 2e-11, "frame.normal");
+      checkClose(frame.sLeft, expectedFrame["sLeft"], 2e-10, "frame.sLeft");
+      checkClose(frame.sRight, expectedFrame["sRight"], 2e-10, "frame.sRight");
+      checkClose(frame.crossSectionCurvature, expectedFrame["curvature"], 2e-12, "frame.curvature");
+      checkClose(frame.crossSectionTightness, expectedFrame["tightness"], 2e-12, "frame.tightness");
+    }
+    checkClose(track.trackFloorY, pathExpected["trackFloorY"], 2e-10, "track floor");
+    check(track.zones.size() == 1 && track.zones[0].id == "curve-boost", "path zone compiles");
+    if (!track.zones.empty()) {
+      checkClose(track.zones[0].gLo, pathExpected["zones"][0]["gLo"], 2e-10, "zone.gLo");
+      checkClose(track.zones[0].gHi, pathExpected["zones"][0]["gHi"], 2e-10, "zone.gHi");
+    }
+    check(track.triggers.size() == 1 && track.triggers[0].id == "curve-finish", "path trigger compiles");
+    if (!track.triggers.empty()) {
+      checkVec(track.triggers[0].center, pathExpected["triggers"][0]["center"], 2e-10, "trigger.center");
+      checkVec(track.triggers[0].right, pathExpected["triggers"][0]["right"], 2e-11, "trigger.right");
+      checkVec(track.triggers[0].up, pathExpected["triggers"][0]["up"], 2e-11, "trigger.up");
+      checkVec(track.triggers[0].fwd, pathExpected["triggers"][0]["fwd"], 2e-11, "trigger.fwd");
+    }
+    Simulation simulation(track);
+    Ship ship;
+    const Frame& startFrame = path.centerline.front();
+    Sample startSample;
+    startSample.pos = startFrame.pos;
+    startSample.tangent = startFrame.tangent;
+    startSample.edgeRight = startFrame.edgeRight;
+    startSample.normal = startFrame.normal;
+    startSample.sLeft = startFrame.sLeft;
+    startSample.sRight = startFrame.sRight;
+    startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+    startSample.crossSectionTightness = startFrame.crossSectionTightness;
+    const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, 0);
+    simulation.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+    const StepResult step = simulation.stepPhysics(ship, 1.0 / 120.0, 1, 0, 0);
+    check(!step.respawned && !ship.physics.airborne && std::isfinite(ship.physics.groundPos.x),
+          "native-loaded path immediately drives through Simulation");
+
+    for (const auto& expectedBatch : pathExpected["geometry"]) {
+      const std::string id = expectedBatch["id"].get<std::string>();
+      const auto foundBatch = std::find_if(track.geometry.begin(), track.geometry.end(), [&](const auto& batch) { return batch.id == id; });
+      check(foundBatch != track.geometry.end(), "render batch exists: " + id);
+      if (foundBatch == track.geometry.end()) continue;
+      check(!foundBatch->vertices.empty() && foundBatch->indices.size() % 3 == 0, "render batch is non-empty triangles: " + id);
+      check(foundBatch->vertices.size() == expectedBatch["vertexCount"].get<std::size_t>() &&
+                foundBatch->indices.size() == expectedBatch["indexCount"].get<std::size_t>(),
+            "adaptive render triangle count matches JS: " + id);
+      check(foundBatch->hasUv == expectedBatch["hasUv"].get<bool>(), "render UV presence matches JS: " + id);
+      if (expectedBatch.contains("texture") && !expectedBatch["texture"].is_null()) {
+        check(foundBatch->texture.has_value(), "render texture metadata exists: " + id);
+        if (foundBatch->texture) {
+          check(foundBatch->texture->assetId == expectedBatch["texture"]["assetId"].get<std::string>() &&
+                    foundBatch->texture->tile == expectedBatch["texture"]["tile"].get<int>(),
+                "render texture metadata matches JS: " + id);
+        }
+      }
+      Vec3 min(1e300, 1e300, 1e300), max(-1e300, -1e300, -1e300);
+      for (const auto& vertex : foundBatch->vertices) {
+        min.x = std::min(min.x, vertex.position.x);
+        min.y = std::min(min.y, vertex.position.y);
+        min.z = std::min(min.z, vertex.position.z);
+        max.x = std::max(max.x, vertex.position.x);
+        max.y = std::max(max.y, vertex.position.y);
+        max.z = std::max(max.z, vertex.position.z);
+        check(vertex.rgba.r == 1 && vertex.rgba.g == 1 && vertex.rgba.b == 1 && vertex.rgba.a == 1, "render RGBA defaults white");
+      }
+      checkVec(min, expectedBatch["min"], 2e-9, id + ".min");
+      checkVec(max, expectedBatch["max"], 2e-9, id + ".max");
+    }
+  }
 
   const std::filesystem::path basePath = fixtureDir / "transformed-square.json";
   json base = readJson(basePath);
@@ -187,7 +290,9 @@ int main(int argc, char** argv) {
                 definition.handling.weight == 1000,
             "handling defaults are injected field by field");
       check(definition.start.path == 0 && definition.start.point == 0 && !definition.start.reverse, "start defaults are clamped");
-      check(definition.triggers.empty(), "automatic Finish creation is deferred to M3 path baking");
+      check(definition.triggers.empty(), "loader leaves authored trigger list unchanged");
+      check(loaded.track->triggers.size() == 1 && loaded.track->triggers[0].role == "finish",
+            "M3 baking creates the automatic Finish checkpoint");
     }
   }
   {

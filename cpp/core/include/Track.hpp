@@ -1,7 +1,7 @@
 // Track.hpp — authored current-schema data plus the baked, world-space runtime
-// records the physics rides on. Track::fromJson/fromFile fills `definition`;
-// native spline/geometry compilation is added by M3. The legacy parity harness
-// may still construct the baked records directly from committed JS traces.
+// records and renderer-neutral geometry. Track::fromJson/fromFile normalizes the
+// definition and compiles its spline paths. The legacy parity harness may still
+// construct baked records directly from committed JS traces.
 #pragma once
 #include <filesystem>
 #include <optional>
@@ -11,6 +11,7 @@
 #include <vector>
 #include "Vec3.hpp"
 #include "TrackDefinition.hpp"
+#include "TrackGeometry.hpp"
 
 namespace tox {
 
@@ -19,9 +20,9 @@ struct TrackLoadResult;
 // One baked centerline frame. Only the fields the physics reads at runtime are
 // carried (h/roll/width were baking-time only; sampleTrack never touches them).
 struct Frame {
-  Vec3 pos, tangent, edgeRight, normal;
-  double halfW{0.0}, sLeft{0.0}, sRight{0.0};
-  double crossSectionCurvature{0.0}, crossSectionTightness{1.0};
+  Vec3 pos, tangent, h, edgeRight, normal;
+  double roll{0.0}, width{0.0}, halfW{0.0}, sLeft{0.0}, sRight{0.0};
+  double crossSectionCurvature{0.0}, crossSectionTightness{1.0}, crossSectionThickness{0.0};
 };
 
 struct EndpointIds {
@@ -59,8 +60,7 @@ struct Trigger {
 };
 
 struct Track {
-  // Authored current-schema runtime subset. M2 fills this; M3 compiles it into
-  // the baked records below.
+  // Authored current-schema runtime subset retained alongside its compiled data.
   TrackDefinition definition;
 
   std::vector<Path> paths;
@@ -68,6 +68,7 @@ struct Track {
   double trackFloorY{-1e9};
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
+  std::vector<GeometryBatch> geometry;
 
   bool endpointConnected(const std::string& id, bool present) const;  // src/Track.cpp
 
