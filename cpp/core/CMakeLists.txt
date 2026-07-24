@@ -7,7 +7,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(core CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -28,6 +28,7 @@ endif()
 set(CORE_HEADERS
   include/Vec3.hpp
   include/TrackCore.hpp
+  include/TrackDefinition.hpp
   include/Track.hpp
   include/Ship.hpp
   include/Simulation.hpp)
@@ -36,9 +37,10 @@ add_library(core STATIC
   src/Vec3.cpp
   src/TrackCore.cpp
   src/Track.cpp
+  src/TrackLoader.cpp
   src/Simulation.cpp
   ${CORE_HEADERS})
-target_include_directories(core PUBLIC include)
+target_include_directories(core PUBLIC include PRIVATE third_party)
 
 # Headers carry no build step of their own, but listing them as sources (above)
 # surfaces them in IDE project views; group them under their own filter there

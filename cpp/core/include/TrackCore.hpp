@@ -11,9 +11,14 @@
 namespace tox {
 namespace TrackCore {
 
-// --- geometry constants owned by track-core.js ---
+// --- schema/geometry constants owned by track-core.js ---
+constexpr int TRACK_SCHEMA_VERSION = 10;
+constexpr int N_DEFAULT = 400;
 constexpr double COLLISION_WALL_MARGIN = 1.8;
+constexpr double DEFAULT_WIDTH = 36.0;
+constexpr double DEFAULT_RAIL_HEIGHT = 6.0;
 constexpr double DEFAULT_CROSS_SECTION_TIGHTNESS = 1.0;
+constexpr double DEFAULT_CROSS_SECTION_THICKNESS = 4.0;
 constexpr double DEFAULT_BOOST_FACTOR = 1.5;
 constexpr double DEFAULT_BOOST_DURATION = 2.0;
 

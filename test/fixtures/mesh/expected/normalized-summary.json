@@ -1,0 +1,331 @@
+{
+  "transformed-square.json": {
+    "name": "Fixture - transformed square",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 4,
+    "edges": 4,
+    "railEdges": 1,
+    "polygons": 1,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "square-placed",
+        "asset": "pad",
+        "x": 100,
+        "z": 50,
+        "rotation": 37,
+        "elevation": 8
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "pad-with-hole.json": {
+    "name": "Fixture - pad with hole",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 8,
+    "edges": 8,
+    "railEdges": 8,
+    "polygons": 2,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "hole-pad",
+        "asset": "pad",
+        "x": -30,
+        "z": -30,
+        "rotation": 0,
+        "elevation": 4
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "shared-seam.json": {
+    "name": "Fixture - shared interior seam",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 6,
+    "edges": 7,
+    "railEdges": 6,
+    "polygons": 2,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "seamed-pad",
+        "asset": "pad",
+        "x": -30,
+        "z": 0,
+        "rotation": 0,
+        "elevation": 2
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "concave-railed-pad.json": {
+    "name": "Fixture - concave railed pad",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 6,
+    "edges": 6,
+    "railEdges": 6,
+    "polygons": 1,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "concave-pad",
+        "asset": "pad",
+        "x": -30,
+        "z": 0,
+        "rotation": 0,
+        "elevation": 3
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "corridor-mesh-bridge.json": {
+    "name": "Fixture - corridor mesh bridge",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 4,
+    "edges": 4,
+    "railEdges": 0,
+    "polygons": 1,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "bridge-pad",
+        "asset": "bridge",
+        "x": -40,
+        "z": -40,
+        "rotation": 0,
+        "elevation": 0
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "overlapping-elevations.json": {
+    "name": "Fixture - overlapping elevations",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 2,
+    "vertices": 4,
+    "edges": 4,
+    "railEdges": 0,
+    "polygons": 1,
+    "zones": 0,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "lower-deck",
+        "asset": "deck",
+        "x": -35,
+        "z": -35,
+        "rotation": 0,
+        "elevation": 0
+      },
+      {
+        "id": "upper-deck",
+        "asset": "deck",
+        "x": -35,
+        "z": -35,
+        "rotation": 15,
+        "elevation": 12
+      }
+    ],
+    "effects": [],
+    "gates": [
+      {
+        "id": "checkpoint-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "forward",
+        "kind": "path"
+      }
+    ]
+  },
+  "mesh-effects.json": {
+    "name": "Fixture - mesh effects",
+    "samples": 400,
+    "paths": 1,
+    "points": 10,
+    "meshAssets": 1,
+    "meshes": 1,
+    "vertices": 4,
+    "edges": 4,
+    "railEdges": 4,
+    "polygons": 1,
+    "zones": 1,
+    "triggers": 1,
+    "start": {
+      "path": 0,
+      "point": 0,
+      "reverse": false
+    },
+    "handling": {
+      "maxSpeed": 140,
+      "accel": 71,
+      "turnSpeed": 137.5,
+      "weight": 1000
+    },
+    "placements": [
+      {
+        "id": "arena-placed",
+        "asset": "arena",
+        "x": -50,
+        "z": -50,
+        "rotation": 0,
+        "elevation": 5
+      }
+    ],
+    "effects": [
+      {
+        "id": "mesh-boost",
+        "effect": "velocityChange",
+        "kind": "mesh"
+      }
+    ],
+    "gates": [
+      {
+        "id": "mesh-finish",
+        "type": "checkpoint",
+        "role": "finish",
+        "direction": "both",
+        "kind": "mesh"
+      }
+    ]
+  }
+}

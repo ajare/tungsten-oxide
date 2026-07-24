@@ -1,13 +1,20 @@
-// Track.hpp — the baked, world-space corridor the physics rides on. Loaded
-// straight from the golden trace's `world` (already baked in JS), so there is no
-// spline evaluation here — just the frames the step samples.
+// Track.hpp — authored current-schema data plus the baked, world-space runtime
+// records the physics rides on. Track::fromJson/fromFile fills `definition`;
+// native spline/geometry compilation is added by M3. The legacy parity harness
+// may still construct the baked records directly from committed JS traces.
 #pragma once
-#include <string>
-#include <vector>
+#include <filesystem>
+#include <optional>
 #include <set>
+#include <string>
+#include <string_view>
+#include <vector>
 #include "Vec3.hpp"
+#include "TrackDefinition.hpp"
 
 namespace tox {
+
+struct TrackLoadResult;
 
 // One baked centerline frame. Only the fields the physics reads at runtime are
 // carried (h/roll/width were baking-time only; sampleTrack never touches them).
@@ -52,6 +59,10 @@ struct Trigger {
 };
 
 struct Track {
+  // Authored current-schema runtime subset. M2 fills this; M3 compiles it into
+  // the baked records below.
+  TrackDefinition definition;
+
   std::vector<Path> paths;
   std::set<std::string> connectedEndpointIds;
   double trackFloorY{-1e9};
@@ -59,6 +70,21 @@ struct Track {
   std::vector<Trigger> triggers;
 
   bool endpointConnected(const std::string& id, bool present) const;  // src/Track.cpp
+
+  static TrackLoadResult fromJson(std::string_view text);
+  static TrackLoadResult fromFile(const std::filesystem::path& path);
+};
+
+struct TrackWarning {
+  std::string code, message, objectId;
+};
+
+struct TrackLoadResult {
+  std::optional<Track> track;
+  std::vector<TrackWarning> warnings;
+  std::string error;
+
+  explicit operator bool() const { return track.has_value() && error.empty(); }
 };
 
 }  // namespace tox

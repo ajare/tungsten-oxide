@@ -144,8 +144,33 @@ const fixtures = [];
   )]);
 }
 
+const summaries = {};
 for (const [filename, raw] of fixtures) {
   const normalized = TrackCore.parseTrack(JSON.stringify(raw));
   await writeFile(new URL(filename, outputDir), TrackCore.serializeTrack(normalized) + '\n');
+  const assets = Object.values(normalized.meshAssets);
+  summaries[filename] = {
+    name: normalized.name,
+    samples: normalized.samples,
+    paths: normalized.paths.length,
+    points: normalized.paths.reduce((n, p) => n + p.points.length, 0),
+    meshAssets: assets.length,
+    meshes: normalized.meshes.length,
+    vertices: assets.reduce((n, a) => n + a.mesh.vertices.length, 0),
+    edges: assets.reduce((n, a) => n + a.mesh.edges.length, 0),
+    railEdges: assets.reduce((n, a) => n + a.mesh.edges.filter(e => e.attributes?.rail).length, 0),
+    polygons: assets.reduce((n, a) => n + a.mesh.polygons.length, 0),
+    zones: normalized.zones.length,
+    triggers: normalized.triggers.length,
+    start: normalized.start,
+    handling: normalized.handling,
+    placements: normalized.meshes.map(m => ({ id: m.id, asset: m.asset, x: m.x, z: m.z, rotation: m.rotation, elevation: m.elevation })),
+    effects: normalized.zones.map(z => ({ id: z.id, effect: z.effect, kind: z.host.kind })),
+    gates: normalized.triggers.map(t => ({ id: t.id, type: t.type, role: t.role || '', direction: t.direction, kind: t.host.kind }))
+  };
   console.log(`wrote test/fixtures/mesh/${filename}`);
 }
+const expectedDir = new URL('expected/', outputDir);
+await mkdir(expectedDir, { recursive: true });
+await writeFile(new URL('normalized-summary.json', expectedDir), JSON.stringify(summaries, null, 2) + '\n');
+console.log('wrote test/fixtures/mesh/expected/normalized-summary.json');
