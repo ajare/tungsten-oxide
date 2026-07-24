@@ -20,6 +20,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(TungstenOxideCpp CXX)
 
+# Register tests from child projects in the combined build's top-level
+# CTestTestfile.cmake, so the documented `ctest --test-dir cpp/build` command
+# discovers core's parity and focused track tests.
+enable_testing()
+
 add_subdirectory(willpower)
 add_subdirectory(core)
 

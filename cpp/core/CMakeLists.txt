@@ -49,11 +49,20 @@ add_executable(parity tests/parity_main.cpp)
 target_include_directories(parity PRIVATE third_party)
 target_link_libraries(parity PRIVATE core)
 
+# Focused loader/bake/mesh tests. M0 starts this as a shared-fixture smoke
+# harness; later mesh-port milestones add semantic geometry and physics cases
+# without making the existing parity replayer responsible for everything.
+add_executable(track_tests tests/track_tests.cpp)
+target_include_directories(track_tests PRIVATE third_party)
+target_link_libraries(track_tests PRIVATE core)
+
 enable_testing()
 set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/traces)
+set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/mesh)
 add_test(NAME parity
   COMMAND parity
     ${TRACE_DIR}/starter-circle.json
     ${TRACE_DIR}/open-curve.json
     ${TRACE_DIR}/boost-circuit.json
     ${TRACE_DIR}/recovery-run.json)
+add_test(NAME track_tests COMMAND track_tests ${MESH_FIXTURE_DIR})
