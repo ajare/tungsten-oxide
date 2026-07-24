@@ -5,8 +5,8 @@
  *
  *  1. JS<->JS self-check (test/parity.test.js): the trace pipeline replays
  *     bit-exact, proving the oracle + lossless serialization.
- *  2. C++ per-step parity, IF the engine has been built to cpp/build/parity.exe
- *     (cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build). Skipped
+ *  2. C++ per-step parity, IF the engine has been built from cpp/ (combined)
+ *     or cpp/core (standalone). Skipped
  *     with a note otherwise, so contributors without the C++ toolchain still get
  *     the JS half.
  *
@@ -36,7 +36,9 @@ failed += run('JS<->JS parity (node --test)', process.execPath, ['--test', 'test
 
 // 2. C++ per-step parity, if built.
 const exeCandidates = [
-  `${root}cpp/build/parity.exe`,
+  `${root}cpp/build/core/Release/parity.exe`,  // combined MSVC build
+  `${root}cpp/build/core/parity`,              // combined single-config build
+  `${root}cpp/build/parity.exe`,               // standalone core builds
   `${root}cpp/build/parity`,
   `${root}cpp/build/Release/parity.exe`
 ];
@@ -46,7 +48,7 @@ if (exe) {
 } else {
   console.log('\n=== C++ per-step parity ===');
   console.log('  SKIPPED — build the engine first:');
-  console.log('    cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build');
+  console.log('    cmake -S cpp -B cpp/build && cmake --build cpp/build --config Release');
 }
 
 process.stdout.write(`\n${failed ? `FAILED (${failed} suite(s))` : 'ALL PARITY CHECKS PASSED'}\n`);

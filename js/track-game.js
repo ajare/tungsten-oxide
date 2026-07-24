@@ -1,5 +1,6 @@
 
 import * as TrackMesh from './track-mesh.js';
+import { bakeTrackPhysics } from './track-bake.js';
 import { DEFAULT_SHIP_COUNT, gridSlot } from './ship-grid.js';
 import { Vec3 } from './vec3.js';
 // The physics core was extracted, verbatim, into track-physics.js (see
@@ -85,8 +86,8 @@ let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
 
 // The stateful physics engine. buildTrack() populates its baked track data; the
-// animate loop drives it. Mesh-region collision is delegated to TrackMesh (out
-// of the C++ port's scope). Game-only trigger side effects — the console log and
+// animate loop drives it. Mesh-region collision is delegated to TrackMesh.
+// Game-only trigger side effects — the console log and
 // the player's checkpoint-flash — are injected here; the portable checkpoint/lap
 // logic runs inside the Simulation itself.
 const sim = new Simulation({
@@ -541,16 +542,16 @@ function buildTrack(track) {
   for (const region of meshRegions) lowest = Math.min(lowest, region.elevation);
   trackFloorY = (isFinite(lowest) ? lowest : 0) - RESPAWN_FALL_DEPTH;
 
-  // Hand the freshly-baked, world-space track data to the physics engine. These
-  // arrays are rebuilt wholesale on every buildTrack, so re-pointing the sim at
-  // them here (after zones/triggers/floor are final, before the roster samples
-  // the track) keeps the two in sync.
-  sim.paths = paths;
-  sim.meshRegions = meshRegions;
-  sim.zones = zones;
-  sim.triggers = triggers;
-  sim.connectedEndpointIds = connectedEndpointIds;
-  sim.trackFloorY = trackFloorY;
+  // Physics consumes the shared THREE-free bake used by Node and the C++ parity
+  // oracle. Rendering above still owns THREE objects, but there is now only one
+  // authoritative complete physics bake for paths, meshes, zones and triggers.
+  const physicsWorld = bakeTrackPhysics(track);
+  sim.paths = physicsWorld.paths;
+  sim.meshRegions = physicsWorld.meshRegions;
+  sim.zones = physicsWorld.zones;
+  sim.triggers = physicsWorld.triggers;
+  sim.connectedEndpointIds = physicsWorld.connectedEndpointIds;
+  sim.trackFloorY = physicsWorld.trackFloorY;
 
   buildRoster(track);
   const label = document.getElementById('trackName');

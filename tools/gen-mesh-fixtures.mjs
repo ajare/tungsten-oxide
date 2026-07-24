@@ -64,8 +64,8 @@ const fixtures = [];
 
 {
   const mesh = new Mesh();
-  const outer = mesh.addPolygon([[0, 0], [60, 0], [60, 60], [0, 60]].map(p => new Vector2(p)));
-  const hole = mesh.addPolygon([[20, 20], [40, 20], [40, 40], [20, 40]].map(p => new Vector2(p)));
+  const outer = mesh.addPolygon([[0, 0], [60, 0], [60, 60], [0, 60]].map(([x, y]) => new Vector2(x, y)));
+  const hole = mesh.addPolygon([[20, 20], [40, 20], [40, 40], [20, 40]].map(([x, y]) => new Vector2(x, y)));
   mesh.addHoleToPolygon(outer, hole);
   TrackMesh.railBoundaryEdges(mesh);
   fixtures.push(['pad-with-hole.json', baseTrack(

@@ -1,7 +1,11 @@
 # C++ Full-Track and Mesh-Region Port Plan
 
-Status: **agreed design; implementation not started.** This is the follow-on to
+Status: **milestones M0–M1 complete.** This is the follow-on to
 `CPP_PORT_PLAN.md`. The existing baked-corridor C++ parity suite remains intact.
+
+- **M0:** combined MSVC/CMake baseline, shared fixtures, and focused C++ test harness.
+- **M1:** complete THREE-free JS physics bake (meshes/effects/floor), renderer-neutral geometry,
+  runtime mesh branch tests, and shipping-game use of the shared physics bake.
 
 ## 1. Goal
 
