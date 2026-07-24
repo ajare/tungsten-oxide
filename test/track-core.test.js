@@ -500,6 +500,23 @@ test('zonePathStrip returns finite, equal-length edges and a real g-window', () 
   assert.ok(strip.gHi > strip.gLo, 'non-empty along-window');
 });
 
+test('a path zone follows the authored cross-section instead of floating on its chord', () => {
+  const cps = [-150, -50, 50, 150].map((z, i) => ({ type: 'position', id: `p${i}`, pos: [0, 0, z], weight: 1 }));
+  const rolls = [{ type: 'roll', t: 0, roll: 0 }, { type: 'roll', t: 1, roll: 0 }];
+  const widths = [{ type: 'width', t: 0, width: 40 }, { type: 'width', t: 1, width: 40 }];
+  const cross = [
+    { type: 'crossSection', t: 0, curvature: -0.5, tightness: 1, thickness: 0 },
+    { type: 'crossSection', t: 1, curvature: -0.5, tightness: 1, thickness: 0 }
+  ];
+  const zone = { width: 12, length: 40, host: { kind: 'path', pathId: 'p', t: 0.5, lateral: 0 } };
+  const strip = TrackCore.zonePathStrip(cps, false, rolls, widths, cross, zone, 0);
+  assert.ok(Array.isArray(strip.rows) && strip.rows.length >= 2, 'strip exposes cross-surface rows');
+  const row = strip.rows[Math.floor(strip.rows.length / 2)];
+  assert.ok(row.length >= 3, 'cross-section is tessellated through its centre');
+  const centre = row[Math.floor(row.length / 2)];
+  assert.ok(Math.abs(centre.y + 10) < 1e-6, `zone centre should sit on the -10-unit dish, got y=${centre.y}`);
+});
+
 test('a path zone along-window spans its authored length in arc units', () => {
   // The strip's [gLo, gHi] must cover ~= zone.length of true arc, regardless of
   // how coarse the control-point spacing is (a short pad on a big loop). Pins

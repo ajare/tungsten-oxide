@@ -1441,15 +1441,30 @@
     // One strip cross-section roughly every 6 units of the zone's length, so it
     // conforms to a curve without over-tessellating a straight pad.
     const K = Math.max(2, Math.min(96, Math.round((zone.length || 0) / 6) || 2));
-    const left = [], right = [];
+    const left = [], right = [], rows = [];
+    const ACROSS_STEPS = 4;
     for (let i = 0; i <= K; i++) {
       const g = gLo + (gHi - gLo) * (i / K);
       const f = frameFromSample(evalTrack(clampG(g)));
-      const mid = vaddScaled(vaddScaled(f.pos, f.edgeRight, lateral), f.normal, hv);
-      left.push(vaddScaled(mid, f.edgeRight, -halfW));
-      right.push(vaddScaled(mid, f.edgeRight, halfW));
+      const roadWidth = Math.max(1e-6, Math.abs(f.width));
+      const roadLo = -roadWidth / 2;
+      const row = [];
+      for (let j = 0; j <= ACROSS_STEPS; j++) {
+        const s = lateral - halfW + (2 * halfW) * (j / ACROSS_STEPS);
+        const v = (s - roadLo) / roadWidth;
+        const lift = crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, roadWidth);
+        const dhdv = crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, roadWidth);
+        const crossT = vaddScaled(vscale(f.edgeRight, roadWidth), f.normal, dhdv);
+        let surfaceNormal = vnorm(vcross(f.tangent, crossT));
+        if (surfaceNormal.x * f.normal.x + surfaceNormal.y * f.normal.y + surfaceNormal.z * f.normal.z < 0) surfaceNormal = vscale(surfaceNormal, -1);
+        let point = vaddScaled(vaddScaled(f.pos, f.edgeRight, s), f.normal, lift);
+        point = vaddScaled(point, surfaceNormal, hv);
+        row.push(point);
+      }
+      rows.push(row);
+      left.push(row[0]); right.push(row[row.length - 1]);
     }
-    return { left, right, gLo, gHi, gMax, closed };
+    return { left, right, rows, gLo, gHi, gMax, closed };
   }
 
   // Is the ship's evaluator parameter gShip within a path zone's [gLo, gHi]

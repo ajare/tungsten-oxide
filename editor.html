@@ -211,15 +211,16 @@
     <button id="showPhysicsBtn" title="Generate and show the 400 baked frames physics rides on, as selectable dots">Show Physics Pts</button>
     <button id="hidePhysicsBtn" title="Hide the physics sample points" disabled>Hide Physics Pts</button>
     <span class="spacer" aria-hidden="true"></span>
-    <label title="Top-down grid size">Grid
-      <select id="gridSizeSelect">
+    <label title="Show or hide the top-down grid (G)"><input id="showGridChk" type="checkbox" checked> Grid</label>
+    <label title="Top-down grid size">
+      <select id="gridSizeSelect" aria-label="Grid size">
         <option value="8">8</option>
         <option value="16">16</option>
         <option value="32" selected>32</option>
         <option value="64">64</option>
       </select>
     </label>
-    <label title="Snap position control points to the top-down grid"><input id="snapGridChk" type="checkbox"> Snap</label>
+    <label title="Snap position control points to the visible top-down grid"><input id="snapGridChk" type="checkbox"> Snap</label>
     <span class="spacer"></span>
     <a id="openGameLink" href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
     <input id="fileInput" type="file" accept="application/json,.json" hidden>
@@ -254,6 +255,12 @@
     <div class="rrRow"><span>Max hill height</span><input id="rrMaxHill" type="number" step="10"></div>
     <div class="rrRow"><span>Width</span><span class="pair"><input id="rrWidthMin" type="number" step="1">&ndash;<input id="rrWidthMax" type="number" step="1"></span></div>
     <div class="rrRow"><span>Max cross-section dish</span><input id="rrMaxCurvature" type="number" step="0.05" title="Maximum inward dish; curvature is sampled in [-this, 0]"></div>
+    <div class="rrRow"><span>Mesh chance %</span><span class="pair"><input id="rrMeshChanceMin" type="number" min="0" max="100" step="1">&ndash;<input id="rrMeshChanceMax" type="number" min="0" max="100" step="1"></span></div>
+    <div class="rrRow"><span>Sequence chance %</span><input id="rrSequenceChance" type="number" min="0" max="100" step="1"></div>
+    <div class="rrRow"><span>Max mesh sections</span><input id="rrMaxMeshSections" type="number" min="0" max="5" step="1"></div>
+    <div class="rrRow"><span>Mesh section length</span><span class="pair"><input id="rrMeshLengthMin" type="number" step="10">&ndash;<input id="rrMeshLengthMax" type="number" step="10"></span></div>
+    <div class="rrRow"><span>Section end drop</span><span class="pair"><input id="rrEndDropMin" type="number" step="1">&ndash;<input id="rrEndDropMax" type="number" step="1"></span></div>
+    <div class="rrRow"><span>Boost pads</span><span class="pair"><input id="rrBoostMin" type="number" min="0" step="1">&ndash;<input id="rrBoostMax" type="number" min="0" step="1"></span></div>
   </div>
 
   <div id="handlingPanel">

@@ -1,5 +1,6 @@
 
 import * as TrackMesh from './track-mesh.js';
+import { Mesh, Vector2 } from '@willpower/geometry';
 import { exportTrackToUSDA, sanitizeFileStem } from './usd-export.js';
 
 // ---------- Editor state ----------
@@ -104,6 +105,7 @@ let topZoom = 1;                  // multiplier over the auto-fit top-down view
 // value clamp, and releaseTopViewFreeze can't drift.
 const TOP_ZOOM_SLIDER_MIN = -100;    // 2^(-100/50) = 0.25x
 const TOP_ZOOM_SLIDER_MAX = 250;     // 2^(250/50)  = 32x
+let showGrid = true;
 let gridSize = 32;
 let snapToGrid = false;
 let topPan = { x: 0, y: 0 };      // screen-pixel offset from the auto-fit center
@@ -188,6 +190,8 @@ let texturePanelOpen = false;
 let textureTileEditArmed = null;
 // File-dialog selections get an in-memory preview URL, never serialized.
 const texturePreviewUrls = new Map();
+const BUNDLED_TEXTURE_ROOT = 'assets/track/';
+const BUNDLED_TEXTURE_MANIFEST = BUNDLED_TEXTURE_ROOT + 'manifest.json';
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function textureAssets() { if (!track.textureAssets || typeof track.textureAssets !== 'object') track.textureAssets = {}; return track.textureAssets; }
 function textureAssetEntries() { return Object.entries(textureAssets()); }
@@ -270,6 +274,36 @@ async function loadTextureFileReference(file) {
   } catch (err) {
     URL.revokeObjectURL(objectUrl);
     alert('Could not load image: ' + (err.message || err));
+  }
+}
+async function loadBundledTextureAssets() {
+  try {
+    // A static browser app cannot enumerate a directory portably, so this
+    // checked-in manifest is the directory index on every supported host.
+    const response = await fetch(BUNDLED_TEXTURE_MANIFEST, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`manifest request returned ${response.status}`);
+    const filenames = await response.json();
+    if (!Array.isArray(filenames)) throw new Error('manifest must be an array of filenames');
+    const existingPaths = new Set(textureAssetEntries().map(([, asset]) => asset.path));
+    let changed = false;
+    for (const filename of filenames) {
+      if (typeof filename !== 'string' || !filename.trim()) continue;
+      const path = BUNDLED_TEXTURE_ROOT + filename.trim().replace(/^[/\\]+/, '');
+      if (existingPaths.has(path)) continue;
+      try {
+        const size = await imageSizeFromPath(path);
+        const name = textureNameFromPath(path);
+        const id = uniqueTextureAssetId(name);
+        textureAssets()[id] = { name, path, width: size.width, height: size.height, tileWidth: size.width, tileHeight: size.height };
+        existingPaths.add(path);
+        changed = true;
+      } catch (err) {
+        console.warn(`Skipping bundled texture "${path}":`, err);
+      }
+    }
+    if (changed) refresh();
+  } catch (err) {
+    console.warn(`Could not load bundled texture manifest "${BUNDLED_TEXTURE_MANIFEST}":`, err);
   }
 }
 function renderTexturePanel() {
@@ -710,7 +744,7 @@ function computeView(w, h) {
 const worldToScreen = (x, z) => ({ x: x * view.scale + view.ox, y: z * view.scale + view.oy });
 const screenToWorld = (sx, sy) => ({ x: (sx - view.ox) / view.scale, z: (sy - view.oy) / view.scale });
 function snapWorldXZ(w) {
-  if (!snapToGrid) return w;
+  if (!showGrid || !snapToGrid) return w;
   return {
     x: Math.round(w.x / gridSize) * gridSize,
     z: Math.round(w.z / gridSize) * gridSize
@@ -910,12 +944,14 @@ function drawTop() {
   ctx.clearRect(0, 0, w, h);
 
   // faint grid
-  ctx.strokeStyle = 'rgba(40,70,95,0.35)';
-  ctx.lineWidth = 1;
-  const step = gridSize * view.scale;
-  if (step > 6) {
-    for (let gx = view.ox % step; gx < w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
-    for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+  if (showGrid) {
+    ctx.strokeStyle = 'rgba(40,70,95,0.35)';
+    ctx.lineWidth = 1;
+    const step = gridSize * view.scale;
+    if (step > 6) {
+      for (let gx = view.ox % step; gx < w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
+      for (let gy = view.oy % step; gy < h; gy += step) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+    }
   }
 
   // Mesh regions draw beneath the paths: they are backdrop surfaces, and path
@@ -2530,10 +2566,12 @@ function syncVisualOptionsFromControls() {
   if (renderEl) renderMode = renderEl.value;
   const modeEl = document.getElementById('editModeSelect');
   if (modeEl) editMode = modeEl.value;
+  const showGridEl = document.getElementById('showGridChk');
+  if (showGridEl) showGrid = showGridEl.checked;
   const gridEl = document.getElementById('gridSizeSelect');
-  if (gridEl) gridSize = Number(gridEl.value) || gridSize;
+  if (gridEl) { gridSize = Number(gridEl.value) || gridSize; gridEl.disabled = !showGrid; }
   const snapEl = document.getElementById('snapGridChk');
-  if (snapEl) snapToGrid = snapEl.checked;
+  if (snapEl) { snapToGrid = snapEl.checked; snapEl.disabled = !showGrid; }
   const posEl = document.getElementById('showPositionChk');
   const rollEl = document.getElementById('showRollChk');
   const widthEl = document.getElementById('showWidthChk');
@@ -2914,9 +2952,10 @@ function deleteSegment(pi, i) {
     // Fresh (flat) roll/width points for both halves -- the old splines don't
     // map cleanly onto the split domains, so this is redone by hand.
     pushUndo();
+    const inheritedTexture = path.texture ? { ...path.texture } : null;
     track.paths.splice(pi, 1,
-      { id: newId('path'), closed: false, points: left.concat(flatRollWidthDefaults(false)) },
-      { id: newId('path'), closed: false, points: right.concat(flatRollWidthDefaults(false)) });
+      { id: newId('path'), closed: false, points: left.concat(flatRollWidthDefaults(false)), ...(inheritedTexture ? { texture: { ...inheritedTexture } } : {}) },
+      { id: newId('path'), closed: false, points: right.concat(flatRollWidthDefaults(false)), ...(inheritedTexture ? { texture: { ...inheritedTexture } } : {}) });
   }
   preserveStartPoint(oldStartPoint, oldReverse);
   assertNoStaleSeams();
@@ -2944,7 +2983,8 @@ function splitTargetPathAt(pathIndex, pointIndex) {
     track.paths.splice(pathIndex, 1, {
       id: path.id || newId('path'),
       closed: false,
-      points: rotated.concat(rollWidthForSourceRange(pp, true, startT, startT + 1))
+      points: rotated.concat(rollWidthForSourceRange(pp, true, startT, startT + 1)),
+      ...(path.texture ? { texture: { ...path.texture } } : {})
     });
     return true;
   }
@@ -2954,8 +2994,8 @@ function splitTargetPathAt(pathIndex, pointIndex) {
   const left = cps.slice(0, pointIndex + 1);
   const right = cps.slice(pointIndex);
   track.paths.splice(pathIndex, 1,
-    { id: newId('path'), closed: false, points: left.concat(rollWidthForSourceRange(pp, false, 0, pointIndex / max)) },
-    { id: newId('path'), closed: false, points: right.concat(rollWidthForSourceRange(pp, false, pointIndex / max, 1)) }
+    { id: newId('path'), closed: false, points: left.concat(rollWidthForSourceRange(pp, false, 0, pointIndex / max)), ...(path.texture ? { texture: { ...path.texture } } : {}) },
+    { id: newId('path'), closed: false, points: right.concat(rollWidthForSourceRange(pp, false, pointIndex / max, 1)), ...(path.texture ? { texture: { ...path.texture } } : {}) }
   );
   return true;
 }
@@ -3542,7 +3582,9 @@ elevCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
-  if (e.target.tagName === 'INPUT') return;
+  // Text-like inputs own letter keys, but a focused checkbox should not disable
+  // global view shortcuts such as G after the user clicks a toolbar toggle.
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') return;
   // A focused dropdown/textarea owns its own letter keys (native typeahead),
   // so don't shadow them -- including the mode dropdown itself, where
   // typeahead already reaches every mode and fires 'change'.
@@ -3551,6 +3593,13 @@ window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey && !e.metaKey && !e.altKey) {
     const mode = { KeyE: 'edit', KeyC: 'create', KeyR: 'rails' }[e.code];
     if (mode) { e.preventDefault(); setEditMode(mode); return; }
+    if (e.code === 'KeyG') {
+      e.preventDefault();
+      const checkbox = document.getElementById('showGridChk');
+      checkbox.checked = !checkbox.checked;
+      refresh();
+      return;
+    }
   }
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
@@ -3616,9 +3665,16 @@ const RANDOM_RANGE_DEFAULTS = Object.freeze({
   lengthMin: 8000, lengthMax: 9000,
   turnsMin: 6, turnsMax: 22,
   maxBanking: 25, maxHill: 300,
-  widthMin: 28, widthMax: 52, maxCurvature: 0.5
+  widthMin: 28, widthMax: 52, maxCurvature: 0.5,
+  meshChanceMin: 15, meshChanceMax: 45, sequenceChance: 20, maxMeshSections: 2,
+  meshLengthMin: 120, meshLengthMax: 300, endDropMin: 15, endDropMax: 40,
+  boostMin: 2, boostMax: 5
 });
 const RANDOM_RANGES_KEY = 'web3d.randomRanges';
+// Temporary route sampling used to choose mesh cuts; generatedPath simplifies
+// ordinary runs before authoring them, retaining only geometrically meaningful
+// controls plus the dedicated mesh endpoints.
+const RANDOM_ROUTE_CONTROL_SPACING = 250;
 function clampNum(v, lo, hi, d) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; }
 function sanitizeRandomRanges(r) {
   const d = RANDOM_RANGE_DEFAULTS;
@@ -3631,12 +3687,26 @@ function sanitizeRandomRanges(r) {
     maxHill: clampNum(r.maxHill, 0, 5000, d.maxHill),
     widthMin: clampNum(r.widthMin, 1, 2000, d.widthMin),
     widthMax: clampNum(r.widthMax, 1, 2000, d.widthMax),
-    maxCurvature: clampNum(r.maxCurvature, 0, 1, d.maxCurvature)
+    maxCurvature: clampNum(r.maxCurvature, 0, 1, d.maxCurvature),
+    meshChanceMin: clampNum(r.meshChanceMin, 0, 100, d.meshChanceMin),
+    meshChanceMax: clampNum(r.meshChanceMax, 0, 100, d.meshChanceMax),
+    sequenceChance: clampNum(r.sequenceChance, 0, 100, d.sequenceChance),
+    maxMeshSections: Math.round(clampNum(r.maxMeshSections, 0, 5, d.maxMeshSections)),
+    meshLengthMin: clampNum(r.meshLengthMin, 60, 1000, d.meshLengthMin),
+    meshLengthMax: clampNum(r.meshLengthMax, 60, 1000, d.meshLengthMax),
+    endDropMin: clampNum(r.endDropMin, 1, 200, d.endDropMin),
+    endDropMax: clampNum(r.endDropMax, 1, 200, d.endDropMax),
+    boostMin: Math.round(clampNum(r.boostMin, 0, 50, d.boostMin)),
+    boostMax: Math.round(clampNum(r.boostMax, 0, 50, d.boostMax))
   };
   // Keep each pair ordered so lerps behave, whatever the user typed.
   if (out.lengthMax < out.lengthMin) out.lengthMax = out.lengthMin;
   if (out.turnsMax < out.turnsMin) out.turnsMax = out.turnsMin;
   if (out.widthMax < out.widthMin) out.widthMax = out.widthMin;
+  if (out.meshChanceMax < out.meshChanceMin) out.meshChanceMax = out.meshChanceMin;
+  if (out.meshLengthMax < out.meshLengthMin) out.meshLengthMax = out.meshLengthMin;
+  if (out.endDropMax < out.endDropMin) out.endDropMax = out.endDropMin;
+  if (out.boostMax < out.boostMin) out.boostMax = out.boostMin;
   return out;
 }
 function loadRandomRanges() {
@@ -3670,6 +3740,109 @@ function measureLoopLength(controlPoints) {
   }
   const a = frames[frames.length - 1].pos, b = frames[0].pos;
   return len + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+}
+
+function simplifyGeneratedCoords(coords, tolerance = 75, minimum = 5) {
+  if (coords.length <= minimum) return coords.map(pos => [...pos]);
+  const distanceToSegment = (p, a, b) => {
+    const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+    const len2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
+    const t = len2 > 1e-9 ? Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / len2)) : 0;
+    return Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t);
+  };
+  // Preserve short straight endpoint runs so mesh joins can establish their
+  // elevation drop and then transition grade without moving the opposite end.
+  const keep = new Set([0, 1, coords.length - 2, coords.length - 1].filter(i => i >= 0 && i < coords.length));
+  const visit = (lo, hi) => {
+    let farthest = -1, farthestDistance = tolerance;
+    for (let i = lo + 1; i < hi; i++) {
+      const distance = distanceToSegment(coords[i], coords[lo], coords[hi]);
+      if (distance > farthestDistance) { farthest = i; farthestDistance = distance; }
+    }
+    if (farthest < 0) return;
+    keep.add(farthest); visit(lo, farthest); visit(farthest, hi);
+  };
+  visit(0, coords.length - 1);
+  // Very short ordinary runs between nearby mesh sections still need enough
+  // controls for the cubic evaluator. Add evenly-spaced originals only when
+  // geometric simplification left fewer than that minimum.
+  for (let slot = 1; keep.size < minimum && slot < minimum - 1; slot++) {
+    keep.add(Math.round(slot * (coords.length - 1) / (minimum - 1)));
+  }
+  return [...keep].sort((a, b) => a - b).map(i => [...coords[i]]);
+}
+
+function flattenTightTurnElevations(coords, closed) {
+  const out = coords.map(pos => [...pos]), n = out.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const root = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const unite = (a, b) => { a = root(a); b = root(b); if (a !== b) parent[b] = a; };
+  const first = closed ? 0 : 1, last = closed ? n : n - 1;
+  for (let i = first; i < last; i++) {
+    const pm = (i - 1 + n) % n, pp = (i + 1) % n;
+    const ix = out[i][0] - out[pm][0], iz = out[i][2] - out[pm][2];
+    const ox = out[pp][0] - out[i][0], oz = out[pp][2] - out[i][2];
+    const il = Math.hypot(ix, iz) || 1, ol = Math.hypot(ox, oz) || 1;
+    const angle = Math.acos(Math.max(-1, Math.min(1, (ix * ox + iz * oz) / (il * ol))));
+    if (angle >= Math.PI / 8) { unite(pm, i); unite(i, pp); }
+  }
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    const r = root(i), group = groups.get(r) || { sum: 0, indices: [] };
+    group.sum += out[i][1]; group.indices.push(i); groups.set(r, group);
+  }
+  for (const group of groups.values()) {
+    if (group.indices.length < 2) continue;
+    const level = group.sum / group.indices.length;
+    for (const i of group.indices) out[i][1] = level;
+  }
+  return out;
+}
+
+function generatedPath(id, coords, rnd, ranges, complexityT, ramp = false, closed = false) {
+  if (!ramp && !closed) coords = simplifyGeneratedCoords(coords);
+  if (!ramp) coords = flattenTightTurnElevations(coords, closed);
+  const points = coords.map((pos, i) => ({ type: 'position', id: `${id}-p-${i + 1}`, pos: [...pos], weight: 1 }));
+  const last = Math.max(1, closed ? coords.length : coords.length - 1);
+  const width0 = TrackCore.DEFAULT_WIDTH;
+  for (let i = 0; i < coords.length; i++) {
+    let roll = 0;
+    if (!ramp && (closed || (i > 0 && i < coords.length - 1))) {
+      const pm = coords[(i - 1 + coords.length) % coords.length], p = coords[i], pp = coords[(i + 1) % coords.length];
+      const inx = p[0] - pm[0], inz = p[2] - pm[2], outx = pp[0] - p[0], outz = pp[2] - p[2];
+      const inl = Math.hypot(inx, inz) || 1, outl = Math.hypot(outx, outz) || 1;
+      const m = Math.max(-1, Math.min(1, (inz * outx - inx * outz) / (inl * outl)));
+      roll = Math.max(-ranges.maxBanking, Math.min(ranges.maxBanking, (Math.asin(m) / 0.6) * ranges.maxBanking)) * complexityT;
+    }
+    points.push({ type: 'roll', t: i / last, roll });
+    const safeEndpoint = !closed && (ramp || i === 0 || i === coords.length - 1);
+    const sample = ranges.widthMin + (ranges.widthMax - ranges.widthMin) * rnd();
+    const width = safeEndpoint ? width0 * 2 : Math.max(1, width0 + (sample - width0) * complexityT);
+    points.push({ type: 'width', t: i / last, width });
+    points.push({ type: 'crossSection', t: i / last, curvature: ramp ? 0 : -rnd() * ranges.maxCurvature * complexityT, tightness: 1, thickness: TrackCore.DEFAULT_CROSS_SECTION_THICKNESS });
+  }
+  return { id, closed, points };
+}
+
+function generatedPlatformAsset(length, width) {
+  const mesh = new Mesh();
+  const polygonId = mesh.addPolygon([
+    new Vector2(-length / 2, -width / 2), new Vector2(length / 2, -width / 2),
+    new Vector2(length / 2, width / 2), new Vector2(-length / 2, width / 2)
+  ]);
+  // Only the two long sides are walls; entry and exit remain ledges.
+  for (const directed of mesh.getPolygon(polygonId).edges) {
+    const edge = mesh.getEdge(directed.edge);
+    const a = mesh.getVertex(edge.vertices[0]).position, b = mesh.getVertex(edge.vertices[1]).position;
+    if (Math.abs(a.y - b.y) < 1e-6) TrackMesh.setRailEdge(mesh, directed.edge, true);
+  }
+  return TrackMesh.meshToJSON(mesh);
+}
+
+function sequencePlatformCount(rnd) {
+  const r = rnd();
+  return r < 0.5 ? 2 : r < 0.8 ? 3 : 4;
 }
 
 function generateRandomTrack(complexity, seed, ranges) {
@@ -3718,44 +3891,224 @@ function generateRandomTrack(complexity, seed, ranges) {
   const corr = L3d > 1e-6 ? targetLen / L3d : 1;
   for (let i = 0; i < N; i++) { xs[i] *= corr; zs[i] *= corr; ys[i] *= corr; }
 
-  const width0 = TrackCore.DEFAULT_WIDTH;
-  const points = [];
-  for (let i = 0; i < N; i++) points.push({ type: 'position', pos: [xs[i], ys[i], zs[i]], weight: 1 });
-  // Banking: lean INTO each corner. The signed turn metric
-  // m = in_z*out_x - in_x*out_z is > 0 for a right-hand turn, which is exactly
-  // the sign of +roll (which lifts the LEFT edge -> banks into a right turn)
-  // per track-core.js. Magnitude from turn sharpness (asin m), capped at
-  // maxBanking, faded in by complexity.
+  // Add temporary route controls for choosing well-spaced mesh endpoints.
+  // Ordinary paths are simplified afterward; physics and rendering perform
+  // their own sampling and do not need these authored every few metres.
+  const route = [];
   for (let i = 0; i < N; i++) {
-    const pm = (i - 1 + N) % N, pp = (i + 1) % N;
-    const inx = xs[i] - xs[pm], inz = zs[i] - zs[pm];
-    const outx = xs[pp] - xs[i], outz = zs[pp] - zs[i];
-    const inl = Math.hypot(inx, inz) || 1, outl = Math.hypot(outx, outz) || 1;
-    const m = Math.max(-1, Math.min(1, (inz * outx - inx * outz) / (inl * outl)));
-    const turn = Math.asin(m);   // radians, + = right-hand turn
-    const roll = Math.max(-ranges.maxBanking, Math.min(ranges.maxBanking, (turn / 0.6) * ranges.maxBanking)) * t;
-    points.push({ type: 'roll', t: i / N, roll });
+    const j = (i + 1) % N;
+    const len = Math.hypot(xs[j] - xs[i], ys[j] - ys[i], zs[j] - zs[i]);
+    const steps = Math.max(1, Math.ceil(len / RANDOM_ROUTE_CONTROL_SPACING));
+    for (let k = 0; k < steps; k++) {
+      const f = k / steps;
+      route.push([xs[i] + (xs[j] - xs[i]) * f, ys[i] + (ys[j] - ys[i]) * f, zs[i] + (zs[j] - zs[i]) * f]);
+    }
   }
-  // Width varies smoothly (the width spline interpolates), blended from a
-  // constant default toward the full range by complexity.
-  for (let i = 0; i < N; i++) {
-    const sample = ranges.widthMin + (ranges.widthMax - ranges.widthMin) * rnd();
-    points.push({ type: 'width', t: i / N, width: Math.max(1, width0 + (sample - width0) * t) });
+
+  const meshChance = (ranges.meshChanceMin + (ranges.meshChanceMax - ranges.meshChanceMin) * t) / 100;
+  let wantedSections = 0;
+  for (let i = 0; i < ranges.maxMeshSections; i++) if (rnd() < meshChance) wantedSections++;
+
+  // Candidate cuts are separated by at least 500 m (about seven controls) and
+  // stay clear of the first few controls reserved for the starting grid.
+  const cuts = [];
+  const minOrdinarySteps = Math.max(2, Math.ceil(500 / RANDOM_ROUTE_CONTROL_SPACING));
+  for (let attempt = 0; attempt < 300 && cuts.length < wantedSections; attempt++) {
+    const start = 4 + Math.floor(rnd() * Math.max(1, route.length - 8));
+    const desiredLength = ranges.meshLengthMin + (ranges.meshLengthMax - ranges.meshLengthMin) * rnd();
+    const span = Math.max(1, Math.min(route.length - 2, Math.round(desiredLength / RANDOM_ROUTE_CONTROL_SPACING)));
+    const end = (start + span) % route.length;
+    if (end <= start || end >= route.length - 2) continue; // keep cuts non-wrapping; the route itself still wraps
+    // Platforms are deliberately safe and aligned: reject cuts whose chord is
+    // not close to both the outgoing and receiving path directions.
+    const alignment = (ax, az, bx, bz) => {
+      const al = Math.hypot(ax, az) || 1, bl = Math.hypot(bx, bz) || 1;
+      return (ax * bx + az * bz) / (al * bl);
+    };
+    const bridgeX = route[end][0] - route[start][0], bridgeZ = route[end][2] - route[start][2];
+    const intoX = route[start][0] - route[start - 2][0], intoZ = route[start][2] - route[start - 2][2];
+    const outX = route[end + 2][0] - route[end][0], outZ = route[end + 2][2] - route[end][2];
+    if (alignment(intoX, intoZ, bridgeX, bridgeZ) < 0.985 || alignment(bridgeX, bridgeZ, outX, outZ) < 0.985) continue;
+    const separated = cuts.every(c => Math.min(Math.abs(start - c.start), route.length - Math.abs(start - c.start)) >= minOrdinarySteps + Math.max(span, c.span));
+    if (separated) cuts.push({ start, end, span });
   }
-  // Curvature is dish-only: sampled in [-maxCurvature*t, 0], so at full
-  // complexity with the default 0.5 max it stays within [-0.5, 0] (the road
-  // only ever dishes inward, never crowns).
-  for (let i = 0; i < N; i++) {
-    const curvature = -rnd() * ranges.maxCurvature * t;
-    points.push({ type: 'crossSection', t: i / N, curvature, tightness: 1, thickness: TrackCore.DEFAULT_CROSS_SECTION_THICKNESS });
+  cuts.sort((a, b) => a.start - b.start);
+
+  if (!cuts.length) {
+    const sparseLoop = xs.map((x, i) => [x, ys[i], zs[i]]);
+    const path = generatedPath('random-path-1', sparseLoop, rnd, ranges, t, false, true);
+    const track = {
+      version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Random Track', start: { path: 0, point: 0, reverse: false },
+      disjointSeams: [], junctions: [], selfIntersectionOverrides: [], meshAssets: {}, meshes: [], textureAssets: {}, zones: [], triggers: [],
+      paths: [path]
+    };
+    const boostCount = Math.max(ranges.boostMin, Math.min(ranges.boostMax, Math.round(ranges.boostMin + (ranges.boostMax - ranges.boostMin) * t + (rnd() - 0.5) * 2)));
+    for (let i = 0; i < boostCount; i++) track.zones.push({
+      id: `random-boost-${i + 1}`, effect: 'velocityChange', width: TrackCore.DEFAULT_WIDTH * 0.3, length: TrackCore.DEFAULT_ZONE_LENGTH,
+      factor: TrackCore.DEFAULT_BOOST_FACTOR, duration: TrackCore.DEFAULT_BOOST_DURATION,
+      host: { kind: 'path', pathId: path.id, t: 0.1 + 0.8 * rnd(), lateral: 0 }
+    });
+    track.triggers = TrackCore.normalizeTriggers([], track.paths, track.meshes, track.start);
+    return track;
   }
-  return {
-    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Random Track',
-    start: { path: 0, point: 0, reverse: false },
-    disjointSeams: [], junctions: [], selfIntersectionOverrides: [],
-    meshAssets: {}, meshes: [], textureAssets: {},
-    paths: [{ id: null, closed: true, points }]
+
+  // Lower every receiving end and blend that drop into the first few ordinary
+  // controls. The outgoing endpoint remains untouched and therefore meets the
+  // first horizontal platform flush.
+  for (const cut of cuts) {
+    const drop = ranges.endDropMin + (ranges.endDropMax - ranges.endDropMin) * rnd();
+    cut.drop = drop;
+    const original = route[cut.end][1];
+    const target = route[cut.start][1] - drop;
+    const delta = target - original;
+    for (let k = 0; k <= 4; k++) {
+      const index = (cut.end + k) % route.length;
+      route[index][1] += delta * (1 - k / 4);
+    }
+  }
+
+  // One open ordinary path follows each cut: receiving end -> around the old
+  // loop -> next outgoing end. Mesh/ramp structures reconnect those endpoints.
+  const paths = [];
+  for (let i = 0; i < cuts.length; i++) {
+    const from = cuts[i].end, to = cuts[(i + 1) % cuts.length].start;
+    const coords = [];
+    for (let at = from, guard = 0; guard <= route.length; at = (at + 1) % route.length, guard++) {
+      coords.push(route[at]);
+      if (at === to) break;
+    }
+    paths.push(generatedPath(`random-path-${i + 1}`, coords, rnd, ranges, t));
+  }
+
+  // Use the evaluator's REAL open-curve endpoints, not the first/last authored
+  // controls: the uniform cubic spline does not generally pass through those
+  // controls. Simplification changes its endpoint blend, so settle each
+  // receiving end back to the section's authored drop by moving only its first
+  // dedicated endpoint controls; the ordinary path is free to climb again afterward.
+  const endpoint = (path, atEnd) => {
+    const pp = TrackCore.splitPoints(path.points);
+    const ev = TrackCore.makeEvaluator(pp.controlPoints, false);
+    const p = ev.evalTrack(atEnd ? ev.CP_N - 1 : 0).pos;
+    return [p.x, p.y, p.z];
   };
+  for (let i = 0; i < cuts.length; i++) {
+    const destination = paths[(i + 1) % cuts.length];
+    const outgoing = endpoint(paths[i], true), incoming = endpoint(destination, false);
+    const desiredY = outgoing[1] - cuts[(i + 1) % cuts.length].drop;
+    const controls = TrackCore.splitPoints(destination.points).controlPoints;
+    let prefix = Math.min(2, controls.length);
+    // Do not put the endpoint correction boundary through a flattened tight-turn
+    // group. Extend the shifted prefix until every such group is wholly inside
+    // or outside it, preserving the no-grade-through-tight-turn invariant.
+    let extended = true;
+    while (extended) {
+      extended = false;
+      for (let j = 1; j < controls.length - 1; j++) {
+        const a = controls[j - 1].pos, b = controls[j].pos, c = controls[j + 1].pos;
+        const ix = b[0] - a[0], iz = b[2] - a[2], ox = c[0] - b[0], oz = c[2] - b[2];
+        const il = Math.hypot(ix, iz) || 1, ol = Math.hypot(ox, oz) || 1;
+        const angle = Math.acos(Math.max(-1, Math.min(1, (ix * ox + iz * oz) / (il * ol))));
+        if (angle >= Math.PI / 8 && j - 1 < prefix && j + 1 >= prefix) {
+          prefix = Math.min(controls.length, j + 2); extended = true;
+        }
+      }
+    }
+    // Solve the rational endpoint blend instead of assuming these controls
+    // contribute with unit weight. This lets two dedicated endpoint controls
+    // establish the exact drop while retaining far fewer authored controls.
+    const beforeY = endpoint(destination, false)[1];
+    for (let j = 0; j < prefix; j++) controls[j].pos[1] += 1;
+    const response = endpoint(destination, false)[1] - beforeY;
+    for (let j = 0; j < prefix; j++) controls[j].pos[1] -= 1;
+    const shift = Math.abs(response) > 1e-9 ? (desiredY - beforeY) / response : (desiredY - beforeY);
+    for (let j = 0; j < prefix; j++) controls[j].pos[1] += shift;
+  }
+
+  const meshAssets = {}, meshes = [], platformRecords = [];
+  let rampNumber = 0, meshNumber = 0;
+  for (let i = 0; i < cuts.length; i++) {
+    // This section connects path i's outgoing endpoint to path i+1's receiving endpoint.
+    const a = endpoint(paths[i], true), b = endpoint(paths[(i + 1) % cuts.length], false);
+    const dx = b[0] - a[0], dz = b[2] - a[2], distance = Math.hypot(dx, dz) || 1;
+    const ux = dx / distance, uz = dz / distance, rotation = Math.atan2(uz, ux) * 180 / Math.PI;
+    const isSequence = rnd() < ranges.sequenceChance / 100;
+    const count = isSequence ? sequencePlatformCount(rnd) : 1;
+    const platformWidth = Math.max(TrackCore.DEFAULT_WIDTH * 2, ranges.widthMax);
+    // Reserve enough total empty distance for safe jumps, then distribute it
+    // equally before, between, and after the platforms. Keeping all the empty
+    // space at the receiving end made sequences look stacked against the
+    // outgoing path instead of spanning the two open ends.
+    const totalGap = Math.max(30, Math.min(115, distance - count * 18));
+    const platformLength = Math.max(18, (distance - totalGap) / count);
+    const gap = Math.max(0, (distance - platformLength * count) / (count + 1));
+    const levels = [];
+    for (let j = 0; j < count; j++) {
+      const f = j / count;
+      const trend = a[1] + (b[1] - a[1]) * f;
+      levels.push(j === 0 ? a[1] : trend + (rnd() * 2 - 1) * 15);
+    }
+    // Whatever rises/falls happen inside the sequence, its final launch must be
+    // above the receiving path so a flat or ramp-assisted exit can land rather
+    // than asking the ship to jump upward at the last transition.
+    levels[count - 1] = b[1] + 8;
+    let cursor = gap;
+    for (let j = 0; j < count; j++) {
+      const length = platformLength;
+      const centerAlong = cursor + length / 2;
+      const assetId = `random-platform-asset-${++meshNumber}`;
+      const meshId = `random-platform-${meshNumber}`;
+      meshAssets[assetId] = { name: `Platform ${meshNumber}`, railHeight: TrackCore.DEFAULT_RAIL_HEIGHT, mesh: generatedPlatformAsset(length, platformWidth) };
+      const placement = { id: meshId, asset: assetId, x: a[0] + ux * centerAlong, z: a[2] + uz * centerAlong, rotation, elevation: levels[j] };
+      meshes.push(placement);
+      platformRecords.push({ placement, length, width: platformWidth });
+      const nextLevel = j + 1 < count ? levels[j + 1] : b[1];
+      if (nextLevel >= levels[j] - 0.5) {
+        // Horizontal platforms cannot provide upward launch velocity. A short
+        // open spline ramp starts at the ledge and projects most of the way
+        // across the evenly-spaced gap toward the next surface.
+        const rampLength = Math.min(28, gap * 0.75);
+        const rise = Math.min(12, Math.max(3, nextLevel - levels[j] + 3));
+        const ramp = [];
+        for (let q = 0; q < 4; q++) {
+          const f = q / 3, along = cursor + length + rampLength * f;
+          ramp.push([a[0] + ux * along, levels[j] + rise * f, a[2] + uz * along]);
+        }
+        paths.push(generatedPath(`random-ramp-${++rampNumber}`, ramp, rnd, ranges, t, true));
+      }
+      cursor += length + gap;
+    }
+  }
+
+  const startPointCount = TrackCore.splitPoints(paths[0].points).controlPoints.length;
+  const start = { path: 0, point: Math.max(1, Math.min(startPointCount - 2, Math.floor(startPointCount / 3))), reverse: false };
+  const zones = [];
+  const boostCount = Math.max(ranges.boostMin, Math.min(ranges.boostMax, Math.round(ranges.boostMin + (ranges.boostMax - ranges.boostMin) * t + (rnd() - 0.5) * 2)));
+  const ordinaryPaths = paths.filter(path => !path.id.startsWith('random-ramp-'));
+  const boostablePlatforms = platformRecords.filter(p => p.length >= TrackCore.DEFAULT_ZONE_LENGTH + 8);
+  for (let i = 0; i < boostCount; i++) {
+    const useMesh = boostablePlatforms.length > 0 && rnd() < 0.3;
+    if (useMesh) {
+      const p = boostablePlatforms[Math.floor(rnd() * boostablePlatforms.length)];
+      zones.push({ id: `random-boost-${i + 1}`, effect: 'velocityChange', width: p.width * 0.3, length: Math.min(TrackCore.DEFAULT_ZONE_LENGTH, p.length - 4), factor: TrackCore.DEFAULT_BOOST_FACTOR, duration: TrackCore.DEFAULT_BOOST_DURATION,
+        host: { kind: 'mesh', meshId: p.placement.id, x: p.placement.x, z: p.placement.z, rotation: p.placement.rotation } });
+    } else {
+      const path = ordinaryPaths[Math.floor(rnd() * ordinaryPaths.length)];
+      zones.push({ id: `random-boost-${i + 1}`, effect: 'velocityChange', width: TrackCore.DEFAULT_WIDTH * 0.3, length: TrackCore.DEFAULT_ZONE_LENGTH, factor: TrackCore.DEFAULT_BOOST_FACTOR, duration: TrackCore.DEFAULT_BOOST_DURATION,
+        host: { kind: 'path', pathId: path.id, t: 0.15 + 0.7 * rnd(), lateral: 0 } });
+    }
+  }
+
+  const intermediateTriggers = cuts.map((cut, i) => ({
+    id: `random-checkpoint-${i + 1}`, type: 'checkpoint', role: 'intermediate',
+    host: { kind: 'path', pathId: paths[(i + 1) % cuts.length].id, t: 0.08 },
+    width: TrackCore.DEFAULT_TRIGGER_WIDTH, height: TrackCore.DEFAULT_TRIGGER_HEIGHT, rotation: 0, direction: 'forward'
+  }));
+  const result = {
+    version: TrackCore.TRACK_SCHEMA_VERSION, name: 'Random Track', start,
+    disjointSeams: [], junctions: [], selfIntersectionOverrides: [], meshAssets, meshes, textureAssets: {}, zones,
+    paths, triggers: TrackCore.normalizeTriggers(intermediateTriggers, paths, meshes, start)
+  };
+  return result;
 }
 
 const randomSeedEl = document.getElementById('randomSeed');
@@ -3769,7 +4122,12 @@ randomComplexityEl.addEventListener('input', () => { randomComplexityValEl.textC
 function applyRandomTrack(seed) {
   pushUndo();
   const complexity = Number(randomComplexityEl.value) || 5;
+  // Textures are an editor library as well as track metadata. Random replaces
+  // the authored world, but must not unload images the author already added;
+  // new paths simply begin with no texture assignment.
+  const retainedTextureAssets = JSON.parse(JSON.stringify(textureAssets()));
   track = generateRandomTrack(complexity, seed, randomRanges);
+  track.textureAssets = retainedTextureAssets;
   ensureTrackIds();
   assertNoStaleSeams();
   selectedPointId = null; syncSelectionToId(); segSel = null; joinSel = []; rollSel = null; widthSel = null; crossSectionSel = null; topPan = { x: 0, y: 0 };
@@ -3791,7 +4149,10 @@ randomSeedEl.addEventListener('change', () => {
 // Ranges popup (#randomPanel): edit the bounds complexity scales within.
 const RR_FIELDS = {
   lengthMin: 'rrLengthMin', lengthMax: 'rrLengthMax', turnsMin: 'rrTurnsMin', turnsMax: 'rrTurnsMax',
-  maxBanking: 'rrMaxBanking', maxHill: 'rrMaxHill', widthMin: 'rrWidthMin', widthMax: 'rrWidthMax', maxCurvature: 'rrMaxCurvature'
+  maxBanking: 'rrMaxBanking', maxHill: 'rrMaxHill', widthMin: 'rrWidthMin', widthMax: 'rrWidthMax', maxCurvature: 'rrMaxCurvature',
+  meshChanceMin: 'rrMeshChanceMin', meshChanceMax: 'rrMeshChanceMax', sequenceChance: 'rrSequenceChance', maxMeshSections: 'rrMaxMeshSections',
+  meshLengthMin: 'rrMeshLengthMin', meshLengthMax: 'rrMeshLengthMax', endDropMin: 'rrEndDropMin', endDropMax: 'rrEndDropMax',
+  boostMin: 'rrBoostMin', boostMax: 'rrBoostMax'
 };
 function fillRandomRangeFields() {
   for (const k in RR_FIELDS) { const el = document.getElementById(RR_FIELDS[k]); if (el) el.value = randomRanges[k]; }
@@ -4156,6 +4517,7 @@ document.getElementById('curveSelect').addEventListener('change', (e) => {
   refresh();
 });
 document.getElementById('renderModeSelect').addEventListener('change', refresh);
+document.getElementById('showGridChk').addEventListener('change', refresh);
 document.getElementById('gridSizeSelect').addEventListener('change', refresh);
 document.getElementById('snapGridChk').addEventListener('change', refresh);
 const topZoomSlider = document.getElementById('topZoomSlider');
@@ -4331,3 +4693,4 @@ applyElevCollapsed();
 
 window.addEventListener('resize', draw);
 refresh();
+loadBundledTextureAssets();

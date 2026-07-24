@@ -672,13 +672,18 @@ function buildZones(track, bakedPaths) {
         dist[i] = dist[i - 1] + Math.hypot(bx - ax, by - ay, bz - az);
       }
       const pos = [], uv = [];
-      for (let i = 0; i < strip.left.length - 1; i++) {
-        const a = strip.left[i], b = strip.right[i], c = strip.left[i + 1], d = strip.right[i + 1];
+      const rows = strip.rows || strip.left.map((left, i) => [left, strip.right[i]]);
+      for (let i = 0; i < rows.length - 1; i++) {
         const u0 = dist[i] * uScale, u1 = dist[i + 1] * uScale;
-        pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-        uv.push(u0, 0, u0, vW, u1, 0);
-        pos.push(b.x, b.y, b.z, d.x, d.y, d.z, c.x, c.y, c.z);
-        uv.push(u0, vW, u1, vW, u1, 0);
+        const across = Math.min(rows[i].length, rows[i + 1].length);
+        for (let j = 0; j < across - 1; j++) {
+          const a = rows[i][j], b = rows[i][j + 1], c = rows[i + 1][j], d = rows[i + 1][j + 1];
+          const v0 = vW * (j / (across - 1)), v1 = vW * ((j + 1) / (across - 1));
+          pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+          uv.push(u0, v0, u0, v1, u1, v0);
+          pos.push(b.x, b.y, b.z, d.x, d.y, d.z, c.x, c.y, c.z);
+          uv.push(u0, v1, u1, v1, u1, v0);
+        }
       }
       const mesh = zoneMeshFromPositions(pos, uv, zone.effect); scene.add(mesh);
       zones.push({
@@ -1076,7 +1081,7 @@ function applyHandling(track, physics) {
 }
 // Weight-scaled wall bounciness. m = weight / neutral: a heavy ship (m > 1)
 // bounces less, a light one (m < 1) more, capped so it never approaches a
-// perfect-elastic ping. At the neutral weight this is exactly the base 0.4.
+// perfect-elastic ping. At the neutral weight this is exactly the base 0.75.
 function weightRestitution(physics) {
   const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
   return Math.max(0, Math.min(0.9, physics.wallRestitution / m));
@@ -1478,7 +1483,7 @@ function createPhysicsState() { return {
   friction: 55,      // 40 * 1.373 -- decel when neither throttle nor brake held
   turnRate: 2.4,           // rad/sec at low speed
   grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
-  wallRestitution: 0.4,    // BASE guard-rail bounce at the neutral weight; scaled per weight (weightRestitution)
+  wallRestitution: 0.75,   // BASE guard-rail bounce at the neutral weight; scaled per weight (weightRestitution)
   weight: 1000,            // ship mass (kg); 1000 = neutral. Heavier bounces less, lighter more
   bobTime: 0,
   visualBank: 0,           // smoothed steer-lean (rad)
@@ -1795,7 +1800,7 @@ function stepPhysics(ship, dt, throttle, brake, steer) {
         const into = vel.dot(_wallN);
         if (into > 0) {
           // Weight-scaled bounce, plus a momentum-scaled jolt on a real impact.
-          vel.addScaledVector(_wallN, -into * (1 + weightRestitution()));
+          vel.addScaledVector(_wallN, -into * (1 + weightRestitution(physics)));
           addImpactJolt(physics, into);
         }
         physics.speed = vel.length() * weightSpeedRetain(physics);
@@ -1820,21 +1825,23 @@ function stepPhysics(ship, dt, throttle, brake, steer) {
     surfaceNormal = UP;
   } else if (!physics.airborne && !hasTranslation) {
     c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-    if (ship.controller === idleController) {
-      // The placeholder AI explicitly holds its authored grid pose. It still
-      // runs physics and interaction detection; once an external effect gives
-      // it speed, the normal translating branches take over.
+    const parkedProjection = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
+    if (!corridorContains(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z, parkedProjection)) {
+      // A zero-speed ship can still be unsupported after an external placement
+      // (for example over a mesh-region hole), in which case it must fall.
+      beginAirborne(ship, _launchVel.set(0, 0, 0));
+      surfaceRenderPos = physics.groundPos;
+      surfaceNormal = UP;
+    } else {
+      // A zero-speed ship already occupies the exact surface pose produced by
+      // its last translating step or grid placement. Reprojecting that pose
+      // every frame is not idempotent on a curved, crowned ribbon: interpolated
+      // frame normals can have a tiny component along the baked centerline
+      // chord, so nearest-segment projection walks the pose backward a few
+      // millimetres per frame. Hold the pose; sampling still runs for zones and
+      // triggers, and normal projection resumes as soon as it translates.
       surfaceRenderPos = physics.groundPos;
       surfaceNormal = physics.up;
-    } else {
-      const { s, loS, hiS } = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-      const finalS = THREE.MathUtils.clamp(s, loS, hiS);
-      const surface = curvedSurfaceFrame(c, finalS);
-      physics.groundPos.copy(surface.pos);
-      // No re-tangentize here: parked, the surface normal isn't changing, and the
-      // top-of-frame steering/grip already flattened forward/moveDir onto it.
-      surfaceRenderPos = surface.pos;
-      surfaceNormal = surface.normal;
     }
   }
 

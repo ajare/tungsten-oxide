@@ -65,9 +65,31 @@ const meshFile = JSON.stringify({
   ]
 });
 
-await visit('editor.html loads', 'editor.html');
+await visit('editor: grid visibility toggle and shortcut disable snapping', 'editor.html', async (page) => {
+  await page.check('#snapGridChk');
+  await page.keyboard.press('g');
+  let state = await page.evaluate(() => ({
+    shown: document.getElementById('showGridChk').checked,
+    snapChecked: document.getElementById('snapGridChk').checked,
+    snapDisabled: document.getElementById('snapGridChk').disabled,
+    sizeDisabled: document.getElementById('gridSizeSelect').disabled
+  }));
+  if (state.shown || !state.snapChecked || !state.snapDisabled || !state.sizeDisabled)
+    throw new Error('G did not hide the grid and suspend its controls: ' + JSON.stringify(state));
+  await page.keyboard.press('g');
+  state = await page.evaluate(() => ({
+    shown: document.getElementById('showGridChk').checked,
+    snapChecked: document.getElementById('snapGridChk').checked,
+    snapDisabled: document.getElementById('snapGridChk').disabled
+  }));
+  if (!state.shown || !state.snapChecked || state.snapDisabled)
+    throw new Error('G did not restore the grid and prior snap preference: ' + JSON.stringify(state));
+  return 'G hides the grid, suspends snap, and restores the prior snap preference';
+});
 
-await visit('editor: texture file dialog saves a reference, not embedded image data', 'editor.html', async (page) => {
+await visit('editor: bundled and browsed textures save references, not embedded image data', 'editor.html', async (page) => {
+  await page.waitForFunction(() => Object.values(window.__editor.track.textureAssets || {})
+    .some(asset => asset.path === 'assets/track/wipeout_seamless_track_texture_512x512.png'));
   await page.click('#texturesBtn');
   await page.setInputFiles('#textureFileInput', join(ROOT, 'assets/test-1.png'));
   await page.waitForTimeout(300);
@@ -76,11 +98,233 @@ await visit('editor: texture file dialog saves a reference, not embedded image d
     const json = window.TrackCore.serializeTrack(window.__editor.track);
     return { assets, json };
   });
-  if (result.assets.length !== 1 || result.assets[0].path !== 'test-1.png')
+  if (!result.assets.some(asset => asset.path === 'test-1.png'))
     throw new Error('file dialog selection did not store its filename reference: ' + JSON.stringify(result.assets));
-  if ('dataUrl' in result.assets[0] || result.json.includes('data:image') || result.json.includes('dataUrl'))
+  if (!result.assets.some(asset => asset.path === 'assets/track/wipeout_seamless_track_texture_512x512.png'))
+    throw new Error('bundled track texture was not loaded: ' + JSON.stringify(result.assets));
+  if (result.assets.some(asset => 'dataUrl' in asset) || result.json.includes('data:image') || result.json.includes('dataUrl'))
     throw new Error('texture image data leaked into track JSON');
-  return 'saved test-1.png without image bytes';
+  return 'auto-loaded the bundled texture and saved file references without image bytes';
+});
+
+let generatedRandomTrackJSON, generatedRampTrackJSON;
+await visit('editor: random generator preserves textures and builds deterministic mesh gaps, checkpoints, and boosts', 'editor.html', async (page) => {
+  await page.setInputFiles('#textureFileInput', join(ROOT, 'assets/test-1.png'));
+  await page.waitForTimeout(200);
+  await page.click('#randomRangesBtn');
+  await page.evaluate(() => {
+    const values = {
+      rrMeshChanceMin: 100, rrMeshChanceMax: 100, rrSequenceChance: 0, rrMaxMeshSections: 2,
+      rrMeshLengthMin: 180, rrMeshLengthMax: 220, rrEndDropMin: 20, rrEndDropMax: 20,
+      rrBoostMin: 2, rrBoostMax: 2
+    };
+    for (const [id, value] of Object.entries(values)) {
+      const el = document.getElementById(id); el.value = value; el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  const generate = async () => {
+    await page.evaluate(() => {
+      const seed = document.getElementById('randomSeed');
+      seed.value = 424242; seed.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+    return page.evaluate(() => ({
+      json: window.TrackCore.serializeTrack(window.__editor.track),
+      paths: window.__editor.track.paths.map(p => ({ id: p.id, closed: p.closed })),
+      positionPoints: window.__editor.track.paths.reduce((sum, p) => sum + p.points.filter(point => point.type === 'position').length, 0),
+      tightTurnGrades: window.__editor.track.paths.flatMap(path => {
+        if (path.id.startsWith('random-ramp-')) return [];
+        const cps = path.points.filter(point => point.type === 'position');
+        const grades = [];
+        for (let i = 1; i < cps.length - 1; i++) {
+          const a = cps[i - 1].pos, b = cps[i].pos, c = cps[i + 1].pos;
+          const ix = b[0] - a[0], iz = b[2] - a[2], ox = c[0] - b[0], oz = c[2] - b[2];
+          const il = Math.hypot(ix, iz) || 1, ol = Math.hypot(ox, oz) || 1;
+          const angle = Math.acos(Math.max(-1, Math.min(1, (ix * ox + iz * oz) / (il * ol))));
+          if (angle >= Math.PI / 8) grades.push(Math.max(Math.abs(b[1] - a[1]) / il, Math.abs(c[1] - b[1]) / ol));
+        }
+        return grades;
+      }),
+      drops: window.__editor.track.paths.map((path, i, paths) => {
+        const endpoint = (p, end) => { const pp = window.TrackCore.splitPoints(p.points); const ev = window.TrackCore.makeEvaluator(pp.controlPoints, false); return ev.evalTrack(end ? ev.CP_N - 1 : 0).pos; };
+        return endpoint(path, true).y - endpoint(paths[(i + 1) % paths.length], false).y;
+      }),
+      meshes: window.__editor.track.meshes.length,
+      meshCenterErrors: window.__editor.track.meshes.map((mesh, i) => {
+        const endpoint = (p, end) => { const pp = window.TrackCore.splitPoints(p.points); const ev = window.TrackCore.makeEvaluator(pp.controlPoints, false); return ev.evalTrack(end ? ev.CP_N - 1 : 0).pos; };
+        const a = endpoint(window.__editor.track.paths[i], true), b = endpoint(window.__editor.track.paths[(i + 1) % window.__editor.track.meshes.length], false);
+        return Math.hypot(mesh.x - (a.x + b.x) / 2, mesh.z - (a.z + b.z) / 2);
+      }),
+      rails: window.__editor.compiledMeshes().map(m => m.compiled.rails.length),
+      zones: window.__editor.track.zones,
+      texturePaths: Object.values(window.__editor.track.textureAssets || {}).map(asset => asset.path).sort(),
+      checkpoints: window.__editor.track.triggers.filter(t => t.type === 'checkpoint')
+    }));
+  };
+  const first = await generate(), second = await generate();
+  generatedRandomTrackJSON = first.json;
+  if (first.json !== second.json) throw new Error('same random seed and settings did not reproduce identical JSON');
+  if (!first.texturePaths.includes('test-1.png') || !first.texturePaths.includes('assets/track/wipeout_seamless_track_texture_512x512.png'))
+    throw new Error('random generation unloaded currently-added textures: ' + JSON.stringify(first.texturePaths));
+  if (first.meshes !== 2 || first.paths.length < 2 || first.paths.some(p => p.closed !== false))
+    throw new Error('expected two mesh-connected open path sections: ' + JSON.stringify(first));
+  if (first.positionPoints > 20) throw new Error(`random track authored ${first.positionPoints} position controls; expected at most 20`);
+  if (!first.tightTurnGrades.length) throw new Error('random-track fixture contains no tight turn to exercise grade suppression');
+  if (first.tightTurnGrades.some(grade => grade > 1e-6))
+    throw new Error('tight horizontal turn was combined with an elevation change: ' + first.tightTurnGrades);
+  if (first.rails.some(n => n !== 2)) throw new Error('generated platforms must rail only their two sides: ' + first.rails);
+  if (first.meshCenterErrors.some(error => error > 1e-6)) throw new Error('single platforms must be centered evenly between their open ends: ' + first.meshCenterErrors);
+  if (first.drops.some(drop => drop <= 0)) throw new Error('receiving path must be below every outgoing path: ' + first.drops);
+  if (first.zones.length !== 2 || first.zones.some(z => z.effect !== 'velocityChange'))
+    throw new Error('expected two generated boost pads: ' + JSON.stringify(first.zones));
+  const finish = first.checkpoints.filter(t => t.role === 'finish'), intermediate = first.checkpoints.filter(t => t.role === 'intermediate');
+  if (finish.length !== 1 || intermediate.length !== 2 || first.checkpoints.some(t => t.direction !== 'forward'))
+    throw new Error('generated checkpoint route is incomplete: ' + JSON.stringify(first.checkpoints));
+  const expectedCheckpointPaths = [first.paths[1].id, first.paths[0].id];
+  if (intermediate.some((checkpoint, i) => checkpoint.host.pathId !== expectedCheckpointPaths[i]))
+    throw new Error('intermediate checkpoints are not ordered along the driven route: ' + JSON.stringify(intermediate));
+
+  await page.evaluate(() => {
+    const values = { rrMeshChanceMin: 100, rrMeshChanceMax: 100, rrSequenceChance: 100, rrMaxMeshSections: 1,
+      rrMeshLengthMin: 300, rrMeshLengthMax: 300, rrEndDropMin: 15, rrEndDropMax: 15 };
+    for (const [id, value] of Object.entries(values)) {
+      const el = document.getElementById(id); el.value = value; el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+  let rampCase = null;
+  for (let seedValue = 1; seedValue <= 12 && !rampCase; seedValue++) {
+    await page.evaluate(seedValue => {
+      const seed = document.getElementById('randomSeed');
+      seed.value = seedValue; seed.dispatchEvent(new Event('change', { bubbles: true }));
+    }, seedValue);
+    rampCase = await page.evaluate(() => {
+      const track = window.__editor.track;
+      const ramps = track.paths.filter(p => p.id.startsWith('random-ramp-')).length;
+      if (!ramps) return null;
+      const ordinary = track.paths.find(p => !p.id.startsWith('random-ramp-'));
+      const pp = window.TrackCore.splitPoints(ordinary.points), ev = window.TrackCore.makeEvaluator(pp.controlPoints, false);
+      const a = ev.evalTrack(ev.CP_N - 1).pos, b = ev.evalTrack(0).pos;
+      const dx = b.x - a.x, dz = b.z - a.z, distance = Math.hypot(dx, dz), ux = dx / distance, uz = dz / distance;
+      const platforms = track.meshes.map(mesh => {
+        const vertices = track.meshAssets[mesh.asset].mesh.vertices;
+        const xs = vertices.map(v => v.position.x);
+        return { along: (mesh.x - a.x) * ux + (mesh.z - a.z) * uz, length: Math.max(...xs) - Math.min(...xs) };
+      }).sort((x, y) => x.along - y.along);
+      const gaps = [platforms[0].along - platforms[0].length / 2];
+      for (let i = 1; i < platforms.length; i++) gaps.push(platforms[i].along - platforms[i].length / 2 - (platforms[i - 1].along + platforms[i - 1].length / 2));
+      gaps.push(distance - (platforms.at(-1).along + platforms.at(-1).length / 2));
+      return { ramps, meshes: track.meshes.length, spacingError: Math.max(...gaps) - Math.min(...gaps), json: window.TrackCore.serializeTrack(track) };
+    });
+  }
+  if (!rampCase || rampCase.meshes < 2 || rampCase.meshes > 4)
+    throw new Error('platform sequences did not generate a launch ramp: ' + JSON.stringify(rampCase));
+  if (rampCase.spacingError > 1e-6)
+    throw new Error('platform sequence gaps are not evenly distributed between the open ends: ' + JSON.stringify(rampCase));
+  generatedRampTrackJSON = rampCase.json;
+  return `${first.positionPoints} route controls, 2 side-railed gaps, 2 boosts, ordered checkpoints, and a ${rampCase.meshes}-platform ramp sequence`;
+});
+
+await visit('game: generated mesh section is traversable into the receiving path', 'track.html', async (page) => {
+  await page.evaluate(json => localStorage.setItem('web3d.currentTrack', json), generatedRandomTrackJSON);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const built = await page.evaluate(() => ({ paths: window.__game.paths.length, meshes: window.__game.meshRegions.length, zones: window.__game.zones.length }));
+  if (built.paths < 2 || built.meshes !== 2 || built.zones !== 2) throw new Error('generated world did not compile: ' + JSON.stringify(built));
+  await page.evaluate(() => {
+    const game = window.__game, path = game.paths[0], p = game.physics;
+    const frame = path.centerline[Math.max(0, path.centerline.length - 10)];
+    p.groundPos.copy(frame.pos); p.visualGroundPos.copy(frame.pos);
+    p.forward.copy(frame.tangent); p.moveDir.copy(frame.tangent); p.up.copy(frame.normal); p.visualUp.copy(frame.normal);
+    p.speed = p.maxSpeed * 0.6; p.airborne = false; p.verticalVel = 0;
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+  });
+  let closestLanding = Infinity, closestAny = Infinity, landingSpeed = 0;
+  for (let i = 0; i < 60; i++) {
+    await page.waitForTimeout(100);
+    const sample = await page.evaluate(() => {
+      const game = window.__game, p = game.physics, receiving = game.paths[1].centerline;
+      let nearest = Infinity;
+      for (const frame of receiving) nearest = Math.min(nearest, frame.pos.distanceTo(p.groundPos));
+      return { airborne: p.airborne, nearest, speed: p.speed };
+    });
+    closestAny = Math.min(closestAny, sample.nearest);
+    if (!sample.airborne && sample.nearest < closestLanding) { closestLanding = sample.nearest; landingSpeed = sample.speed; }
+  }
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+  if (closestLanding > 45) throw new Error('ship did not reach the receiving path: ' + JSON.stringify({ closestLanding, closestAny }));
+  return `landed on receiving path at ${landingSpeed.toFixed(1)} m/s`;
+});
+
+await visit('game: generated ramp sequence can return to its receiving path', 'track.html', async (page) => {
+  await page.evaluate(json => localStorage.setItem('web3d.currentTrack', json), generatedRampTrackJSON);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    const game = window.__game, path = game.paths[0], p = game.physics;
+    const frame = path.centerline[Math.max(0, path.centerline.length - 10)];
+    p.groundPos.copy(frame.pos); p.visualGroundPos.copy(frame.pos);
+    p.forward.copy(frame.tangent); p.moveDir.copy(frame.tangent); p.up.copy(frame.normal); p.visualUp.copy(frame.normal);
+    p.speed = p.maxSpeed * 0.6; p.airborne = false; p.verticalVel = 0;
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+  });
+  let closestLanding = Infinity, closestAny = Infinity, landingSpeed = 0;
+  let closestMeshes = await page.evaluate(() => window.__game.meshRegions.map(() => Infinity));
+  for (let i = 0; i < 65; i++) {
+    await page.waitForTimeout(100);
+    const sample = await page.evaluate(() => {
+      const game = window.__game, p = game.physics, receiving = game.paths[0].centerline;
+      let nearestStart = Infinity;
+      for (let j = 0; j < Math.min(80, receiving.length); j++) nearestStart = Math.min(nearestStart, receiving[j].pos.distanceTo(p.groundPos));
+      return { airborne: p.airborne, nearestStart, speed: p.speed,
+        meshDistances: game.meshRegions.map(r => Math.hypot(r.compiled.placement.x - p.groundPos.x, r.compiled.placement.z - p.groundPos.z)) };
+    });
+    closestMeshes = closestMeshes.map((d, j) => Math.min(d, sample.meshDistances[j]));
+    closestAny = Math.min(closestAny, sample.nearestStart);
+    if (!sample.airborne && sample.nearestStart < closestLanding) { closestLanding = sample.nearestStart; landingSpeed = sample.speed; }
+  }
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+  if (closestLanding > 25) throw new Error('ship did not complete generated ramp sequence: ' + JSON.stringify({ closestLanding, closestAny, closestMeshes }));
+  return `completed ramp sequence at ${landingSpeed.toFixed(1)} m/s`;
+});
+
+await visit('editor: both halves of a deleted segment accept textures independently', 'editor.html', async (page) => {
+  await page.click('#newBtn');
+  await page.waitForTimeout(200);
+  await page.setInputFiles('#textureFileInput', join(ROOT, 'assets/test-1.png'));
+  await page.waitForTimeout(200);
+  await page.click('#texturesBtn');
+  await page.waitForFunction(() => document.querySelector('#textureAssetList .tile'));
+  await page.click('#textureAssetList .tile');
+  await page.click('#closeTexturePanelBtn');
+  const point = await page.evaluate(() => {
+    const cps = window.TrackCore.splitPoints(window.__editor.track.paths[0].points).controlPoints;
+    const cp = cps[Math.floor(cps.length / 2) - 1];
+    const s = window.__editor.worldToScreen(cp.pos[0], cp.pos[2]);
+    const r = document.getElementById('topCanvas').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y, count: cps.length };
+  });
+  if (point.count < 8) throw new Error('starter track needs at least 8 controls for this split test');
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(100);
+  await page.click('#delSegmentBtn'); // closed loop -> one open path
+  await page.waitForTimeout(150);
+  const interior = await page.evaluate(() => {
+    const cps = window.TrackCore.splitPoints(window.__editor.track.paths[0].points).controlPoints;
+    const cp = cps[3];
+    const s = window.__editor.worldToScreen(cp.pos[0], cp.pos[2]);
+    const r = document.getElementById('topCanvas').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y };
+  });
+  await page.mouse.click(interior.x, interior.y);
+  await page.waitForTimeout(100);
+  await page.click('#delSegmentBtn'); // open path -> two open paths
+  await page.waitForTimeout(200);
+  if (await page.evaluate(() => window.__editor.track.paths.length) !== 2) throw new Error('deleting the interior segment did not split the path');
+
+  const assignments = await page.evaluate(() => window.__editor.track.paths.map(path => path.texture || null));
+  if (assignments.some(texture => !texture)) throw new Error('splitting a textured path dropped one or both assignments: ' + JSON.stringify(assignments));
+  if (assignments[0].asset !== assignments[1].asset) throw new Error('split paths should retain the same texture asset');
+  return 'both split paths inherited the original texture assignment';
 });
 
 await visit('editor: import mesh, move, rail, export', 'editor.html', async (page) => {
@@ -162,6 +406,25 @@ await visit('editor: right-click does not read the clipboard', 'editor.html', as
   if (afterPaste !== 1) throw new Error(`pasting read the clipboard ${afterPaste}x, should be 1`);
 
   return `menu 0 reads, paste 1 read (permission: ${state})`;
+});
+
+await visit('game: player remains at its starting-grid pose while parked', 'track.html', async (page) => {
+  await page.evaluate(() => {
+    localStorage.setItem('web3d.currentTrack',
+      window.TrackCore.serializeTrack(window.TrackCore.cloneTrack(window.TrackCore.DEFAULT_TRACK)));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  const displacement = await page.evaluate(() => {
+    const ship = window.__game.ships[0];
+    const delta = ship.physics.groundPos.clone().sub(ship.startPose.pos);
+    const rendered = ship.group.position.clone().addScaledVector(ship.startPose.up, -1).sub(ship.startPose.pos);
+    return { along: delta.dot(ship.startPose.forward), renderedAlong: rendered.dot(ship.startPose.forward), speed: ship.physics.speed };
+  });
+  if (displacement.speed !== 0) throw new Error(`parked player gained speed ${displacement.speed}`);
+  if (Math.abs(displacement.along) > 0.01) throw new Error(`parked player drifted ${displacement.along.toFixed(3)} m along the track`);
+  if (Math.abs(displacement.renderedAlong) > 0.01) throw new Error(`rendered player drifted ${displacement.renderedAlong.toFixed(3)} m along the track`);
+  return 'physics and rendered pose remained fixed at zero speed';
 });
 
 await visit('game: creates one player and seven independently simulated idle AI ships', 'track.html', async (page) => {
@@ -447,6 +710,30 @@ const openTrack = {
     ]
   }]
 };
+
+await visit('game: spline guard rails reflect velocity instead of sticking the ship', 'track.html', async (page) => {
+  await page.evaluate((t) => localStorage.setItem('web3d.currentTrack', JSON.stringify(t)), openTrack);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    const p = window.__game.physics;
+    p.groundPos.set(0, 0, 0); p.visualGroundPos.copy(p.groundPos);
+    p.airborne = false; p.verticalVel = 0;
+    p.forward.set(Math.SQRT1_2, 0, Math.SQRT1_2); p.moveDir.copy(p.forward); p.speed = 80;
+  });
+  const samples = [];
+  for (let i = 0; i < 45; i++) {
+    await page.waitForTimeout(12);
+    samples.push(await page.evaluate(() => {
+      const p = window.__game.physics;
+      return { x: p.groundPos.x, z: p.groundPos.z, moveX: p.moveDir.x };
+    }));
+  }
+  if (Math.max(...samples.map(s => s.x)) < 9) throw new Error('ship never reached the guard rail');
+  if (Math.min(...samples.map(s => s.moveX)) > -0.45) throw new Error('rail bounce did not send the ship strongly enough toward the reflection vector');
+  if (Math.max(...samples.map(s => s.z)) < 15) throw new Error('ship stuck at the rail instead of continuing after impact');
+  return 'velocity strongly reflected and motion continued after impact';
+});
 
 async function driveOffEnd(page, { fromZ, heading, expectBeyond }) {
   await page.evaluate(({ fromZ, heading }) => {
