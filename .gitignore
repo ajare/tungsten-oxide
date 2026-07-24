@@ -11,3 +11,7 @@ Thumbs.db
 node_modules/
 dist/
 npm-debug.log*
+
+# C++ build output (CMake/Ninja). The vendored nlohmann header and sources are
+# tracked; the build tree is not.
+cpp/build/

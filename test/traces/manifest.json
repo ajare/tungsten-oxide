@@ -1,0 +1,22 @@
+[
+  {
+    "file": "starter-circle.json",
+    "steps": 600,
+    "airborneSteps": 0
+  },
+  {
+    "file": "open-curve.json",
+    "steps": 900,
+    "airborneSteps": 106
+  },
+  {
+    "file": "boost-circuit.json",
+    "steps": 1600,
+    "airborneSteps": 0
+  },
+  {
+    "file": "recovery-run.json",
+    "steps": 900,
+    "airborneSteps": 219
+  }
+]

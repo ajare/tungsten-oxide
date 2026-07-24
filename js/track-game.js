@@ -1,6 +1,17 @@
 
 import * as TrackMesh from './track-mesh.js';
 import { DEFAULT_SHIP_COUNT, gridSlot } from './ship-grid.js';
+import { Vec3 } from './vec3.js';
+// The physics core was extracted, verbatim, into track-physics.js (see
+// CPP_PORT_PLAN.md milestone 0). This module keeps only the THREE rendering,
+// input, track-building glue and the animate loop; every physics symbol below
+// is imported. Stateful physics lives on `sim` (a Simulation), which buildTrack
+// populates with the baked track data.
+import {
+  Simulation, MAX_PHYSICS_STEP, RESPAWN_FALL_DEPTH,
+  createPhysicsState, createRaceState, applyHandling,
+  curvedSurfaceFrame, projectToSurface, tangentize
+} from './track-physics.js';
 
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
@@ -38,8 +49,10 @@ scene.add(sun);
 // buildTrack() (re)generates everything from a path list, so importing new
 // JSON at runtime just calls it again.
 const N = TrackCore.N_DEFAULT;         // fallback bake size; buildTrack picks a per-path adaptive count (TrackCore.adaptiveSampleCount)
-const UP = new THREE.Vector3(0, 1, 0);
-const toVec = o => new THREE.Vector3(o.x, o.y, o.z);
+// Baked centerline vectors are Vec3 (js/vec3.js) now that the physics is
+// THREE-free; Vec3 mirrors THREE.Vector3's method set, so the rendering code
+// below consumes them unchanged.
+const toVec = o => new Vec3(o.x, o.y, o.z);
 // The road's cross-section profile lives in TrackCore, shared with the editor's
 // preview and the USD exporter so all three draw the same surface.
 const crossSectionHeight = TrackCore.crossSectionHeight;
@@ -70,6 +83,27 @@ let showGuardRails = false;
 let showWireframe = false;
 let trackName = '';
 let trackStart = { path: 0, point: 0, reverse: false };
+
+// The stateful physics engine. buildTrack() populates its baked track data; the
+// animate loop drives it. Mesh-region collision is delegated to TrackMesh (out
+// of the C++ port's scope). Game-only trigger side effects — the console log and
+// the player's checkpoint-flash — are injected here; the portable checkpoint/lap
+// logic runs inside the Simulation itself.
+const sim = new Simulation({
+  TrackMesh,
+  now: () => performance.now(),
+  onTriggerFired: (ship, rec, dir, state) => {
+    if (ship === playerShip) state.flash = TRIGGER_FLASH_TIME;
+    console.log(`[trigger][${ship.id}] ${rec.id} fired (${dir})`);
+  }
+});
+
+// Respawn wrapper: resolves the default/by-id ship the console and HUD use, then
+// defers to the Simulation. stepPhysics calls sim.respawn(ship) directly.
+function respawn(ship = playerShip) {
+  if (typeof ship === 'string') ship = ships.find(s => s.id === ship);
+  sim.respawn(ship);
+}
 
 function textureGrid(asset) {
   if (!asset) return { cols: 0, rows: 0, count: 0 };
@@ -507,6 +541,17 @@ function buildTrack(track) {
   for (const region of meshRegions) lowest = Math.min(lowest, region.elevation);
   trackFloorY = (isFinite(lowest) ? lowest : 0) - RESPAWN_FALL_DEPTH;
 
+  // Hand the freshly-baked, world-space track data to the physics engine. These
+  // arrays are rebuilt wholesale on every buildTrack, so re-pointing the sim at
+  // them here (after zones/triggers/floor are final, before the roster samples
+  // the track) keeps the two in sync.
+  sim.paths = paths;
+  sim.meshRegions = meshRegions;
+  sim.zones = zones;
+  sim.triggers = triggers;
+  sim.connectedEndpointIds = connectedEndpointIds;
+  sim.trackFloorY = trackFloorY;
+
   buildRoster(track);
   const label = document.getElementById('trackName');
   if (label) label.textContent = trackName;
@@ -695,78 +740,8 @@ function buildZones(track, bakedPaths) {
   }
 }
 
-// The ship's evaluator parameter g on the path a sample landed on, recovered
-// from the segment (a->b, segT) sampleTrack recorded. Matches buildCenterline's
-// frame->g mapping so it lines up with the zone's own gLo/gHi window.
-function shipParamG(sample) {
-  const p = sample.pathObj;
-  if (!p) return 0;
-  const M = p.centerline.length, CP_N = p.anchors.length;
-  const gAt = i => p.closed ? (i / M) * CP_N : (M > 1 ? (i / (M - 1)) * (CP_N - 1) : 0);
-  const ga = gAt(sample.a);
-  let gb = gAt(sample.b);
-  if (p.closed && sample.b < sample.a) gb += CP_N;   // the wrap segment M-1 -> 0
-  return ga + (gb - ga) * sample.segT;
-}
-
-// Effective speed cap this frame: the raised boost cap while a boost is running,
-// otherwise the normal per-track max.
-function effectiveMaxSpeed(physics) {
-  return physics.boostActive ? Math.max(physics.maxSpeed, physics.boostEffCap) : physics.maxSpeed;
-}
-function clearBoost(ship) {
-  const physics = ship.physics;
-  physics.boostActive = false; physics.boostReleasing = false;
-  physics.boostHold = 0; physics.boostReleaseT = 0; physics.boostCap = 0; physics.boostEffCap = 0;
-  ship.zoneInside.clear();
-}
-// Start a boost for one ship. Each ship owns its lock and cap state.
-function triggerBoost(ship, zone) {
-  const physics = ship.physics;
-  if (physics.boostActive) return;
-  physics.boostActive = true;
-  physics.boostReleasing = false;
-  physics.boostHold = zone.duration || TrackCore.DEFAULT_BOOST_DURATION;
-  physics.boostReleaseT = ZONE_RELEASE;
-  physics.boostCap = (zone.factor || TrackCore.DEFAULT_BOOST_FACTOR) * physics.maxSpeed;
-  physics.boostEffCap = physics.boostCap;
-  if (physics.speed > 0) physics.speed = Math.max(physics.speed, physics.boostCap);
-}
-function tickBoost(ship, dt) {
-  const physics = ship.physics;
-  if (!physics.boostActive) return;
-  if (!physics.boostReleasing) {
-    physics.boostHold -= dt;
-    physics.boostEffCap = physics.boostCap;
-    if (physics.boostHold <= 0) { physics.boostReleasing = true; physics.boostReleaseT = ZONE_RELEASE; }
-  } else {
-    physics.boostReleaseT -= dt;
-    const frac = Math.max(0, Math.min(1, physics.boostReleaseT / ZONE_RELEASE));
-    physics.boostEffCap = physics.maxSpeed + (physics.boostCap - physics.maxSpeed) * frac;
-    if (physics.boostReleaseT <= 0) { physics.boostActive = false; physics.boostEffCap = physics.maxSpeed; }
-  }
-}
-function detectZoneTriggers(ship, sample, meshRegion) {
-  const physics = ship.physics;
-  for (const z of zones) {
-    let inside = false;
-    if (z.kind === 'path') {
-      if (!meshRegion && sample && sample.pathObj === z.hostPath) {
-        const proj = projectToSurface(sample, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-        inside = TrackCore.zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
-          Math.abs(proj.s - z.lateral) <= z.halfWidth;
-      }
-    } else if (meshRegion === z.hostRegion) {
-      const dx = physics.groundPos.x - z.x, dz = physics.groundPos.z - z.z;
-      const cos = Math.cos(z.rot), sin = Math.sin(z.rot);
-      const lx = dx * cos + dz * sin, lz = -dx * sin + dz * cos;
-      inside = Math.abs(lx) <= z.halfLen && Math.abs(lz) <= z.halfWidth;
-    }
-    const wasInside = ship.zoneInside.get(z.id) || false;
-    if (inside && !wasInside && z.effect === 'velocityChange') triggerBoost(ship, z);
-    ship.zoneInside.set(z.id, inside);
-  }
-}
+// (Physics — shipParamG, effectiveMaxSpeed, boost, detectZoneTriggers — moved to
+// track-physics.js; zone/boost detection now runs inside sim.stepPhysics.)
 
 // ---------- Triggers / checkpoints ----------
 // Vertical gate quads the ship passes THROUGH (see track-core.js). Never
@@ -776,18 +751,6 @@ function detectZoneTriggers(ship, sample, meshRegion) {
 let triggers = [];
 let ships = [];
 let playerShip = null;
-const CHECKPOINT_FLASH_MS = 500;
-
-function createRaceState(track, now) {
-  const checkpoints = (track.triggers || []).filter(tr => tr.type === 'checkpoint');
-  return {
-    laps: 0, hit: new Set(),
-    intermediateIds: checkpoints.filter(tr => tr.role !== 'finish').map(tr => tr.id),
-    finishId: (checkpoints.find(tr => tr.role === 'finish') || {}).id || null,
-    totalStartedAt: now, lapStartedAt: now, flashUntil: 0
-  };
-}
-
 function rebuildCheckpointLights() {
   const row = document.getElementById('checkpointLights');
   if (!row || !playerShip) return;
@@ -910,63 +873,10 @@ function buildTriggers(track, bakedPaths) {
   }
 }
 
-function fireTrigger(ship, rec, dir) {
-  const state = ship.triggerStates.get(rec.id);
-  if (ship === playerShip) state.flash = TRIGGER_FLASH_TIME;
-  console.log(`[trigger][${ship.id}] ${rec.id} fired (${dir})`);
-  if (rec.type !== 'checkpoint') return;
-
-  const checkpoint = ship.lastCheckpoint;
-  checkpoint.valid = true;
-  checkpoint.triggerId = rec.id;
-  checkpoint.pos.copy(rec.center);
-  checkpoint.up.copy(rec.up);
-  checkpoint.forward.copy(rec.fwd).multiplyScalar(dir === 'backward' ? -1 : 1);
-
-  const race = ship.race;
-  if (rec.role !== 'finish') {
-    race.hit.add(rec.id);
-    return;
-  }
-  if (!race.intermediateIds.every(id => race.hit.has(id))) return;
-
-  const now = performance.now();
-  race.laps++;
-  race.hit.clear();
-  race.lapStartedAt = now;
-  race.flashUntil = now + CHECKPOINT_FLASH_MS;
-}
-
-// Swept crossing of the ship segment p0->p1 against every trigger gate. Fires
-// once on an allowed crossing while armed, then disarms until the ship is clear
-// of the gate (off its width x height footprint, or past the plane by the
-// re-arm margin). Runs airborne too -- a gate can be crossed in the air.
-function detectTriggers(ship, p0, p1) {
-  for (const tr of triggers) {
-    const state = ship.triggerStates.get(tr.id);
-    const c = tr.center;
-    const d0 = (p0.x - c.x) * tr.fwd.x + (p0.y - c.y) * tr.fwd.y + (p0.z - c.z) * tr.fwd.z;
-    const d1 = (p1.x - c.x) * tr.fwd.x + (p1.y - c.y) * tr.fwd.y + (p1.z - c.z) * tr.fwd.z;
-    const rr = (p1.x - c.x) * tr.right.x + (p1.y - c.y) * tr.right.y + (p1.z - c.z) * tr.right.z;
-    const uu = (p1.x - c.x) * tr.up.x + (p1.y - c.y) * tr.up.y + (p1.z - c.z) * tr.up.z;
-    if (!state.armed && (Math.abs(rr) > tr.halfWidth || uu < 0 || uu > tr.height || Math.abs(d1) > TRIGGER_REARM_MARGIN)) state.armed = true;
-    if (state.armed && d0 !== d1 && ((d0 <= 0 && d1 > 0) || (d0 >= 0 && d1 < 0))) {
-      const t = d0 / (d0 - d1);
-      const xr = (p0.x + (p1.x - p0.x) * t - c.x), yr = (p0.y + (p1.y - p0.y) * t - c.y), zr = (p0.z + (p1.z - p0.z) * t - c.z);
-      const lr = xr * tr.right.x + yr * tr.right.y + zr * tr.right.z;
-      const lu = xr * tr.up.x + yr * tr.up.y + zr * tr.up.z;
-      if (Math.abs(lr) <= tr.halfWidth && lu >= 0 && lu <= tr.height) {
-        const dir = d1 > d0 ? 'forward' : 'backward';
-        if (tr.direction === 'both' || tr.direction === dir) { fireTrigger(ship, tr, dir); state.armed = false; }
-      }
-    }
-  }
-}
-
-function resetTriggers(ship, disarmedId = null) {
-  ship.prevTriggerPos.copy(ship.physics.groundPos);
-  for (const tr of triggers) ship.triggerStates.set(tr.id, { armed: tr.id !== disarmedId, flash: 0 });
-}
+// (Physics — fireTrigger, detectTriggers, resetTriggers — moved to
+// track-physics.js. The portable checkpoint/lap logic runs inside the
+// Simulation; the console log + player checkpoint-flash are the sim's
+// onTriggerFired hook, wired at the top of this file.)
 
 // The shared debug mesh reflects only the player's independent trigger state.
 function updateTriggerDebug(dt) {
@@ -984,280 +894,9 @@ function updateTriggerDebug(dt) {
   }
 }
 
-/* The mesh region under X/Z whose surface sits nearest the ship's current Y,
- * or null. Surfaces above the ship are strongly penalised so a flyover never
- * steals the ship driving underneath it. */
-function meshRegionAt(x, z, shipY) {
-  let best = null;
-  for (const region of meshRegions) {
-    if (!TrackMesh.withinBounds(region.compiled, x, z)) continue;
-    if (!TrackMesh.containsWorldPoint(region.compiled, x, z)) continue;
-    const above = region.elevation - shipY;
-    const score = Math.abs(above) + (above > SURFACE_SNAP_UP ? 1e6 : 0);
-    if (!best || score < best.score) best = { region, score };
-  }
-  return best;
-}
-
-// A surface more than this far ABOVE the ship is treated as overhead geometry
-// rather than something to snap up onto.
-const SURFACE_SNAP_UP = 3;
-// How far below the lowest drivable surface counts as "fallen off for good".
-const RESPAWN_FALL_DEPTH = 100;
-
-// Project a FULL 3D position onto a corridor sample's cross-section, returning
-// the lateral offset `s` and the drivable range bounded by the rendered
-// physical walls (the trimmed edge offsets, inset by the ship margin).
-//
-// `edgeRight` is a unit vector, so the lateral offset is simply the 3D dot
-// product of the displacement with it -- no division, and no degeneracy at any
-// roll. (This replaces an earlier X/Z-only version that divided by cos^2(roll),
-// which blew up as the road verticalized near 90deg roll: with only X/Z known,
-// recovering `s` meant inverting a map that becomes singular exactly there.
-// Feeding the real 3D point -- the ship's Y is tracked now that velocity lives
-// in the surface tangent plane -- makes the reconstruction exact at every roll.)
-// The caller MUST pass the ship's actual Y; passing the centerline's Y would
-// reintroduce the old degeneracy through the back door.
-function projectToSurface(sample, px, py, pz) {
-  const er = sample.edgeRight;
-  const s = (px - sample.pos.x) * er.x + (py - sample.pos.y) * er.y + (pz - sample.pos.z) * er.z;
-  let loS = sample.sLeft + TrackCore.COLLISION_WALL_MARGIN;    // inner limit of the left edge (negative side)
-  let hiS = sample.sRight - TrackCore.COLLISION_WALL_MARGIN;   // inner limit of the right edge (positive side)
-  if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; } // corridor pinched to a point
-  return { er, s, loS, hiS };
-}
-
-// How far along the tangent a point may sit from its sampled centerline frame
-// and still count as "over the ribbon". Generous relative to the spacing
-// between baked samples, but far smaller than any real gap.
-const CORRIDOR_ALONG_TOL = 8;
-
-/* Is X/Z genuinely over a corridor sample's drivable surface?
- *
- * The lateral bounds alone are NOT containment. `s` measures only the offset
- * along edgeRight, so a point far beyond the END of a segment projects onto
- * that segment's clamped endpoint and can report a small, perfectly in-range
- * `s` while actually being hundreds of units away down the track's axis. That
- * matters now that mesh regions let the ship be somewhere with no ribbon
- * anywhere near it: without the along-tangent check, leaving a mesh ledge
- * teleports the ship onto whichever distant ribbon happened to be nearest. */
-function corridorContains(sample, x, y, z, proj) {
-  if (sample.offEnd || proj.s < proj.loS || proj.s > proj.hiS) return false;
-  // 3D along-tangent, so this stays meaningful where the centerline itself goes
-  // vertical (a loop): an X/Z-only dot would collapse to ~0 there and never
-  // reject a point off the segment's end.
-  const along = (x - sample.pos.x) * sample.tangent.x + (y - sample.pos.y) * sample.tangent.y + (z - sample.pos.z) * sample.tangent.z;
-  return Math.abs(along) <= CORRIDOR_ALONG_TOL;
-}
-
-const _meshSurfacePos = new THREE.Vector3();
-
-/* Decide which surface owns a horizontal position: the mesh region under it, or
- * the spline corridor. Containment in a region is necessary but not sufficient
- * -- when the ship is also inside a corridor, the surface nearest it in Y wins,
- * which is what makes flyovers and stacked plazas behave. Returns the winning
- * region, or null to mean "the corridor owns this". */
-function surfaceOwnerAt(x, z, shipY, corridorSample) {
-  const meshHit = meshRegionAt(x, z, shipY);
-  if (!meshHit) return null;
-  const proj = projectToSurface(corridorSample, x, shipY, z);
-  if (!corridorContains(corridorSample, x, shipY, z, proj)) return meshHit.region;
-  const corridorY = curvedSurfaceFrame(corridorSample, proj.s).pos.y;
-  return Math.abs(meshHit.region.elevation - shipY) <= Math.abs(corridorY - shipY) ? meshHit.region : null;
-}
-
-// ---------- Per-track ship handling ----------
-// maxSpeed/accel/turnRate and the ship mass come from the track's `handling`
-// section (TrackCore fills defaults when it is absent, so this always gets a
-// complete object). brakeDecel/friction/maxReverse/grip are deliberately NOT
-// touched -- they stay the fixed engine constants set on the physics object.
-const HANDLING_BASE_WEIGHT = 1000;   // kg; the weight the collision reaction is tuned around
-function applyHandling(track, physics) {
-  const h = TrackCore.normalizeHandling(track && track.handling);
-  physics.maxSpeed = h.maxSpeed;
-  physics.accel = h.accel;
-  physics.turnRate = h.turnSpeed * Math.PI / 180;
-  physics.weight = h.weight;
-}
-// Weight-scaled wall bounciness. m = weight / neutral: a heavy ship (m > 1)
-// bounces less, a light one (m < 1) more, capped so it never approaches a
-// perfect-elastic ping. At the neutral weight this is exactly the base 0.75.
-function weightRestitution(physics) {
-  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
-  return Math.max(0, Math.min(0.9, physics.wallRestitution / m));
-}
-// Fraction of speed kept after a wall impact -- heavier ships shrug it off and
-// keep more, lighter ones scrub more. At the neutral weight this is the old 0.98.
-function weightSpeedRetain(physics) {
-  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
-  return Math.max(0.85, Math.min(0.999, 1 - 0.02 / m));
-}
-// Hover-kick/shake proportional to impact MOMENTUM (weight x normal impact
-// speed), so a heavier or faster hit jolts the ship more. Reuses the landing
-// spring so it eases out the same way a hard landing does.
-function addImpactJolt(physics, normalImpactSpeed) {
-  const m = (physics.weight || HANDLING_BASE_WEIGHT) / HANDLING_BASE_WEIGHT;
-  const momentum = m * Math.max(0, normalImpactSpeed);
-  physics.landingBounce += Math.min(2.0, momentum * 0.012);
-  physics.landingBounceVel += Math.min(10, momentum * 0.05);
-}
-
-// Swept rail collision lives in track-mesh.js (pure geometry, shared and
-// testable); this just binds it to the ship's collision margin and the ship's
-// current weight-derived bounciness.
-const slideAlongRails = (physics, region, from, to, velocity) =>
-  TrackMesh.slideAlongRails(region.compiled, from, to, velocity, TrackCore.COLLISION_WALL_MARGIN, weightRestitution(physics));
-
-// Sample a smooth, interpolated track frame at a horizontal position. Searches
-// ALL path segments for the nearest projected point, then interpolates within
-// that segment. Segment-based selection avoids endpoint ambiguity at disjoint
-// shared control points, where nearest-sample selection can briefly stick to
-// the old path end and then jump to the new path.
-const _sample = {
-  pos: new THREE.Vector3(),
-  tangent: new THREE.Vector3(),
-  edgeRight: new THREE.Vector3(),
-  normal: new THREE.Vector3(),
-  halfW: 0, sLeft: 0, sRight: 0, crossSectionCurvature: 0, crossSectionTightness: 1,
-  offEnd: false,
-  // Which compiled path this sample landed on and the segment (a->b, param segT)
-  // it was projected onto -- carried so zone detection can recover the ship's
-  // evaluator parameter g on that path (see shipParamG).
-  pathObj: null, a: 0, b: 1, segT: 0
-};
-function curvedSurfaceHeight(sample, s) {
-  const lo = sample.sLeft, hi = sample.sRight;
-  const span = hi - lo;
-  if (Math.abs(span) < 1e-6) return 0;
-  const v = (s - lo) / span;
-  return crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
-}
-function curvedSurfaceFrame(sample, s) {
-  const lo = sample.sLeft, hi = sample.sRight;
-  const span = hi - lo;
-  const v = Math.abs(span) < 1e-6 ? 0.5 : (s - lo) / span;
-  const lift = crossSectionHeight(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
-  const pos = sample.pos.clone()
-    .addScaledVector(sample.edgeRight, s)
-    .addScaledVector(sample.normal, lift);
-  const dhdv = crossSectionHeightDerivative(sample.crossSectionCurvature, sample.crossSectionTightness, v, Math.abs(span));
-  const crossT = sample.edgeRight.clone().multiplyScalar(span).addScaledVector(sample.normal, dhdv);
-  const normal = new THREE.Vector3().crossVectors(sample.tangent, crossT).normalize();
-  if (normal.dot(sample.normal) < 0) normal.negate();
-  return { pos, normal };
-}
-
-// How far past a centerline segment's own extent a point may sit and still
-// count as being "over" that segment. A perpendicular projection lands exactly
-// on the segment, so this only ever admits float noise at a shared sample
-// point; anything beyond belongs to a neighbouring segment, or to no segment at
-// all (which is what running off an open end means).
-const SEGMENT_ALONG_TOL = 0.5;
-
-// Selection is fully 3D: the ship's position projects onto each centerline
-// segment in 3D and the nearest by 3D distance wins. This is what makes a
-// vertical loop drivable -- where the centerline itself goes straight up, the
-// ascending and descending sides share an X/Z column, so an X/Z-footprint search
-// could not tell top-of-loop from bottom-of-loop. It also sharpens overlapping
-// flyovers: the vertically-nearest ribbon is picked, not merely one that shares
-// the X/Z column. `y` is the ship's real height, required by both the 3D
-// distance and the 3D lateral-membership test below.
-function sampleTrack(x, y, z) {
-  let fallback = { path: paths[0], a: 0, b: 1, t: 0, d: Infinity };
-  let bestUnder = null;
-  for (const path of paths) {
-    const cl = path.centerline, M = cl.length;
-    const segCount = path.closed ? M : M - 1;
-    for (let i = 0; i < segCount; i++) {
-      const j = path.closed ? (i + 1) % M : i + 1;
-      const a = cl[i], b = cl[j];
-      const sx = b.pos.x - a.pos.x, sy = b.pos.y - a.pos.y, sz = b.pos.z - a.pos.z;
-      const segLen2 = sx * sx + sy * sy + sz * sz;
-      const t = segLen2 > 0
-        ? THREE.MathUtils.clamp(((x - a.pos.x) * sx + (y - a.pos.y) * sy + (z - a.pos.z) * sz) / segLen2, 0, 1)
-        : 0;
-      const px = a.pos.x + sx * t, py = a.pos.y + sy * t, pz = a.pos.z + sz * t;
-      const dx = x - px, dy = y - py, dz = z - pz;
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < fallback.d) fallback = { path, a: i, b: j, t, d };
-
-      // If multiple road ribbons overlap under the ship, use only the closest
-      // one whose actual collision corridor contains this X/Z. Segments that
-      // are nearby but outside their sLeft/sRight bounds are not "under" the
-      // ship and should not steal physics from an overlapping branch/road.
-      let erx = a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t;
-      let ery = a.edgeRight.y + (b.edgeRight.y - a.edgeRight.y) * t;
-      let erz = a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t;
-      const erl = Math.hypot(erx, ery, erz) || 1;
-      erx /= erl; ery /= erl; erz /= erl;
-      const cx = a.pos.x + (b.pos.x - a.pos.x) * t;
-      const cy = a.pos.y + (b.pos.y - a.pos.y) * t;
-      const cz = a.pos.z + (b.pos.z - a.pos.z) * t;
-      // 3D lateral offset onto the unit edgeRight -- exact at any roll, matching
-      // projectToSurface. On flat ground ery = 0, so this reduces to the old
-      // X/Z dot; on a bank the ship's real Y is what keeps `s` honest.
-      const lateral = (x - cx) * erx + (y - cy) * ery + (z - cz) * erz;
-      let loS = (a.sLeft + (b.sLeft - a.sLeft) * t) + TrackCore.COLLISION_WALL_MARGIN;
-      let hiS = (a.sRight + (b.sRight - a.sRight) * t) - TrackCore.COLLISION_WALL_MARGIN;
-      if (loS > hiS) { const m = (loS + hiS) / 2; loS = m; hiS = m; }
-      let wouldOffEnd = false;
-      if (!path.closed) {
-        if (i === 0 && t <= 1e-4) {
-          const e = cl[0];
-          wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.start) &&
-            ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) < 0;
-        } else if (j === M - 1 && t >= 1 - 1e-4) {
-          const e = cl[M - 1];
-          wouldOffEnd = !connectedEndpointIds.has(path.endpointIds.end) &&
-            ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) > 0;
-        }
-      }
-      // Being within the lateral bounds is not the same as being OVER this
-      // segment. `t` is clamped to [0,1], so a point beyond a segment's end
-      // projects onto that end and reports the lateral offset of the endpoint
-      // -- which on a straight run down the middle of a road is 0 for every
-      // segment on the path, however far away. Left unchecked, a point off the
-      // open END of a curve is claimed by some far-back segment, so `best` is
-      // never the terminal segment and offEnd below can never fire: the ship
-      // gets reprojected backwards instead of launching off the end. Require
-      // the projection to be a genuine perpendicular foot, which it is exactly
-      // when `t` did not clamp.
-      const alongSeg = segLen2 > 0 ? ((x - px) * sx + (y - py) * sy + (z - pz) * sz) / Math.sqrt(segLen2) : 0;
-      const overSegment = Math.abs(alongSeg) <= SEGMENT_ALONG_TOL;
-      if (overSegment && !wouldOffEnd && lateral >= loS && lateral <= hiS && (!bestUnder || d < bestUnder.d)) bestUnder = { path, a: i, b: j, t, d };
-    }
-  }
-  const best = bestUnder || fallback;
-  const bestPath = best.path, bestA = best.a, bestB = best.b;
-  const cl = bestPath.centerline;
-  const a = cl[bestA], b = cl[bestB];
-  const t = best.t;
-  _sample.pathObj = bestPath; _sample.a = bestA; _sample.b = bestB; _sample.segT = t;
-
-  _sample.pos.copy(a.pos).lerp(b.pos, t);
-  _sample.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
-  _sample.edgeRight.copy(a.edgeRight).lerp(b.edgeRight, t).normalize();
-  _sample.normal.copy(a.normal).lerp(b.normal, t).normalize();
-  _sample.halfW = a.halfW + (b.halfW - a.halfW) * t;
-  _sample.crossSectionCurvature = a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * t;
-  _sample.crossSectionTightness = a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * t;
-  _sample.sLeft = a.sLeft + (b.sLeft - a.sLeft) * t;
-  _sample.sRight = a.sRight + (b.sRight - a.sRight) * t;
-  _sample.offEnd = false;
-  if (!bestPath.closed) {
-    const M = bestPath.centerline.length;
-    if (bestA === 0 && t <= 1e-4) {
-      const e = bestPath.centerline[0];
-      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.start) &&
-        ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) < 0;
-    } else if (bestB === M - 1 && t >= 1 - 1e-4) {
-      const e = bestPath.centerline[M - 1];
-      _sample.offEnd = !connectedEndpointIds.has(bestPath.endpointIds.end) &&
-        ((x - e.pos.x) * e.tangent.x + (y - e.pos.y) * e.tangent.y + (z - e.pos.z) * e.tangent.z) > 0;
-    }
-  }
-  return _sample;
-}
+// (Physics — meshRegionAt, projectToSurface, corridorContains, surfaceOwnerAt,
+//  applyHandling/weightRestitution/weightSpeedRetain/addImpactJolt, slideAlongRails,
+//  curvedSurfaceHeight/Frame, sampleTrack — moved to track-physics.js.)
 
 // ---------- Ships / starting grid ----------
 const bodyGeo = new THREE.BoxGeometry(2.4, 0.8, 4.0);
@@ -1338,7 +977,7 @@ function startingGridPoses(count) {
     // the parked physics branch uses, so an idle ship does not creep while the
     // two representations converge over its first frames.
     for (let n = 0; n < 3; n++) {
-      canonical = sampleTrack(surface.pos.x, surface.pos.y, surface.pos.z);
+      canonical = sim.sampleTrack(surface.pos.x, surface.pos.y, surface.pos.z);
       const proj = projectToSurface(canonical, surface.pos.x, surface.pos.y, surface.pos.z);
       surface = curvedSurfaceFrame(canonical, THREE.MathUtils.clamp(proj.s, proj.loS, proj.hiS));
     }
@@ -1365,30 +1004,9 @@ function createShip(index, track, now) {
   };
 }
 
-function placeShipAtPose(ship, pose, disarmedId = null) {
-  const physics = ship.physics;
-  physics.groundPos.copy(pose.pos);
-  physics.visualGroundPos.copy(pose.pos);
-  physics.forward.copy(pose.forward);
-  physics.moveDir.copy(pose.forward);
-  physics.up.copy(pose.up); physics.visualUp.copy(pose.up);
-  physics.right.crossVectors(pose.up, pose.forward).normalize();
-  physics.heading = Math.atan2(pose.forward.x, pose.forward.z);
-  physics.speed = 0; physics.airborne = false; physics.verticalVel = 0;
-  physics.visualBank = 0; physics.visualPitch = 0;
-  physics.landingBounce = 0; physics.landingBounceVel = 0;
-  ship.group.position.copy(pose.pos).addScaledVector(pose.up, 1);
-  clearBoost(ship);
-  resetTriggers(ship, disarmedId);
-}
-
-function respawn(ship = playerShip) {
-  if (typeof ship === 'string') ship = ships.find(s => s.id === ship);
-  if (!ship) return;
-  const checkpoint = ship.lastCheckpoint;
-  const pose = checkpoint.valid ? checkpoint : ship.startPose;
-  placeShipAtPose(ship, pose, checkpoint.valid ? checkpoint.triggerId : null);
-}
+// (Physics — placeShipAtPose, respawn — moved to track-physics.js; a thin
+// respawn wrapper resolving the default/by-id ship lives at the top of this
+// file.)
 
 function buildRoster(track, count = DEFAULT_SHIP_COUNT) {
   disposeShips();
@@ -1399,7 +1017,7 @@ function buildRoster(track, count = DEFAULT_SHIP_COUNT) {
   ships.forEach((ship, i) => {
     applyHandling(track, ship.physics);
     ship.startPose = poses[i];
-    placeShipAtPose(ship, ship.startPose);
+    sim.placeShipAtPose(ship, ship.startPose);
   });
   rebuildCheckpointLights();
 }
@@ -1461,411 +1079,9 @@ const IDLE_INTENT = Object.freeze({ throttle: 0, brake: 0, steer: 0, respawn: fa
 const idleController = { kind: 'ai', intent: () => IDLE_INTENT };
 
 // ---------- Wipeout-style hover physics ----------
-function createPhysicsState() { return {
-  // Facing/motion are TANGENT-PLANE unit vectors, not world-yaw scalars, so the
-  // ship can be oriented and move on an arbitrarily-rolled (even vertical or
-  // inverted) surface. `forward`/`right`/`up` form the ship's basis; `moveDir`
-  // is where it's actually travelling (lags `forward` under hard turns -> the
-  // wipeout drift). `heading` is kept only as a derived world azimuth of
-  // `forward` (atan2 of its X/Z), which is all the top-down minimap needs.
-  heading: 0,        // derived world-yaw azimuth of `forward` (for the minimap)
-  speed: 0,                // signed scalar speed (units/sec)
-  // 1 world unit = 1 metre, so maxSpeed 140 = 140 m/s (504 km/h). The
-  // longitudinal rates below are the old 102-tuned values scaled x1.373 (=
-  // 140/102) so the pedal FEEL is unchanged -- same ~2.0s to top speed, same
-  // braking punch, same coast-down -- just at the higher ceiling. turnRate/grip
-  // are angular rates (scale-invariant) and stay put, which keeps both the big
-  // new tracks and small legacy tracks driveable.
-  maxSpeed: 140,
-  maxReverse: -33,   // -24 * 1.373
-  accel: 71,         // 52 * 1.373
-  brakeDecel: 115,   // 84 * 1.373
-  friction: 55,      // 40 * 1.373 -- decel when neither throttle nor brake held
-  turnRate: 2.4,           // rad/sec at low speed
-  grip: 3.2,               // how fast velocity direction chases heading (lower = more slide)
-  wallRestitution: 0.75,   // BASE guard-rail bounce at the neutral weight; scaled per weight (weightRestitution)
-  weight: 1000,            // ship mass (kg); 1000 = neutral. Heavier bounces less, lighter more
-  bobTime: 0,
-  visualBank: 0,           // smoothed steer-lean (rad)
-  visualPitch: 0,          // smoothed accel-pitch (rad)
-  up: new THREE.Vector3(0, 1, 0),      // current road surface normal
-  forward: new THREE.Vector3(0, 0, 1), // ship's actual (banked) forward, orthogonal to `up`
-  right: new THREE.Vector3(1, 0, 0),   // ship's actual (banked) right, orthogonal to both
-  // Hover-free reference position (on the ribbon surface, no bob offset).
-  // Velocity is integrated from THIS, not from shipGroup.position -- the
-  // rendered position has the hover bob added along `normal`, and once the
-  // track is banked `normal` isn't purely vertical, so its bob offset leaks
-  // into X/Z. Feeding that back into next frame's lateral (s) projection
-  // compounds into a slow one-directional drift on any banked section, even
-  // at a dead stop. groundPos sidesteps that by staying bob-free.
-  groundPos: new THREE.Vector3(),
-  // Smoothed render-only surface position/up. Physics integrates against
-  // groundPos directly, but the rendered ship/camera can ease over tiny
-  // projection discontinuities (notably at disjoint path seams) instead of
-  // visibly popping.
-  visualGroundPos: new THREE.Vector3(),
-  visualUp: new THREE.Vector3(0, 1, 0),
-  // Actual travel direction, a unit vector in the surface tangent plane. Chases
-  // `forward` (see grip below); `velocity = moveDir * speed` is a full 3D vector
-  // that gains a vertical component on a banked surface, which is what lets the
-  // ship climb toward a rolled edge instead of only ever sliding horizontally.
-  moveDir: new THREE.Vector3(0, 0, 1),
-  airborne: false,
-  verticalVel: 0,
-  gravity: 60,
-  landingBounce: 0,
-  landingBounceVel: 0,
-  // Boost-zone state. While active, the speed clamp uses boostEffCap (>= maxSpeed)
-  // instead of maxSpeed: it holds at boostCap for boostHold seconds, then eases
-  // back to maxSpeed over BOOST_RELEASE (the "smooth release"). boostActive stays
-  // true through the release, which is this ship's lock that makes a boost
-  // fire once on enter and ignore further pads until it ends.
-  boostActive: false,
-  boostReleasing: false,
-  boostHold: 0,
-  boostReleaseT: 0,
-  boostCap: 0,
-  boostEffCap: 0
-}; }
-// Scratch vectors reused each frame so the physics loop allocates nothing.
-const _vel = new THREE.Vector3();
-const _newPos = new THREE.Vector3();
-const _wallN = new THREE.Vector3();
-const _launchVel = new THREE.Vector3();
-
-// --- surface-relative motion helpers (see "roll near 90deg" note below) ------
-// The ship's facing and motion are 3D unit vectors that live in the TANGENT
-// PLANE of the surface it's on, not world-yaw scalars. That's what lets it
-// drive across and along a vertical (90deg-rolled) wall and through a loop:
-// world-yaw can only ever describe an azimuth, which cannot point up/down a
-// vertical surface, so a horizontal-velocity model degenerates exactly there.
-const _tanTmp = new THREE.Vector3();
-// Re-project unit-ish `v` into the plane tangent to unit normal `n` and
-// renormalize, keeping a facing/motion vector on the surface as the surface
-// tilts underneath it frame to frame. Falls back to `fallback` when `v` is
-// (near) parallel to `n` -- e.g. a cross-track direction on a surface that has
-// just gone vertical -- so it never returns a zero/NaN vector.
-function tangentize(v, n, fallback) {
-  _tanTmp.copy(v).addScaledVector(n, -v.dot(n));
-  if (_tanTmp.lengthSq() < 1e-9) { return v.copy(fallback); }
-  return v.copy(_tanTmp).normalize();
-}
-const _saCross = new THREE.Vector3();
-// Signed angle (radians) rotating unit `a` onto unit `b` about unit `axis`,
-// with a and b assumed ~perpendicular to axis. On flat ground (axis = +Y) this
-// is exactly the yaw delta the old lerpAngle steering used.
-function signedAngleAbout(a, b, axis) {
-  const d = THREE.MathUtils.clamp(a.dot(b), -1, 1);
-  const ang = Math.acos(d);
-  _saCross.crossVectors(a, b);
-  return _saCross.dot(axis) < 0 ? -ang : ang;
-}
-// Enter the ballistic state from a 3D launch velocity: its vertical component
-// seeds `verticalVel` (so launching off a banked ramp or wall arcs correctly --
-// the old code always zeroed this, which was only right for a level launch),
-// and its horizontal part becomes the constant-in-air travel direction/speed.
-function beginAirborne(ship, vel3D) {
-  const physics = ship.physics;
-  physics.airborne = true;
-  physics.verticalVel = vel3D.y;
-  const horiz = Math.hypot(vel3D.x, vel3D.z);
-  physics.speed = horiz;
-  if (horiz > 1e-6) physics.moveDir.set(vel3D.x / horiz, 0, vel3D.z / horiz);
-  else tangentize(physics.moveDir, UP, physics.forward);   // launched straight up: keep a horizontal azimuth
-}
-// Re-contact a surface: drop the vertical velocity (as before) and re-flatten
-// the horizontal travel/facing directions onto the landed surface's tangent
-// plane so they immediately follow its bank. Horizontal speed is preserved,
-// matching the old landing behaviour; on a flat surface (normal +Y) this is a
-// no-op beyond clearing the airborne flags.
-function landOnSurface(ship, normal) {
-  const physics = ship.physics;
-  physics.airborne = false;
-  physics.verticalVel = 0;
-  tangentize(physics.moveDir, normal, physics.forward);
-  tangentize(physics.forward, normal, physics.moveDir);
-}
-
-// Largest integration step the physics is allowed to take. A long render frame
-// is split into ceil(dt / MAX_PHYSICS_STEP) equal sub-steps, so the position
-// advance and the wall/rail collision (both tested once per step) can never
-// move a fast ship far enough to tunnel a wall or skip past a corridor edge in
-// a single test. Small enough that even a slow (~20fps) frame still integrates
-// in a handful of steps; the per-step work is cheap float math and one
-// sampleTrack pass, negligible next to rendering.
-const MAX_PHYSICS_STEP = 1 / 120;
-
-// Advance the physics state by ONE integration sub-step, returning the surface
-// normal + render position the once-per-frame visual pass should use, and
-// whether a respawn fired (which aborts the rest of the frame, as the original
-// early-return did). Everything here is integration/collision; the visual work
-// (hover, orientation, camera basis, HUD) stays in updateShip below.
-function stepPhysics(ship, dt, throttle, brake, steer) {
-  const physics = ship.physics;
-  const hasTranslation = !!(throttle || brake || Math.abs(physics.speed) > 0.001);
-
-  // Longitudinal speed control
-  if (throttle) {
-    physics.speed += physics.accel * dt;
-  } else if (brake) {
-    physics.speed -= physics.brakeDecel * dt;
-  } else {
-    // natural friction bleeds speed toward 0
-    const decay = physics.friction * dt;
-    if (physics.speed > 0) physics.speed = Math.max(0, physics.speed - decay);
-    else physics.speed = Math.min(0, physics.speed + decay);
-  }
-  physics.speed = THREE.MathUtils.clamp(physics.speed, physics.maxReverse, effectiveMaxSpeed(physics));
-
-  // Clamped to [0,1] on purpose: during a boost speed exceeds maxSpeed, and the
-  // steering/grip/lean terms below must not be driven past their tuned range
-  // (a raw ratio > 1 would flip the turn-rate falloff negative). The HUD reads
-  // the true speed separately.
-  const speedRatio = Math.min(1, Math.abs(physics.speed) / physics.maxSpeed);
-
-  // Sample the surface under the ship FIRST: its normal is the axis we steer and
-  // drift about, so turning is defined in the driver's frame at any roll.
-  let c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-  let surfaceNormal = c.normal;
-  let surfaceRenderPos = physics.groundPos;
-
-  // Which surface owns the ship right now -- a flat mesh region, or the spline
-  // corridor? Whichever sits nearer in Y wins, so a mesh bridge passing over a
-  // ribbon never hijacks the ship driving underneath it.
-  const meshRegion = surfaceOwnerAt(physics.groundPos.x, physics.groundPos.z, physics.groundPos.y, c);
-
-  // The plane the ship turns and travels in: the corridor surface normal on a
-  // ribbon, world +Y on a flat mesh region, and world +Y while airborne
-  // (gravity's frame -- air steering is world-horizontal). Rotating `forward`
-  // about THIS axis is the driver-correct turn on any roll, including past
-  // vertical and inverted -- which is why the old world-yaw `upSign` flip is
-  // gone: on an inverted surface the normal points down, so a rotation about it
-  // already flips the turn the way the (upside-down) driver perceives it.
-  const steerAxis = (physics.airborne || meshRegion) ? UP : surfaceNormal;
-
-  // Steering: turn rate eases off slightly at top speed, and reverses sign in
-  // reverse. Rotate the facing vector about the surface normal, then re-flatten
-  // it onto the (possibly newly-tilted) tangent plane.
-  const effectiveTurn = physics.turnRate * (1 - 0.35 * speedRatio) * Math.sign(physics.speed || 1);
-  physics.forward.applyAxisAngle(steerAxis, steer * effectiveTurn * dt);
-  tangentize(physics.forward, steerAxis, physics.forward);
-
-  // Hover "grip": travel direction chases facing, lagging under hard turns at
-  // speed -> the classic wipeout drift. Rotate moveDir a fraction of the way
-  // toward forward about the same axis (on flat ground this is exactly the old
-  // lerpAngle(velocityAngle, heading, ...)), then re-flatten onto the tangent.
-  const gripThisFrame = physics.grip * (0.5 + 0.5 * (1 - Math.min(Math.abs(steer) * speedRatio, 1)));
-  const toForward = signedAngleAbout(physics.moveDir, physics.forward, steerAxis);
-  physics.moveDir.applyAxisAngle(steerAxis, toForward * Math.min(gripThisFrame * dt, 1));
-  tangentize(physics.moveDir, steerAxis, physics.forward);
-
-  // Velocity is a full 3D vector along the tangent travel direction, so on a
-  // banked surface it gains the vertical component that lets the ship climb
-  // toward a rolled edge instead of only ever sliding along the ground plane.
-  // `vx`/`vz` are its horizontal part, reused by the airborne and mesh-region
-  // code (which integrate in world X/Z). On flat ground moveDir is horizontal,
-  // so vx/vz equal the old sin/cos(velocityAngle)*speed exactly.
-  const vel = _vel.copy(physics.moveDir).multiplyScalar(physics.speed);
-  const vx = vel.x, vz = vel.z;
-
-  if (physics.airborne) {
-    let ax = vx, az = vz;
-    let px = physics.groundPos.x + ax * dt;
-    let pz = physics.groundPos.z + az * dt;
-
-    // Rails are finite-height walls: they still block an airborne ship that has
-    // not cleared their top, and are simply absent above it.
-    for (const region of meshRegions) {
-      if (physics.groundPos.y >= region.elevation + region.railHeight) continue;
-      if (!TrackMesh.withinBounds(region.compiled, px, pz, TrackCore.COLLISION_WALL_MARGIN)) continue;
-      const velocity = { x: ax, z: az };
-      const before = Math.hypot(ax, az);
-      const moved = slideAlongRails(physics, region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
-      if (!moved.hit) continue;
-      px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
-      physics.speed = Math.hypot(ax, az) * weightSpeedRetain(physics);
-      addImpactJolt(physics, before - Math.hypot(ax, az));
-      if (physics.speed > 1e-6) physics.moveDir.set(ax, 0, az).normalize();   // horizontal air travel dir
-    }
-
-    physics.verticalVel -= physics.gravity * dt;
-    physics.groundPos.set(px, physics.groundPos.y + physics.verticalVel * dt, pz);
-
-    const landing = meshRegionAt(px, pz, physics.groundPos.y);
-    if (landing && physics.groundPos.y <= landing.region.elevation) {
-      const impactSpeed = Math.max(0, -physics.verticalVel);
-      landOnSurface(ship, UP);
-      physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
-      physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
-      physics.groundPos.set(px, landing.region.elevation, pz);
-      surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
-      surfaceNormal = UP;
-    } else {
-      c = sampleTrack(px, physics.groundPos.y, pz);
-      const proj = projectToSurface(c, px, physics.groundPos.y, pz);
-      const { s } = proj;
-      const surface = curvedSurfaceFrame(c, s);
-      if (corridorContains(c, px, physics.groundPos.y, pz, proj) && physics.groundPos.y <= surface.pos.y) {
-        const impactSpeed = Math.max(0, -physics.verticalVel);
-        landOnSurface(ship, surface.normal);
-        physics.landingBounce += Math.min(3.2, impactSpeed * 0.09);
-        physics.landingBounceVel += Math.min(16, impactSpeed * 0.35);
-        physics.groundPos.copy(surface.pos);
-        surfaceRenderPos = surface.pos;
-        surfaceNormal = surface.normal;
-      }
-    }
-  } else if (meshRegion && hasTranslation) {
-    // Free 2D motion across a flat region, bounded only by railed edges. There
-    // is no lateral parameter to clamp here -- the corridor's clamp(s) has no
-    // meaning on an arbitrary polygon.
-    const from = { x: physics.groundPos.x, z: physics.groundPos.z };
-    const velocity = { x: vx, z: vz };
-    const moved = slideAlongRails(physics, meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
-    if (moved.hit) {
-      const before = Math.hypot(vx, vz), after = Math.hypot(velocity.x, velocity.z);
-      physics.speed = after * weightSpeedRetain(physics);
-      if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();   // region is flat: horizontal
-      addImpactJolt(physics, before - after);
-    }
-
-    const stillOn = TrackMesh.containsWorldPoint(meshRegion.compiled, moved.x, moved.z)
-      ? meshRegion
-      : (meshRegionAt(moved.x, moved.z, meshRegion.elevation) || {}).region || null;
-
-    if (stillOn) {
-      physics.groundPos.set(moved.x, stillOn.elevation, moved.z);
-      surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
-      surfaceNormal = UP;
-    } else {
-      // Left the region across a bare edge. Drive onto the corridor if one
-      // meets this region at a compatible height, otherwise it was a ledge.
-      c = sampleTrack(moved.x, meshRegion.elevation, moved.z);
-      const proj = projectToSurface(c, moved.x, meshRegion.elevation, moved.z);
-      const { s } = proj;
-      const surface = corridorContains(c, moved.x, meshRegion.elevation, moved.z, proj) ? curvedSurfaceFrame(c, s) : null;
-      if (surface && Math.abs(surface.pos.y - meshRegion.elevation) <= SURFACE_SNAP_UP) {
-        physics.groundPos.copy(surface.pos);
-        // Region travel is horizontal; re-flatten it onto the (possibly banked)
-        // corridor surface so the ship follows the ribbon instead of the plane.
-        tangentize(physics.moveDir, surface.normal, physics.forward);
-        tangentize(physics.forward, surface.normal, physics.moveDir);
-        surfaceRenderPos = surface.pos;
-        surfaceNormal = surface.normal;
-      } else {
-        beginAirborne(ship, _launchVel.copy(physics.moveDir).multiplyScalar(physics.speed));
-        physics.groundPos.set(moved.x, meshRegion.elevation, moved.z);
-      }
-    }
-  } else if (hasTranslation) {
-    // Advance the FULL 3D position by the tangent-plane velocity, so on a bank
-    // the ship climbs toward its rolled edge (vel.y != 0 there) rather than only
-    // sliding along the ground plane and relying on reprojection to guess Y.
-    const newPos = _newPos.copy(physics.groundPos).addScaledVector(vel, dt);
-
-    // First test the proposed move against the segment we were already riding.
-    // If it crosses that segment's wall, resolve against THIS segment before
-    // sampleTrack() can pick another overlapping branch whose corridor happens
-    // to contain the post-wall position (which would tunnel the ship across).
-    const current = c;
-    let projection = projectToSurface(current, newPos.x, newPos.y, newPos.z);
-    let forceCurrentWall = !current.offEnd && (projection.s > projection.hiS || projection.s < projection.loS);
-
-    if (!forceCurrentWall) {
-      c = sampleTrack(newPos.x, newPos.y, newPos.z);
-      projection = projectToSurface(c, newPos.x, newPos.y, newPos.z);
-    }
-
-    if (!forceCurrentWall && c.offEnd) {
-      // Leaving an open curve: go ballistic from the current 3D velocity (its
-      // vertical part matters if the end was banked or on a slope) until the
-      // ship's X/Z is back over a curve.
-      beginAirborne(ship, vel);
-      physics.groundPos.copy(newPos);
-    } else {
-      const { er, s, loS, hiS } = projection;
-
-      let hitSign = 0;
-      if (s > hiS) hitSign = 1; else if (s < loS) hitSign = -1;
-      let finalS = s;
-      if (hitSign) {
-        finalS = THREE.MathUtils.clamp(s, loS, hiS);
-        // Bounce off the guard rail: reflect the velocity component pushing into
-        // the wall (scaled by wallRestitution) instead of cancelling it, so a
-        // square hit bounces back while a glancing one still mostly slides. The
-        // wall's inward normal is the (unit, 3D) edgeRight signed by the side
-        // hit; edgeRight is tangent to the surface, so reflecting the 3D
-        // velocity about it keeps the ship on the surface AND works on a bank.
-        _wallN.copy(er).multiplyScalar(hitSign);   // er is already a unit vector
-        const into = vel.dot(_wallN);
-        if (into > 0) {
-          // Weight-scaled bounce, plus a momentum-scaled jolt on a real impact.
-          vel.addScaledVector(_wallN, -into * (1 + weightRestitution(physics)));
-          addImpactJolt(physics, into);
-        }
-        physics.speed = vel.length() * weightSpeedRetain(physics);
-        if (physics.speed > 1e-6) physics.moveDir.copy(vel).normalize();
-      }
-
-      const surface = curvedSurfaceFrame(c, finalS);
-      physics.groundPos.copy(surface.pos);
-      // No re-tangentize here: next frame's top-of-frame steering/grip flattens
-      // forward/moveDir onto the new normal, once. Keeping tangentization to a
-      // single projection per frame is what stops the facing precessing onto the
-      // track tangent (see the render block and the parked branch).
-      surfaceRenderPos = surface.pos;
-      surfaceNormal = surface.normal;
-    }
-  }
-
-  if (!physics.airborne && !hasTranslation && meshRegion) {
-    // Parked on a flat region: nothing to reproject, just sit on the plane.
-    physics.groundPos.y = meshRegion.elevation;
-    surfaceRenderPos = _meshSurfacePos.copy(physics.groundPos);
-    surfaceNormal = UP;
-  } else if (!physics.airborne && !hasTranslation) {
-    c = sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-    const parkedProjection = projectToSurface(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
-    if (!corridorContains(c, physics.groundPos.x, physics.groundPos.y, physics.groundPos.z, parkedProjection)) {
-      // A zero-speed ship can still be unsupported after an external placement
-      // (for example over a mesh-region hole), in which case it must fall.
-      beginAirborne(ship, _launchVel.set(0, 0, 0));
-      surfaceRenderPos = physics.groundPos;
-      surfaceNormal = UP;
-    } else {
-      // A zero-speed ship already occupies the exact surface pose produced by
-      // its last translating step or grid placement. Reprojecting that pose
-      // every frame is not idempotent on a curved, crowned ribbon: interpolated
-      // frame normals can have a tiny component along the baked centerline
-      // chord, so nearest-segment projection walks the pose backward a few
-      // millimetres per frame. Hold the pose; sampling still runs for zones and
-      // triggers, and normal projection resumes as soon as it translates.
-      surfaceRenderPos = physics.groundPos;
-      surfaceNormal = physics.up;
-    }
-  }
-
-  // Sit on the surface, hovering a little along the surface normal. groundPos
-  // (bob-free) is what next frame's integration reads from; shipGroup's
-  // actual rendered position adds the hover bob on top of it. At disjoint
-  // seams the nearest path segment can switch, producing a small projection
-  // correction in groundPos; smooth only unexpectedly-large render deltas so
-  // normal movement stays responsive while seam pops are eased out.
-  // Zones: the boost timer advances every sub-step (it keeps running through the
-  // air), but a trigger only fires while grounded on the zone's host surface.
-  tickBoost(ship, dt);
-  if (!physics.airborne) detectZoneTriggers(ship, c, meshRegion);
-
-  // Triggers: swept crossing over this sub-step's motion (grounded OR airborne).
-  detectTriggers(ship, ship.prevTriggerPos, physics.groundPos);
-  ship.prevTriggerPos.copy(physics.groundPos);
-
-  if (physics.airborne && physics.groundPos.y < trackFloorY) {
-    respawn(ship);
-    return { respawned: true };
-  }
-  return { surfaceNormal, surfaceRenderPos, respawned: false };
-}
+// (createPhysicsState, tangentize/signedAngleAbout, beginAirborne/landOnSurface,
+//  MAX_PHYSICS_STEP and stepPhysics moved to track-physics.js. stepPhysics is now
+//  sim.stepPhysics; the animate loop still owns the fixed-size sub-stepping below.)
 
 // Read input once per frame, integrate it in fixed-size sub-steps (see
 // MAX_PHYSICS_STEP), then run the render/visual pass ONCE off the final
@@ -1885,7 +1101,7 @@ function updateShip(ship, dt, intent) {
   const sdt = dt / subSteps;
   let surfaceNormal = physics.up, surfaceRenderPos = physics.groundPos;
   for (let i = 0; i < subSteps; i++) {
-    const r = stepPhysics(ship, sdt, throttle, brake, steer);
+    const r = sim.stepPhysics(ship, sdt, throttle, brake, steer);
     if (r.respawned) return;   // ship already reset; skip this frame's render, matching the old early return
     surfaceNormal = r.surfaceNormal;
     surfaceRenderPos = r.surfaceRenderPos;

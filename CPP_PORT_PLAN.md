@@ -1,8 +1,12 @@
 # C++ Port Plan — Track Physics Core
 
-Status: **agreed, not yet started.** This is the implementation reference produced from a
+Status: **milestones 0–3 complete.** This is the implementation reference produced from a
 grilling/planning session. Every decision below was made deliberately; the "Why" notes exist so a
-future implementer (human or agent) doesn't silently re-litigate or undo a choice.
+future implementer (human or agent) doesn't silently re-litigate or undo a choice. The port now
+holds per-step parity at 1 ULP over the full corpus (kinematics, guard-rail corridor, airborne
+launch/landing, zone boost, checkpoint/lap, respawn recovery) plus the bounded-trajectory smoke
+check; the calibrated tolerance is locked (§4, `cpp/tests/parity_main.cpp`). Remaining work is the
+deferred mesh-region physics (§2) — not a milestone here.
 
 ---
 
