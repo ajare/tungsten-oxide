@@ -16,3 +16,4 @@ npm-debug.log*
 # vendored nlohmann header and sources are tracked; build trees are not.
 cpp/build/
 cpp/core/build/
+cpp/willpower/build/
