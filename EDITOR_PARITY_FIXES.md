@@ -465,8 +465,30 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
 10. **Render modes** (banked / flat / elevation), point-type filters, physics-sample overlay.
 11. **Segment selection, deletion and splitting; insert-point-on-segment.**
 12. **Elevation view roll points** — the orange roll line and its draggable diamonds.
-13. **Add-point context menu.** M9 added a minimal right-click popup with only "Paste Mesh"; JS
-    offers position/roll/width/crossSection plus zone and trigger creation.
+13. ~~**Add-point context menu.**~~ **Implemented (Roll/Width/Cross-section, zone, trigger; not
+    Position).** `TopDownCanvas.cpp`'s right-click popup (previously M9's minimal "Paste Mesh"
+    only) now mirrors `#addPointMenu`'s remaining sections: "Add control point" (Roll/Width/
+    Cross-Section), "Add zone" (Boost/Start Grid), "Add trigger" (Dummy/Checkpoint), each anchored
+    to the click via a new `nearestPathPlacement()` helper -- a direct port of JS's same-named
+    function (`js/editor.js:4238-4257`): nearest centerline sample across every path, plus the
+    lateral offset from it via the frame's own `edgeRight`. Approximated off the baked centerline's
+    discrete samples rather than JS's fine-grained live spline evaluator (same tradeoff already
+    accepted for zone/trigger outlines, gaps 3/4 -- no evaluator is exposed to `cpp/editor`). The
+    Roll/Width/Cross-Section items seed the new point's fields from the nearest frame's *actual
+    current* baked value (`frame.roll` converted degrees<->radians, `frame.width`,
+    `frame.crossSectionCurvature/Tightness/Thickness`), matching `insertRollPointAtWorld`/
+    `insertWidthPoint`/`insertCrossSectionPoint` exactly -- not the schema default `addAuxPoint`
+    alone would give (used elsewhere by gap 1's slider-based Add flow, which has no click position
+    to seed from). All six items disable when no path exists to anchor to (mirrors the menu having
+    nothing sensible to do then). **Not implemented: "Position"** (`insertNear`) -- inserting a
+    control point mid-segment needs gap 11's (still unimplemented) segment-insert machinery; left
+    out rather than done halfway. Also not implemented: mesh-hosted zone/trigger creation from this
+    menu (`addZoneAt`/`addTriggerAt`'s mesh-region branch) -- gaps 3/4's panels don't support that
+    either. **Verification:** build + the existing Gap1/Gap3/Gap4 smoke checks cover the
+    `addAuxPoint`/`addPathZone`/`addPathTrigger` calls this menu drives end-to-end (schema through
+    bake); the menu-specific glue (`nearestPathPlacement`, the frame-value seeding) is ImGui-only
+    code with no headless entry point, verified by inspection rather than a live click-test --
+    same tradeoff already taken for gap 8's `sanitize()`.
 14. ~~**Undo/redo button disabled state.**~~ **Implemented.** `main.cpp`'s Undo/Redo buttons are now
     wrapped in `ImGui::BeginDisabled(!editorState.history().canUndo()/canRedo())`, mirroring
     `#undoBtn`/`#redoBtn`. `EditorHistory::canUndo()`/`canRedo()` already existed (unused until

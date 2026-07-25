@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -259,6 +260,44 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
     if (outline.size() >= 3 && pointInWorldPolygon(outline, worldX, worldZ)) return &*it;
   }
   return nullptr;
+}
+
+// ---- Add-point context menu (EDITOR_PARITY_FIXES.md gap 13) ----------------------------------
+
+struct NearestPathPlacement {
+  int pathIndex{-1};
+  double t{0.0}, lateral{0.0};
+  const tox::Frame* frame{nullptr};
+};
+
+// Mirrors nearestPathPlacement (js/editor.js:4238-4257): nearest centerline sample across every
+// path, plus the lateral offset from it -- used to place a zone/trigger/aux point at a right-click
+// world position. Approximated off the baked centerline's own discrete samples rather than JS's
+// fine-grained live spline evaluator (same tradeoff already accepted for zone/trigger outlines,
+// EDITOR_PARITY_FIXES.md gaps 3/4 -- no evaluator is exposed to cpp/editor).
+std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked, double worldX, double worldZ) {
+  if (baked == nullptr) return std::nullopt;
+  int bestPath = -1, bestIndex = -1;
+  double bestDistSq = std::numeric_limits<double>::infinity();
+  for (int pi = 0; pi < static_cast<int>(baked->paths.size()); ++pi) {
+    const auto& centerline = baked->paths[pi].centerline;
+    for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
+      const double dx = centerline[i].pos.x - worldX, dz = centerline[i].pos.z - worldZ;
+      const double distSq = dx * dx + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestPath = pi;
+        bestIndex = i;
+      }
+    }
+  }
+  if (bestPath < 0) return std::nullopt;
+  const tox::Path& path = baked->paths[bestPath];
+  const tox::Frame& frame = path.centerline[bestIndex];
+  const int n = static_cast<int>(path.centerline.size());
+  const double t = path.closed ? static_cast<double>(bestIndex) / n : static_cast<double>(bestIndex) / std::max(1, n - 1);
+  const double lateral = (worldX - frame.pos.x) * frame.edgeRight.x + (worldZ - frame.pos.z) * frame.edgeRight.z;
+  return NearestPathPlacement{bestPath, t, lateral, &frame};
 }
 
 // ---- Triggers (EDITOR_PARITY_FIXES.md gap 4) -------------------------------------------------
@@ -584,11 +623,12 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         else if (state.selectedTriggerId().has_value())
           mutated = state.deleteSelectedTrigger() || mutated;
       }
-      // Minimal right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9): a right-*click* (no
-      // drag) opens it instead of panning; a real drag still pans, since ResetMouseDragDelta below
-      // only ever fires on release, after the drag's own per-frame pan deltas already applied.
-      // Scoped to just "Paste Mesh" -- editor.js's real menu has many more entries, out of scope
-      // here (see the plan's scope-creep note).
+      // Right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9, extended by
+      // EDITOR_PARITY_FIXES.md gap 13): a right-*click* (no drag) opens it instead of panning; a
+      // real drag still pans, since ResetMouseDragDelta below only ever fires on release, after
+      // the drag's own per-frame pan deltas already applied. Mirrors editor.html's #addPointMenu
+      // except "Position" (`insertNear`) -- that needs inserting a point mid-segment, i.e. gap 11's
+      // (unimplemented) segment machinery, so it's left out here rather than half-done.
       if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
         const ImVec2 dragDelta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
         if (std::abs(dragDelta.x) < 3.0f && std::abs(dragDelta.y) < 3.0f) {
@@ -598,6 +638,45 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
       }
       if (ImGui::BeginPopup("TopDownContextMenu")) {
+        // Add control point: Roll/Width/Cross-section, mirroring insertRollPointAtWorld/
+        // insertWidthPoint/insertCrossSectionPoint -- seeded from the nearest baked centerline
+        // frame's actual current value at that point (not a schema default), same as JS.
+        const std::optional<NearestPathPlacement> nearPlacement = nearestPathPlacement(baked, contextMenuWorld.x, contextMenuWorld.z);
+        ImGui::TextDisabled("Add control point");
+        ImGui::BeginDisabled(!nearPlacement.has_value());
+        if (ImGui::MenuItem("Roll")) {
+          const auto index = state.addAuxPoint(nearPlacement->pathIndex, PointKind::Roll, nearPlacement->t);
+          if (index.has_value()) {
+            const double rollDeg = nearPlacement->frame->roll * 180.0 / std::numbers::pi;
+            state.editAuxPoint(nearPlacement->pathIndex, *index, [&](TrackPoint& p) { p.roll = rollDeg; });
+            mutated = true;
+          }
+        }
+        if (ImGui::MenuItem("Width")) {
+          const auto index = state.addAuxPoint(nearPlacement->pathIndex, PointKind::Width, nearPlacement->t);
+          if (index.has_value()) {
+            const double width = nearPlacement->frame->width;
+            state.editAuxPoint(nearPlacement->pathIndex, *index, [&](TrackPoint& p) { p.width = width; });
+            mutated = true;
+          }
+        }
+        if (ImGui::MenuItem("Cross-Section")) {
+          const auto index = state.addAuxPoint(nearPlacement->pathIndex, PointKind::CrossSection, nearPlacement->t);
+          if (index.has_value()) {
+            const double curvature = nearPlacement->frame->crossSectionCurvature, tightness = nearPlacement->frame->crossSectionTightness,
+                         thickness = nearPlacement->frame->crossSectionThickness;
+            state.editAuxPoint(nearPlacement->pathIndex, *index, [&](TrackPoint& p) {
+              p.curvature = curvature;
+              p.tightness = tightness;
+              p.thickness = thickness;
+            });
+            mutated = true;
+          }
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Add mesh");
         if (ImGui::MenuItem("Paste Mesh")) {
           // Mirrors importMeshFromClipboard(centreOn): centred on the click, unlike the toolbar
           // Paste Mesh button (world origin) or Import Mesh (current view centre).
@@ -605,6 +684,31 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
             mutated = !state.importMeshFromJsonText(*text, "pasted-mesh", contextMenuWorld.x, contextMenuWorld.z).has_value() || mutated;
           }
         }
+
+        // Add zone/trigger: mirrors addZoneAt/addTriggerAt's path-anchored branch (mesh-hosted
+        // creation from this menu is out of scope -- gaps 3/4 already don't support it either).
+        ImGui::Separator();
+        ImGui::TextDisabled("Add zone");
+        ImGui::BeginDisabled(!nearPlacement.has_value());
+        if (ImGui::MenuItem("Boost")) {
+          mutated = state.addPathZone(nearPlacement->pathIndex, "velocityChange", nearPlacement->t, nearPlacement->lateral).has_value() || mutated;
+        }
+        if (ImGui::MenuItem("Start Grid")) {
+          mutated = state.addPathZone(nearPlacement->pathIndex, "startGrid", nearPlacement->t, nearPlacement->lateral).has_value() || mutated;
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Add trigger");
+        ImGui::BeginDisabled(!nearPlacement.has_value());
+        if (ImGui::MenuItem("Dummy")) {
+          mutated = state.addPathTrigger(nearPlacement->pathIndex, "dummy", nearPlacement->t).has_value() || mutated;
+        }
+        if (ImGui::MenuItem("Checkpoint")) {
+          mutated = state.addPathTrigger(nearPlacement->pathIndex, "checkpoint", nearPlacement->t).has_value() || mutated;
+        }
+        ImGui::EndDisabled();
+
         ImGui::EndPopup();
       }
       break;
