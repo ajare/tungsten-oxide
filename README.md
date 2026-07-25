@@ -37,18 +37,40 @@ Track files record a schema `version`. Schema 5 doubled the world's unit scale �
 
 - `track-core.js` — shared track math (spline evaluation, control points, serialization). Used by both the game and the editor so their geometry can never drift apart.
 - `js/track-mesh.js` — shared mesh-region math (triangulation, containment, rail collision), built on geometry-js.
-- `js/track-game.js` — three.js scene, track mesh generation, car physics, collisions.
+- `js/track-game.js` — three.js scene, input and runtime loop; it consumes the shared headless bake and physics modules.
+- `js/track-bake.js` / `js/track-physics.js` — complete renderer-free spline/mesh bake and simulation reference.
+- `js/track-render-geometry.js` — renderer-neutral triangle batches shared with tests and mirrored natively.
 - `js/editor.js` — editor state, undo/redo, canvas rendering and interaction.
 - `ext/geoemetry-js/` — a git submodule ([`@willpower/geometry`](https://github.com/ajare/geoemetry-js)), a standalone geometry/mesh library with its own tests and React editor. Linked into this project as a local npm dependency (`package.json` -> `"@willpower/geometry": "file:ext/geoemetry-js"`) so track code can `import` it.
+- `cpp/core/` — native C++20 track engine: strict schema-10 loading, spline/mesh baking, renderer-neutral geometry and complete physics.
+- `cpp/willpower/` — embedded C++ Willpower topology/triangulation dependency used by the native loader.
 
 See `CLAUDE.md` for a deeper dive into the track data model and editor/game conventions.
+
+## Native C++ engine
+
+The C++20 core independently loads complete current-schema track JSON, bakes spline paths and placed mesh assets, exposes graphics-API-neutral geometry, and simulates the same corridor/mesh behavior as JavaScript. Schema version 10 is accepted strictly; historical migration remains editor/JavaScript-only.
+
+Build from an MSVC Developer prompt:
+
+```sh
+cmake -S cpp -B cpp/build
+cmake --build cpp/build --config Release
+ctest --test-dir cpp/build -C Release --output-on-failure
+```
+
+The combined build uses the embedded `cpp/willpower` sources and copies required Willpower DLLs next to test executables. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md` and `MESH_CPP_PORT_PLAN.md`.
 
 ## Tests
 
 ```sh
-npm test                                   # pure logic, no browser
-node tools/browser-smoke.mjs               # drives the real pages in headless Chromium
+npm test                                   # Node logic + JS trace replay
+node tools/browser-smoke.mjs               # real pages in headless Chromium
+npm run parity                             # JS + C++ baked/raw parity layers
+npm run gen-traces                         # deliberately regenerate committed traces
 ```
+
+`npm run parity` uses a previously built `cpp/build` when available. The committed parity corpus has two layers: byte-identical baked-world traces that isolate runtime math, and raw schema-10 tracks independently loaded and baked by both engines. See `test/traces/raw/README.md`.
 
 The browser suite needs Playwright, which is not a project dependency:
 

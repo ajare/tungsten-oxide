@@ -100,7 +100,7 @@ test('committed fixtures in test/traces/ replay bit-exact', () => {
   const manifestUrl = new URL('./traces/manifest.json', import.meta.url);
   if (!existsSync(manifestUrl)) {
     // Fixtures are optional for the pure npm-test flow; generate with
-    // `node test/parity/gen-traces.mjs`.
+    // `npm run gen-traces`.
     return;
   }
   const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8'));

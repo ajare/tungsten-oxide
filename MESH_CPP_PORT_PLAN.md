@@ -1,6 +1,6 @@
 # C++ Full-Track and Mesh-Region Port Plan
 
-Status: **milestones M0–M6 complete.** This is the follow-on to
+Status: **milestones M0–M7 complete.** This is the completed follow-on to
 `CPP_PORT_PLAN.md`. The existing baked-corridor C++ parity suite remains intact.
 
 - **M0:** combined MSVC/CMake baseline, shared fixtures, and focused C++ test harness.
@@ -17,16 +17,17 @@ Status: **milestones M0–M6 complete.** This is the follow-on to
 - **M6:** committed current-schema raw-track corpus (12 deterministic scenarios / 1116 steps),
   independent JS/C++ loading and baking, exact discrete branch outcomes, bounded free runs, and a
   separately measured native-bake physics tolerance lock.
+- **M7:** clean-build integration, complete JS/browser/C++/parity verification, and updated root,
+  native-build, architecture, tolerance, and trace-generation documentation.
 
 ## 1. Goal
 
-Make the native C++ core capable of loading a complete current-schema track JSON file without
-JavaScript, baking its spline paths and placed mesh assets, generating graphics-API-agnostic render
-geometry, and running every mesh-related physics branch with measured JS/C++ parity.
+The native C++ core now loads a complete current-schema track JSON file without JavaScript, bakes
+its spline paths and placed mesh assets, generates graphics-API-agnostic render geometry, and runs
+every mesh-related physics branch with measured JS/C++ parity.
 
-JavaScript remains the reference oracle during this port. C++ will independently parse and bake the
-raw authored data; it must not depend on JavaScript-baked mesh loops or centerline frames in the new
-end-to-end tests.
+JavaScript remains the measured reference oracle. C++ independently parses and bakes raw authored
+data; raw end-to-end tests share neither JavaScript-baked mesh loops nor centerline frames.
 
 ## 2. Agreed scope
 
@@ -94,8 +95,8 @@ TrackLoadResult Track::fromFile(const std::filesystem::path& path);
 
 Malformed top-level JSON, an unsupported version, missing required path data, or no usable driving
 surface is fatal. Invalid mesh assets/placements are skipped with structured warnings, matching the
-recoverable JS policy. A polygon triangulation failure warns and omits its render triangles while
-retaining valid containment loops and rails for physics.
+recoverable JS policy. A Willpower topology or triangulation failure skips the affected compiled
+placement with a structured warning; valid placements and spline paths remain usable.
 
 ### 3.3 Authored and compiled data
 
@@ -123,8 +124,8 @@ forcing a library-wide scalar conversion:
 2. Build a Willpower `geometry::Mesh` for topology validation, polygon/hole ownership, connectivity,
    and triangulation.
 3. Maintain explicit serialized-ID to Willpower-runtime-index maps for vertices, edges, and polygons.
-4. Keep rail flags in a side table keyed by mapped runtime edge index; do not require generic
-   Willpower user-attribute serialization for the one runtime attribute needed here.
+4. Keep rail flags in normalized authored edge records alongside explicit authored-ID/runtime-index
+   maps; do not require generic Willpower user-attribute serialization for one runtime attribute.
 5. Fetch triangle indices from Willpower, but fetch final render positions from the retained double
    vertex table before applying the placement transform.
 6. Build physics loops, bounds, normals, and rail segments entirely in double precision.
@@ -140,7 +141,6 @@ Add a C++ counterpart to `js/track-mesh.js` containing faithful double-precision
 - bounds;
 - point-in-loop and polygon-minus-holes containment;
 - bounds tests;
-- closest point on segment;
 - segment crossing;
 - rail compilation and outward-normal probing;
 - iterative swept `slideAlongRails()` with two-sided resolution and restitution.
@@ -209,10 +209,10 @@ struct GeometryBatch {
 };
 ```
 
-Generate normals with Three.js-compatible triangle accumulation where shared indexed vertices are
-used; use face normals where JavaScript converts geometry to non-indexed/flat-shaded form. Vertex
-colour remains white. `materialKey` communicates semantic appearance (`road`, `shell`, `rail`,
-`mesh-region`, and zone effect) without embedding renderer policy.
+Current batches are triangle-expanded and carry face normals, matching the JavaScript neutral
+builder's non-indexed output. Vertex colour remains white. `materialKey` communicates semantic
+appearance (`road`, `shell`, `rail`, `mesh-region`, and zone effect) without embedding renderer
+policy.
 
 ## 4. JavaScript reference work
 
@@ -424,38 +424,37 @@ comparison diagnostics and the old baked parity suite still passing.
 **Exit:** a clean checkout can load a full current-schema track in C++, expose renderer-neutral
 geometry, and reproduce JS mesh physics within the locked tolerances.
 
-## 9. Expected file layout
+## 9. Final file layout
 
 ```text
 cpp/core/include/
-  Track.hpp                 expanded compiled runtime Track
-  TrackDefinition.hpp       normalized authored records
-  TrackLoader.hpp           public load-result declarations if not kept on Track
-  TrackGeometry.hpp         render vertex/batch API
-  TrackMesh.hpp             compiled mesh-region/query declarations
+  TrackDefinition.hpp       normalized authored schema-10 records
+  Track.hpp                 load result + compiled paths/effects/gates
+  TrackGeometry.hpp         renderer-neutral vertex/batch API
+  TrackMesh.hpp             compiled regions and mesh queries
+  Simulation.hpp            complete path/mesh runtime API
 cpp/core/src/
-  TrackLoader.cpp
-  TrackBake.cpp
-  TrackGeometry.cpp
-  TrackMesh.cpp
-  Simulation.cpp            mesh branches restored
+  TrackLoader.cpp            strict JSON/file normalization
+  TrackBake.cpp              spline bake + path/effect geometry
+  TrackMesh.cpp              Willpower adapter + mesh geometry/queries
+  Simulation.cpp            corridor and mesh physics
 cpp/core/tests/
-  parity_main.cpp           existing baked suite + raw trace mode or shared helpers
-  track_tests.cpp           loader/bake/geometry/mesh scenario tests
+  parity_main.cpp            baked and raw trace comparator
+  track_tests.cpp            loader/bake/geometry/mesh scenarios
+cpp/willpower/               embedded topology/triangulation libraries
 js/
-  track-bake.js             full physics bake including mesh regions
-  track-render-geometry.js  pure graphics-agnostic reference geometry
-  track-mesh.js             existing shared mesh queries
+  track-bake.js              complete headless reference bake
+  track-render-geometry.js   renderer-neutral reference geometry
+  track-mesh.js              mesh compile/query reference
 test/
-  fixtures/mesh/            shared current-schema fixtures
-  track-mesh-physics.test.js
-  track-render-geometry.test.js
-  traces/                   old baked traces plus raw mesh traces
+  fixtures/{mesh,path}/      shared source and JS oracle summaries
+  parity/raw-traces.js       deterministic raw scenario definitions
+  traces/                    unchanged baked fixtures
+  traces/raw/                schema-10 traces, manifest and format README
 ```
 
-Exact header splitting may be adjusted to keep ownership and compile times sensible, but the authored
-definition, compiled physics representation, render geometry, and mesh query responsibilities must
-remain separate.
+Authored definitions, compiled physics records, renderer-neutral geometry, and mesh queries remain
+separate even though loading invokes the whole compile pipeline.
 
 ## 10. Required verification commands
 

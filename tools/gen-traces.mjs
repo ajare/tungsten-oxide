@@ -2,7 +2,7 @@
  * Deliberate, reviewable regeneration only — run when physics, native loading,
  * or the parity corpus is intentionally changed:
  *
- *   node test/parity/gen-traces.mjs
+ *   npm run gen-traces
  *
  * The traces are committed fixtures read by BOTH engines (the JS self-check and
  * the C++ parity replayer). Baked traces isolate runtime math; raw traces force
@@ -10,14 +10,14 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { installTrackCore } from './loadcore.js';
+import { installTrackCore } from '../test/parity/loadcore.js';
 
 installTrackCore();
-const { buildTrace } = await import('./trace.js');
-const { tracks } = await import('./tracks.js');
-const { rawScenarios, buildRawTrace, validateRawActivity } = await import('./raw-traces.js');
+const { buildTrace } = await import('../test/parity/trace.js');
+const { tracks } = await import('../test/parity/tracks.js');
+const { rawScenarios, buildRawTrace, validateRawActivity } = await import('../test/parity/raw-traces.js');
 
-const outDir = fileURLToPath(new URL('../traces/', import.meta.url));
+const outDir = fileURLToPath(new URL('../test/traces/', import.meta.url));
 mkdirSync(outDir, { recursive: true });
 
 const manifest = [];

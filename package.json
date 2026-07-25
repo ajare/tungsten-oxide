@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node --test",
     "parity": "node tools/parity.mjs",
-    "gen-traces": "node test/parity/gen-traces.mjs"
+    "gen-traces": "node tools/gen-traces.mjs"
   },
   "dependencies": {
     "@willpower/geometry": "file:ext/geoemetry-js"

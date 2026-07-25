@@ -1,12 +1,16 @@
 # C++ Port Plan — Track Physics Core
 
-Status: **milestones 0–3 complete.** This is the implementation reference produced from a
-grilling/planning session. Every decision below was made deliberately; the "Why" notes exist so a
-future implementer (human or agent) doesn't silently re-litigate or undo a choice. The port now
-holds per-step parity at 1 ULP over the full corpus (kinematics, guard-rail corridor, airborne
-launch/landing, zone boost, checkpoint/lap, respawn recovery) plus the bounded-trajectory smoke
-check; the calibrated tolerance is locked (§4, `cpp/core/tests/parity_main.cpp`). Remaining work is the
-deferred mesh-region physics (§2) — not a milestone here.
+Status: **original corridor milestones 0–3 and full-track follow-on milestones M0–M7 complete.**
+This document preserves the rationale for the first mesh-free physics extraction. The deferred work
+identified here was subsequently completed in `MESH_CPP_PORT_PLAN.md`: native strict schema-10
+loading, spline and mesh baking, renderer-neutral geometry, complete mesh physics, and independent
+raw-track parity are now implemented. Treat statements below that call mesh/loading/render geometry
+"deferred" as historical first-phase scope, not current engine limitations.
+
+Current locks: the original 4000-step baked-world corpus remains unchanged at 1 ULP worst
+(`atol=rtol=1e-12`, ratio gate `1e-3`). The 12-track/1116-step raw corpus independently loads and
+bakes schema-10 source in both engines (`atol=rtol=1e-12`, ratio gate `0.1`) with exact discrete
+surface/collision/effect outcomes. See `MESH_CPP_PORT_PLAN.md` §7 and `cpp/README.md`.
 
 ---
 
@@ -27,23 +31,27 @@ deferred mesh-region physics (§2) — not a milestone here.
 (present from day one; their *effects* land in milestone 2). All of this rides on `track-core.js`
 math, which is already dependency-free.
 
-**Out (deferred):** mesh-region physics — `slideAlongRails`, swept polygon collision,
-`surfaceOwnerAt` arbitration. It drags in geometry-js (`@willpower/geometry`) triangulation and
-roughly doubles the surface area. Deferred to a self-contained follow-on, exactly as it already is in
-the JS. Random parity tracks are configured to emit **zero** mesh sections.
+**Originally deferred, now complete in the follow-on:** mesh-region physics (`slideAlongRails`,
+swept polygon collision, `surfaceOwnerAt`), native authored-track loading/baking, and
+renderer-neutral geometry. The engine links embedded Willpower.Geometry for load-time topology and
+triangulation while retaining double-precision runtime geometry. The original random parity tracks
+still emit zero mesh sections deliberately so their strict runtime-only gate remains unchanged.
 
-**Also out:** all rendering (THREE.js scene/mesh/material/camera).
+**Still out:** graphics APIs and presentation (`THREE.js` scene/material/camera), image decoding,
+historical-schema migration, and native editing/saving. C++ does emit graphics-API-neutral batches.
 
 ## 3. Architecture
 
 - Port `track-core.js` as a **faithful stateless `TrackCore` free-function namespace** — a 1:1 mirror.
   This is where the spline evaluation and transcendental-heavy math lives; keeping it a stateless
   mirror is the single biggest lever for per-step parity holding.
-- Classes wrap the **stateful** parts (this is the "classes for each" the port asked for):
-  - **`Track`** — parsed track data + baked centerline/edges (produced by calling `TrackCore`).
-  - **`Ship`** — the physics-state struct with `stepPhysics` as a method.
-  - **`Zone`** / **`Trigger`** — data + their detection predicates.
-  - **`Simulation`** — owns the `Track`, the ship roster, zones, triggers; runs the loop.
+- Classes/records wrap the **stateful** parts:
+  - **`TrackDefinition`** — normalized authored schema-10 runtime subset.
+  - **`Track`** — authored definition plus compiled paths, mesh regions, zones, triggers and geometry;
+    `fromJson()` / `fromFile()` perform native loading and baking.
+  - **`Ship`** — complete mutable physics and race/detection state.
+  - **`Zone`** / **`Trigger`** — compiled path- or mesh-hosted effects/gates.
+  - **`Simulation`** — references an immutable compiled `Track` and advances ships.
 - **`Vec3` is hand-rolled (double)**, mirroring `THREE.Vector3`'s method set **and** its edge cases:
   zero-length `normalize()` → zero vector (not NaN), the same `applyAxisAngle` quaternion path, and
   the **same operation order** (float add isn't associative). No glm, no Eigen.
@@ -60,10 +68,13 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
   - (Rejected: vendoring fdlibm for bit-exact parity. Stronger guarantee but more upfront work; the
     port owner chose the simpler tolerance path. If ever revisited, it would make per-step parity
     bit-exact and make the C++ engine deterministic across shipping platforms.)
-- **Golden-trace architecture.** JS is the generator. For each random track it writes:
+- **Two-layer golden-trace architecture.** JS is the generator. Legacy traces carry a baked `world`
+  to isolate runtime math. Raw traces carry normalized `sourceTrack` schema JSON so JS and C++ load
+  and bake independently, plus exact per-step branch outcomes:
 
   ```json
-  { "track": {…}, "initialState": {…}, "steps": [ { "input": {…}, "outputState": {…} }, … ] }
+  { "sourceTrack": {…}, "initialState": {…},
+    "steps": [ { "control": {…}, "outcome": {…}, "after": {…} } ] }
   ```
 
   - Doubles serialize as JS shortest-round-trip decimals; C++ parses with **correctly-rounded `strtod`**
@@ -111,35 +122,36 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
 
 ## 6. Toolchain, dependencies, layout, workflow
 
-- **Compiler/build:** MSVC (Visual Studio Build Tools) driven through **CMake** (`CMakeLists.txt` is the
-  "CMake-compatible" build the request asked for). Nothing is currently installed — MSVC + CMake must
-  be installed as a first step. Pinning parity to MSVC's FP behavior now avoids re-validating later.
+- **Compiler/build:** C++20 with MSVC driven through CMake. The primary combined build is
+  `cmake -S cpp -B cpp/build`; standalone `cpp/core` configuration imports sibling Willpower.
+  Release parity is calibrated against MSVC `/fp:precise` behavior.
 - **Dependencies:**
-  - Vendor **`nlohmann/json`** (single header, committed under `cpp/core/third_party/nlohmann/`). Its
-    correctly-rounded double parsing is exactly the fiddly, silently-wrong-if-hand-rolled code we don't
-    want to write.
+  - Vendor **`nlohmann/json`** (single header, committed under `cpp/core/third_party/nlohmann/`) as a
+    private `core` implementation dependency for native loading and parity trace parsing.
+  - Link the embedded `cpp/willpower` Common/Geometry targets for mesh topology and triangulation.
   - **Hand-roll** the ~30-line assert/report test harness (`check_close(a, b, tol)` + pass/fail counter
     + worst-offender reporting). Keeps third-party surface to the one piece that's genuinely hard.
   - (Rejected: doctest/Catch2/GoogleTest — unnecessary given how small the harness is.)
 - **Layout:**
   ```
   cpp/
-    core/               # the "core" CMake project (physics engine, parity-tested against JS)
-      include/          # Vec3, TrackCore, Track, Ship, Zone, Trigger, Simulation headers
-      src/              # bodies for the above
-      tests/            # C++ parity replayer/comparator + hand-rolled harness
+    core/               # native loader, bake, geometry and physics static library
+      include/          # authored, compiled, geometry, mesh, ship/simulation API
+      src/              # loader/bake/mesh/query/physics implementations
+      tests/            # parity replayer + focused track_tests harness
       third_party/nlohmann/
-      CMakeLists.txt
+    willpower/          # embedded Common/Geometry topology implementation
   test/
-    traces/             # committed golden .json fixtures, read by BOTH sides
-    parity/             # JS trace-gen + noisy autopilot + JS<->JS parity self-check
+    traces/             # unchanged baked-world fixtures
+      raw/              # independently loaded current-schema fixtures + manifest
+    parity/             # JS generation, replay and scenario definitions
   ```
-- **Traces are committed** as fixtures (self-contained C++ suite, reviewable diffs, durable oracle after
-  JS retires) + a `regen-traces` script / CMake target for deliberate, reviewable regeneration when
-  physics is intentionally changed.
+- **Traces are committed** as fixtures (self-contained C++ suite, reviewable diffs, durable oracle
+  after JS retires). Regenerate both layers deliberately with `npm run gen-traces`; see
+  `test/traces/raw/README.md`.
 - **Suites stay separate:**
-  - `npm test` stays fast/pure (Node) and **gains** the JS↔JS parity + trace generation. It does **not**
-    hard-depend on CMake/MSVC — contributors without the C++ toolchain can still run it.
+  - `npm test` stays fast/pure (Node) and includes JS↔JS replay of both committed trace layers. Trace
+    regeneration is a separate deliberate command. Node tests do **not** require CMake/MSVC.
   - C++ has its own `cmake --build … && ctest` flow.
   - A thin top-level convenience script (e.g. `tools/parity.mjs` or an npm script) runs both end-to-end
     for the full cross-check.
@@ -157,16 +169,18 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
 3. **Trajectory + tolerance lock.** Bounded-trajectory smoke test with the growing-tolerance envelope;
    measure worst per-step drift across all traces and lock the calibrated tolerance.
 
+The completed follow-on milestones M0–M7 (headless full-track reference, native loader/path bake,
+Willpower meshes, mesh simulation, raw parity, and final integration) are specified and measured in
+`MESH_CPP_PORT_PLAN.md`.
+
 ## 8. Risks / things to watch
 
-- **Phase-0 is parity-sensitive** and, until the new node tests exist, is covered only by the
-  browser-smoke playtest. The JS `Vec3` must transliterate `THREE.Vector3` **exactly** (op order + edge
-  cases) or the shipping game's own behavior shifts.
-- **Scattered constants.** `maxSpeed`, `accel`, `gravity`, `UP`, `COLLISION_WALL_MARGIN`,
-  `SEGMENT_ALONG_TOL`, `CORRIDOR_ALONG_TOL`, boost `ZONE_RELEASE`, `TRIGGER_REARM_MARGIN`, etc. are
-  spread across `track-core.js` and `track-game.js`. Centralize them in `track-physics.js` as the single
-  source of truth, then transliterate into one C++ header. A drifted constant is an invisible parity
-  bug.
+- **The extraction remains parity-sensitive.** Node parity, direct physics tests and browser smoke
+  now cover it, but JS `Vec3` must continue to mirror `THREE.Vector3` r128 operation order and edge
+  cases or both the shipping game and oracle shift.
+- **Centralized constants must stay synchronized.** Runtime constants now live in
+  `track-physics.js`/`track-core.js` and mirror `TrackCore.hpp`; a drifted value is an invisible parity
+  bug and should be caught by both trace layers.
 - **Chaotic divergence** makes trajectory tests inherently soft; treat per-step as the real gate and
   don't tune tolerances to force a long trajectory to pass.
 - **Lossless state coverage.** Every field in `createPhysicsState()` (js/track-game.js) plus the
@@ -175,14 +189,14 @@ the JS. Random parity tracks are configured to emit **zero** mesh sections.
 
 ---
 
-## Appendix — key source anchors (as of planning)
+## Appendix — historical source anchors (at initial planning time)
 
 - `track-core.js` (1874 lines): pure math IIFE, `window.TrackCore`. No THREE, no geometry-js. Port
   target for the `TrackCore` namespace.
 - `js/track-game.js` (2259 lines): physics + rendering mixed. Physics functions to extract:
   `shipParamG` (701), `effectiveMaxSpeed` (714), `detectZoneTriggers` (749), `detectTriggers` (944),
   `projectToSurface` (1021), `corridorContains` (1044), `surfaceOwnerAt` (1060), `applyHandling` (1075),
-  `slideAlongRails` (1108, **mesh — out of scope**), `curvedSurfaceHeight`/`Frame` (1128/1135),
+  `slideAlongRails` (1108, originally deferred; now ported), `curvedSurfaceHeight`/`Frame` (1128/1135),
   `sampleTrack` (1165), `createPhysicsState` (1464), `tangentize` (1548), `beginAirborne` (1567),
   `stepPhysics` (1603). Physics step body uses only `THREE.Vector3` (math) + `THREE.MathUtils`
   (clamp/lerp) — trivially THREE-free after the `Vec3` swap.
