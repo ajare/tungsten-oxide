@@ -71,7 +71,8 @@ set(EDITOR_SOURCES
   src/FileDialog.cpp
   src/Clipboard.cpp
   src/PropertiesPanel.cpp
-  src/ZonesPanel.cpp)
+  src/ZonesPanel.cpp
+  src/TriggersPanel.cpp)
 
 add_executable(track_editor
   main.cpp

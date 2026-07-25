@@ -53,7 +53,7 @@ struct SelectedRail {
 };
 
 class EditorState {
- public:
+public:
   // backfillPointIds() mirrors js/editor.js's ensureTrackIds(), called after every track
   // construction/replacement there (initial load, New, Random, Import). Without it here, a track
   // built in memory rather than loaded from JSON (main.cpp's buildStarterTrack(), New,
@@ -72,10 +72,17 @@ class EditorState {
   bool meshDragging() const { return meshDragging_; }
   bool meshRotating() const { return meshRotating_; }
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
+  const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
 
   const Zone* findZone(const std::string& id) const {
     for (const auto& zone : track_.zones)
       if (zone.id == id) return &zone;
+    return nullptr;
+  }
+
+  const Trigger* findTrigger(const std::string& id) const {
+    for (const auto& trigger : track_.triggers)
+      if (trigger.id == id) return &trigger;
     return nullptr;
   }
 
@@ -122,10 +129,11 @@ class EditorState {
     const auto hit = hitTestPosition(worldX, worldZ, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
-    // Points/mesh regions/zones share one selection (props panel), mirrors clearMeshSelection()
-    // also clearing selectedZoneId in js/editor.js.
+    // Points/mesh regions/zones/triggers share one selection (props panel), mirrors
+    // clearMeshSelection() also clearing selectedZoneId/selectedTriggerId in js/editor.js.
     selectedMeshId_.reset();
     selectedZoneId_.reset();
+    selectedTriggerId_.reset();
     return true;
   }
 
@@ -137,6 +145,7 @@ class EditorState {
     selectedMeshId_ = placementId;
     selection_ = {};
     selectedZoneId_.reset();
+    selectedTriggerId_.reset();
   }
 
   void clearMeshSelection() { selectedMeshId_.reset(); }
@@ -157,6 +166,7 @@ class EditorState {
     selectedZoneId_ = id;
     selection_ = {};
     selectedMeshId_.reset();
+    selectedTriggerId_.reset();
   }
 
   void clearZoneSelection() { selectedZoneId_.reset(); }
@@ -208,6 +218,90 @@ class EditorState {
     history_.push(track_);
     track_.zones.erase(it);
     selectedZoneId_.reset();
+    return true;
+  }
+
+  // ---- Triggers (EDITOR_PARITY_FIXES.md gap 4) ----
+  //
+  // Same scope reduction as zones (gap 3): full add/edit-fields/delete via a dedicated panel
+  // (TriggersPanel.hpp/.cpp) plus on-canvas rendering and click-to-select, reusing core's own
+  // baked tox::Trigger records. Unlike zones, core already bakes a trigger's complete world-space
+  // gate frame (center/right/up/fwd/halfWidth/height) directly -- no centerline-interpolation
+  // approximation is needed here at all (see TopDownCanvas.cpp's drawTriggers/triggerAtWorld).
+  // NOT implemented: on-canvas drag (`dragging === 'triggerTop'`), for the same reason zone drag
+  // isn't (it continuously re-projects onto the nearest path via a live spline evaluator that
+  // isn't exposed to cpp/editor). Only path-hosted trigger creation is wired up in the panel;
+  // mesh-hosted triggers can still be loaded, viewed, selected and edited.
+
+  void selectTrigger(const std::string& id) {
+    selectedTriggerId_ = id;
+    selection_ = {};
+    selectedMeshId_.reset();
+    selectedZoneId_.reset();
+  }
+
+  void clearTriggerSelection() { selectedTriggerId_.reset(); }
+
+  // Adds a path-hosted trigger at parameter `t` along `pathIndex` with schema defaults (width 40,
+  // height 12 -- TrackDefinition.hpp's own field defaults, matching TrackCore.DEFAULT_TRIGGER_WIDTH/
+  // HEIGHT). `type` must be "dummy" or "checkpoint"; anything else is treated as dummy, mirroring
+  // addTriggerAt's own `type === 'checkpoint' ? 'checkpoint' : 'dummy'` coercion. A fresh checkpoint
+  // starts as role "intermediate", same as addTriggerAt. Selects the new trigger and returns its
+  // id, or nullopt if pathIndex is invalid.
+  std::optional<std::string> addPathTrigger(int pathIndex, const std::string& type, double t) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
+    history_.push(track_);
+    Trigger trigger;
+    trigger.id = newTriggerId();
+    trigger.type = type == "checkpoint" ? "checkpoint" : "dummy";
+    trigger.host.kind = "path";
+    trigger.host.pathId = track_.paths[pathIndex].id;
+    trigger.host.t = std::clamp(t, 0.0, 1.0);
+    if (trigger.type == "checkpoint") trigger.role = "intermediate";
+    track_.triggers.push_back(std::move(trigger));
+    const std::string triggerId = track_.triggers.back().id;
+    selectTrigger(triggerId);
+    return triggerId;
+  }
+
+  // Mutates the trigger by id via `mutate`, pushing one undo step first and re-clamping afterward.
+  // Also mirrors setTriggerRole's finish-uniqueness invariant (js/editor.js:2318-2323): if `mutate`
+  // leaves this trigger's role as "finish", any other checkpoint currently marked finish is demoted
+  // to "intermediate" so at most one finish ever exists (harmless to re-run when nothing changed).
+  template <typename Mutate>
+  bool editTrigger(const std::string& id, Mutate&& mutate) {
+    const auto it = std::find_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return t.id == id; });
+    if (it == track_.triggers.end()) return false;
+    history_.push(track_);
+    mutate(*it);
+    it->width = std::max(0.5, it->width);
+    it->height = std::max(0.5, it->height);
+    if (it->direction != "forward" && it->direction != "backward") it->direction = "both";
+    if (it->type == "checkpoint") {
+      if (it->role != "finish" && it->role != "intermediate") it->role = "intermediate";
+      if (it->role == "finish") {
+        for (auto& other : track_.triggers)
+          if (&other != &*it && other.type == "checkpoint" && other.role == "finish") other.role = "intermediate";
+      }
+    } else {
+      it->role.clear();
+    }
+    if (it->host.kind == "path") it->host.t = std::clamp(it->host.t, 0.0, 1.0);
+    return true;
+  }
+
+  // Mirrors deleteSelectedTrigger's finish-role guard: a checkpoint marked "finish" can't be
+  // deleted until another is promoted first, since a track needs exactly one finish trigger for
+  // lap detection. Returns false (no-op) rather than the JS alert() when blocked.
+  bool deleteSelectedTrigger() {
+    if (!selectedTriggerId_.has_value()) return false;
+    const auto it =
+        std::find_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return t.id == *selectedTriggerId_; });
+    if (it == track_.triggers.end()) return false;
+    if (it->type == "checkpoint" && it->role == "finish") return false;
+    history_.push(track_);
+    track_.triggers.erase(it);
+    selectedTriggerId_.reset();
     return true;
   }
 
@@ -273,7 +367,7 @@ class EditorState {
   // mirrors importMeshFile/pasteMeshFromClipboard sharing js/editor.js's parseMeshJSON). Returns
   // the parse error, or nullopt on success.
   std::optional<std::string> importMeshFromJsonText(const std::string& text, const std::string& name, double centerWorldX,
-                                                     double centerWorldZ) {
+                                                    double centerWorldZ) {
     MeshAssetParseResult parsed = parseMeshAssetJson(text);
     if (!parsed.asset) return parsed.error;
     importMeshAsset(std::move(*parsed.asset), name, centerWorldX, centerWorldZ);
@@ -356,6 +450,7 @@ class EditorState {
     selectedMeshId_ = meshId;
     selection_ = {};
     selectedZoneId_.reset();
+    selectedTriggerId_.reset();
     selectedRail_ = SelectedRail{meshId, edgeId};
     return true;
   }
@@ -401,7 +496,10 @@ class EditorState {
     TextureAsset& asset = it->second;
     const int maxSide = isWidth ? asset.width : asset.height;
     const int clamped = std::max(1, std::min(maxSide, value));
-    if (isWidth) asset.tileWidth = clamped; else asset.tileHeight = clamped;
+    if (isWidth)
+      asset.tileWidth = clamped;
+    else
+      asset.tileHeight = clamped;
     const int cols = asset.tileWidth > 0 ? asset.width / asset.tileWidth : 0;
     const int rows = asset.tileHeight > 0 ? asset.height / asset.tileHeight : 0;
     const int count = cols * rows;
@@ -617,7 +715,7 @@ class EditorState {
 
   void cancelCreateDraft() { createDraft_.clear(); }
 
- private:
+private:
   void replaceTrackKeepHistory(TrackDefinition replacement) {
     track_ = std::move(replacement);
     backfillPointIds(track_);  // see the constructor's comment on why this must never be skipped
@@ -629,6 +727,7 @@ class EditorState {
     meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
     selectedRail_.reset();
     selectedZoneId_.reset();
+    selectedTriggerId_.reset();
   }
 
   MeshPlacement* mutableSelectedMeshPlacement() {
@@ -798,6 +897,13 @@ class EditorState {
     return firstUnusedId("z", used);
   }
 
+  // "tr" prefix mirrors js/editor.js's newId('tr') for triggers.
+  std::string newTriggerId() const {
+    std::set<std::string> used;
+    for (const auto& trigger : track_.triggers) used.insert(trigger.id);
+    return firstUnusedId("tr", used);
+  }
+
   // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
   // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
   // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
@@ -903,6 +1009,7 @@ class EditorState {
 
   std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;
+  std::optional<std::string> selectedTriggerId_;
 };
 
 }  // namespace editor

@@ -332,7 +332,27 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    works — only the panel's Add flow is path-only). A "Gap3 smoke check" verifies an added zone
    bakes into a real path-relative `gLo`/`gHi` span with the correct default boost factor, not just
    schema plumbing.
-4. **Triggers** (dummy / checkpoint) — add, select, drag, delete, role and direction.
+4. ~~**Triggers**~~ **Implemented (add/select/edit/delete; no on-canvas drag).** New "Triggers"
+   window (`TriggersPanel.hpp/.cpp`) plus `EditorState::addPathTrigger`/`editTrigger`/
+   `selectTrigger`/`deleteSelectedTrigger`. Triggers render on the top-down canvas (a gate line
+   plus direction arrow(s)) and are click-selectable there too (`TopDownCanvas.cpp`'s
+   `drawTriggers`/`triggerAtWorld`), picked in the same order as `js/editor.js` (control points,
+   then zones, then triggers, then mesh regions). Unlike zones, core already bakes a trigger's
+   complete world-space gate frame (`tox::Trigger::center`/`right`/`up`/`fwd`/`halfWidth`/`height`)
+   directly, so unlike gap 3's zone outlines this needed no centerline-interpolation approximation
+   at all. `editTrigger` also ports `setTriggerRole`'s at-most-one-Finish invariant (promoting a
+   checkpoint to Finish demotes any other Finish back to Intermediate) and
+   `deleteSelectedTrigger`'s guard against deleting the current Finish checkpoint (a track needs
+   exactly one for lap detection) -- the panel disables both the Role dropdown's Intermediate
+   option and the Delete button while a trigger is Finish, mirroring the JS panel's disabled
+   controls rather than its alert()-and-revert. **Not implemented:** on-canvas drag
+   (`dragging === 'triggerTop'`) for the same reason zone drag isn't (gap 3) -- no spline
+   evaluator is exposed to `cpp/editor` for continuous re-projection onto the nearest path -- and
+   creating a mesh-hosted trigger from scratch (loading/viewing/editing/deleting one from an
+   existing file still works). A "Gap4 smoke check" verifies an added trigger bakes into a real
+   world-space gate (not just schema plumbing), that editing reaches the right record even though
+   `buildStarterTrack()`'s own checkpoints (one already Finish) sit ahead of it in the list, and
+   the Finish-uniqueness/delete-guard invariants end to end.
 5. **Curve management** — curve selector, Delete Curve, Connect/join, make-disjoint/reconnect,
    junctions, self-intersection overrides.
 6. **Direction toggle and start-point selection** (`#dirBtn`).

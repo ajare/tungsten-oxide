@@ -16,8 +16,8 @@ namespace {
 
 constexpr double kWorldGridSize = 100.0;  // metres between grid lines
 constexpr float kPointRadius = 4.0f;
-constexpr float kPickRadiusPx = 10.0f;  // matches editor.js's nodeAtTop hit radius
-const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);   // matches editor.html's #canvasWrap
+constexpr float kPickRadiusPx = 10.0f;                    // matches editor.js's nodeAtTop hit radius
+const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);  // matches editor.html's #canvasWrap
 const ImU32 kGridColor = IM_COL32(255, 255, 255, 18);
 const ImU32 kRoadColor = IM_COL32(60, 70, 82, 255);
 const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
@@ -33,11 +33,17 @@ constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_P
 
 // Matches editor.js's ZONE_FILL/ZONE_STROKE (js/editor.js:4209-4210) minus the startGrid checker
 // pattern, which is cosmetic only -- a flat fill reads fine at editor zoom levels.
-const ImU32 kZoneBoostFillColor = IM_COL32(255, 165, 32, 107);    // rgba(255,165,32,0.42)
-const ImU32 kZoneBoostStrokeColor = IM_COL32(255, 176, 32, 255);  // #ffb020
-const ImU32 kZoneStartGridFillColor = IM_COL32(207, 214, 221, 97);  // rgba(207,214,221,0.38)
+const ImU32 kZoneBoostFillColor = IM_COL32(255, 165, 32, 107);         // rgba(255,165,32,0.42)
+const ImU32 kZoneBoostStrokeColor = IM_COL32(255, 176, 32, 255);       // #ffb020
+const ImU32 kZoneStartGridFillColor = IM_COL32(207, 214, 221, 97);     // rgba(207,214,221,0.38)
 const ImU32 kZoneStartGridStrokeColor = IM_COL32(207, 214, 221, 255);  // #cfd6dd
 const ImU32 kZoneSelectedStrokeColor = IM_COL32(255, 90, 90, 255);
+
+// Matches editor.js's TRIGGER_COLOR / triggerColor (js/editor.js:4347-4350). Selection is shown
+// via line/point weight only (matching drawTriggers), not a separate highlight color.
+const ImU32 kTriggerDummyColor = IM_COL32(255, 94, 168, 255);        // #ff5ea8
+const ImU32 kTriggerCheckpointColor = IM_COL32(127, 231, 255, 255);  // #7fe7ff
+const ImU32 kTriggerFinishColor = IM_COL32(255, 211, 79, 255);       // #ffd34f
 
 // Mirrors editor.js's computeTrackBounds: authored control points plus every mesh region's baked
 // bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
@@ -223,7 +229,7 @@ bool pointInWorldPolygon(const std::vector<WorldPoint2D>& points, double x, doub
 }
 
 void drawZones(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
-              const std::optional<std::string>& selectedZoneId) {
+               const std::optional<std::string>& selectedZoneId) {
   for (const auto& zone : baked.zones) {
     const std::vector<WorldPoint2D> outline = zoneOutlineWorld(baked, zone);
     if (outline.size() < 3) continue;
@@ -250,6 +256,50 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
   return nullptr;
 }
 
+// ---- Triggers (EDITOR_PARITY_FIXES.md gap 4) -------------------------------------------------
+//
+// Unlike zones, core bakes a trigger directly into a complete world-space gate frame
+// (tox::Trigger::center/right/up/fwd, halfWidth, height) -- js/editor.js's own triggerFrameXZ
+// re-derives the same thing client-side from the authored host, but core already did the
+// equivalent work at bake time, so this reuses it verbatim rather than re-deriving anything.
+
+ImU32 triggerColor(const tox::Trigger& trigger) {
+  if (trigger.type != "checkpoint") return kTriggerDummyColor;
+  return trigger.role == "finish" ? kTriggerFinishColor : kTriggerCheckpointColor;
+}
+
+void drawTriggers(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
+                  const std::optional<std::string>& selectedTriggerId) {
+  for (const auto& trigger : baked.triggers) {
+    const ImVec2 a = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x - trigger.right.x * trigger.halfWidth,
+                                                                 trigger.center.z - trigger.right.z * trigger.halfWidth));
+    const ImVec2 b = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x + trigger.right.x * trigger.halfWidth,
+                                                                 trigger.center.z + trigger.right.z * trigger.halfWidth));
+    const bool isSelected = selectedTriggerId.has_value() && *selectedTriggerId == trigger.id;
+    const ImU32 color = triggerColor(trigger);
+    drawList->AddLine(a, b, color, isSelected ? 4.0f : 2.5f);
+
+    const ImVec2 center = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x, trigger.center.z));
+    constexpr float kArrowLen = 14.0f;
+    auto drawArrow = [&](double sign) {
+      const double dx = trigger.fwd.x * sign, dz = trigger.fwd.z * sign;
+      const double len = std::hypot(dx, dz);
+      if (len <= 0.0) return;
+      const ImVec2 tip(center.x + static_cast<float>(dx / len * kArrowLen), center.y + static_cast<float>(dz / len * kArrowLen));
+      drawList->AddLine(center, tip, color, isSelected ? 4.0f : 2.5f);
+      const double angle = std::atan2(tip.y - center.y, tip.x - center.x);
+      const ImVec2 wing1(tip.x - static_cast<float>(std::cos(angle - 0.4) * 6.0), tip.y - static_cast<float>(std::sin(angle - 0.4) * 6.0));
+      const ImVec2 wing2(tip.x - static_cast<float>(std::cos(angle + 0.4) * 6.0), tip.y - static_cast<float>(std::sin(angle + 0.4) * 6.0));
+      drawList->AddTriangleFilled(tip, wing1, wing2, color);
+    };
+    if (trigger.direction == "both" || trigger.direction == "forward") drawArrow(1.0);
+    if (trigger.direction == "both" || trigger.direction == "backward") drawArrow(-1.0);
+
+    drawList->AddCircleFilled(a, isSelected ? 4.0f : 3.0f, color);
+    drawList->AddCircleFilled(b, isSelected ? 4.0f : 3.0f, color);
+  }
+}
+
 // Local-to-world for one mesh vertex, mirroring js/track-mesh.js's localToWorld and
 // TrackMesh.cpp's transform() exactly (rotation in degrees, CCW, local y -> world z). Needed only
 // for rail-edge picking/highlighting: core's baked MeshRegion carries just the rail SUBSET already
@@ -274,6 +324,19 @@ double distanceSqToSegment(double px, double pz, double ax, double az, double bx
   const double t = lengthSq > 0.0 ? std::clamp(((px - ax) * dx + (pz - az) * dz) / lengthSq, 0.0, 1.0) : 0.0;
   const double cx = ax + t * dx, cz = az + t * dz;
   return (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
+}
+
+// Topmost trigger under a world point within `tolWorld`, mirroring triggerAtTop's reverse
+// iteration (later-added triggers draw on top) and its distToScreenSegment-based 8px pick radius
+// (converted to world units by the caller, same convention as meshEdgeAtWorld's tolWorld).
+const tox::Trigger* triggerAtWorld(const tox::Track* baked, double worldX, double worldZ, double tolWorld) {
+  if (baked == nullptr) return nullptr;
+  for (auto it = baked->triggers.rbegin(); it != baked->triggers.rend(); ++it) {
+    const double ax = it->center.x - it->right.x * it->halfWidth, az = it->center.z - it->right.z * it->halfWidth;
+    const double bx = it->center.x + it->right.x * it->halfWidth, bz = it->center.z + it->right.z * it->halfWidth;
+    if (std::sqrt(distanceSqToSegment(worldX, worldZ, ax, az, bx, bz)) <= tolWorld) return &*it;
+  }
+  return nullptr;
 }
 
 struct MeshEdgeHit {
@@ -381,9 +444,18 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       if (zone != nullptr) {
         state.selectZone(zone->id);
       } else {
-        const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
-        if (region != nullptr) state.selectMesh(region->id);
-        else state.clearMeshSelection();
+        // Triggers: gate lines, picked alongside zones (before the big mesh regions) -- mirrors
+        // js/editor.js's mousedown ordering (zoneAtTop then triggerAtTop, both before meshAtWorld).
+        const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld);
+        if (trigger != nullptr) {
+          state.selectTrigger(trigger->id);
+        } else {
+          const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
+          if (region != nullptr)
+            state.selectMesh(region->id);
+          else
+            state.clearMeshSelection();
+        }
       }
     }
   }
@@ -436,8 +508,10 @@ bool handleRailsModeInput(EditorState& state, TopDownView& view, const ImVec2& m
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     const auto hit = meshEdgeAtWorld(state.track(), world.x, world.z, edgePickToleranceWorld);
-    if (hit.has_value()) mutated = state.toggleRailEdge(hit->meshId, hit->assetId, hit->edgeId);
-    else state.clearRailSelection();
+    if (hit.has_value())
+      mutated = state.toggleRailEdge(hit->meshId, hit->assetId, hit->edgeId);
+    else
+      state.clearRailSelection();
   }
   if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
   return mutated;
@@ -474,7 +548,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   view.computeView(bounds, canvasSize.x, canvasSize.y);
 
   ImGui::InvisibleButton("topDownCanvasInput", canvasSize,
-                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
   const bool hovered = ImGui::IsItemHovered();
   const bool windowFocused = ImGui::IsWindowFocused();
   const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
@@ -493,9 +567,14 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
-        if (state.selection().valid()) mutated = state.deleteSelectedPoint() || mutated;
-        else if (state.selectedMeshId().has_value()) mutated = state.deleteSelectedMesh() || mutated;
-        else if (state.selectedZoneId().has_value()) mutated = state.deleteSelectedZone() || mutated;
+        if (state.selection().valid())
+          mutated = state.deleteSelectedPoint() || mutated;
+        else if (state.selectedMeshId().has_value())
+          mutated = state.deleteSelectedMesh() || mutated;
+        else if (state.selectedZoneId().has_value())
+          mutated = state.deleteSelectedZone() || mutated;
+        else if (state.selectedTriggerId().has_value())
+          mutated = state.deleteSelectedTrigger() || mutated;
       }
       // Minimal right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9): a right-*click* (no
       // drag) opens it instead of panning; a real drag still pans, since ResetMouseDragDelta below
@@ -540,6 +619,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
     drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId());
+    drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId());
   }
   drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());

@@ -60,6 +60,7 @@
 #include "TexturePanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
+#include "TriggersPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
@@ -101,9 +102,18 @@ editor::TrackDefinition buildStarterTrack() {
   path.id = "starter-path";
   path.closed = true;
   const double positions[12][3] = {
-      {1332.907, 0, 0},        {1154.331, 0, 666.453},   {666.453, 0, 1154.331},   {0, 0, 1332.907},
-      {-666.453, 0, 1154.331}, {-1154.331, 0, 666.453},  {-1332.907, 0, 0},        {-1154.331, 0, -666.453},
-      {-666.453, 0, -1154.331}, {0, 0, -1332.907},       {666.453, 0, -1154.331},  {1154.331, 0, -666.453},
+      {1332.907, 0, 0},
+      {1154.331, 0, 666.453},
+      {666.453, 0, 1154.331},
+      {0, 0, 1332.907},
+      {-666.453, 0, 1154.331},
+      {-1154.331, 0, 666.453},
+      {-1332.907, 0, 0},
+      {-1154.331, 0, -666.453},
+      {-666.453, 0, -1154.331},
+      {0, 0, -1332.907},
+      {666.453, 0, -1154.331},
+      {1154.331, 0, -666.453},
   };
   for (const auto& p : positions) {
     editor::TrackPoint point;
@@ -651,7 +661,7 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
     const auto& centerline = baked.track->paths[0].centerline;
     const std::size_t nearT = static_cast<std::size_t>(0.1 * static_cast<double>(centerline.size() - 1));
     result.bakedRollApplied = std::abs(centerline[nearT].edgeRight.y) > 0.05;  // banked, not flat
-    result.bakedWidthApplied = centerline[nearT].halfW > 20.0;                // wider than the default 18 (36/2)
+    result.bakedWidthApplied = centerline[nearT].halfW > 20.0;                 // wider than the default 18 (36/2)
   }
 
   const std::size_t countBefore = state.track().paths[0].points.size();
@@ -730,10 +740,10 @@ Gap3SmokeCheckResult runGap3SmokeCheck() {
   }
 
   result.edited = state.editZone(*zoneId, [](editor::Zone& zone) {
-                    zone.width = 99.0;
-                    zone.factor = 3.0;
-                  }) &&
-                  state.track().zones[0].width == 99.0 && state.track().zones[0].factor == 3.0;
+    zone.width = 99.0;
+    zone.factor = 3.0;
+  }) && state.track().zones[0].width == 99.0 &&
+                  state.track().zones[0].factor == 3.0;
 
   const auto startGridId = state.addPathZone(0, "startGrid", 0.5, 0.0);
   result.startGridAdded = startGridId.has_value();
@@ -742,6 +752,65 @@ Gap3SmokeCheckResult runGap3SmokeCheck() {
 
   const std::size_t countBefore = state.track().zones.size();
   result.deleted = state.deleteSelectedZone() && state.track().zones.size() == countBefore - 1;
+
+  return result;
+}
+
+// Gap-4 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #4): add a path-hosted checkpoint
+// trigger, confirm core's own bake compiles a real world-space gate frame (not just schema
+// plumbing), edit its fields, promote a second checkpoint to Finish and confirm the first is
+// demoted (at-most-one-finish invariant), confirm a Finish trigger can't be deleted, then confirm
+// deletion succeeds once it's no longer Finish.
+struct Gap4SmokeCheckResult {
+  bool added = false, selected = false;
+  bool bakedAsGate = false;
+  bool edited = false;
+  bool secondCheckpointAdded = false, finishUniqueAfterPromotion = false;
+  bool deleteBlockedWhileFinish = false, deletedAfterDemotion = false;
+};
+
+Gap4SmokeCheckResult runGap4SmokeCheck() {
+  Gap4SmokeCheckResult result;
+
+  // buildStarterTrack() already seeds four checkpoint triggers (mirroring track-core.js's
+  // STARTER_TRACK, one of them "finish"), so every check below must match by id, never by index.
+  editor::EditorState state(buildStarterTrack());
+  const auto triggerId = state.addPathTrigger(0, "checkpoint", 0.25);
+  result.added = triggerId.has_value();
+  result.selected = state.selectedTriggerId().has_value() && *state.selectedTriggerId() == *triggerId;
+
+  tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  if (baked) {
+    const auto it = std::find_if(baked.track->triggers.begin(), baked.track->triggers.end(),
+                                 [&](const tox::Trigger& t) { return t.id == *triggerId; });
+    result.bakedAsGate = it != baked.track->triggers.end() && it->type == "checkpoint" && it->halfWidth > 0.0;
+  }
+
+  result.edited = state.editTrigger(*triggerId, [](editor::Trigger& trigger) {
+    trigger.width = 77.0;
+    trigger.direction = "forward";
+  }) && [&] {
+    const editor::Trigger* t = state.findTrigger(*triggerId);
+    return t != nullptr && t->width == 77.0 && t->direction == "forward";
+  }();
+
+  const auto secondId = state.addPathTrigger(0, "checkpoint", 0.5);
+  result.secondCheckpointAdded = secondId.has_value();
+  result.deleteBlockedWhileFinish =
+      state.editTrigger(*secondId, [](editor::Trigger& trigger) { trigger.role = "finish"; }) && !state.deleteSelectedTrigger();
+
+  // *triggerId (added first) started with the schema-default "intermediate" role and was never
+  // promoted, so promoting *secondId to finish should have left it alone -- only a *pre-existing*
+  // finish would need demoting. Verify that invariant by promoting *triggerId to finish too and
+  // confirming *secondId is demoted back to intermediate.
+  state.selectTrigger(*triggerId);
+  state.editTrigger(*triggerId, [](editor::Trigger& trigger) { trigger.role = "finish"; });
+  const editor::Trigger* second = state.findTrigger(*secondId);
+  result.finishUniqueAfterPromotion = second != nullptr && second->role == "intermediate";
+
+  state.editTrigger(*triggerId, [](editor::Trigger& trigger) { trigger.role = "intermediate"; });
+  state.selectTrigger(*triggerId);
+  result.deletedAfterDemotion = state.deleteSelectedTrigger();
 
   return result;
 }
@@ -767,7 +836,7 @@ int main(int, char**) {
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
       SDL_CreateWindow("track_editor (M10: texture file picker)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
-                        windowFlags);
+                       windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
     SDL_Quit();
@@ -897,6 +966,16 @@ int main(int, char**) {
                gap3Smoke.deleted ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap4SmokeCheckResult gap4Smoke = runGap4SmokeCheck();
+  std::fprintf(stdout,
+               "Gap4 smoke check (triggers): add=%s select=%s bakedAsGate=%s edit=%s secondCheckpoint=%s finishUnique=%s "
+               "deleteBlocked=%s deleteAfterDemotion=%s\n",
+               gap4Smoke.added ? "OK" : "MISMATCH", gap4Smoke.selected ? "OK" : "MISMATCH", gap4Smoke.bakedAsGate ? "OK" : "MISMATCH",
+               gap4Smoke.edited ? "OK" : "MISMATCH", gap4Smoke.secondCheckpointAdded ? "OK" : "MISMATCH",
+               gap4Smoke.finishUniqueAfterPromotion ? "OK" : "MISMATCH", gap4Smoke.deleteBlockedWhileFinish ? "OK" : "MISMATCH",
+               gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -950,75 +1029,82 @@ int main(int, char**) {
     ImGui::BulletText("JSON round-trip (toJson . fromJson . toJson idempotent): %s", smoke.roundTripOk ? "OK" : "MISMATCH");
     if (smoke.bakeOk) {
       ImGui::BulletText("tox::Track::fromJson bake: OK (%zu path(s), %zu geometry batch(es), %zu warning(s))", smoke.pathCount,
-                         smoke.geometryBatchCount, smoke.warningCount);
+                        smoke.geometryBatchCount, smoke.warningCount);
     } else {
       ImGui::BulletText("tox::Track::fromJson bake: FAILED (%s)", smoke.bakeError.c_str());
     }
     ImGui::BulletText("EditorHistory undo/redo round trip: %s", smoke.undoRedoOk ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M3 smoke check (EditorState logic, exercised directly):");
     ImGui::BulletText("drag moves point / undo restores / redo reapplies: %s / %s / %s", m3Smoke.dragMovedPoint ? "OK" : "MISMATCH",
-                       m3Smoke.dragUndoRestored ? "OK" : "MISMATCH", m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH");
+                      m3Smoke.dragUndoRestored ? "OK" : "MISMATCH", m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH");
     ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
-                       m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
+                      m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
     ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M4 smoke check (mesh placement, exercised directly):");
     ImGui::BulletText("place / drag / rotate: %s / %s / %s", m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH",
-                       m4Smoke.rotateApplied ? "OK" : "MISMATCH");
+                      m4Smoke.rotateApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
-                       m4Smoke.deleted ? "OK" : "MISMATCH");
+                      m4Smoke.deleted ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M5 smoke check (rail-edge toggle, exercised directly):");
     ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
-                       m5Smoke.selectionSet ? "OK" : "MISMATCH");
+                      m5Smoke.selectionSet ? "OK" : "MISMATCH");
     ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
     ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
-                       m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
+                      m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M7a smoke check (random-track bake + USD export, exercised directly):");
     ImGui::BulletText("random track bakes: %s (%zu path(s), %zu geometry batch(es))", m7aSmoke.randomBakeOk ? "OK" : "FAILED",
-                       m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
+                      m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
     ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
-                       m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
+                      m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
     ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
     ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
-                       m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
+                      m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
     ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
-                       m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
-                       m7bSmoke.deleted ? "OK" : "MISMATCH");
+                      m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
+                      m7bSmoke.deleted ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M7c smoke check (mesh-section random-track generation, exercised directly):");
     ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
-                       m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
-                       m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
+                      m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
+                      m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
     ImGui::TextUnformatted("M9 smoke check (mesh JSON import, exercised directly):");
     ImGui::BulletText("parse / import / rails boundary by default: %s / %s / %s", m9Smoke.parsedFromJson ? "OK" : "MISMATCH",
-                       m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
+                      m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
     ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
-                       m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
+                      m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Parity-fix smoke check (EDITOR_PARITY_FIXES.md findings 1/4/5, exercised directly):");
     ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
-                       paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
+                      paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
     ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
-                       paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
+                      paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
     ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap1 smoke check (roll/width/crossSection point editing, exercised directly):");
     ImGui::BulletText("add roll/width/crossSection / edit fields / delete: %s/%s/%s / %s / %s", gap1Smoke.rollAdded ? "OK" : "MISMATCH",
-                       gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",
-                       gap1Smoke.fieldsEdited ? "OK" : "MISMATCH", gap1Smoke.deleted ? "OK" : "MISMATCH");
+                      gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",
+                      gap1Smoke.fieldsEdited ? "OK" : "MISMATCH", gap1Smoke.deleted ? "OK" : "MISMATCH");
     ImGui::BulletText("baked roll/width reflect the edit: %s / %s", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
-                       gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
+                      gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
-                       gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+                      gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
     ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
-                       gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
+                      gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
     ImGui::BulletText("empty name stays live in memory / falls back only on serialize: %s / %s",
-                       gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
+                      gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap3 smoke check (zones, exercised directly):");
     ImGui::BulletText("add / select / baked as path zone / baked factor default: %s / %s / %s / %s", gap3Smoke.added ? "OK" : "MISMATCH",
-                       gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
-                       gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH");
+                      gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
+                      gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("edit fields / add start-grid zone / bakes with both / delete: %s / %s / %s / %s", gap3Smoke.edited ? "OK" : "MISMATCH",
-                       gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
-                       gap3Smoke.deleted ? "OK" : "MISMATCH");
+                      gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
+                      gap3Smoke.deleted ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap4 smoke check (triggers, exercised directly):");
+    ImGui::BulletText("add / select / baked as gate / edit fields: %s / %s / %s / %s", gap4Smoke.added ? "OK" : "MISMATCH",
+                      gap4Smoke.selected ? "OK" : "MISMATCH", gap4Smoke.bakedAsGate ? "OK" : "MISMATCH",
+                      gap4Smoke.edited ? "OK" : "MISMATCH");
+    ImGui::BulletText("second checkpoint / finish stays unique / delete blocked while finish / delete after demotion: %s / %s / %s / %s",
+                      gap4Smoke.secondCheckpointAdded ? "OK" : "MISMATCH", gap4Smoke.finishUniqueAfterPromotion ? "OK" : "MISMATCH",
+                      gap4Smoke.deleteBlockedWhileFinish ? "OK" : "MISMATCH", gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1061,7 +1147,7 @@ int main(int, char**) {
     if (ImGui::Button("Export JSON...")) {
       const editor::FileDialogResult picked =
           editor::showSaveFileDialog(L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}},
-                                      toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
+                                     toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
       if (picked.ok) {
         // toFile() throws when the stream won't open (read-only target, locked file, removed
         // drive) -- uncaught here it took the whole process down and the user's unsaved track
@@ -1120,8 +1206,10 @@ int main(int, char**) {
           std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
           const editor::WorldPoint2D center = topDownView.center();
           const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
-          if (error) fileIoStatus = "Mesh import failed: " + *error;
-          else rebake();
+          if (error)
+            fileIoStatus = "Mesh import failed: " + *error;
+          else
+            rebake();
         }
       }
     }
@@ -1132,8 +1220,10 @@ int main(int, char**) {
       // importMeshFromClipboard's own `at = {x:0,z:0}` default when called without centreOn.
       if (const auto text = editor::readClipboardText()) {
         const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
-        if (error) fileIoStatus = "Clipboard does not contain a mesh: " + *error;
-        else rebake();
+        if (error)
+          fileIoStatus = "Clipboard does not contain a mesh: " + *error;
+        else
+          rebake();
       } else {
         fileIoStatus = "Could not read the clipboard";
       }
@@ -1157,7 +1247,7 @@ int main(int, char**) {
       if (bakedTrack != nullptr) {
         const editor::FileDialogResult picked =
             editor::showSaveFileDialog(L"Export USD", {{L"USD ASCII (*.usda)", L"*.usda"}},
-                                        toWide(sanitizeFilenameStem(editorState.track().name) + ".usda"), L"usda");
+                                       toWide(sanitizeFilenameStem(editorState.track().name) + ".usda"), L"usda");
         if (picked.ok) {
           const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
           std::ofstream out(picked.path, std::ios::binary);
@@ -1227,6 +1317,11 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("Zones");
     if (editor::DrawZonesPanel(editorState, currentPathIndex)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Triggers");
+    if (editor::DrawTriggersPanel(editorState, currentPathIndex)) rebake();
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
