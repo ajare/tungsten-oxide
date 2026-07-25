@@ -462,7 +462,44 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    snap-only-when-shown-and-enabled, hidden-grid-disables-snap, grid-size respect, and that a
    Create-mode click both snaps a new point and still closes the draft off the raw (unsnapped) hit
    test.
-10. **Render modes** (banked / flat / elevation), point-type filters, physics-sample overlay.
+10. ~~**Render modes** (banked / flat / elevation), point-type filters, physics-sample
+    overlay.~~ **Implemented (point filters: Position only has an on-canvas effect).**
+    `TopDownView` gained `RenderMode`/point-filter/physics-overlay state, mirroring
+    editor.js's module-level `renderMode`/`pointFilters`/`showPhysicsPoints`/`physicsSel` -- view/
+    UI preferences, not track data, same category as gap 9's grid/snap. **Render modes:**
+    `TopDownCanvas.cpp`'s `drawBakedPath` now branches on mode: Banked (default, unchanged)
+    offsets edges by each frame's baked `edgeRight` with a flat fill color; Flat/Elevation instead
+    offset by the frame's UNROLLED `h` axis (a direct field on `tox::Frame`, already baked --
+    mirrors `buildFlatEdges`, "the track's plan-view footprint without banking distorting the
+    top-down shape") and fill each segment by interpolated roll or elevation
+    (`rollFillColor`/`elevationFillColor`, ported 1:1 from `rollColor`/`elevationColor`,
+    `js/editor.js:774-787`); Elevation's min/max is computed across every path's baked centerline
+    once per frame, mirroring `drawTop`'s `allY = pathPreviews.flatMap(p => p.yAt)`. **Point-type
+    filters:** all four checkboxes exist (`showPositionPoints`/`showRollPoints`/`showWidthPoints`/
+    `showCrossSectionPoints`), but only Position has an observable effect -- roll/width/
+    crossSection points have no on-canvas presence at all yet in this editor (gap 1: panel-only),
+    so hiding/showing them here is a no-op until that on-canvas rendering exists; the other three
+    checkboxes are wired for UI parity, not silently dropped. Position's filter gates both
+    rendering (`drawAuthoredPositionPoints`) and click-to-select. **Physics-sample overlay:** a
+    new `drawPhysicsPoints`/`physicsPointAtWorld` (`TopDownCanvas.cpp`) render/pick the baked
+    centerline as small orange dots, selected one highlighted pink with a white ring, picked after
+    authored control points but before zones/triggers/mesh regions -- mirrors
+    `physicsPointAtTop`'s placement in `editor.js`'s mousedown handler exactly. Selecting one
+    clears every other selection (mirrors `physicsSel`'s reset block); a new read-only
+    "Physics sample" section in `PropertiesPanel.cpp` (`drawPhysicsSampleInfo`) takes over the
+    whole panel body when active, mirroring `renderProps()`'s `if (physicsSel)` branch field-for-
+    field (t, position, tangent, roll, width, half-width, edge-right, normal, left/right edge).
+    **One accepted divergence:** JS specifically re-samples at `TrackCore.N_DEFAULT` (its own fixed
+    editor-preview constant), not the adaptive-by-length count the real game runtime uses; this
+    instead shows the track's *actual* baked centerline (core's own adaptive sampling) -- the true
+    physics samples the current native bake produced, arguably more useful for a physics-debug
+    overlay than a separately forced fixed count, and needs no new bake path. A "Gap10 smoke
+    check" in `main.cpp` covers `TopDownView`'s new state directly (default render mode, round-
+    tripping a mode change, filter defaults/toggling, physics-overlay show/hide and selection,
+    hiding clearing the selection); the render-mode fill-color formulas and
+    `physicsPointAtWorld`/`drawPhysicsSampleInfo` are ImGui-adjacent glue with no headless entry
+    point, verified by inspection against JS -- same tradeoff already taken for gap 8's
+    `sanitize()` and gap 13's `nearestPathPlacement()`.
 11. ~~**Segment selection, deletion and splitting; insert-point-on-segment.**~~ **Implemented
     (selection derived from the current point selection, not click-to-select; Position context-
     menu item completed).** New `EditorState::deleteSegmentAt`/`deleteSelectedSegment`/

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <numbers>
 
 #include "imgui.h"
 
@@ -114,9 +115,47 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
     });
 }
 
+// Read-only physics-sample info (EDITOR_PARITY_FIXES.md gap 10), mirroring renderProps()'s
+// `if (physicsSel)` branch exactly: these are baked frames, not authored state, so there's
+// nothing here to edit -- just the exact values physics consumes. Returns true if a selection was
+// shown (caller should skip the normal point-fields body), matching JS's early-return precedence.
+bool drawPhysicsSampleInfo(const TopDownView& view, const tox::Track* baked) {
+  const auto& sel = view.physicsSelection();
+  if (!sel.has_value() || baked == nullptr || sel->pathIndex < 0 || sel->pathIndex >= static_cast<int>(baked->paths.size())) return false;
+  const tox::Path& path = baked->paths[sel->pathIndex];
+  if (sel->frameIndex < 0 || sel->frameIndex >= static_cast<int>(path.centerline.size())) return false;
+  const tox::Frame& frame = path.centerline[sel->frameIndex];
+  const int n = static_cast<int>(path.centerline.size());
+  const double t = path.closed ? static_cast<double>(sel->frameIndex) / n : (n > 1 ? static_cast<double>(sel->frameIndex) / (n - 1) : 0.0);
+
+  char header[64];
+  std::snprintf(header, sizeof(header), "Physics sample %d.%d", sel->pathIndex, sel->frameIndex);
+  ImGui::TextColored(ImVec4(1.0f, 0.61f, 0.24f, 1.0f), "%s", header);
+  ImGui::TextDisabled("baked frame %d of %d - %s path", sel->frameIndex + 1, n, path.closed ? "closed" : "open");
+
+  const auto v3Row = [](const char* label, const tox::Vec3& v) {
+    ImGui::Text("%s: %.3f, %.3f, %.3f", label, v.x, v.y, v.z);
+  };
+  ImGui::Text("t (param): %.4f", t);
+  v3Row("Position", frame.pos);
+  v3Row("Tangent", frame.tangent);
+  ImGui::Text("Roll deg: %.2f", frame.roll * 180.0 / std::numbers::pi);
+  ImGui::Text("Width: %.3f", frame.width);
+  ImGui::Text("Half width: %.3f", frame.halfW);
+  v3Row("Edge right", frame.edgeRight);
+  v3Row("Normal", frame.normal);
+  const tox::Vec3 left = frame.pos.clone().addScaledVector(frame.edgeRight, -frame.halfW);
+  const tox::Vec3 right = frame.pos.clone().addScaledVector(frame.edgeRight, frame.halfW);
+  v3Row("Left edge", left);
+  v3Row("Right edge", right);
+  return true;
+}
+
 }  // namespace
 
-bool DrawPropertiesPanel(EditorState& state, int currentPathIndex) {
+bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDownView& view, const tox::Track* baked) {
+  if (drawPhysicsSampleInfo(view, baked)) return false;
+
   bool mutated = false;
   const SelectedPoint sel = state.selection();
   const bool selectionValid = sel.valid() && sel.pathIndex < static_cast<int>(state.track().paths.size()) &&

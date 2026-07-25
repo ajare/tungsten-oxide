@@ -29,6 +29,11 @@ const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
 const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
+
+// Matches editor.js's physics-sample dot colors (js/editor.js:1095: '#ff9c3c' idle, '#ff5ea8'
+// selected).
+const ImU32 kPhysicsPointColor = IM_COL32(255, 156, 60, 255);
+const ImU32 kPhysicsSelectedColor = IM_COL32(255, 94, 168, 255);
 constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_PX
 
 // Matches editor.js's ZONE_FILL/ZONE_STROKE (js/editor.js:4209-4210) minus the startGrid checker
@@ -74,6 +79,22 @@ ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ScreenPoint2D& local) {
   return ImVec2(canvasOrigin.x + static_cast<float>(local.x), canvasOrigin.y + static_cast<float>(local.y));
 }
 
+// Road-fill color formulas for Flat/Elevation render modes (EDITOR_PARITY_FIXES.md gap 10),
+// ported 1:1 from js/editor.js's rollColor/elevationColor (js/editor.js:774-787).
+ImU32 rollFillColor(double rollDeg) {
+  const double t = std::clamp(std::abs(rollDeg) / 180.0, 0.0, 1.0);
+  const int r = static_cast<int>(std::lround(40.0 + (210.0 - 40.0) * t));
+  const int g = static_cast<int>(std::lround(190.0 + (50.0 - 190.0) * t));
+  return IM_COL32(r, g, 55, 255);
+}
+ImU32 elevationFillColor(double y, double minY, double maxY) {
+  const double span = (maxY - minY) != 0.0 ? (maxY - minY) : 1.0;
+  const double t = std::clamp((y - minY) / span, 0.0, 1.0);
+  const int r = static_cast<int>(std::lround(40.0 + (220.0 - 40.0) * t));
+  const int g = static_cast<int>(std::lround(210.0 + (55.0 - 210.0) * t));
+  return IM_COL32(r, g, 55, 255);
+}
+
 // Configurable top-down reference grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
 // drawTop() grid block: gated on view.showGrid(), spaced at view.gridSize() world units, skipped
 // once screen spacing drops below drawTop's own `step > 6` threshold rather than smearing into a
@@ -99,28 +120,43 @@ void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& ca
   }
 }
 
-void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Path& path) {
+// `mode` mirrors editor.js's renderMode (EDITOR_PARITY_FIXES.md gap 10): Banked (default) offsets
+// edges by each frame's baked, banked `edgeRight` and fills with a flat color, matching
+// TrackCore.buildEdges + drawTop's non-flat ribbon fill. Flat/Elevation instead offset by the
+// UNROLLED `h` axis (mirrors buildFlatEdges -- "the track's plan-view footprint (width only)
+// without banking distorting the top-down shape") and fill each segment by interpolated roll or
+// elevation (rollFillColor/elevationFillColor) instead of a flat color. `minElev`/`maxElev` are
+// ignored outside Elevation mode.
+void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Path& path,
+                   TopDownView::RenderMode mode, double minElev, double maxElev) {
   const std::size_t n = path.centerline.size();
   if (n < 2) return;
+  const bool flatEdges = mode != TopDownView::RenderMode::Banked;
 
-  // Road band: one filled quad per centerline segment, using each frame's baked edgeRight/halfW
-  // (flat, ignoring cross-section banking -- a top-down view has no elevation axis anyway).
   const std::size_t segmentCount = path.closed ? n : n - 1;
   for (std::size_t i = 0; i < segmentCount; ++i) {
     const std::size_t j = (i + 1) % n;
     const tox::Frame& fi = path.centerline[i];
     const tox::Frame& fj = path.centerline[j];
-    const tox::Vec3 leftI = fi.pos.clone().addScaledVector(fi.edgeRight, -fi.halfW);
-    const tox::Vec3 rightI = fi.pos.clone().addScaledVector(fi.edgeRight, fi.halfW);
-    const tox::Vec3 leftJ = fj.pos.clone().addScaledVector(fj.edgeRight, -fj.halfW);
-    const tox::Vec3 rightJ = fj.pos.clone().addScaledVector(fj.edgeRight, fj.halfW);
+    const tox::Vec3& axisI = flatEdges ? fi.h : fi.edgeRight;
+    const tox::Vec3& axisJ = flatEdges ? fj.h : fj.edgeRight;
+    const tox::Vec3 leftI = fi.pos.clone().addScaledVector(axisI, -fi.halfW);
+    const tox::Vec3 rightI = fi.pos.clone().addScaledVector(axisI, fi.halfW);
+    const tox::Vec3 leftJ = fj.pos.clone().addScaledVector(axisJ, -fj.halfW);
+    const tox::Vec3 rightJ = fj.pos.clone().addScaledVector(axisJ, fj.halfW);
     const ImVec2 quad[4] = {
         toAbsolute(canvasOrigin, view.worldToScreen(leftI.x, leftI.z)),
         toAbsolute(canvasOrigin, view.worldToScreen(leftJ.x, leftJ.z)),
         toAbsolute(canvasOrigin, view.worldToScreen(rightJ.x, rightJ.z)),
         toAbsolute(canvasOrigin, view.worldToScreen(rightI.x, rightI.z)),
     };
-    drawList->AddConvexPolyFilled(quad, 4, kRoadColor);
+    ImU32 fillColor = kRoadColor;
+    if (mode == TopDownView::RenderMode::Flat) {
+      fillColor = rollFillColor((fi.roll + fj.roll) * 0.5 * 180.0 / std::numbers::pi);
+    } else if (mode == TopDownView::RenderMode::Elevation) {
+      fillColor = elevationFillColor((fi.pos.y + fj.pos.y) * 0.5, minElev, maxElev);
+    }
+    drawList->AddConvexPolyFilled(quad, 4, fillColor);
   }
 
   std::vector<ImVec2> centerline;
@@ -298,6 +334,51 @@ std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked
   const double t = path.closed ? static_cast<double>(bestIndex) / n : static_cast<double>(bestIndex) / std::max(1, n - 1);
   const double lateral = (worldX - frame.pos.x) * frame.edgeRight.x + (worldZ - frame.pos.z) * frame.edgeRight.z;
   return NearestPathPlacement{bestPath, t, lateral, &frame};
+}
+
+// ---- Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10) ----------------------------------
+//
+// A read-only debug overlay showing the baked centerline frames physics actually reads: one dot
+// per tox::Path::centerline entry, selectable for inspection only (no drag). Mirrors editor.js's
+// showPhysicsPoints/physicsSel/drawTop's dot loop. One accepted divergence: JS specifically
+// re-samples at TrackCore.N_DEFAULT (its own fixed preview constant), not the adaptive count the
+// real game runtime uses; this instead shows the track's *actual* baked centerline (core's own
+// adaptive-by-length sampling, see CLAUDE.md's "Game conventions") -- the true physics samples the
+// current native bake produced, which is arguably more useful for a physics-debug overlay than a
+// separately-forced fixed count, and needs no extra bake path.
+
+// Nearest baked centerline frame (across all paths) to a world point, within `pickRadiusWorld` --
+// mirrors physicsPointAtTop's small-threshold nearest-dot search.
+std::optional<TopDownView::PhysicsSampleRef> physicsPointAtWorld(const tox::Track* baked, double worldX, double worldZ,
+                                                                  double pickRadiusWorld) {
+  if (baked == nullptr) return std::nullopt;
+  std::optional<TopDownView::PhysicsSampleRef> best;
+  double bestDistSq = pickRadiusWorld * pickRadiusWorld;
+  for (int pi = 0; pi < static_cast<int>(baked->paths.size()); ++pi) {
+    const auto& centerline = baked->paths[pi].centerline;
+    for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
+      const double dx = centerline[i].pos.x - worldX, dz = centerline[i].pos.z - worldZ;
+      const double distSq = dx * dx + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = TopDownView::PhysicsSampleRef{pi, i};
+      }
+    }
+  }
+  return best;
+}
+
+void drawPhysicsPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked) {
+  const auto& sel = view.physicsSelection();
+  for (int pi = 0; pi < static_cast<int>(baked.paths.size()); ++pi) {
+    const auto& centerline = baked.paths[pi].centerline;
+    for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
+      const bool isSelected = sel.has_value() && sel->pathIndex == pi && sel->frameIndex == i;
+      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(centerline[i].pos.x, centerline[i].pos.z));
+      drawList->AddCircleFilled(screen, isSelected ? 5.0f : 2.2f, isSelected ? kPhysicsSelectedColor : kPhysicsPointColor);
+      if (isSelected) drawList->AddCircle(screen, 5.0f, IM_COL32(255, 255, 255, 255), 0, 2.0f);
+    }
+  }
 }
 
 // ---- Triggers (EDITOR_PARITY_FIXES.md gap 4) -------------------------------------------------
@@ -480,25 +561,43 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   bool mutated = false;
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    if (!state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
-      // Zones checked before mesh regions: a zone is usually the smaller, more specific thing
-      // drawn on top of a region it sits on (a boost pad on a mesh plaza, say), so it should win a
-      // click over the region beneath it.
-      const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z);
-      if (zone != nullptr) {
-        state.selectZone(zone->id);
+    const bool hitPosition = view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld);
+    if (hitPosition) {
+      view.clearPhysicsSelection();
+    } else {
+      // Physics sample points (debug overlay, EDITOR_PARITY_FIXES.md gap 10): picked after
+      // authored control points so editing is never obstructed, but before zones/triggers/mesh
+      // regions -- mirrors physicsPointAtTop's placement in editor.js's mousedown handler.
+      // Read-only: selecting one just shows its baked values, no drag.
+      const auto physicsHit = view.showPhysicsPoints() ? physicsPointAtWorld(baked, world.x, world.z, kPickRadiusPx / view.scale()) : std::nullopt;
+      if (physicsHit.has_value()) {
+        view.selectPhysicsSample(physicsHit->pathIndex, physicsHit->frameIndex);
+        state.clearSelection();
+        state.clearMeshSelection();
+        state.clearZoneSelection();
+        state.clearTriggerSelection();
       } else {
-        // Triggers: gate lines, picked alongside zones (before the big mesh regions) -- mirrors
-        // js/editor.js's mousedown ordering (zoneAtTop then triggerAtTop, both before meshAtWorld).
-        const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld);
-        if (trigger != nullptr) {
-          state.selectTrigger(trigger->id);
+        view.clearPhysicsSelection();
+        // Zones checked before mesh regions: a zone is usually the smaller, more specific thing
+        // drawn on top of a region it sits on (a boost pad on a mesh plaza, say), so it should win
+        // a click over the region beneath it.
+        const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z);
+        if (zone != nullptr) {
+          state.selectZone(zone->id);
         } else {
-          const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
-          if (region != nullptr)
-            state.selectMesh(region->id);
-          else
-            state.clearMeshSelection();
+          // Triggers: gate lines, picked alongside zones (before the big mesh regions) -- mirrors
+          // js/editor.js's mousedown ordering (zoneAtTop then triggerAtTop, both before
+          // meshAtWorld).
+          const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld);
+          if (trigger != nullptr) {
+            state.selectTrigger(trigger->id);
+          } else {
+            const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
+            if (region != nullptr)
+              state.selectMesh(region->id);
+            else
+              state.clearMeshSelection();
+          }
         }
       }
     }
@@ -747,13 +846,25 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   drawList->AddRectFilled(canvasOrigin, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), kBackgroundColor);
   drawGrid(drawList, canvasOrigin, canvasSize, view);
   if (baked != nullptr) {
-    for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
+    // Elevation render mode colors each segment by its position in the FULL track's elevation
+    // range (every path, not just the one being drawn) -- mirrors drawTop's `allY =
+    // pathPreviews.flatMap(p => p.yAt)` computed once before the per-path draw loop.
+    double minElev = std::numeric_limits<double>::infinity(), maxElev = -std::numeric_limits<double>::infinity();
+    if (view.renderMode() == TopDownView::RenderMode::Elevation) {
+      for (const auto& path : baked->paths)
+        for (const auto& frame : path.centerline) {
+          minElev = std::min(minElev, frame.pos.y);
+          maxElev = std::max(maxElev, frame.pos.y);
+        }
+    }
+    for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path, view.renderMode(), minElev, maxElev);
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
     drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId());
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId());
+    if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
   }
   drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
-  drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
+  if (view.showPositionPoints()) drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
   ImGui::EndChild();

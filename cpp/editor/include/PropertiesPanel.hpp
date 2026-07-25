@@ -6,12 +6,18 @@
 #pragma once
 
 #include "EditorState.hpp"
+#include "Track.hpp"
+#include "TopDownView.hpp"
 
 namespace editor {
 
 // `currentPathIndex` is where a freshly Added roll/width/crossSection point lands -- mirrors
 // currentCurve()'s role elsewhere (TexturePanel.cpp, main.cpp): the selected point's path, or the
-// first path if nothing's selected. Returns true if the track was mutated (caller should rebake).
-bool DrawPropertiesPanel(EditorState& state, int currentPathIndex);
+// first path if nothing's selected. `view`/`baked` back the read-only physics-sample info section
+// (EDITOR_PARITY_FIXES.md gap 10, mirrors renderProps()'s `if (physicsSel)` branch): when a
+// physics sample is selected, it takes over the whole panel body, same as JS. Returns true if the
+// track was mutated (caller should rebake) -- always false while a physics sample is shown, since
+// that section is read-only.
+bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDownView& view, const tox::Track* baked);
 
 }  // namespace editor

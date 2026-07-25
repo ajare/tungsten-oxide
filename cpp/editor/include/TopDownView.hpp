@@ -110,6 +110,44 @@ class TopDownView {
     return {std::round(w.x / gridSize_) * gridSize_, std::round(w.z / gridSize_) * gridSize_};
   }
 
+  // Render mode / point-type filters / physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10),
+  // mirroring editor.js's module-level renderMode/pointFilters/showPhysicsPoints/physicsSel: all
+  // view/UI preferences, not track data, so -- like grid/snap above -- they live here rather than
+  // in EditorState/undo history.
+  enum class RenderMode { Banked, Flat, Elevation };
+
+  RenderMode renderMode() const { return renderMode_; }
+  void setRenderMode(RenderMode mode) { renderMode_ = mode; }
+
+  // Only `showPositionPoints` currently has an observable effect: roll/width/crossSection points
+  // have no on-canvas presence at all yet in this editor (EDITOR_PARITY_FIXES.md gap 1 -- they're
+  // panel-only), so hiding/showing them here is a no-op until that on-canvas rendering exists.
+  // The fields and accessors still exist so the toolbar checkboxes match editor.html's four,
+  // rather than silently dropping three of them.
+  bool showPositionPoints() const { return showPositionPoints_; }
+  void setShowPositionPoints(bool show) { showPositionPoints_ = show; }
+  bool showRollPoints() const { return showRollPoints_; }
+  void setShowRollPoints(bool show) { showRollPoints_ = show; }
+  bool showWidthPoints() const { return showWidthPoints_; }
+  void setShowWidthPoints(bool show) { showWidthPoints_ = show; }
+  bool showCrossSectionPoints() const { return showCrossSectionPoints_; }
+  void setShowCrossSectionPoints(bool show) { showCrossSectionPoints_ = show; }
+
+  struct PhysicsSampleRef {
+    int pathIndex, frameIndex;
+  };
+
+  bool showPhysicsPoints() const { return showPhysicsPoints_; }
+  // Mirrors setPhysicsPointsVisible: hiding the overlay also drops any active selection, since a
+  // hidden dot can't stay "selected" in any way the user can see.
+  void setShowPhysicsPoints(bool show) {
+    showPhysicsPoints_ = show;
+    if (!show) physicsSelection_.reset();
+  }
+  const std::optional<PhysicsSampleRef>& physicsSelection() const { return physicsSelection_; }
+  void selectPhysicsSample(int pathIndex, int frameIndex) { physicsSelection_ = PhysicsSampleRef{pathIndex, frameIndex}; }
+  void clearPhysicsSelection() { physicsSelection_.reset(); }
+
  private:
   double scale_{1.0}, originX_{0.0}, originY_{0.0};
   double width_{1.0}, height_{1.0};
@@ -119,6 +157,10 @@ class TopDownView {
   bool showGrid_{true};
   double gridSize_{32.0};
   bool snapToGrid_{false};
+  RenderMode renderMode_{RenderMode::Banked};
+  bool showPositionPoints_{true}, showRollPoints_{true}, showWidthPoints_{true}, showCrossSectionPoints_{true};
+  bool showPhysicsPoints_{false};
+  std::optional<PhysicsSampleRef> physicsSelection_;
 };
 
 }  // namespace editor

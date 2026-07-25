@@ -1213,6 +1213,43 @@ Gap11SmokeCheckResult runGap11SmokeCheck() {
   return result;
 }
 
+// Gap-10 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #10): render modes, point-type
+// filters, and the physics-sample overlay. Exercises TopDownView's new state directly (pure view
+// state, no ImGui needed -- same reasoning as gap 9's snapWorldXZ check); the render-mode fill
+// color formulas (rollFillColor/elevationFillColor) and physicsPointAtWorld/
+// drawPhysicsSampleInfo are ImGui-adjacent glue with no headless entry point, verified by
+// inspection against js/editor.js's rollColor/elevationColor/physicsPointAtTop -- same tradeoff
+// already taken for gap 8's sanitize() and gap 13's nearestPathPlacement().
+struct Gap10SmokeCheckResult {
+  bool defaultRenderModeIsBanked = false, renderModeRoundTrips = false;
+  bool pointFiltersDefaultShown = false, positionFilterToggles = false;
+  bool physicsPointsHiddenByDefault = false, physicsSelectionRoundTrips = false, hidingPhysicsClearsSelection = false;
+};
+
+Gap10SmokeCheckResult runGap10SmokeCheck() {
+  Gap10SmokeCheckResult result;
+
+  editor::TopDownView view;
+  result.defaultRenderModeIsBanked = view.renderMode() == editor::TopDownView::RenderMode::Banked;
+  view.setRenderMode(editor::TopDownView::RenderMode::Elevation);
+  result.renderModeRoundTrips = view.renderMode() == editor::TopDownView::RenderMode::Elevation;
+
+  result.pointFiltersDefaultShown =
+      view.showPositionPoints() && view.showRollPoints() && view.showWidthPoints() && view.showCrossSectionPoints();
+  view.setShowPositionPoints(false);
+  result.positionFilterToggles = !view.showPositionPoints();
+
+  result.physicsPointsHiddenByDefault = !view.showPhysicsPoints() && !view.physicsSelection().has_value();
+  view.setShowPhysicsPoints(true);
+  view.selectPhysicsSample(2, 17);
+  result.physicsSelectionRoundTrips =
+      view.physicsSelection().has_value() && view.physicsSelection()->pathIndex == 2 && view.physicsSelection()->frameIndex == 17;
+  view.setShowPhysicsPoints(false);
+  result.hidingPhysicsClearsSelection = !view.physicsSelection().has_value();
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1407,6 +1444,17 @@ int main(int, char**) {
                gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap10SmokeCheckResult gap10Smoke = runGap10SmokeCheck();
+  std::fprintf(stdout,
+               "Gap10 smoke check (render modes / point filters / physics overlay): defaultBanked=%s "
+               "renderModeRoundTrips=%s filtersDefaultShown=%s positionFilterToggles=%s physicsHiddenByDefault=%s "
+               "physicsSelectionRoundTrips=%s hidingClearsSelection=%s\n",
+               gap10Smoke.defaultRenderModeIsBanked ? "OK" : "MISMATCH", gap10Smoke.renderModeRoundTrips ? "OK" : "MISMATCH",
+               gap10Smoke.pointFiltersDefaultShown ? "OK" : "MISMATCH", gap10Smoke.positionFilterToggles ? "OK" : "MISMATCH",
+               gap10Smoke.physicsPointsHiddenByDefault ? "OK" : "MISMATCH", gap10Smoke.physicsSelectionRoundTrips ? "OK" : "MISMATCH",
+               gap10Smoke.hidingPhysicsClearsSelection ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   const Gap11SmokeCheckResult gap11Smoke = runGap11SmokeCheck();
   std::fprintf(stdout,
                "Gap11 smoke check (segment select/delete/split, insert-on-segment): outgoingNulloptOnAux=%s "
@@ -1597,6 +1645,13 @@ int main(int, char**) {
     ImGui::TextUnformatted("Gap8 smoke check (random ranges panel, exercised directly):");
     ImGui::BulletText("custom turn-count range respected / default ranges still bake: %s / %s",
                       gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap10 smoke check (render modes / point filters / physics overlay, exercised directly):");
+    ImGui::BulletText("default banked / render mode round-trips / filters default shown / position filter toggles: %s / %s / %s / %s",
+                      gap10Smoke.defaultRenderModeIsBanked ? "OK" : "MISMATCH", gap10Smoke.renderModeRoundTrips ? "OK" : "MISMATCH",
+                      gap10Smoke.pointFiltersDefaultShown ? "OK" : "MISMATCH", gap10Smoke.positionFilterToggles ? "OK" : "MISMATCH");
+    ImGui::BulletText("physics points hidden by default / selection round-trips / hiding clears selection: %s / %s / %s",
+                      gap10Smoke.physicsPointsHiddenByDefault ? "OK" : "MISMATCH", gap10Smoke.physicsSelectionRoundTrips ? "OK" : "MISMATCH",
+                      gap10Smoke.hidingPhysicsClearsSelection ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap11 smoke check (segment select/delete/split, insert-on-segment, exercised directly):");
     ImGui::BulletText("outgoing nullopt on aux selection / at open-path end / incoming nullopt at open-path start: %s / %s / %s",
                       gap11Smoke.outgoingNulloptOnAuxSelection ? "OK" : "MISMATCH", gap11Smoke.outgoingNulloptAtOpenPathEnd ? "OK" : "MISMATCH",
@@ -1671,6 +1726,44 @@ int main(int, char**) {
       ImGui::SameLine();
       bool snapToGrid = topDownView.snapToGrid();
       if (ImGui::Checkbox("Snap", &snapToGrid)) topDownView.setSnapToGrid(snapToGrid);
+      ImGui::EndDisabled();
+    }
+    // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #renderModeSelect.
+    {
+      int renderModeIndex = static_cast<int>(topDownView.renderMode());
+      const char* renderModeLabels[] = {"Banked edges (lean tint)", "Flat width (roll colour)", "Flat with elevation colour"};
+      ImGui::SetNextItemWidth(200);
+      if (ImGui::Combo("Render Mode", &renderModeIndex, renderModeLabels, 3))
+        topDownView.setRenderMode(static_cast<editor::TopDownView::RenderMode>(renderModeIndex));
+    }
+    // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #pointFilters.
+    // Only Position currently has an observable effect -- roll/width/crossSection points have no
+    // on-canvas presence yet at all (gap 1), so those three checkboxes exist for UI parity but are
+    // otherwise inert until that on-canvas rendering lands.
+    {
+      bool showPosition = topDownView.showPositionPoints();
+      if (ImGui::Checkbox("Position##filter", &showPosition)) topDownView.setShowPositionPoints(showPosition);
+      ImGui::SameLine();
+      bool showRoll = topDownView.showRollPoints();
+      if (ImGui::Checkbox("Roll##filter", &showRoll)) topDownView.setShowRollPoints(showRoll);
+      ImGui::SameLine();
+      bool showWidth = topDownView.showWidthPoints();
+      if (ImGui::Checkbox("Width##filter", &showWidth)) topDownView.setShowWidthPoints(showWidth);
+      ImGui::SameLine();
+      bool showCrossSection = topDownView.showCrossSectionPoints();
+      if (ImGui::Checkbox("Cross-Section##filter", &showCrossSection)) topDownView.setShowCrossSectionPoints(showCrossSection);
+    }
+    // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
+    // #showPhysicsBtn/#hidePhysicsBtn -- each disabled while already in that state, matching JS's
+    // `.disabled = visible`/`.disabled = !visible`.
+    {
+      const bool showingPhysics = topDownView.showPhysicsPoints();
+      ImGui::BeginDisabled(showingPhysics);
+      if (ImGui::Button("Show Physics Pts")) topDownView.setShowPhysicsPoints(true);
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!showingPhysics);
+      if (ImGui::Button("Hide Physics Pts")) topDownView.setShowPhysicsPoints(false);
       ImGui::EndDisabled();
     }
     // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors editor.html's
@@ -1863,7 +1956,7 @@ int main(int, char**) {
 
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("Point Properties");
-    if (editor::DrawPropertiesPanel(editorState, currentPathIndex)) rebake();
+    if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
