@@ -22,7 +22,10 @@
 // clearPathTexture. M7c completes RandomTrack.hpp/.cpp with the mesh-section branch: splitting the
 // loop into open ordinary paths joined by generated jump platforms/ramps, with an iterative
 // endpoint-blend solve (via probe bakes through core, not a reimplemented spline evaluator -- see
-// RandomTrack.hpp) to land each drop exactly.
+// RandomTrack.hpp) to land each drop exactly. M8 (EDITOR_NATIVE_FILE_IO_PLAN.md) adds New/Export
+// JSON/Export USD/Import JSON, backed by FileDialog.hpp/.cpp's modern IFileOpenDialog/
+// IFileSaveDialog wrappers -- the first native replacement for editor.html's browser file-picker
+// primitives.
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -41,6 +44,7 @@
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 #include "ElevationView.hpp"
+#include "FileDialog.hpp"
 #include "RandomTrack.hpp"
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
@@ -49,6 +53,27 @@
 #include "USDExport.hpp"
 
 namespace {
+
+// Mirrors js/editor.js's #exportBtn default filename: `(track.name || 'track').replace(/[^\w.-]+/g,
+// '_')`. \w is ASCII word chars only, so runs of anything else collapse to a single underscore.
+std::string sanitizeFilenameStem(const std::string& name) {
+  const std::string base = name.empty() ? "track" : name;
+  std::string out;
+  bool inRun = false;
+  for (char c : base) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+    if (ok) {
+      out += c;
+      inRun = false;
+    } else if (!inRun) {
+      out += '_';
+      inRun = true;
+    }
+  }
+  return out.empty() ? "track" : out;
+}
+
+std::wstring toWide(const std::string& text) { return std::wstring(text.begin(), text.end()); }
 
 // A flat 8km circle, mirroring track-core.js's STARTER_TRACK exactly (same 12 control points,
 // same calibrated radius, same roll/width/crossSection defaults, same finish + 3 intermediate
@@ -451,7 +476,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M7c: full random-track generation)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M8: native save/load)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -550,6 +575,7 @@ int main(int, char**) {
   int randomSeed = 12345;
   int randomComplexity = 5;
   std::string usdExportStatus;
+  std::string fileIoStatus;
 
   auto rebake = [&]() {
     bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
@@ -641,6 +667,47 @@ int main(int, char**) {
     if (ImGui::Button("Redo (Ctrl+Y)")) {
       if (editorState.redo()) rebake();
     }
+    ImGui::Separator();
+    // New/Export JSON/Import JSON mirror editor.html's #newBtn/#exportBtn/#importBtn row
+    // (EDITOR_NATIVE_FILE_IO_PLAN.md M8); Export USD (below) is the same row's #exportUsdBtn.
+    if (ImGui::Button("New")) {
+      editorState.history().push(editorState.track());
+      editorState.replaceTrack(buildStarterTrack());
+      rebake();
+      fileIoStatus.clear();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Export JSON...")) {
+      const editor::FileDialogResult picked =
+          editor::showSaveFileDialog(L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}},
+                                      toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
+      if (picked.ok) {
+        editor::toFile(editorState.track(), picked.path);
+        fileIoStatus = "Wrote " + picked.path.string();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Import JSON...")) {
+      const editor::FileDialogResult picked =
+          editor::showOpenFileDialog(L"Import Track JSON", {{L"Track JSON (*.json)", L"*.json"}});
+      if (picked.ok) {
+        try {
+          editor::TrackDefinition imported = editor::fromFile(picked.path);
+          // Push undo of the prior track only on successful parse, mirroring importFile's
+          // pushUndo() placement in js/editor.js -- a failed import must never disturb history.
+          editorState.history().push(editorState.track());
+          editorState.replaceTrack(std::move(imported));
+          rebake();
+          fileIoStatus = "Loaded " + picked.path.string();
+        } catch (const std::exception& error) {
+          fileIoStatus = std::string("Import failed: ") + error.what();
+        }
+      }
+    }
+    if (!fileIoStatus.empty()) {
+      ImGui::SameLine();
+      ImGui::TextUnformatted(fileIoStatus.c_str());
+    }
     if (ImGui::Button("Place Test Mesh")) {
       // Placed just outside the starter circle (radius ~1333m) so it's never accidentally on top
       // of the track -- there's no asset library/drag-from-palette UI yet (M4 is placement, not
@@ -662,15 +729,20 @@ int main(int, char**) {
       rebake();
     }
     ImGui::Separator();
-    if (ImGui::Button("Export USD")) {
+    if (ImGui::Button("Export USD...")) {
       if (bakedTrack != nullptr) {
-        const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
-        std::ofstream out("track_export.usda", std::ios::binary);
-        if (out) {
-          out << usd.text;
-          usdExportStatus = "Wrote track_export.usda (" + std::to_string(usd.meshCount) + " mesh(es))";
-        } else {
-          usdExportStatus = "Failed to open track_export.usda for writing";
+        const editor::FileDialogResult picked =
+            editor::showSaveFileDialog(L"Export USD", {{L"USD ASCII (*.usda)", L"*.usda"}},
+                                        toWide(sanitizeFilenameStem(editorState.track().name) + ".usda"), L"usda");
+        if (picked.ok) {
+          const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
+          std::ofstream out(picked.path, std::ios::binary);
+          if (out) {
+            out << usd.text;
+            usdExportStatus = "Wrote " + picked.path.string() + " (" + std::to_string(usd.meshCount) + " mesh(es))";
+          } else {
+            usdExportStatus = "Failed to open " + picked.path.string() + " for writing";
+          }
         }
       } else {
         usdExportStatus = "Nothing to export -- current track failed to bake";
