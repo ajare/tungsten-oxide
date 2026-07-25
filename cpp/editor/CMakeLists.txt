@@ -69,7 +69,8 @@ set(EDITOR_SOURCES
   src/TextureCache.cpp
   src/TexturePanel.cpp
   src/FileDialog.cpp
-  src/Clipboard.cpp)
+  src/Clipboard.cpp
+  src/PropertiesPanel.cpp)
 
 add_executable(track_editor
   main.cpp

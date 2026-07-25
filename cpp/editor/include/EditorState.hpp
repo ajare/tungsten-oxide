@@ -408,24 +408,99 @@ class EditorState {
     selectedMeshId_.reset();
   }
 
-  // Mirrors deleteSelected(): refuses to drop a path below 4 position points (a track path needs
-  // that many to bake). No shared/disjoint-id guard -- this editor doesn't alias points by id yet
-  // (see EditorTrackDefinition.hpp). Preserves track_.start across the deletion (mirrors
-  // deleteSelected()'s preserveStartPoint call, EDITOR_PARITY_FIXES.md finding 4) -- without this,
-  // start silently drifted to whatever point ended up at the old index, or went out of range
-  // entirely once enough points were removed.
+  // Mirrors deleteSelected() for a position point (refuses to drop a path below 4, since a track
+  // path needs that many to bake) generalized to also delete a selected roll/width/crossSection
+  // point (EDITOR_PARITY_FIXES.md gap 1), which JS handles separately (the rollSel/widthSel/
+  // crossSectionSel branches of renderProps()'s Delete buttons, js/editor.js:2383/2416/2449) with
+  // no minimum-count guard at all -- a path can have zero roll/width/crossSection points; core's
+  // baker treats that as flat/default-width/uncurved. No shared/disjoint-id guard -- this editor
+  // doesn't alias points by id yet (see EditorTrackDefinition.hpp). Preserves track_.start across
+  // the deletion (mirrors deleteSelected()'s preserveStartPoint call, EDITOR_PARITY_FIXES.md
+  // finding 4) -- harmless no-op when the deleted point isn't a/the position point start refers to.
   bool deleteSelectedPoint() {
     if (!selectionInRange()) return false;
     Path& path = track_.paths[selection_.pathIndex];
-    const auto positionCount =
-        std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; });
-    if (positionCount <= 4) return false;
+    const PointKind kind = path.points[selection_.pointIndex].kind;
+    if (kind == PointKind::Position) {
+      const auto positionCount =
+          std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; });
+      if (positionCount <= 4) return false;
+    }
 
     const std::string startPointId = currentStartPointId();
     history_.push(track_);
     path.points.erase(path.points.begin() + selection_.pointIndex);
     selection_ = {};
     preserveStartPoint(startPointId);
+    return true;
+  }
+
+  // ---- Roll/width/cross-section point editing (EDITOR_PARITY_FIXES.md gap 1) ----
+  //
+  // Scoped to add/edit-fields/delete via a properties panel (PropertiesPanel.hpp/.cpp), NOT the
+  // draggable-handle-on-canvas interaction js/editor.js's top-down and elevation views offer
+  // (rollHandleAtTop/widthHandleAtTop/crossSectionHandleAtTop/rollHandleAtElev) -- that needs
+  // deriving a screen-space handle position from an arbitrary t along the baked centerline, which
+  // is materially more work than the schema-authoring capability itself. This still makes
+  // banking/width/cross-section fully authorable; on-canvas dragging remains a gap.
+
+  TrackPoint* mutablePointAt(int pathIndex, int pointIndex) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return nullptr;
+    auto& points = track_.paths[pathIndex].points;
+    if (pointIndex < 0 || pointIndex >= static_cast<int>(points.size())) return nullptr;
+    return &points[pointIndex];
+  }
+
+  // Appends a new roll/width/crossSection point to `pathIndex` at parameter `t`, using the schema
+  // defaults every TrackPoint already carries (roll 0, width 36, curvature 0/tightness 1/thickness
+  // 4 -- js/editor.js's insertRollPointAtWorld/insertWidthPoint/insertCrossSectionPoint instead
+  // interpolate the curve's *current* value at that t so a fresh point doesn't visibly kink the
+  // curve; this editor doesn't, so a newly added point may need its value adjusted immediately).
+  // Selects the new point and returns its raw index, or nullopt if pathIndex is invalid or `kind`
+  // is Position (use finishCreateDraft/createModeClick for that).
+  std::optional<int> addAuxPoint(int pathIndex, PointKind kind, double t) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size()) || kind == PointKind::Position) return std::nullopt;
+    history_.push(track_);
+    TrackPoint point;
+    point.kind = kind;
+    point.t = std::clamp(t, 0.0, 1.0);
+    Path& path = track_.paths[pathIndex];
+    path.points.push_back(point);
+    const int index = static_cast<int>(path.points.size()) - 1;
+    selectPoint(pathIndex, index);
+    return index;
+  }
+
+  // Mutates the selected point's roll/width/crossSection fields (t plus whichever value fields the
+  // point's own kind uses) via `mutate`, pushing one undo step first and re-clamping afterward to
+  // the same bounds normalizePath() enforces on load. No-op (returns false, no history push) for a
+  // Position point or an out-of-range selection -- use setSelectedPositionFields for the former.
+  template <typename Mutate>
+  bool editAuxPoint(int pathIndex, int pointIndex, Mutate&& mutate) {
+    TrackPoint* point = mutablePointAt(pathIndex, pointIndex);
+    if (!point || point->kind == PointKind::Position) return false;
+    history_.push(track_);
+    mutate(*point);
+    point->t = std::clamp(point->t, 0.0, 1.0);
+    if (point->kind == PointKind::Roll) point->roll = std::clamp(point->roll, -180.0, 180.0);
+    if (point->kind == PointKind::Width) point->width = std::max(1.0, point->width);
+    if (point->kind == PointKind::CrossSection) {
+      point->curvature = std::clamp(point->curvature, -1.0, 1.0);
+      point->tightness = std::clamp(point->tightness, 0.2, 4.0);
+      point->thickness = std::max(0.0, point->thickness);
+    }
+    return true;
+  }
+
+  // Numeric-field counterpart to dragSelectedTo/dragSelectedElevationTo for a Position point, for
+  // the properties panel's typed X/Y/Z/Weight inputs rather than a canvas drag.
+  bool setSelectedPositionFields(double x, double y, double z, double weight) {
+    if (!selectionInRange()) return false;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::Position) return false;
+    history_.push(track_);
+    point.pos = tox::Vec3(x, y, z);
+    point.weight = std::max(0.01, weight);
     return true;
   }
 

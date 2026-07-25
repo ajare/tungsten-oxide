@@ -33,6 +33,7 @@
 // "Load Bundled Textures", reusing M7b's readImageSize/addTextureAsset with FileDialog.hpp's
 // Open dialog -- almost entirely wiring.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -57,6 +58,7 @@
 #include "RandomTrack.hpp"
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
+#include "PropertiesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
@@ -612,6 +614,68 @@ ParitySmokeCheckResult runParitySmokeCheck() {
   return result;
 }
 
+// Gap-1 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #1): add/edit/delete a roll, width,
+// and cross-section point through EditorState directly (the same methods PropertiesPanel.cpp
+// calls), and confirm core's own bake reflects a banked/widened/curved cross-section -- not just
+// that the schema round-trips, but that the values actually reach the physics.
+struct Gap1SmokeCheckResult {
+  bool rollAdded = false, widthAdded = false, crossSectionAdded = false;
+  bool fieldsEdited = false, deleted = false;
+  bool bakedRollApplied = false, bakedWidthApplied = false;
+  bool deletingBelowFourPositionsRefused = false, deletingAuxPointsUnguarded = false;
+};
+
+Gap1SmokeCheckResult runGap1SmokeCheck() {
+  Gap1SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const auto rollIndex = state.addAuxPoint(0, editor::PointKind::Roll, 0.1);
+  result.rollAdded = rollIndex.has_value() && state.selection().pathIndex == 0 && state.selection().pointIndex == *rollIndex;
+  const auto widthIndex = state.addAuxPoint(0, editor::PointKind::Width, 0.1);
+  result.widthAdded = widthIndex.has_value();
+  const auto crossSectionIndex = state.addAuxPoint(0, editor::PointKind::CrossSection, 0.1);
+  result.crossSectionAdded = crossSectionIndex.has_value();
+
+  result.fieldsEdited = state.editAuxPoint(0, *rollIndex, [](editor::TrackPoint& p) { p.roll = 25.0; }) &&
+                        state.track().paths[0].points[*rollIndex].roll == 25.0;
+  result.fieldsEdited = result.fieldsEdited &&
+                        state.editAuxPoint(0, *widthIndex, [](editor::TrackPoint& p) { p.width = 60.0; }) &&
+                        state.track().paths[0].points[*widthIndex].width == 60.0;
+
+  // Roll/width points near the same t as the added ones (0.1) should carry through to the bake --
+  // exercises that this isn't just schema plumbing (a huge roll/width would be unmistakable in the
+  // baked frame nearest that t).
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  if (baked && !baked.track->paths.empty() && !baked.track->paths[0].centerline.empty()) {
+    const auto& centerline = baked.track->paths[0].centerline;
+    const std::size_t nearT = static_cast<std::size_t>(0.1 * static_cast<double>(centerline.size() - 1));
+    result.bakedRollApplied = std::abs(centerline[nearT].edgeRight.y) > 0.05;  // banked, not flat
+    result.bakedWidthApplied = centerline[nearT].halfW > 20.0;                // wider than the default 18 (36/2)
+  }
+
+  const std::size_t countBefore = state.track().paths[0].points.size();
+  result.deleted = state.deleteSelectedPoint() && state.track().paths[0].points.size() == countBefore - 1;
+
+  // A roll/width/crossSection point must never be blocked by the 4-position-point floor: delete
+  // every position point down to exactly 4, then confirm a *position* delete IS refused there while
+  // an aux-point delete right beside it is NOT (EditorState.hpp's deleteSelectedPoint guard is
+  // supposed to apply only to PointKind::Position).
+  editor::EditorState guard(buildStarterTrack());
+  while (std::count_if(guard.track().paths[0].points.begin(), guard.track().paths[0].points.end(),
+                       [](const editor::TrackPoint& p) { return p.kind == editor::PointKind::Position; }) > 4) {
+    const auto& p = guard.track().paths[0].points[0];
+    guard.selectPositionAt(p.pos.x, p.pos.z, 1.0);
+    guard.deleteSelectedPoint();
+  }
+  const auto& lastPosition = guard.track().paths[0].points[0];
+  guard.selectPositionAt(lastPosition.pos.x, lastPosition.pos.z, 1.0);
+  result.deletingBelowFourPositionsRefused = !guard.deleteSelectedPoint();
+  const auto auxIndex = guard.addAuxPoint(0, editor::PointKind::Roll, 0.5);
+  result.deletingAuxPointsUnguarded = auxIndex.has_value() && guard.deleteSelectedPoint();
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -735,6 +799,17 @@ int main(int, char**) {
                paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap1SmokeCheckResult gap1Smoke = runGap1SmokeCheck();
+  std::fprintf(stdout,
+               "Gap1 smoke check (roll/width/crossSection editing): add=%s/%s/%s edit=%s delete=%s bakedRoll=%s bakedWidth=%s "
+               "positionFloorHeld=%s auxUnguarded=%s\n",
+               gap1Smoke.rollAdded ? "OK" : "MISMATCH", gap1Smoke.widthAdded ? "OK" : "MISMATCH",
+               gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH", gap1Smoke.fieldsEdited ? "OK" : "MISMATCH",
+               gap1Smoke.deleted ? "OK" : "MISMATCH", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
+               gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH", gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH",
+               gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -837,6 +912,14 @@ int main(int, char**) {
     ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
                        paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
     ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap1 smoke check (roll/width/crossSection point editing, exercised directly):");
+    ImGui::BulletText("add roll/width/crossSection / edit fields / delete: %s/%s/%s / %s / %s", gap1Smoke.rollAdded ? "OK" : "MISMATCH",
+                       gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",
+                       gap1Smoke.fieldsEdited ? "OK" : "MISMATCH", gap1Smoke.deleted ? "OK" : "MISMATCH");
+    ImGui::BulletText("baked roll/width reflect the edit: %s / %s", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
+                       gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
+    ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
+                       gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -1017,11 +1100,17 @@ int main(int, char**) {
     }
     ImGui::End();
 
-    ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Textures");
     // Mirrors currentCurve(): the selected point's path, or the first path if nothing's selected.
     const int currentPathIndex =
         editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
+
+    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Point Properties");
+    if (editor::DrawPropertiesPanel(editorState, currentPathIndex)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Textures");
     if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
     ImGui::End();
 

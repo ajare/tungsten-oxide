@@ -294,9 +294,18 @@ point is selected for the props panel) rather than folding the bounds check into
 Present in `js/editor.js`/`editor.html`, absent from the native editor. These are unimplemented
 scope, not defects — listed so the remaining distance is visible. Roughly by impact:
 
-1. **Roll / width / cross-section control point editing** — add, drag, delete, convert between
-   types. The native editor edits *only* position points, so banking, width and cross-section
-   profile are entirely unauthorable. This is the single largest gap.
+1. ~~**Roll / width / cross-section control point editing**~~ **Implemented (panel-based, not
+   on-canvas drag).** `PropertiesPanel.hpp/.cpp` (new "Point Properties" window) plus
+   `EditorState::addAuxPoint`/`editAuxPoint`/`deleteSelectedPoint` (generalized to any point kind,
+   not just Position) give full add/edit-fields/delete for roll/width/cross-section points, and a
+   flat clickable list to re-select one later. **Deliberately does not** replicate JS's
+   draggable-handle-on-canvas interaction (`rollHandleAtTop`/`widthHandleAtTop`/
+   `crossSectionHandleAtTop`/`rollHandleAtElev`) or "convert an existing point's type" — deriving a
+   screen-space handle position from an arbitrary t along the baked centerline is materially more
+   work than the schema-authoring capability itself, which is what actually blocked authoring a
+   full track. A dedicated "Gap1 smoke check" in `main.cpp` verifies an edited roll/width value
+   reaches the physics bake, not just the schema. Still open: on-canvas handles, point-type
+   conversion.
 2. **Track name editing.** No input exists, so M8's `sanitizeFilenameStem` always resolves to
    `New_Track.json`.
 3. **Zones** (boost / start grid) — add, select, drag, delete.
