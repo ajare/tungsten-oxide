@@ -1,8 +1,6 @@
-// TrackCore.hpp — the stateless shared math the physics step calls at runtime,
-// transliterated 1:1 from track-core.js / track-physics.js. Because the golden
-// trace serializes the already-BAKED corridor, the C++ engine never bakes a
-// track, so only the cross-section profile functions (used by curvedSurfaceFrame)
-// are needed here — plus the centralized constants (CPP_PORT_PLAN.md §8).
+// TrackCore.hpp — shared constants and stateless math used by native track
+// loading/baking and the runtime physics step. TrackBake.cpp carries the larger
+// authored-path evaluator while these reusable profile/query helpers stay here.
 //
 // The constants stay in the header (constexpr); the function bodies live in
 // src/TrackCore.cpp.
@@ -11,9 +9,14 @@
 namespace tox {
 namespace TrackCore {
 
-// --- geometry constants owned by track-core.js ---
+// --- schema/geometry constants owned by track-core.js ---
+constexpr int TRACK_SCHEMA_VERSION = 10;
+constexpr int N_DEFAULT = 400;
 constexpr double COLLISION_WALL_MARGIN = 1.8;
+constexpr double DEFAULT_WIDTH = 36.0;
+constexpr double DEFAULT_RAIL_HEIGHT = 6.0;
 constexpr double DEFAULT_CROSS_SECTION_TIGHTNESS = 1.0;
+constexpr double DEFAULT_CROSS_SECTION_THICKNESS = 4.0;
 constexpr double DEFAULT_BOOST_FACTOR = 1.5;
 constexpr double DEFAULT_BOOST_DURATION = 2.0;
 

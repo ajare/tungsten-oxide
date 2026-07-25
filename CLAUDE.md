@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A browser-based, dependency-free (aside from three.js via CDN) racing track editor and driving game, built as plain HTML/JS with no build step. There is no root `package.json`, no bundler, no test runner for the top-level app — files are opened/served as static assets.
+A browser-based racing track editor and driving game built as plain HTML/JS with no application build step. Three.js is loaded from a CDN; the root `package.json` links the local geometry-js submodule and provides Node test/parity scripts. Pages are still opened or served as static assets.
 
 - `track.html` — the driving game. Loads three.js (CDN), `track-core.js`, `js/track-game.js`.
 - `editor.html` — the 2D/elevation track editor UI. Loads `track-core.js`, `js/editor.js`.
@@ -13,7 +13,8 @@ A browser-based, dependency-free (aside from three.js via CDN) racing track edit
 - `js/track-game.js` — three.js scene, track mesh generation/rendering, input, the animate loop. The physics was extracted into `js/track-physics.js` (below); this module builds the THREE meshes, owns a `Simulation`, and drives it.
 - `js/track-physics.js` — the THREE-free physics core (a `Simulation` class + pure helpers + centralized constants), extracted verbatim from `track-game.js` so it runs headless and serves as the reference oracle for the C++ port. Uses `js/vec3.js` instead of `THREE.Vector3`. See "Physics core & C++ port".
 - `js/vec3.js` — a hand-rolled `Vec3`, a behavioural mirror of `THREE.Vector3` **as shipped in three.js r128** (the exact CDN build): same op order, same edge cases (zero-length `normalize()`→zero, r128's inverse-quaternion `applyQuaternion`). Do not "modernize" it — parity depends on the op order.
-- `js/track-bake.js` — THREE-free baking of a normalized track into the world-space physics data a `Simulation` consumes (Vec3 centerline frames + `connectedEndpointIds` + `trackFloorY`). A faithful extraction of `buildTrack()`'s physics half, so a track baked here matches the game's inline bake; the game additionally builds THREE meshes on top.
+- `js/track-bake.js` — THREE-free baking of a normalized track into complete world-space physics data: spline frames, mesh regions, zones/triggers, endpoint connectivity, and respawn floor. It is the JS reference oracle for native loading/baking.
+- `js/track-render-geometry.js` — graphics-API-neutral path, shell, rail, mesh, and zone triangle batches used by tests and mirrored by C++.
 - `js/editor.js` — editor state, undo/redo, canvas rendering/interaction for authoring tracks.
 - `js/track-mesh.js` — shared mesh-region math (see below). The mesh-world counterpart to `track-core.js`, split out because it depends on geometry-js while `track-core.js` stays dependency-free.
 - `js/ship-grid.js` — pure, dependency-free two-column runtime grid layout (slot ordering, spacing, stagger and narrow-road compression), unit-tested without a browser.
@@ -28,10 +29,12 @@ When making changes to C++ code, make sure that you adhere to the .clang-format 
 
 No build step: open `track.html` or `editor.html` directly, or serve the repo root statically. Run `npm install` once (after `git submodule update --init --recursive`) to link the `@willpower/geometry` local dependency.
 
-- `npm test` — Node's built-in runner over `test/*.test.js` (pure logic: mesh geometry, rail collision, schema round trips). Fast, no browser.
+- `npm test` — Node's built-in runner over app/submodule logic and bit-exact JS replay of both committed parity layers. It does not regenerate traces or require a browser/C++ toolchain.
 - `node tools/browser-smoke.mjs` — drives the real pages in headless Chromium. Catches ESM/import-map breakage, runtime errors and physics regressions the unit tests can't see. Needs `npm install --no-save playwright && npx playwright install chromium`. Deliberately outside `test/` so `node --test` doesn't try to run it.
-- `npm run gen-traces` — regenerate the committed golden parity traces in `test/traces/` (deliberate, reviewable; run only when the physics is intentionally changed).
-- `npm run parity` — the top-level cross-check: JS↔JS trace replay plus the C++ per-step replayer (if `cpp/build/parity` has been built).
+- `npm run gen-traces` — regenerate both committed physics parity layers in `test/traces/`: legacy baked-world traces and current-schema raw-track traces. This is deliberate and reviewable; run only when physics, loading/baking, or the corpus intentionally changes.
+- `npm run gen-random-mesh-fixtures` — regenerate the deterministic random schema-10 JSON tracks and JS renderer-neutral geometry oracle under `test/fixtures/random-track-mesh/`.
+- `npm run parity` — the top-level cross-check: JS↔JS replay plus C++ baked-world, raw-track, and seeded random JSON-to-geometry parity (when `cpp/build` has been built).
+- Native build/test — from an MSVC Developer prompt: `cmake -S cpp -B cpp/build`, `cmake --build cpp/build --config Release`, then `ctest --test-dir cpp/build -C Release --output-on-failure`. See `cpp/README.md`.
 
 For the `geoemetry-js` submodule, its own commands apply (`npm test`, `npm --prefix ext/geoemetry-js/editor/ui run dev`) — see `ext/geoemetry-js/README.md`.
 
@@ -39,16 +42,12 @@ For the `geoemetry-js` submodule, its own commands apply (`npm test`, `npm --pre
 
 ## Physics core & C++ port
 
-The physics is being ported to a native C++ engine (Windows/MSVC); JS is the reference oracle during the transition. See `CPP_PORT_PLAN.md` for the full plan and rationale. Status: **milestones 0–3 done** — JS extraction + C++ kinematics/guard-rail corridor (M0–1), zone boost + checkpoint/lap + respawn-recovery effects (M2), and the bounded-trajectory smoke check + tolerance lock (M3). Per-step parity holds at 1 ULP (worst combined ratio 7.3e-5, gate 1e-3) over the full 4000-step corpus; the free-running trajectory tracks JS within the documented growing envelope on every trace.
+The full current-schema track runtime is now ported to C++ (Windows/MSVC); JS remains the measured reference oracle. `CPP_PORT_PLAN.md` documents the original corridor core and `MESH_CPP_PORT_PLAN.md` documents the completed full-track follow-on. Status: **all M0–M7 milestones complete**. C++ independently loads strict schema-10 JSON, bakes rational spline paths, compiles Willpower mesh topology, emits renderer-neutral geometry, and runs corridor/mesh physics, zones, checkpoints, landing, and recovery.
 
-- **JS side.** `js/track-physics.js` is a *literal* transliteration of the physics that used to live in `track-game.js` — every `THREE.Vector3` became `Vec3` (`js/vec3.js`), which mirrors r128's op order exactly so the shipping game's behaviour did not shift (guarded by the browser-smoke "mesh-free track still drives normally" check). Stateful physics is the `Simulation` class; game-only trigger side effects (console log, player checkpoint flash) are injected as hooks.
-- **Golden traces.** `test/parity/` generates traces from deterministic **mesh-free** tracks driven by a seeded "noisy autopilot"; each step records the control input and the full resulting ship state. The trace serializes the already-**baked** corridor (not raw track JSON), so both engines replay against byte-identical frames — baking is removed as a parity variable and the C++ `TrackCore` port shrinks to the runtime cross-section math. `test/parity.test.js` proves the trace replays **bit-exact** in JS (determinism + lossless serialization) before any C++ runs. Traces are committed fixtures in `test/traces/`.
-- **C++ side (`cpp/core/`).** The `core` CMake project builds a static library, also named `core`: `Vec3`/`TrackCore`/`Track`/`Ship`/`Zone`/`Trigger`/`Simulation` split into declaration headers (`include/`, exposed `PUBLIC`) + source files (`src/`) — a 1:1 mirror; mesh-region physics is out of scope, so the mesh branches of the step are omitted as provably-dead on the mesh-free corpus. Plain-data structs (`Ship`, `Zone`, `Trigger`, `Frame`, …) live entirely in headers; `TrackCore`'s constants stay `constexpr` in its header while its functions and all class/method bodies live in `src/`. The `parity` executable (`tests/parity_main.cpp`, the hand-rolled replayer/comparator — mixed abs+rel tolerance, worst-offender + ULP reporting, plus the bounded-trajectory free-run smoke check) links the `core` library rather than compiling its sources directly; `third_party/nlohmann/json.hpp` (vendored) is private to `parity`, not part of the engine. Build + test:
-  ```
-  cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build
-  ctest --test-dir cpp/build --output-on-failure
-  ```
-  (Needs a Developer environment — run after `vcvars64.bat` so CMake finds `cl`. The repo's VS install bundles CMake + Ninja.)
+- **JS reference.** `js/track-physics.js`, `js/track-bake.js`, `js/track-render-geometry.js`, and `js/track-mesh.js` are the headless oracle. `Vec3` still mirrors three.js r128 operation order exactly; do not modernize it casually.
+- **C++ core (`cpp/core/`).** Public authored records (`TrackDefinition.hpp`) are separate from compiled runtime records (`Track.hpp`, `TrackMesh.hpp`) and renderer-neutral batches (`TrackGeometry.hpp`). `Track::fromJson()` / `fromFile()` accept schema 10 only, return structured warnings for recoverable mesh failures, and perform all baking without JavaScript. Willpower.Geometry is used at load time for topology and triangulation; simulation consumes retained double-precision loops, rails, and bounds. `nlohmann/json` remains a private implementation dependency.
+- **Parity layers.** The original four baked-world traces isolate runtime math: 4000 steps, unchanged `atol=rtol=1e-12`, ratio gate `1e-3`, observed worst `7.322e-5` (1 ULP). Twelve raw-track traces force independent loading/baking and cover 1116 steps of spline and mesh behavior: `atol=rtol=1e-12`, ratio gate `0.1`, observed worst `0.01051` (`1.42e-14`); surface IDs, rail hits, airborne/boost/trigger/checkpoint/lap/respawn state match exactly. Both layers include bounded free runs. See `test/traces/raw/README.md`.
+- **Native tests.** `track_tests` covers strict loading, JS-generated normalization/geometry oracles, mesh topology and renderer attributes, and direct simulation scenarios. `parity` and `raw_parity` preserve the physics gates. `random_geometry_parity` independently bakes five deterministic randomly-generated schema-10 JSON tracks in C++ and compares batch metadata, topology counts, bounds, UVs, area centroids, and oriented area against the JS geometry oracle.
 
 ## Editor conventions (`js/editor.js`)
 

@@ -5,11 +5,9 @@
 #   core/       the track-physics engine ported from js/track-physics.js,
 #               parity-tested against the JS oracle — see core/CMakeLists.txt.
 #
-# core has no functional dependency on willpower yet, but is expected to grow
-# one (mesh-region physics is planned to consume Willpower.Geometry — see
-# CPP_PORT_PLAN.md). willpower is therefore built first, pinned explicitly via
-# add_dependencies() below so the ordering holds under a parallel build too,
-# not just by add_subdirectory() call order.
+# core links Willpower.Geometry for current-schema mesh topology validation and
+# triangulation. The target link establishes build order; explicit dependencies
+# below retain the intended ordering for all generators and executable targets.
 #
 # Each of core/ and willpower/ can also still be configured standalone (see
 # their own CMakeLists.txt header comments for those commands); this root
@@ -19,6 +17,11 @@
 #   cmake --build cpp/build-all
 cmake_minimum_required(VERSION 3.20)
 project(TungstenOxideCpp CXX)
+
+# Register tests from child projects in the combined build's top-level
+# CTestTestfile.cmake, so the documented `ctest --test-dir cpp/build` command
+# discovers core's parity and focused track tests.
+enable_testing()
 
 add_subdirectory(willpower)
 add_subdirectory(core)

@@ -6,10 +6,9 @@
  * round trip here is bit-exact, and the JS<->JS self-check (test/parity.test.js)
  * proves it before any C++ exists.
  *
- * The trace serializes the BAKED corridor rather than the raw track JSON, so both
- * engines replay against byte-identical centerline frames — baking is removed as
- * a parity variable, and the C++ TrackCore port shrinks to the runtime math the
- * step actually calls (crossSectionHeight/Derivative, zoneAlongContains).
+ * Legacy baked-world traces serialize the corridor here so both engines replay
+ * byte-identical frames. M6 raw-track traces instead carry current-schema source
+ * and use only the ship serialization below while each engine bakes independently.
  */
 
 import { Vec3 } from '../../js/vec3.js';

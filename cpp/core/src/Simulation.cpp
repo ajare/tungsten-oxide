@@ -1,6 +1,6 @@
 // Simulation.cpp — bodies of the physics step + helpers declared in
 // include/Simulation.hpp, transliterated line-for-line from js/track-physics.js.
-// See the header for the milestone scope / mesh-out-of-scope rationale.
+// See the header for the native runtime scope.
 #include "Simulation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -260,7 +260,33 @@ double Simulation::shipParamG(const Sample& sample) const {
   return ga + (gb - ga) * sample.segT;
 }
 
-void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample, bool meshRegion) const {
+const MeshRegion* Simulation::meshRegionAt(double x, double z, double shipY) const {
+  const MeshRegion* best = nullptr;
+  double bestScore = 0;
+  for (const auto& region : track_.meshRegions) {
+    if (!region.withinBounds(x, z) || !region.contains(x, z)) continue;
+    const double above = region.elevation - shipY;
+    const double score = std::fabs(above) + (above > Consts::SURFACE_SNAP_UP ? 1e6 : 0);
+    if (!best || score < bestScore) {
+      best = &region;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+const MeshRegion* Simulation::surfaceOwnerAt(double x, double z, double shipY,
+                                             const Sample& corridorSample) const {
+  const MeshRegion* mesh = meshRegionAt(x, z, shipY);
+  if (!mesh) return nullptr;
+  const Projection projection = projectToSurface(corridorSample, x, shipY, z);
+  if (!corridorContains(corridorSample, x, shipY, z, projection)) return mesh;
+  const double corridorY = curvedSurfaceFrame(corridorSample, projection.s).pos.y;
+  return std::fabs(mesh->elevation - shipY) <= std::fabs(corridorY - shipY) ? mesh : nullptr;
+}
+
+void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample,
+                                    const MeshRegion* meshRegion) const {
   Physics& p = ship.physics;
   for (const Zone& z : track_.zones) {
     bool inside = false;
@@ -270,6 +296,13 @@ void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample, bool meshR
         inside = TrackCore::zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
                  std::fabs(proj.s - z.lateral) <= z.halfWidth;
       }
+    } else if (meshRegion && z.hostRegionIndex >= 0 &&
+               meshRegion == &track_.meshRegions[z.hostRegionIndex]) {
+      const double dx = p.groundPos.x - z.x, dz = p.groundPos.z - z.z;
+      const double cosine = std::cos(z.rotation), sine = std::sin(z.rotation);
+      const double localX = dx * cosine + dz * sine;
+      const double localZ = -dx * sine + dz * cosine;
+      inside = std::fabs(localX) <= z.halfLength && std::fabs(localZ) <= z.halfWidth;
     }
     const bool wasInside = ship.zoneInside.count(z.id) ? ship.zoneInside[z.id] : false;
     if (inside && !wasInside && z.effect == "velocityChange") triggerBoost(ship, z);
@@ -394,9 +427,9 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
   Sample c = sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
   Vec3 surfaceNormal = c.normal;
   Vec3 surfaceRenderPos = p.groundPos;
+  bool railHit = false;
 
-  // No mesh regions in scope -> surfaceOwnerAt is always null.
-  const bool meshRegion = false;
+  const MeshRegion* meshRegion = surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, c);
 
   const Vec3 steerAxis = (p.airborne || meshRegion) ? UP : surfaceNormal;
 
@@ -417,25 +450,89 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
     double ax = vx, az = vz;
     double px = p.groundPos.x + ax * dt;
     double pz = p.groundPos.z + az * dt;
-    // (mesh-rail loop over empty meshRegions omitted)
+    for (const auto& region : track_.meshRegions) {
+      if (p.groundPos.y >= region.elevation + region.railHeight) continue;
+      if (!region.withinBounds(px, pz, TrackCore::COLLISION_WALL_MARGIN)) continue;
+      Vec2d velocity{ax, az};
+      const double before = std::hypot(ax, az);
+      const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {px, pz},
+                                                   velocity, TrackCore::COLLISION_WALL_MARGIN,
+                                                   weightRestitution(p));
+      if (!moved.hit) continue;
+      railHit = true;
+      px = moved.x;
+      pz = moved.z;
+      ax = velocity.x;
+      az = velocity.y;
+      p.speed = std::hypot(ax, az) * weightSpeedRetain(p);
+      addImpactJolt(p, before - std::hypot(ax, az));
+      if (p.speed > 1e-6) p.moveDir.set(ax, 0, az).normalize();
+    }
 
     p.verticalVel -= p.gravity * dt;
     p.groundPos.set(px, p.groundPos.y + p.verticalVel * dt, pz);
 
-    // (mesh landing omitted) -> corridor landing only.
-    c = sampleTrack(px, p.groundPos.y, pz);
-    const Projection proj = projectToSurface(c, px, p.groundPos.y, pz);
-    const SurfaceFrame surface = curvedSurfaceFrame(c, proj.s);
-    if (corridorContains(c, px, p.groundPos.y, pz, proj) && p.groundPos.y <= surface.pos.y) {
+    const MeshRegion* landing = meshRegionAt(px, pz, p.groundPos.y);
+    if (landing && p.groundPos.y <= landing->elevation) {
       const double impactSpeed = std::max(0.0, -p.verticalVel);
-      landOnSurface(ship, surface.normal);
+      landOnSurface(ship, UP);
       p.landingBounce += std::min(3.2, impactSpeed * 0.09);
       p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-      p.groundPos.copy(surface.pos);
-      surfaceRenderPos = surface.pos;
-      surfaceNormal = surface.normal;
+      p.groundPos.set(px, landing->elevation, pz);
+      surfaceRenderPos = p.groundPos;
+      surfaceNormal = UP;
+    } else {
+      c = sampleTrack(px, p.groundPos.y, pz);
+      const Projection proj = projectToSurface(c, px, p.groundPos.y, pz);
+      const SurfaceFrame surface = curvedSurfaceFrame(c, proj.s);
+      if (corridorContains(c, px, p.groundPos.y, pz, proj) && p.groundPos.y <= surface.pos.y) {
+        const double impactSpeed = std::max(0.0, -p.verticalVel);
+        landOnSurface(ship, surface.normal);
+        p.landingBounce += std::min(3.2, impactSpeed * 0.09);
+        p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
+        p.groundPos.copy(surface.pos);
+        surfaceRenderPos = surface.pos;
+        surfaceNormal = surface.normal;
+      }
     }
-  } else if (hasTranslation) {  // (mesh-region translation branch omitted)
+  } else if (meshRegion && hasTranslation) {
+    Vec2d velocity{vx, vz};
+    const MeshMoveResult moved = slideAlongRails(*meshRegion, {p.groundPos.x, p.groundPos.z},
+                                                 {p.groundPos.x + vx * dt, p.groundPos.z + vz * dt},
+                                                 velocity, TrackCore::COLLISION_WALL_MARGIN,
+                                                 weightRestitution(p));
+    if (moved.hit) {
+      railHit = true;
+      const double before = std::hypot(vx, vz), after = std::hypot(velocity.x, velocity.y);
+      p.speed = after * weightSpeedRetain(p);
+      if (p.speed > 1e-6) p.moveDir.set(velocity.x, 0, velocity.y).normalize();
+      addImpactJolt(p, before - after);
+    }
+
+    const MeshRegion* stillOn = meshRegion->contains(moved.x, moved.z)
+                                    ? meshRegion
+                                    : meshRegionAt(moved.x, moved.z, meshRegion->elevation);
+    if (stillOn) {
+      p.groundPos.set(moved.x, stillOn->elevation, moved.z);
+      surfaceRenderPos = p.groundPos;
+      surfaceNormal = UP;
+    } else {
+      c = sampleTrack(moved.x, meshRegion->elevation, moved.z);
+      const Projection projection = projectToSurface(c, moved.x, meshRegion->elevation, moved.z);
+      const bool overCorridor = corridorContains(c, moved.x, meshRegion->elevation, moved.z, projection);
+      const SurfaceFrame surface = curvedSurfaceFrame(c, projection.s);
+      if (overCorridor && std::fabs(surface.pos.y - meshRegion->elevation) <= Consts::SURFACE_SNAP_UP) {
+        p.groundPos.copy(surface.pos);
+        tangentize(p.moveDir, surface.normal, p.forward);
+        tangentize(p.forward, surface.normal, p.moveDir);
+        surfaceRenderPos = surface.pos;
+        surfaceNormal = surface.normal;
+      } else {
+        beginAirborne(ship, p.moveDir.clone().multiplyScalar(p.speed));
+        p.groundPos.set(moved.x, meshRegion->elevation, moved.z);
+      }
+    }
+  } else if (hasTranslation) {
     Vec3 newPos = p.groundPos.clone().addScaledVector(vel, dt);
 
     const Sample current = c;
@@ -479,7 +576,11 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
     }
   }
 
-  if (!p.airborne && !hasTranslation) {  // (parked-on-mesh branch omitted)
+  if (!p.airborne && !hasTranslation && meshRegion) {
+    p.groundPos.y = meshRegion->elevation;
+    surfaceRenderPos = p.groundPos;
+    surfaceNormal = UP;
+  } else if (!p.airborne && !hasTranslation) {
     c = sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
     const Projection parkedProjection = projectToSurface(c, p.groundPos.x, p.groundPos.y, p.groundPos.z);
     if (!corridorContains(c, p.groundPos.x, p.groundPos.y, p.groundPos.z, parkedProjection)) {
@@ -501,9 +602,9 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
 
   if (p.airborne && p.groundPos.y < track_.trackFloorY) {
     respawn(ship);
-    return {surfaceNormal, surfaceRenderPos, true};
+    return {surfaceNormal, surfaceRenderPos, true, railHit};
   }
-  return {surfaceNormal, surfaceRenderPos, false};
+  return {surfaceNormal, surfaceRenderPos, false, railHit};
 }
 
 }  // namespace tox

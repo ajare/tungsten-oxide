@@ -5,8 +5,9 @@
  *
  *  1. JS<->JS self-check (test/parity.test.js): the trace pipeline replays
  *     bit-exact, proving the oracle + lossless serialization.
- *  2. C++ per-step parity, IF the engine has been built to cpp/build/parity.exe
- *     (cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build). Skipped
+ *  2. C++ baked-world and independently loaded raw-track parity, plus seeded
+ *     random JSON-to-render-geometry parity, IF the engine has been built from cpp/ (combined)
+ *     or cpp/core (standalone). Skipped
  *     with a note otherwise, so contributors without the C++ toolchain still get
  *     the JS half.
  *
@@ -14,13 +15,15 @@
  * one place that runs the whole loop. */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const traceDir = fileURLToPath(new URL('../test/traces/', import.meta.url));
 const traces = ['starter-circle.json', 'open-curve.json', 'boost-circuit.json', 'recovery-run.json']
   .map(f => traceDir + f);
+const rawManifest = JSON.parse(readFileSync(traceDir + 'raw/manifest.json', 'utf8'));
+const rawTraces = rawManifest.map(entry => traceDir + 'raw/' + entry.file);
 
 function run(label, cmd, args, opts = {}) {
   process.stdout.write(`\n=== ${label} ===\n`);
@@ -34,19 +37,36 @@ let failed = 0;
 // 1. JS<->JS parity self-check.
 failed += run('JS<->JS parity (node --test)', process.execPath, ['--test', 'test/parity.test.js']) ? 1 : 0;
 
-// 2. C++ per-step parity, if built.
+// 2. C++ baked-world and raw-track per-step parity, if built.
 const exeCandidates = [
-  `${root}cpp/build/parity.exe`,
+  `${root}cpp/build/core/Release/parity.exe`,  // combined MSVC build
+  `${root}cpp/build/core/parity`,              // combined single-config build
+  `${root}cpp/build/parity.exe`,               // standalone core builds
   `${root}cpp/build/parity`,
   `${root}cpp/build/Release/parity.exe`
 ];
 const exe = exeCandidates.find(existsSync);
 if (exe) {
-  failed += run('C++ per-step parity', exe, traces) ? 1 : 0;
+  failed += run('C++ baked-world + raw-track parity', exe, [...traces, ...rawTraces]) ? 1 : 0;
+  const geometryCandidates = [
+    `${root}cpp/build/core/Release/random_geometry_parity.exe`,
+    `${root}cpp/build/core/random_geometry_parity`,
+    `${root}cpp/build/random_geometry_parity.exe`,
+    `${root}cpp/build/random_geometry_parity`,
+    `${root}cpp/build/Release/random_geometry_parity.exe`
+  ];
+  const geometryExe = geometryCandidates.find(existsSync);
+  if (geometryExe) {
+    failed += run('C++ random track-mesh geometry parity', geometryExe,
+      [`${root}test/fixtures/random-track-mesh`]) ? 1 : 0;
+  } else {
+    console.log('\n=== C++ random track-mesh geometry parity ===');
+    console.log('  SKIPPED — rebuild the engine to add random_geometry_parity');
+  }
 } else {
   console.log('\n=== C++ per-step parity ===');
   console.log('  SKIPPED — build the engine first:');
-  console.log('    cmake -S cpp/core -B cpp/build -G Ninja && cmake --build cpp/build');
+  console.log('    cmake -S cpp -B cpp/build && cmake --build cpp/build --config Release');
 }
 
 process.stdout.write(`\n${failed ? `FAILED (${failed} suite(s))` : 'ALL PARITY CHECKS PASSED'}\n`);

@@ -1,0 +1,52 @@
+{
+  "version": 10,
+  "name": "Random geometry parity 195948557",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": {"maxSpeed":145,"accel":76,"turnSpeed":149,"weight":1330},
+  "zones": [{"id":"random-path-zone-195948557","effect":"velocityChange","width":9.81616547331214,"length":22.052739361068234,"host":{"kind":"path","pathId":"random-path-195948557","t":0.5542396739125252,"lateral":-0.9917508475482464},"factor":1.7197537967003882,"duration":1.9328260608017445},{"id":"random-mesh-zone-195948557","effect":"startGrid","width":16.901781582972035,"length":31.573798874625936,"host":{"kind":"mesh","meshId":"random-placement-195948557-a","x":-39.725971571169794,"z":-38.449234664440155,"rotation":44.762293982319534}}],
+  "triggers": [{"id":"random-finish-195948557","type":"checkpoint","host":{"kind":"path","pathId":"random-path-195948557","t":0.07961989757604898},"width":36.75782710290514,"height":9.974387550726533,"rotation":19.11673923023045,"direction":"forward","role":"finish"}],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "meshAssets": {
+    "random-asset-195948557": {"name":"Seeded polygon 195948557","railHeight":8.771736237453297,"mesh":{"vertices":[{"id":0,"position":{"x":59.030613106209785,"y":0},"attributes":{}},{"id":1,"position":{"x":44.468828692673924,"y":44.46882869267392},"attributes":{}},{"id":2,"position":{"x":3.730149295893371e-15,"y":60.917960974387825},"attributes":{}},{"id":3,"position":{"x":-41.128928494409216,"y":41.12892849440922},"attributes":{}},{"id":4,"position":{"x":-54.2073072665371,"y":6.638480533436172e-15},"attributes":{}},{"id":5,"position":{"x":-38.14489845553651,"y":-38.1448984555365},"attributes":{}},{"id":6,"position":{"x":-1.1197892685800077e-14,"y":-60.958488567732275},"attributes":{}},{"id":7,"position":{"x":39.65990544945575,"y":-39.65990544945577},"attributes":{}}],"edges":[{"id":0,"vertices":[0,1],"attributes":{}},{"id":1,"vertices":[1,2],"attributes":{"rail":true}},{"id":2,"vertices":[2,3],"attributes":{"rail":true}},{"id":3,"vertices":[3,4],"attributes":{}},{"id":4,"vertices":[4,5],"attributes":{"rail":true}},{"id":5,"vertices":[5,6],"attributes":{"rail":true}},{"id":6,"vertices":[6,7],"attributes":{}},{"id":7,"vertices":[7,0],"attributes":{"rail":true}}],"polygons":[{"id":0,"edges":[{"edge":0,"v0":0,"v1":1},{"edge":1,"v0":1,"v1":2},{"edge":2,"v0":2,"v1":3},{"edge":3,"v0":3,"v1":4},{"edge":4,"v0":4,"v1":5},{"edge":5,"v0":5,"v1":6},{"edge":6,"v0":6,"v1":7},{"edge":7,"v0":7,"v1":0}],"holes":[],"hole":false,"attributes":{}}]}}
+  },
+  "meshes": [
+    { "id": "random-placement-195948557-a", "asset": "random-asset-195948557", "x": -39.725971571169794, "z": -38.449234664440155, "rotation": 31.762293982319534, "elevation": 17.96987087186426 },
+    { "id": "random-placement-195948557-b", "asset": "random-asset-195948557", "x": 30.18638810608536, "z": 140.90360485948622, "rotation": 84.79763814248145, "elevation": 34.22801719047129 }
+  ],
+  "textureAssets": {
+    "atlas-195948557": {
+      "name": "atlas-195948557.png",
+      "path": "textures/atlas-195948557.png",
+      "width": 128,
+      "height": 64,
+      "tileWidth": 32,
+      "tileHeight": 32
+    }
+  },
+  "paths": [
+    { "id": "random-path-195948557", "closed": true, "texture": {"asset":"atlas-195948557","tile":7}, "points": [
+      { "type": "position", "id": "seed-195948557-p0", "pos": [306.3171118455315, 10.381261641945247, 17.394251035720526], "weight": 1.184902114677243 },
+      { "type": "position", "id": "seed-195948557-p1", "pos": [191.58554703544928, -14.14772182905753, 237.2231338930521], "weight": 1.3252071684924887 },
+      { "type": "position", "id": "seed-195948557-p2", "pos": [-69.5001390627893, 23.44659396663222, 276.09426320538256], "weight": 1.1096435510320588 },
+      { "type": "position", "id": "seed-195948557-p3", "pos": [-222.79621694617092, -25.499883112881832, 105.7943455405077], "weight": 1.1548653517616914 },
+      { "type": "position", "id": "seed-195948557-p4", "pos": [-231.53595548786922, 25.45108957241395, -95.39328623232088], "weight": 0.8023935302626342 },
+      { "type": "position", "id": "seed-195948557-p5", "pos": [-86.28764188199612, -22.172485502375324, -281.9319174668785], "weight": 1.105633265641518 },
+      { "type": "position", "id": "seed-195948557-p6", "pos": [159.1891454815405, 7.858358867037478, -200.06702174817937], "weight": 1.4268840583041311 },
+      { "type": "roll", "t": 0, "roll": 1.3899543769657612 },
+      { "type": "width", "t": 0, "width": 42.059859700966626 },
+      { "type": "crossSection", "t": 0, "curvature": -0.259281286848709, "tightness": 1.211502712406218, "thickness": 3.612874095328152 },
+      { "type": "roll", "t": 0.27, "roll": -20.923444570973516 },
+      { "type": "width", "t": 0.27, "width": 42.23010513698682 },
+      { "type": "crossSection", "t": 0.27, "curvature": -0.5680734612280502, "tightness": 1.1236497310921552, "thickness": 2.5271821555215865 },
+      { "type": "roll", "t": 0.59, "roll": -21.984410512261093 },
+      { "type": "width", "t": 0.59, "width": 35.238762528286316 },
+      { "type": "crossSection", "t": 0.59, "curvature": -0.19607524754013864, "tightness": 1.4574125751852989, "thickness": 2.4573940373957157 },
+      { "type": "roll", "t": 0.83, "roll": -19.129817843437195 },
+      { "type": "width", "t": 0.83, "width": 37.270571955130436 },
+      { "type": "crossSection", "t": 0.83, "curvature": -0.08620772770838811, "tightness": 2.1496302520856263, "thickness": 0 }
+    ] }
+  ]
+}
+

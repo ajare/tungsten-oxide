@@ -1,0 +1,140 @@
+[
+  {
+    "file": "raw-corridor-mesh-corridor.json",
+    "steps": 150,
+    "surfaces": [
+      "path:0",
+      "mesh:bridge-pad"
+    ],
+    "railHits": 0,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-bare-ledge-lower-landing.json",
+    "steps": 30,
+    "surfaces": [
+      "mesh:square-placed",
+      "airborne",
+      "mesh:lower-pad"
+    ],
+    "railHits": 0,
+    "airborneSteps": 23,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-head-on-rail.json",
+    "steps": 4,
+    "surfaces": [
+      "mesh:hole-pad"
+    ],
+    "railHits": 1,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-glancing-rail.json",
+    "steps": 3,
+    "surfaces": [
+      "mesh:arena-placed"
+    ],
+    "railHits": 1,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-corner-rail.json",
+    "steps": 3,
+    "surfaces": [
+      "mesh:arena-placed"
+    ],
+    "railHits": 2,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-airborne-outside-below-rail.json",
+    "steps": 2,
+    "surfaces": [
+      "airborne"
+    ],
+    "railHits": 1,
+    "airborneSteps": 2,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-airborne-clears-rail.json",
+    "steps": 2,
+    "surfaces": [
+      "airborne"
+    ],
+    "railHits": 0,
+    "airborneSteps": 2,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-overlapping-elevations.json",
+    "steps": 4,
+    "surfaces": [
+      "mesh:upper-deck",
+      "mesh:lower-deck"
+    ],
+    "railHits": 0,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-mesh-boost-checkpoint.json",
+    "steps": 8,
+    "surfaces": [
+      "mesh:arena-placed"
+    ],
+    "railHits": 3,
+    "airborneSteps": 0,
+    "boostSteps": 8,
+    "checkpointSteps": 7
+  },
+  {
+    "file": "raw-hole-traversal.json",
+    "steps": 10,
+    "surfaces": [
+      "mesh:hole-pad"
+    ],
+    "railHits": 2,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-curved-banked-native-bake.json",
+    "steps": 300,
+    "surfaces": [
+      "path:0"
+    ],
+    "railHits": 0,
+    "airborneSteps": 0,
+    "boostSteps": 0,
+    "checkpointSteps": 0
+  },
+  {
+    "file": "raw-long-mixed-course.json",
+    "steps": 600,
+    "surfaces": [
+      "path:0",
+      "mesh:bridge-pad",
+      "airborne"
+    ],
+    "railHits": 0,
+    "airborneSteps": 248,
+    "boostSteps": 272,
+    "checkpointSteps": 511
+  }
+]

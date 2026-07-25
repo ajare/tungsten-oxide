@@ -1,0 +1,604 @@
+{
+  "transformed-square.json": [
+    {
+      "id": "square-placed",
+      "assetId": "pad",
+      "elevation": 8,
+      "railHeight": 5,
+      "bounds": {
+        "minX": 75.92739907391807,
+        "maxX": 131.9454204018917,
+        "minZ": 50,
+        "maxZ": 106.01802132797364
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 2,
+      "triangleArea": 1600,
+      "rails": [
+        {
+          "edgeId": 0,
+          "a": [
+            100,
+            50
+          ],
+          "b": [
+            131.9454204018917,
+            74.07260092608193
+          ],
+          "normal": [
+            0.6018150231520483,
+            -0.7986355100472927
+          ],
+          "length": 40
+        }
+      ]
+    }
+  ],
+  "pad-with-hole.json": [
+    {
+      "id": "hole-pad",
+      "assetId": "pad",
+      "elevation": 4,
+      "railHeight": 6,
+      "bounds": {
+        "minX": -30,
+        "maxX": 30,
+        "minZ": -30,
+        "maxZ": 30
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": [
+            4
+          ]
+        }
+      ],
+      "triangleCount": 8,
+      "triangleArea": 3200,
+      "rails": [
+        {
+          "edgeId": 0,
+          "a": [
+            -30,
+            -30
+          ],
+          "b": [
+            30,
+            -30
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 60
+        },
+        {
+          "edgeId": 1,
+          "a": [
+            30,
+            -30
+          ],
+          "b": [
+            30,
+            30
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 60
+        },
+        {
+          "edgeId": 2,
+          "a": [
+            30,
+            30
+          ],
+          "b": [
+            -30,
+            30
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 60
+        },
+        {
+          "edgeId": 3,
+          "a": [
+            -30,
+            30
+          ],
+          "b": [
+            -30,
+            -30
+          ],
+          "normal": [
+            -1,
+            0
+          ],
+          "length": 60
+        },
+        {
+          "edgeId": 4,
+          "a": [
+            -10,
+            -10
+          ],
+          "b": [
+            10,
+            -10
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 20
+        },
+        {
+          "edgeId": 5,
+          "a": [
+            10,
+            -10
+          ],
+          "b": [
+            10,
+            10
+          ],
+          "normal": [
+            -1,
+            0
+          ],
+          "length": 20
+        },
+        {
+          "edgeId": 6,
+          "a": [
+            10,
+            10
+          ],
+          "b": [
+            -10,
+            10
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 20
+        },
+        {
+          "edgeId": 7,
+          "a": [
+            -10,
+            10
+          ],
+          "b": [
+            -10,
+            -10
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 20
+        }
+      ]
+    }
+  ],
+  "shared-seam.json": [
+    {
+      "id": "seamed-pad",
+      "assetId": "pad",
+      "elevation": 2,
+      "railHeight": 6,
+      "bounds": {
+        "minX": -30,
+        "maxX": 30,
+        "minZ": 0,
+        "maxZ": 30
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        },
+        {
+          "polygonId": 1,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 4,
+      "triangleArea": 1800,
+      "rails": [
+        {
+          "edgeId": 0,
+          "a": [
+            -30,
+            0
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 30
+        },
+        {
+          "edgeId": 2,
+          "a": [
+            0,
+            30
+          ],
+          "b": [
+            -30,
+            30
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 30
+        },
+        {
+          "edgeId": 3,
+          "a": [
+            -30,
+            30
+          ],
+          "b": [
+            -30,
+            0
+          ],
+          "normal": [
+            -1,
+            0
+          ],
+          "length": 30
+        },
+        {
+          "edgeId": 4,
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            30,
+            0
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 30
+        },
+        {
+          "edgeId": 5,
+          "a": [
+            30,
+            0
+          ],
+          "b": [
+            30,
+            30
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 30
+        },
+        {
+          "edgeId": 6,
+          "a": [
+            30,
+            30
+          ],
+          "b": [
+            0,
+            30
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 30
+        }
+      ]
+    }
+  ],
+  "concave-railed-pad.json": [
+    {
+      "id": "concave-pad",
+      "assetId": "pad",
+      "elevation": 3,
+      "railHeight": 8,
+      "bounds": {
+        "minX": -30,
+        "maxX": 30,
+        "minZ": 0,
+        "maxZ": 60
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 6,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 4,
+      "triangleArea": 2000,
+      "rails": [
+        {
+          "edgeId": 0,
+          "a": [
+            -30,
+            0
+          ],
+          "b": [
+            30,
+            0
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 60
+        },
+        {
+          "edgeId": 1,
+          "a": [
+            30,
+            0
+          ],
+          "b": [
+            30,
+            20
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 20
+        },
+        {
+          "edgeId": 2,
+          "a": [
+            30,
+            20
+          ],
+          "b": [
+            -10,
+            20
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 40
+        },
+        {
+          "edgeId": 3,
+          "a": [
+            -10,
+            20
+          ],
+          "b": [
+            -10,
+            60
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 40
+        },
+        {
+          "edgeId": 4,
+          "a": [
+            -10,
+            60
+          ],
+          "b": [
+            -30,
+            60
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 20
+        },
+        {
+          "edgeId": 5,
+          "a": [
+            -30,
+            60
+          ],
+          "b": [
+            -30,
+            0
+          ],
+          "normal": [
+            -1,
+            0
+          ],
+          "length": 60
+        }
+      ]
+    }
+  ],
+  "corridor-mesh-bridge.json": [
+    {
+      "id": "bridge-pad",
+      "assetId": "bridge",
+      "elevation": 0,
+      "railHeight": 6,
+      "bounds": {
+        "minX": -40,
+        "maxX": 40,
+        "minZ": -40,
+        "maxZ": 40
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 2,
+      "triangleArea": 6400,
+      "rails": []
+    }
+  ],
+  "overlapping-elevations.json": [
+    {
+      "id": "lower-deck",
+      "assetId": "deck",
+      "elevation": 0,
+      "railHeight": 6,
+      "bounds": {
+        "minX": -35,
+        "maxX": 35,
+        "minZ": -35,
+        "maxZ": 35
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 2,
+      "triangleArea": 4900,
+      "rails": []
+    },
+    {
+      "id": "upper-deck",
+      "assetId": "deck",
+      "elevation": 12,
+      "railHeight": 6,
+      "bounds": {
+        "minX": -53.11733315717645,
+        "maxX": 32.614807840234775,
+        "minZ": -35,
+        "maxZ": 50.73214099741122
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 2,
+      "triangleArea": 4899.999999999998,
+      "rails": []
+    }
+  ],
+  "mesh-effects.json": [
+    {
+      "id": "arena-placed",
+      "assetId": "arena",
+      "elevation": 5,
+      "railHeight": 7,
+      "bounds": {
+        "minX": -50,
+        "maxX": 50,
+        "minZ": -50,
+        "maxZ": 50
+      },
+      "polygons": [
+        {
+          "polygonId": 0,
+          "outerCount": 4,
+          "holeCounts": []
+        }
+      ],
+      "triangleCount": 2,
+      "triangleArea": 10000,
+      "rails": [
+        {
+          "edgeId": 0,
+          "a": [
+            -50,
+            -50
+          ],
+          "b": [
+            50,
+            -50
+          ],
+          "normal": [
+            0,
+            -1
+          ],
+          "length": 100
+        },
+        {
+          "edgeId": 1,
+          "a": [
+            50,
+            -50
+          ],
+          "b": [
+            50,
+            50
+          ],
+          "normal": [
+            1,
+            0
+          ],
+          "length": 100
+        },
+        {
+          "edgeId": 2,
+          "a": [
+            50,
+            50
+          ],
+          "b": [
+            -50,
+            50
+          ],
+          "normal": [
+            0,
+            1
+          ],
+          "length": 100
+        },
+        {
+          "edgeId": 3,
+          "a": [
+            -50,
+            50
+          ],
+          "b": [
+            -50,
+            -50
+          ],
+          "normal": [
+            -1,
+            0
+          ],
+          "length": 100
+        }
+      ]
+    }
+  ]
+}

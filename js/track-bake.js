@@ -10,13 +10,14 @@
  * headless physics tests and the C++ parity trace generator bake through here so
  * they drive the exact same corridor the shipping game does.
  *
- * Mesh regions are intentionally NOT baked — they are out of the C++ port's
- * scope and parity tracks emit none. `trackFloorY` therefore considers only the
- * spline surfaces (the game also lowers it for mesh-region elevations).
+ * Mesh placements are compiled through track-mesh.js as well, including their
+ * finite rails, mesh-hosted zones/triggers, and contribution to trackFloorY.
+ * The game and headless tests therefore consume the same complete physics world.
  */
 
 import { Vec3 } from './vec3.js';
 import { RESPAWN_FALL_DEPTH } from './track-physics.js';
+import * as TrackMesh from './track-mesh.js';
 
 const TC = () => /** @type {any} */ (globalThis).TrackCore;
 const toVec = o => new Vec3(o.x, o.y, o.z);
@@ -138,21 +139,52 @@ function bakePhysicsPath(controlPoints, closed, prebuiltRaw, prebuiltEdges, endp
     start: controlPoints[0] && controlPoints[0].id,
     end: controlPoints[controlPoints.length - 1] && controlPoints[controlPoints.length - 1].id
   };
-  return { closed, centerline, anchors, endpointIds };
+  return { closed, centerline, anchors, endpointIds, _renderRaw: raw, _renderEdges: edges };
 }
 
-// Bake the path-hosted zones into the compiled records detectZoneTriggers reads,
-// mirroring track-game.js buildZones() (the path branch). Reuses the shared
-// TrackCore.zonePathStrip for the g-window, so game and headless never drift.
-// Mesh-hosted zones are skipped: mesh regions are out of the C++ port's scope and
-// the parity corpus emits none. `hostPathIndex` is carried so the serialized
-// world can rehydrate the `hostPath` object identity detectZoneTriggers compares.
-function bakeZones(track, bakedPaths, paths) {
+// Compile every valid mesh placement once. Invalid assets are recoverable, as in
+// track-game.js: the rest of the track remains usable and callers receive a
+// structured warning suitable for tests or a future native loading UI.
+function bakeMeshRegions(track, warnings) {
+  const regions = [];
+  const assets = track.meshAssets || {};
+  const cache = new Map();
+  for (const placement of track.meshes || []) {
+    const asset = assets[placement.asset];
+    if (!asset) continue;
+    try {
+      let mesh = cache.get(placement.asset);
+      if (!mesh) { mesh = TrackMesh.meshFromJSON(asset.mesh); cache.set(placement.asset, mesh); }
+      const compiled = TrackMesh.compile(mesh, placement);
+      const railHeight = asset.railHeight == null ? TC().DEFAULT_RAIL_HEIGHT : asset.railHeight;
+      regions.push({ compiled, elevation: compiled.elevation, railHeight });
+    } catch (error) {
+      warnings.push({ code: 'mesh-load-failed', objectId: placement.id, message: String(error && error.message || error) });
+    }
+  }
+  return regions;
+}
+
+// Bake zones into the records detectZoneTriggers reads. Path records retain the
+// sampled strip rows for graphics-agnostic rendering; mesh records retain their
+// host-region identity and flat rectangle transform.
+function bakeZones(track, bakedPaths, paths, meshRegions) {
   const TrackCore = TC();
   const out = [];
   for (const zone of track.zones || []) {
     const host = zone.host || {};
-    if (host.kind === 'mesh') continue;
+    if (host.kind === 'mesh') {
+      const hostRegionIndex = meshRegions.findIndex(r => r.compiled && r.compiled.id === host.meshId);
+      if (hostRegionIndex < 0) continue;
+      const hl = Math.max(0.25, (zone.length || 0) / 2), hw = Math.max(0.25, (zone.width || 0) / 2);
+      out.push({
+        id: zone.id, kind: 'mesh', effect: zone.effect, factor: zone.factor, duration: zone.duration,
+        hostRegion: meshRegions[hostRegionIndex], hostRegionIndex,
+        x: host.x, z: host.z, rot: (host.rotation || 0) * Math.PI / 180,
+        halfLen: hl, halfWidth: hw
+      });
+      continue;
+    }
     const idx = bakedPaths.findIndex(bp => bp.id === host.pathId);
     if (idx < 0) continue;
     const bp = bakedPaths[idx];
@@ -161,24 +193,34 @@ function bakeZones(track, bakedPaths, paths) {
       id: zone.id, kind: 'path', effect: zone.effect, factor: zone.factor, duration: zone.duration,
       hostPath: paths[idx], hostPathIndex: idx,
       gLo: strip.gLo, gHi: strip.gHi, gMax: strip.gMax, closed: strip.closed,
-      lateral: host.lateral || 0, halfWidth: Math.max(0.25, (zone.width || 0) / 2)
+      lateral: host.lateral || 0, halfWidth: Math.max(0.25, (zone.width || 0) / 2),
+      renderRows: strip.rows
     });
   }
   return out;
 }
 
-// Bake the path-hosted triggers into the compiled gate records detectTriggers
-// reads, mirroring track-game.js buildTriggers() (the path branch) via the shared
-// TrackCore.triggerPathFrame. Mesh-hosted triggers are skipped (see bakeZones).
-function bakeTriggers(track, bakedPaths) {
+// Bake path- and mesh-hosted trigger gates into one generic world-space record;
+// Simulation.detectTriggers needs no host-specific branch after this point.
+function bakeTriggers(track, bakedPaths, meshRegions) {
   const TrackCore = TC();
   const out = [];
   for (const trig of track.triggers || []) {
     const host = trig.host || {};
-    if (host.kind === 'mesh') continue;
-    const bp = bakedPaths.find(b => b.id === host.pathId);
-    if (!bp) continue;
-    const frame = TrackCore.triggerPathFrame(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, trig);
+    let frame;
+    if (host.kind === 'mesh') {
+      const region = meshRegions.find(r => r.compiled && r.compiled.id === host.meshId);
+      if (!region) continue;
+      const rot = (trig.rotation || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
+      frame = {
+        center: { x: host.x, y: region.elevation, z: host.z },
+        fwd: { x: sin, y: 0, z: cos }, right: { x: cos, y: 0, z: -sin }, up: { x: 0, y: 1, z: 0 }
+      };
+    } else {
+      const bp = bakedPaths.find(b => b.id === host.pathId);
+      if (!bp) continue;
+      frame = TrackCore.triggerPathFrame(bp.controlPoints, bp.closed, bp.rollPoints, bp.widthPoints, bp.crossSectionPoints, trig);
+    }
     out.push({
       id: trig.id, type: trig.type, role: trig.role, direction: trig.direction,
       center: toVec(frame.center), right: toVec(frame.right), up: toVec(frame.up), fwd: toVec(frame.fwd),
@@ -203,7 +245,7 @@ export function bakeTrackPhysics(track) {
     const frames = TrackCore.buildCenterline(controlPoints, pathN, closed, rollPoints, widthPoints, crossSectionPoints);
     const edges = TrackCore.buildEdges(frames, closed);
     const hasBranchConnection = controlPoints.some(cp => cp && branchPointIds.has(cp.id));
-    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection, pathN };
+    return { id: p.id, closed, controlPoints, rollPoints, widthPoints, crossSectionPoints, frames, edges, hasBranchConnection, pathN, texture: p.texture || null };
   });
 
   const incidentCounts = endpointIncidentCounts(bakedPaths);
@@ -213,19 +255,26 @@ export function bakeTrackPhysics(track) {
   const edgeCuts = TrackCore.computeDisjointEdgeCuts(bakedPaths, disjointSeams);
   const endpointNormals = computeDisjointEndpointNormals(bakedPaths, disjointSeams);
 
-  const paths = bakedPaths.map((p, i) => bakePhysicsPath(
-    p.controlPoints, p.closed, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
-    TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, p.pathN, overrides), p.hasBranchConnection
-  ));
+  const paths = bakedPaths.map((p, i) => {
+    const path = bakePhysicsPath(
+      p.controlPoints, p.closed, p.frames, p.edges, edgeCuts[i], endpointNormals[i],
+      TrackCore.makeSelfIntersectionDeciders(p.controlPoints, p.closed, p.pathN, overrides), p.hasBranchConnection
+    );
+    path._renderDefinition = p;
+    return path;
+  });
 
+  const warnings = [];
+  const meshRegions = bakeMeshRegions(track, warnings);
   let lowest = Infinity;
   for (const p of paths) for (const f of p.centerline) lowest = Math.min(lowest, f.pos.y);
+  for (const region of meshRegions) lowest = Math.min(lowest, region.elevation);
   const trackFloorY = (isFinite(lowest) ? lowest : 0) - RESPAWN_FALL_DEPTH;
 
-  const zones = bakeZones(track, bakedPaths, paths);
-  const triggers = bakeTriggers(track, bakedPaths);
+  const zones = bakeZones(track, bakedPaths, paths, meshRegions);
+  const triggers = bakeTriggers(track, bakedPaths, meshRegions);
 
-  return { paths, connectedEndpointIds, trackFloorY, zones, triggers };
+  return { paths, meshRegions, connectedEndpointIds, trackFloorY, zones, triggers, warnings, bakedPaths };
 }
 
 // Convenience: the start pose (surface position + orientation) at a path's

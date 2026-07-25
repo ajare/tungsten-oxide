@@ -13,6 +13,7 @@
 
 import { Simulation, createShipState, curvedSurfaceFrame, projectToSurface, tangentize, clamp } from '../../js/track-physics.js';
 import { bakeTrackPhysics, startPose } from '../../js/track-bake.js';
+import * as TrackMesh from '../../js/track-mesh.js';
 import { serializeWorld, serializeShip } from './state.js';
 import { makeAutopilot } from './autopilot.js';
 
@@ -20,7 +21,7 @@ const TC = () => globalThis.TrackCore;
 
 // Place a headless ship on-track at the start control point, mirroring the
 // settling loop in track-game.js startingGridPoses (single ship, lateral 0).
-function placeAtStart(sim, track) {
+export function placeAtStart(sim, track) {
   const ship = createShipState(track, 0);
   const { frame, reverse } = startPose(sim, track);
   let surface = curvedSurfaceFrame(frame, 0);
@@ -47,9 +48,10 @@ function placeAtStart(sim, track) {
 }
 
 export function buildSimFor(track) {
-  const sim = new Simulation({ now: () => 0 });
-  const { paths, connectedEndpointIds, trackFloorY, zones, triggers } = bakeTrackPhysics(track);
+  const sim = new Simulation({ now: () => 0, TrackMesh });
+  const { paths, meshRegions, connectedEndpointIds, trackFloorY, zones, triggers } = bakeTrackPhysics(track);
   sim.paths = paths;
+  sim.meshRegions = meshRegions;
   sim.connectedEndpointIds = connectedEndpointIds;
   sim.trackFloorY = trackFloorY;
   sim.zones = zones;

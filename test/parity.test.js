@@ -6,8 +6,9 @@
  *    the recorded `after` — bit-exact through the JSON boundary (JSON.stringify of
  *    two identical doubles is identical). This proves determinism AND that the
  *    full physics state serializes losslessly (an omitted field would desync).
- *  - Committed fixtures in test/traces/ round-trip the same way — the exact files
- *    the C++ replayer will read.
+ *  - Legacy baked-world fixtures isolate runtime math; M6 raw-track fixtures
+ *    independently normalize/bake current-schema source in each engine and also
+ *    compare surface ownership, rail-hit and respawn outcomes exactly.
  */
 
 import test from 'node:test';
@@ -20,6 +21,7 @@ const { buildTrace } = await import('./parity/trace.js');
 const { loadWorldIntoSim, deserializeShip, serializeShip } = await import('./parity/state.js');
 const { Simulation } = await import('../js/track-physics.js');
 const { tracks } = await import('./parity/tracks.js');
+const { rawScenarios, buildRawTrace, buildSimFor, surfaceLabel, validateRawActivity } = await import('./parity/raw-traces.js');
 
 // Replay a trace per-step; returns { steps, airborneSteps, firstMismatch|null }.
 function replayPerStep(trace) {
@@ -48,6 +50,26 @@ function replayPerStep(trace) {
   return { steps: trace.steps.length, airborneSteps, firstMismatch: null };
 }
 
+function replayRawPerStep(trace) {
+  const track = globalThis.TrackCore.parseTrack(JSON.stringify(trace.sourceTrack));
+  const sim = buildSimFor(track);
+  let before = trace.initialState;
+  for (let i = 0; i < trace.steps.length; ++i) {
+    const ship = deserializeShip(before);
+    const c = trace.steps[i].control;
+    const result = sim.stepPhysics(ship, c.dt, c.throttle, c.brake, c.steer);
+    const got = serializeShip(ship);
+    const expected = trace.steps[i];
+    if (JSON.stringify(got) !== JSON.stringify(expected.after))
+      return { firstMismatch: { step: i, field: 'state' } };
+    const outcome = { surface: surfaceLabel(sim, ship), railHit: !!result.railHit, respawned: !!result.respawned };
+    if (JSON.stringify(outcome) !== JSON.stringify(expected.outcome))
+      return { firstMismatch: { step: i, field: 'outcome', got: outcome, exp: expected.outcome } };
+    before = expected.after;
+  }
+  return { steps: trace.steps.length, firstMismatch: null };
+}
+
 for (const { name, track, steps, seed } of tracks()) {
   test(`per-step replay is bit-exact: ${name}`, () => {
     const trace = buildTrace(track, { name, steps, seed });
@@ -65,11 +87,20 @@ test('open-curve trace actually exercises the airborne path', () => {
   assert.ok(airborne > 0, 'ship should leave the open end and go airborne at least once');
 });
 
+for (const scenario of rawScenarios()) {
+  test(`raw-track per-step replay is bit-exact: ${scenario.name}`, () => {
+    const trace = buildRawTrace(scenario.track, scenario);
+    validateRawActivity(trace, scenario.require);
+    const replay = replayRawPerStep(trace);
+    assert.equal(replay.firstMismatch, null, replay.firstMismatch && JSON.stringify(replay.firstMismatch));
+  });
+}
+
 test('committed fixtures in test/traces/ replay bit-exact', () => {
   const manifestUrl = new URL('./traces/manifest.json', import.meta.url);
   if (!existsSync(manifestUrl)) {
     // Fixtures are optional for the pure npm-test flow; generate with
-    // `node test/parity/gen-traces.mjs`.
+    // `npm run gen-traces`.
     return;
   }
   const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8'));
@@ -80,5 +111,18 @@ test('committed fixtures in test/traces/ replay bit-exact', () => {
     assert.equal(r.firstMismatch, null,
       r.firstMismatch && `${entry.file} step ${r.firstMismatch.step} field ${r.firstMismatch.field}`);
     assert.equal(r.steps, entry.steps);
+  }
+});
+
+test('committed raw-track fixtures replay bit-exact from source schema', () => {
+  const directory = new URL('./traces/raw/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('manifest.json', directory), 'utf8'));
+  assert.ok(manifest.length > 0);
+  for (const entry of manifest) {
+    const trace = JSON.parse(readFileSync(new URL(entry.file, directory), 'utf8'));
+    const replay = replayRawPerStep(trace);
+    assert.equal(replay.firstMismatch, null,
+      replay.firstMismatch && `${entry.file} step ${replay.firstMismatch.step} field ${replay.firstMismatch.field}`);
+    assert.equal(replay.steps, entry.steps);
   }
 });

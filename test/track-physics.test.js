@@ -21,14 +21,18 @@ const {
 } = await import('../js/track-physics.js');
 const { Vec3 } = await import('../js/vec3.js');
 const { bakeTrackPhysics, startPose } = await import('../js/track-bake.js');
+const TrackMesh = await import('../js/track-mesh.js');
 
-// Build a Simulation on a normalized track (no mesh, so TrackMesh is unused).
+// Build a Simulation on a complete normalized track, including mesh regions.
 function simFor(track, opts = {}) {
-  const sim = new Simulation({ now: () => 0, ...opts });
-  const { paths, connectedEndpointIds, trackFloorY } = bakeTrackPhysics(track);
+  const sim = new Simulation({ now: () => 0, TrackMesh, ...opts });
+  const { paths, meshRegions, connectedEndpointIds, trackFloorY, zones, triggers } = bakeTrackPhysics(track);
   sim.paths = paths;
+  sim.meshRegions = meshRegions;
   sim.connectedEndpointIds = connectedEndpointIds;
   sim.trackFloorY = trackFloorY;
+  sim.zones = zones;
+  sim.triggers = triggers;
   return sim;
 }
 
