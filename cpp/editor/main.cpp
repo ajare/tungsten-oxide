@@ -16,9 +16,14 @@
 // tox::Track::geometry batches into .usda Mesh prims -- not a port of js/usd-export.js's from-
 // scratch surface derivation, see USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
 // a scoped port of editor.js's generateRandomTrack covering its closed-loop/no-mesh-sections
-// branch only -- see RandomTrack.hpp and EDITOR_CPP_PORT_PLAN.md for what's deferred). Texture
-// assets (M7b, needs an image-loading dependency and real texture files) remain out of scope.
+// branch only -- see RandomTrack.hpp and EDITOR_CPP_PORT_PLAN.md for what's deferred). M7b adds
+// texture assets: TextureCache.hpp/.cpp decodes PNGs with the vendored stb_image and uploads GL
+// textures for thumbnails; TexturePanel.hpp/.cpp is the asset list + tile-grid picker UI, backed
+// by EditorState's new addTextureAsset/deleteTextureAsset/setTextureTileSize/assignPathTexture/
+// clearPathTexture. Full mesh-section random-track generation (M7c) remains out of scope.
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -35,6 +40,8 @@
 #include "Track.hpp"
 #include "ElevationView.hpp"
 #include "RandomTrack.hpp"
+#include "TextureCache.hpp"
+#include "TexturePanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
@@ -347,6 +354,46 @@ M7aSmokeCheckResult runM7aSmokeCheck() {
   return result;
 }
 
+// M7b smoke check: register a texture asset against one of the repo's real checked-in images
+// (assets/test-1.png), assign it to the starter path, resize its tile grid, and confirm the
+// invalid-assignment guard clears the binding when the resize drops it out of range -- exercises
+// EditorState's texture methods directly, the same ones TexturePanel.cpp's UI calls.
+struct M7bSmokeCheckResult {
+  bool imageSizeReadOk = false;
+  bool assetAdded = false, assigned = false, tileResizeOk = false, invalidAssignmentCleared = false;
+  bool deleted = false;
+};
+
+M7bSmokeCheckResult runM7bSmokeCheck() {
+  M7bSmokeCheckResult result;
+
+  int width = 0, height = 0;
+  const std::filesystem::path assetsDir = editor::findAssetsDir();
+  result.imageSizeReadOk = !assetsDir.empty() && editor::readImageSize(assetsDir / "test-1.png", width, height) && width > 0 && height > 0;
+
+  editor::EditorState state(buildStarterTrack());
+  const std::string assetId = state.addTextureAsset("test-1.png", "assets/test-1.png", std::max(width, 1), std::max(height, 1));
+  result.assetAdded = state.track().textureAssets.count(assetId) == 1;
+
+  result.assigned = state.assignPathTexture(0, assetId, 0) && state.track().paths[0].texture.has_value() &&
+                    state.track().paths[0].texture->assetId == assetId && state.track().paths[0].texture->tile == 0;
+
+  // Shrink the tile to exactly one tile across the whole image (tileWidth = full width means a
+  // 1x1 grid, count == 1) -- tile 0 stays valid, so the binding must survive.
+  result.tileResizeOk = state.setTextureTileSize(assetId, true, std::max(width, 1));
+  result.tileResizeOk = result.tileResizeOk && state.track().paths[0].texture.has_value();
+
+  // Now shrink the tile so small the grid grows past tile 0 -- and directly re-point the path at
+  // an out-of-range tile the same way a stale UI click could, to exercise the invalid-assignment
+  // clear on the next resize.
+  state.assignPathTexture(0, assetId, 999);
+  result.invalidAssignmentCleared = state.setTextureTileSize(assetId, false, std::max(1, height / 4)) && !state.track().paths[0].texture.has_value();
+
+  result.deleted = state.deleteTextureAsset(assetId) && state.track().textureAssets.count(assetId) == 0;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -367,7 +414,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M7a: random tracks + USD export)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M7b: texture assets)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -440,6 +487,13 @@ int main(int, char**) {
                m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH", m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
   std::fflush(stdout);
 
+  const M7bSmokeCheckResult m7bSmoke = runM7bSmokeCheck();
+  std::fprintf(stdout, "M7b smoke check: imageSize=%s add=%s assign=%s tileResize=%s invalidClear=%s delete=%s\n",
+               m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH", m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH",
+               m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
+               m7bSmoke.deleted ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -447,6 +501,7 @@ int main(int, char**) {
   tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   editor::TopDownView topDownView;
+  editor::TextureCache textureCache;
   bool elevationVisible = true;
   int randomSeed = 12345;
   int randomComplexity = 5;
@@ -519,6 +574,12 @@ int main(int, char**) {
                        m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
     ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
                        m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
+    ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
+    ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
+                       m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
+    ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
+                       m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
+                       m7bSmoke.deleted ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -608,6 +669,14 @@ int main(int, char**) {
           editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
       if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex)) rebake();
     }
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Textures");
+    // Mirrors currentCurve(): the selected point's path, or the first path if nothing's selected.
+    const int currentPathIndex =
+        editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
+    if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
     ImGui::End();
 
     ImGui::Render();

@@ -1,7 +1,8 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M7a complete** (USD export + a scoped random-track generator; texture assets remain
-out of scope as M7b -- see the M7 milestone note below). `track_editor` builds under the combined
+Status: **M7b complete** (texture assets: image loading, GL thumbnails, tile-grid picker, per-path
+binding; M7c's full random-track generation remains out of scope -- see the M7 milestone note
+below). `track_editor` builds under the combined
 `cpp/` configure, opens an
 SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
 through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
@@ -31,11 +32,24 @@ exporter just walks those batches into USD Mesh prims. `RandomTrack.hpp/.cpp` po
 `generateRandomTrack`'s closed-loop branch (N-turn loop, calibrated driven length, rolling hills,
 curvature-based banking, boost zones) bit-for-bit including its `mulberry32` PRNG; the
 mesh-section/ramp/jump-platform branch (~180 more lines, an iterative spline-endpoint-blend solve)
-is deferred as future work, so every generated track today is the single-loop variant. Texture
-assets (M7b: thumbnail loading, needs an image-loading dependency and real texture files, neither
-of which exist in this checkout yet) remain unaddressed. All milestones' logic through M7a is
-verified via in-process smoke checks exercising the exact methods the UI calls (every check OK
-across all of them), plus screenshots confirming the UI renders without crashing. This document
+is deferred as future work, so every generated track today is the single-loop variant. M7b adds
+texture assets: `TextureCache.hpp/.cpp` decodes PNGs with a vendored `stb_image.h` (single-header,
+public domain -- see `include/stb/README-VENDORED.md`) and uploads one `GL_TEXTURE_2D` per unique
+file path, cached for the process lifetime, since decoding is display-only decoration for the tile
+picker and never touches physics/baking. `TexturePanel.hpp/.cpp` is the asset list + tile-grid
+picker UI (`ImGui::ImageButton` per tile), backed by new `EditorState` methods
+(`addTextureAsset`/`deleteTextureAsset`/`setTextureTileSize`/`assignPathTexture`/
+`clearPathTexture`) that mirror editor.js's texture-panel functions one-for-one -- the schema
+(`TextureAsset`/`TextureBinding` in `EditorTrackDefinition.hpp`, JSON (de)serialization in
+`EditorTrackDefinition.cpp`) already existed unchanged since M1, so this milestone was scoped
+entirely to loading/UI, no schema work. "Load Bundled Textures" scans `assets/track/manifest.json`
+the same way editor.js's `loadBundledTextureAssets` does, but reads straight off disk instead of
+`fetch()`; `findAssetsDir()` locates the repo's checked-in `assets/` directory by walking up from
+the process's working directory, since the built exe's cwd sits several levels below the repo root
+(`cpp/build/editor/Release/...`), unlike the browser editor's page-relative URLs. All milestones'
+logic through M7b is verified via in-process smoke checks exercising the exact methods the UI
+calls (every check OK across all of them), plus screenshots confirming the UI renders without
+crashing. This document
 records the plan to port `editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
@@ -103,9 +117,12 @@ baking; nothing in `core`'s public API changes because of this work.
   (mesh-section/ramp branch deferred); USD export rebuilt to walk core's own baked
   `tox::Track::geometry` batches rather than porting `usd-export.js`'s from-scratch surface
   derivation.
-- **M7b — Texture assets (not started).** Thumbnail loading needs an image-loading dependency
-  (e.g. `stb_image`) and real texture files, neither present in this checkout; also needs a
-  texture-picker UI with nothing to assign textures to yet (no per-path texture binding UI exists).
+- **M7b — Texture assets.** `stb_image.h` vendored (`include/stb/`) for PNG decoding;
+  `TextureCache` uploads/caches one GL texture per file path; `TexturePanel` lists texture assets,
+  a tile-grid picker (`ImGui::ImageButton`) assigns/clears the current path's binding, tile
+  width/height are editable per asset, "Load Bundled Textures" scans
+  `assets/track/manifest.json`. Backed by new `EditorState` methods mirroring editor.js's texture
+  panel functions; the schema itself needed no changes (already present since M1).
 - **M7c — Full random-track generation (not started).** The mesh-section/ramp/jump-platform branch
   of `generateRandomTrack`: an iterative spline-endpoint-blend solve to land each drop exactly,
   generated platform mesh assets, launch ramps. ~180 lines of JS not yet ported; see

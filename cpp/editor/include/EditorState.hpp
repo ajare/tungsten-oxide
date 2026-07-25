@@ -8,6 +8,13 @@
 // rails live on the shared MeshAsset, not the placement, so toggling one flips it for every placed
 // instance of that asset.
 //
+// M7b adds texture asset registration/deletion/tile-sizing and per-path texture assignment,
+// mirroring editor.js's addTextureAsset/deleteTextureAsset/clampTextureTileSize+
+// clearInvalidTextureAssignments/assignCurrentCurveTexture/clearCurrentCurveTexture. Image
+// decoding and GL upload live in TextureCache.hpp/.cpp instead -- EditorState only ever holds the
+// schema-level TextureAsset record (name/path/dimensions), same separation TopDownCanvas.cpp
+// keeps between authored data and its own rendering.
+//
 // Scope: position points and mesh placements only -- roll/width/cross-section handles, segment
 // deletion/splitting, shared/disjoint point identity, zone/trigger picking, and mesh *asset*
 // authoring (there's no import UI; see main.cpp's hardcoded test asset) are all still
@@ -15,6 +22,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -210,6 +218,76 @@ class EditorState {
 
   void clearRailSelection() { selectedRail_.reset(); }
 
+  // ---- Texture assets (EDITOR_CPP_PORT_PLAN.md M7b) ----
+
+  // Registers a newly loaded image as a texture asset (mirrors addTextureAsset): the id is
+  // derived from `name` (mirrors TrackMesh.uniqueAssetId -- sanitized, deduped against existing
+  // ids), and the tile size starts at the full image (one tile), same as editor.js.
+  std::string addTextureAsset(const std::string& name, const std::string& path, int width, int height) {
+    history_.push(track_);
+    const std::string id = uniqueTextureAssetId(name);
+    TextureAsset asset;
+    asset.id = id;
+    asset.name = name;
+    asset.path = path;
+    asset.width = std::max(1, width);
+    asset.height = std::max(1, height);
+    asset.tileWidth = asset.width;
+    asset.tileHeight = asset.height;
+    track_.textureAssets.emplace(id, std::move(asset));
+    return id;
+  }
+
+  // Mirrors deleteTextureAsset: also clears any path currently bound to it.
+  bool deleteTextureAsset(const std::string& assetId) {
+    if (!track_.textureAssets.count(assetId)) return false;
+    history_.push(track_);
+    track_.textureAssets.erase(assetId);
+    for (auto& path : track_.paths)
+      if (path.texture && path.texture->assetId == assetId) path.texture.reset();
+    return true;
+  }
+
+  // Mirrors clampTextureTileSize + clearInvalidTextureAssignments: shrinking a tile size below
+  // the count a path is currently pointing at clears that binding rather than leaving it dangling.
+  bool setTextureTileSize(const std::string& assetId, bool isWidth, int value) {
+    const auto it = track_.textureAssets.find(assetId);
+    if (it == track_.textureAssets.end()) return false;
+    history_.push(track_);
+    TextureAsset& asset = it->second;
+    const int maxSide = isWidth ? asset.width : asset.height;
+    const int clamped = std::max(1, std::min(maxSide, value));
+    if (isWidth) asset.tileWidth = clamped; else asset.tileHeight = clamped;
+    const int cols = asset.tileWidth > 0 ? asset.width / asset.tileWidth : 0;
+    const int rows = asset.tileHeight > 0 ? asset.height / asset.tileHeight : 0;
+    const int count = cols * rows;
+    for (auto& path : track_.paths)
+      if (path.texture && path.texture->assetId == assetId && path.texture->tile >= count) path.texture.reset();
+    return true;
+  }
+
+  // Mirrors assignCurrentCurveTexture: no-op (no history push) if already assigned exactly this
+  // asset/tile, same guard as the JS version.
+  bool assignPathTexture(int pathIndex, const std::string& assetId, int tile) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
+    if (!track_.textureAssets.count(assetId)) return false;
+    Path& path = track_.paths[pathIndex];
+    if (path.texture && path.texture->assetId == assetId && path.texture->tile == tile) return false;
+    history_.push(track_);
+    path.texture = TextureBinding{assetId, tile};
+    return true;
+  }
+
+  // Mirrors clearCurrentCurveTexture.
+  bool clearPathTexture(int pathIndex) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
+    Path& path = track_.paths[pathIndex];
+    if (!path.texture) return false;
+    history_.push(track_);
+    path.texture.reset();
+    return true;
+  }
+
   bool deleteSelectedMesh() {
     if (!selectedMeshId_.has_value()) return false;
     const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
@@ -315,6 +393,43 @@ class EditorState {
     for (auto& placement : track_.meshes)
       if (placement.id == *selectedMeshId_) return &placement;
     return nullptr;
+  }
+
+  // Mirrors TrackMesh.uniqueAssetId, ported for texture asset ids: strip a trailing extension,
+  // collapse runs of non-alphanumeric/underscore/hyphen characters to a single hyphen, trim
+  // leading/trailing hyphens, lowercase, then dedupe against existing ids with a "-2", "-3", ...
+  // suffix.
+  static std::string sanitizeAssetId(const std::string& filename) {
+    std::string base = filename.empty() ? "texture" : filename;
+    const auto dot = base.find_last_of('.');
+    if (dot != std::string::npos) base = base.substr(0, dot);
+    std::string out;
+    bool lastWasSep = false;
+    for (char c : base) {
+      const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+      if (ok) {
+        out += c;
+        lastWasSep = false;
+      } else if (!lastWasSep) {
+        out += '-';
+        lastWasSep = true;
+      }
+    }
+    const auto startIdx = out.find_first_not_of('-');
+    if (startIdx == std::string::npos) return "texture";
+    const auto endIdx = out.find_last_not_of('-');
+    out = out.substr(startIdx, endIdx - startIdx + 1);
+    for (auto& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out.empty() ? "texture" : out;
+  }
+
+  std::string uniqueTextureAssetId(const std::string& filename) const {
+    const std::string base = sanitizeAssetId(filename);
+    if (!track_.textureAssets.count(base)) return base;
+    for (int i = 2;; ++i) {
+      std::string candidate = base + "-" + std::to_string(i);
+      if (!track_.textureAssets.count(candidate)) return candidate;
+    }
   }
 
   static bool withinPick(const tox::Vec3& p, double worldX, double worldZ, double pickRadiusWorld) {
