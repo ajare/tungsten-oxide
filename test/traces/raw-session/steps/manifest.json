@@ -1,0 +1,26 @@
+[
+  {
+    "file": "raw-session-step-lap.json",
+    "steps": 900,
+    "events": 4,
+    "lapCompletions": 2,
+    "explicitRespawns": 0,
+    "automaticRespawns": 0
+  },
+  {
+    "file": "raw-session-step-roster.json",
+    "steps": 30,
+    "events": 0,
+    "lapCompletions": 0,
+    "explicitRespawns": 0,
+    "automaticRespawns": 0
+  },
+  {
+    "file": "raw-session-step-respawn.json",
+    "steps": 15,
+    "events": 1,
+    "lapCompletions": 0,
+    "explicitRespawns": 1,
+    "automaticRespawns": 0
+  }
+]

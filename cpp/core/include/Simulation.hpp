@@ -6,6 +6,8 @@
 // airborne landing, zones/triggers, and respawn recovery. The old baked-world
 // parity corpus still exercises the exact mesh-free branches.
 #pragma once
+#include <functional>
+#include <string>
 #include "Vec3.hpp"
 #include "TrackCore.hpp"
 #include "Track.hpp"
@@ -37,6 +39,15 @@ struct StepResult {
   bool respawned{false}, railHit{false};
 };
 
+// Distinguishes what a trigger crossing accomplished (NATIVE_GAME_RUNTIME_PLAN.md
+// §2.6): every crossing fires `Fired` (including non-checkpoint "dummy"
+// triggers); a checkpoint crossing that advances the race additionally fires
+// `CheckpointAccepted` or, on completing the final intermediate + finish,
+// `LapCompleted`. Notices are emitted from inside fireTrigger itself, so a
+// frame split into several physics sub-steps still emits each occurrence
+// exactly once.
+enum class TriggerNotice { Fired, CheckpointAccepted, LapCompleted };
+
 // --- pure helpers (mirror of the track-physics.js exports) -----------------
 double effectiveMaxSpeed(const Physics& p);
 void triggerBoost(Ship& ship, const Zone& zone);
@@ -56,6 +67,15 @@ void addImpactJolt(Physics& p, double normalImpactSpeed);
 class Simulation {
 public:
   explicit Simulation(const Track& track);
+
+  // Game-only observation hooks (mirror of js/track-physics.js's injected
+  // `opts.onTriggerFired`/`opts.now`). Both default to no-ops so existing
+  // headless callers are unaffected; a GameSession sets these to surface
+  // gameplay events and a deterministic session clock. `now()` feeds the
+  // Race::lapStartedAt/flashUntil timestamps on lap completion only — never
+  // read for anything else in the deterministic step itself.
+  std::function<void(Ship&, const Trigger&, const std::string& dir, TriggerNotice)> onTriggerFired;
+  std::function<double()> now = [] { return 0.0; };
 
   Sample sampleTrack(double x, double y, double z) const;
 

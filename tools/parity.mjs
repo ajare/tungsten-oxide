@@ -24,6 +24,10 @@ const traces = ['starter-circle.json', 'open-curve.json', 'boost-circuit.json', 
   .map(f => traceDir + f);
 const rawManifest = JSON.parse(readFileSync(traceDir + 'raw/manifest.json', 'utf8'));
 const rawTraces = rawManifest.map(entry => traceDir + 'raw/' + entry.file);
+const rawSessionInitManifest = JSON.parse(readFileSync(traceDir + 'raw-session/init/manifest.json', 'utf8'));
+const rawSessionInitTraces = rawSessionInitManifest.map(entry => traceDir + 'raw-session/init/' + entry.file);
+const rawSessionStepManifest = JSON.parse(readFileSync(traceDir + 'raw-session/steps/manifest.json', 'utf8'));
+const rawSessionStepTraces = rawSessionStepManifest.map(entry => traceDir + 'raw-session/steps/' + entry.file);
 
 function run(label, cmd, args, opts = {}) {
   process.stdout.write(`\n=== ${label} ===\n`);
@@ -62,6 +66,21 @@ if (exe) {
   } else {
     console.log('\n=== C++ random track-mesh geometry parity ===');
     console.log('  SKIPPED — rebuild the engine to add random_geometry_parity');
+  }
+  const rawSessionCandidates = [
+    `${root}cpp/build/core/Release/raw_session_parity.exe`,
+    `${root}cpp/build/core/raw_session_parity`,
+    `${root}cpp/build/raw_session_parity.exe`,
+    `${root}cpp/build/raw_session_parity`,
+    `${root}cpp/build/Release/raw_session_parity.exe`
+  ];
+  const rawSessionExe = rawSessionCandidates.find(existsSync);
+  if (rawSessionExe) {
+    failed += run('C++ raw-session parity (native ship/session init + stepping)', rawSessionExe,
+      [...rawSessionInitTraces, ...rawSessionStepTraces]) ? 1 : 0;
+  } else {
+    console.log('\n=== C++ raw-session parity ===');
+    console.log('  SKIPPED — rebuild the engine to add raw_session_parity');
   }
 } else {
   console.log('\n=== C++ per-step parity ===');

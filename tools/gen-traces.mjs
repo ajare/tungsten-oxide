@@ -16,6 +16,10 @@ installTrackCore();
 const { buildTrace } = await import('../test/parity/trace.js');
 const { tracks } = await import('../test/parity/tracks.js');
 const { rawScenarios, buildRawTrace, validateRawActivity } = await import('../test/parity/raw-traces.js');
+const {
+  rawSessionInitScenarios, buildRawSessionInitTrace,
+  rawSessionStepScenarios, buildRawSessionStepTrace, validateRawSessionActivity
+} = await import('../test/parity/raw-session-traces.js');
 
 const outDir = fileURLToPath(new URL('../test/traces/', import.meta.url));
 mkdirSync(outDir, { recursive: true });
@@ -45,3 +49,30 @@ for (const scenario of rawScenarios()) {
 }
 writeFileSync(rawDir + 'manifest.json', JSON.stringify(rawManifest, null, 2) + '\n');
 console.log(`wrote raw/manifest.json (${rawManifest.length} traces)`);
+
+const sessionInitDir = outDir + 'raw-session/init/';
+mkdirSync(sessionInitDir, { recursive: true });
+const sessionInitManifest = [];
+for (const scenario of rawSessionInitScenarios()) {
+  const trace = buildRawSessionInitTrace(scenario.track, scenario);
+  const file = `${scenario.name}.json`;
+  writeFileSync(sessionInitDir + file, JSON.stringify(trace) + '\n');
+  sessionInitManifest.push({ file, shipCount: trace.meta.shipCount });
+  console.log(`wrote raw-session/init/${file}: ${trace.roster.length} ships`);
+}
+writeFileSync(sessionInitDir + 'manifest.json', JSON.stringify(sessionInitManifest, null, 2) + '\n');
+console.log(`wrote raw-session/init/manifest.json (${sessionInitManifest.length} traces)`);
+
+const sessionStepDir = outDir + 'raw-session/steps/';
+mkdirSync(sessionStepDir, { recursive: true });
+const sessionStepManifest = [];
+for (const scenario of rawSessionStepScenarios()) {
+  const trace = buildRawSessionStepTrace(scenario.track, scenario);
+  const activity = validateRawSessionActivity(trace, scenario.require);
+  const file = `${scenario.name}.json`;
+  writeFileSync(sessionStepDir + file, JSON.stringify(trace) + '\n');
+  sessionStepManifest.push({ file, steps: trace.steps.length, ...activity });
+  console.log(`wrote raw-session/steps/${file}: ${trace.steps.length} frames, ${activity.events} events`);
+}
+writeFileSync(sessionStepDir + 'manifest.json', JSON.stringify(sessionStepManifest, null, 2) + '\n');
+console.log(`wrote raw-session/steps/manifest.json (${sessionStepManifest.length} traces)`);

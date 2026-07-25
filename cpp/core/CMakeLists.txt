@@ -39,7 +39,10 @@ set(CORE_HEADERS
   include/TrackMesh.hpp
   include/Track.hpp
   include/Ship.hpp
-  include/Simulation.hpp)
+  include/Simulation.hpp
+  include/StartGrid.hpp
+  include/ShipFactory.hpp
+  include/GameSession.hpp)
 
 add_library(core STATIC
   src/Vec3.cpp
@@ -49,6 +52,9 @@ add_library(core STATIC
   src/TrackMesh.cpp
   src/TrackLoader.cpp
   src/Simulation.cpp
+  src/StartGrid.cpp
+  src/ShipFactory.cpp
+  src/GameSession.cpp
   ${CORE_HEADERS})
 target_include_directories(core PUBLIC include PRIVATE third_party)
 target_link_libraries(core PRIVATE Willpower::Geometry)
@@ -74,11 +80,18 @@ add_executable(random_geometry_parity tests/random_geometry_parity_main.cpp)
 target_include_directories(random_geometry_parity PRIVATE third_party)
 target_link_libraries(random_geometry_parity PRIVATE core)
 
+# Raw-session parity (NATIVE_GAME_RUNTIME_PLAN.md): native ship/session
+# initialization and GameSession frame-stepping/events, independently from
+# schema-10 JSON plus scripted controls only.
+add_executable(raw_session_parity tests/raw_session_parity_main.cpp)
+target_include_directories(raw_session_parity PRIVATE third_party)
+target_link_libraries(raw_session_parity PRIVATE core)
+
 # Multi-config generators leave Willpower DLLs in sibling output directories.
 # Put runtime dependencies beside each executable so direct runs and CTest use
 # the same self-contained layout.
 if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
-  foreach(_executable parity track_tests random_geometry_parity)
+  foreach(_executable parity track_tests random_geometry_parity raw_session_parity)
     add_custom_command(TARGET ${_executable} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_RUNTIME_DLLS:${_executable}> $<TARGET_FILE_DIR:${_executable}>
@@ -113,3 +126,15 @@ add_test(NAME raw_parity
     ${RAW_TRACE_DIR}/raw-long-mixed-course.json)
 add_test(NAME track_tests COMMAND track_tests ${MESH_FIXTURE_DIR})
 add_test(NAME random_geometry_parity COMMAND random_geometry_parity ${RANDOM_GEOMETRY_FIXTURE_DIR})
+
+set(RAW_SESSION_TRACE_DIR ${TRACE_DIR}/raw-session)
+add_test(NAME raw_session_init_parity
+  COMMAND raw_session_parity
+    ${RAW_SESSION_TRACE_DIR}/init/raw-session-init-closed-reversed.json
+    ${RAW_SESSION_TRACE_DIR}/init/raw-session-init-open.json
+    ${RAW_SESSION_TRACE_DIR}/init/raw-session-init-narrow.json)
+add_test(NAME raw_session_step_parity
+  COMMAND raw_session_parity
+    ${RAW_SESSION_TRACE_DIR}/steps/raw-session-step-lap.json
+    ${RAW_SESSION_TRACE_DIR}/steps/raw-session-step-roster.json
+    ${RAW_SESSION_TRACE_DIR}/steps/raw-session-step-respawn.json)

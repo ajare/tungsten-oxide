@@ -65,6 +65,14 @@ struct Race {
   // reconstructable from a step loaded in isolation (mirror of createRaceState).
   std::vector<std::string> intermediateIds;
   std::string finishId;
+
+  // Deterministic session-time clock fields (mirror of createRaceState's
+  // totalStartedAt/lapStartedAt/flashUntil). Seeded from the caller-supplied
+  // session time, never a platform clock; the baked-world/raw-track parity
+  // traces never serialize these, so they are additive and gate-inert there.
+  double totalStartedAt{0.0};
+  double lapStartedAt{0.0};
+  double flashUntil{0.0};
 };
 
 // The respawn fallback pose (mirror of track-game.js ship.startPose), used when

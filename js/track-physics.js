@@ -463,8 +463,14 @@ export class Simulation {
 
   fireTrigger(ship, rec, dir) {
     const state = ship.triggerStates.get(rec.id);
-    // Game-only effects (console log, player checkpoint flash) live in the host.
-    this.onTriggerFired(ship, rec, dir, state);
+    // Game-only observation (event queue, console log, player checkpoint
+    // flash) fires for every trigger, including non-checkpoint "dummy"
+    // triggers; the portable checkpoint/lap logic below runs regardless of
+    // whether a hook is set. `notice` distinguishes what this crossing
+    // accomplished: 'fired' always, plus 'checkpointAccepted'/'lapCompleted'
+    // for a checkpoint crossing that advances the race (mirror of
+    // cpp/core's TriggerNotice).
+    this.onTriggerFired(ship, rec, dir, 'fired', state);
     if (rec.type !== 'checkpoint') return;
 
     const checkpoint = ship.lastCheckpoint;
@@ -477,6 +483,7 @@ export class Simulation {
     const race = ship.race;
     if (rec.role !== 'finish') {
       race.hit.add(rec.id);
+      this.onTriggerFired(ship, rec, dir, 'checkpointAccepted', state);
       return;
     }
     if (!race.intermediateIds.every(id => race.hit.has(id))) return;
@@ -486,6 +493,7 @@ export class Simulation {
     race.hit.clear();
     race.lapStartedAt = now;
     race.flashUntil = now + CHECKPOINT_FLASH_MS;
+    this.onTriggerFired(ship, rec, dir, 'lapCompleted', state);
   }
 
   resetTriggers(ship, disarmedId = null) {

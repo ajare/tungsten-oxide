@@ -22,6 +22,11 @@ const { loadWorldIntoSim, deserializeShip, serializeShip } = await import('./par
 const { Simulation } = await import('../js/track-physics.js');
 const { tracks } = await import('./parity/tracks.js');
 const { rawScenarios, buildRawTrace, buildSimFor, surfaceLabel, validateRawActivity } = await import('./parity/raw-traces.js');
+const {
+  rawSessionInitScenarios, buildRawSessionInitTrace,
+  rawSessionStepScenarios, buildRawSessionStepTrace, validateRawSessionActivity
+} = await import('./parity/raw-session-traces.js');
+const { buildRoster, Session } = await import('../js/track-session.js');
 
 // Replay a trace per-step; returns { steps, airborneSteps, firstMismatch|null }.
 function replayPerStep(trace) {
@@ -124,5 +129,79 @@ test('committed raw-track fixtures replay bit-exact from source schema', () => {
     assert.equal(replay.firstMismatch, null,
       replay.firstMismatch && `${entry.file} step ${replay.firstMismatch.step} field ${replay.firstMismatch.field}`);
     assert.equal(replay.steps, entry.steps);
+  }
+});
+
+/* --- raw-session (NATIVE_GAME_RUNTIME_PLAN.md) ----------------------------
+ * Tier A: rebuilding the roster from `sourceTrack` alone (no serialized
+ * ship/roster input) must reproduce the recorded roster bit-exactly — this
+ * is the self-check half of proving independent ship/session initialization.
+ * Tier B: replaying one recorded frame from its "before" roster + session
+ * time snapshot must reproduce the recorded "after" roster and event list
+ * exactly, the same bit-exact-replay-from-recorded-state technique the
+ * raw-track layer already uses.
+ */
+function replaySessionInit(trace) {
+  const track = globalThis.TrackCore.parseTrack(JSON.stringify(trace.sourceTrack));
+  const sim = buildSimFor(track);
+  const roster = buildRoster(sim, track, trace.meta.shipCount, 0).map(serializeShip);
+  return JSON.stringify(roster) === JSON.stringify(trace.roster) ? null : { got: roster, exp: trace.roster };
+}
+
+function replaySessionFrame(trace, step) {
+  const track = globalThis.TrackCore.parseTrack(JSON.stringify(trace.sourceTrack));
+  const sim = buildSimFor(track);
+  const ships = step.before.roster.map(deserializeShip);
+  const session = new Session(sim, ships);
+  session.sessionTime = step.before.sessionTime;
+  session.step(step.intents, step.dt);
+  const gotAfter = { roster: ships.map(serializeShip), sessionTime: session.sessionTime };
+  const gotEvents = session.events.map(e => ({ ...e }));
+  if (JSON.stringify(gotAfter) !== JSON.stringify(step.after)) return { field: 'after', got: gotAfter, exp: step.after };
+  if (JSON.stringify(gotEvents) !== JSON.stringify(step.events)) return { field: 'events', got: gotEvents, exp: step.events };
+  return null;
+}
+
+for (const scenario of rawSessionInitScenarios()) {
+  test(`raw-session initial roster is bit-exact: ${scenario.name}`, () => {
+    const trace = buildRawSessionInitTrace(scenario.track, scenario);
+    const mismatch = replaySessionInit(trace);
+    assert.equal(mismatch, null, mismatch && JSON.stringify(mismatch));
+  });
+}
+
+for (const scenario of rawSessionStepScenarios()) {
+  test(`raw-session frame replay is bit-exact: ${scenario.name}`, () => {
+    const trace = buildRawSessionStepTrace(scenario.track, scenario);
+    validateRawSessionActivity(trace, scenario.require);
+    for (let i = 0; i < trace.steps.length; i++) {
+      const mismatch = replaySessionFrame(trace, trace.steps[i]);
+      assert.equal(mismatch, null, mismatch && `frame ${i}: ${JSON.stringify(mismatch)}`);
+    }
+  });
+}
+
+test('committed raw-session init fixtures replay bit-exact from source schema', () => {
+  const directory = new URL('./traces/raw-session/init/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('manifest.json', directory), 'utf8'));
+  assert.ok(manifest.length > 0);
+  for (const entry of manifest) {
+    const trace = JSON.parse(readFileSync(new URL(entry.file, directory), 'utf8'));
+    const mismatch = replaySessionInit(trace);
+    assert.equal(mismatch, null, mismatch && `${entry.file}: ${JSON.stringify(mismatch)}`);
+  }
+});
+
+test('committed raw-session step fixtures replay bit-exact from source schema', () => {
+  const directory = new URL('./traces/raw-session/steps/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('manifest.json', directory), 'utf8'));
+  assert.ok(manifest.length > 0);
+  for (const entry of manifest) {
+    const trace = JSON.parse(readFileSync(new URL(entry.file, directory), 'utf8'));
+    for (let i = 0; i < trace.steps.length; i++) {
+      const mismatch = replaySessionFrame(trace, trace.steps[i]);
+      assert.equal(mismatch, null, mismatch && `${entry.file} frame ${i}: ${JSON.stringify(mismatch)}`);
+    }
+    assert.equal(trace.steps.length, entry.steps);
   }
 });

@@ -63,6 +63,24 @@ C++ parity layers. Trace regeneration is deliberate: `npm run gen-traces`. The r
 corpus is regenerated separately with `npm run gen-random-mesh-fixtures`; see
 `test/fixtures/random-track-mesh/README.md`.
 
+## Native runtime host
+
+`cpp/app` builds `track_runner`, a minimal command-line host outside `core`
+(only added by the combined `cpp` configure, not standalone `cpp/core`):
+
+```text
+track_runner <track.json>
+```
+
+It loads and bakes the track (`Track::fromFile`, including renderer-neutral
+geometry), builds a `GameSession` with the default roster, and runs the
+deterministic simulation loop in real time — each frame's `dt` comes from a
+steady clock, not a fixed step — printing a once-a-second status line until
+Escape is pressed. The roster stays idle (zero throttle): there is no
+rendering, audio, or driving input, so this is a session lifecycle/timing
+smoke host, not a playable client. See `NATIVE_GAME_RUNTIME_PLAN.md` for what
+deliberately stays outside it.
+
 ## Public data flow
 
 ```cpp
