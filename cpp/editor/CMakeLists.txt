@@ -74,7 +74,8 @@ set(EDITOR_SOURCES
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp
   src/CurvesPanel.cpp
-  src/HandlingPanel.cpp)
+  src/HandlingPanel.cpp
+  src/RandomRangesPanel.cpp)
 
 add_executable(track_editor
   main.cpp

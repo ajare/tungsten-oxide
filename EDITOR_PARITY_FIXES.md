@@ -423,8 +423,21 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    smoke check" in `main.cpp` covers edit, out-of-range clamping, undo/redo, reset, and that an
    edited value reaches the physics bake (`tox::Track::definition.handling`), not just the
    editor's own schema.
-8. **Random ranges panel** — JS exposes twelve configurable bounds with persistence; `RandomTrack.cpp`
-   hardcodes them.
+8. ~~**Random ranges panel**~~ **Implemented (session-only; no persistence).** `RandomTrack.hpp`'s
+   `generateRandomTrack` already accepted a `RandomTrackRanges` parameter (M7a/M7c); `main.cpp`
+   simply never passed anything but the `{}` default. New "Random Ranges" window
+   (`RandomRangesPanel.hpp/.cpp`) exposes all nineteen fields (nine min/max pairs plus maxBanking/
+   maxHill/maxCurvature/sequenceChance/maxMeshSections), with a `sanitize()` that's a direct port
+   of `sanitizeRandomRanges` (clamp each field, then fix each pair's ordering so a lerp never sees
+   max < min), plus a Reset-to-default button. `main.cpp` holds the `RandomTrackRanges` as a
+   session-local variable (not `EditorState`/undo history -- it's a generator preference, not
+   authored track data) and passes it to every "New Random Track" click. **Deviation from JS:** no
+   `localStorage`-equivalent persistence across sessions -- this editor has no established
+   local-settings-persistence mechanism yet (same tradeoff as gap 9's grid/snap prefs); ranges
+   reset to `RANDOM_RANGE_DEFAULTS`-equivalent defaults every run. A "Gap8 smoke check" in
+   `main.cpp` confirms a custom range actually reaches the generator (pinning `turnsMin ==
+   turnsMax` forces the single-loop variant's control-point count to that exact value) and that the
+   previously-implicit default ranges still bake cleanly.
 9. ~~**Grid display, grid size, snap-to-grid.**~~ **Implemented.** `TopDownView` gained
    `showGrid`/`gridSize`/`snapToGrid` (view/UI preference, not track data, so it lives there rather
    than in `EditorState`/undo history, mirroring `js/editor.js`'s module-level `showGrid`/

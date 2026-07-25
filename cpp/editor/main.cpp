@@ -60,6 +60,7 @@
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
 #include "HandlingPanel.hpp"
+#include "RandomRangesPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
@@ -1078,6 +1079,44 @@ Gap14SmokeCheckResult runGap14SmokeCheck() {
   return result;
 }
 
+// Gap-8 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #8): the random-ranges panel.
+// `generateRandomTrack` already accepted a `RandomTrackRanges` parameter (M7a/M7c); main.cpp
+// simply never passed anything but the `{}` default until this gap's UI wiring. Confirms a custom
+// range actually reaches the generator -- pinning turnsMin == turnsMax forces the single-loop
+// variant's control-point count to that exact value regardless of complexity (`n` in
+// generateRandomTrack, RandomTrack.cpp:283, collapses to `turnsMin` when the range has zero
+// width), and disabling mesh sections (meshChanceMax=0, maxMeshSections=0) keeps the whole track a
+// single loop so the count is unambiguous -- and that the default-constructed ranges still bake
+// cleanly (regression check: this is what every prior random-track call implicitly used). The
+// panel's own field-clamping (`sanitize`, a direct port of sanitizeRandomRanges) is UI-only logic
+// exercised through ImGui widgets with no headless entry point, consistent with how the other gap
+// panels (Zones/Triggers/Properties) aren't unit-tested directly either -- only the
+// EditorState/generator side each one drives is.
+struct Gap8SmokeCheckResult {
+  bool customTurnCountRespected = false, defaultRangesStillBake = false;
+};
+
+Gap8SmokeCheckResult runGap8SmokeCheck() {
+  Gap8SmokeCheckResult result;
+
+  editor::RandomTrackRanges fixedTurns;
+  fixedTurns.turnsMin = fixedTurns.turnsMax = 9;
+  fixedTurns.meshChanceMin = fixedTurns.meshChanceMax = 0.0;
+  fixedTurns.maxMeshSections = 0;
+  const editor::TrackDefinition track = editor::generateRandomTrack(5, 777u, fixedTurns);
+  int positionCount = 0;
+  if (!track.paths.empty())
+    for (const auto& point : track.paths[0].points)
+      if (point.kind == editor::PointKind::Position) ++positionCount;
+  result.customTurnCountRespected = track.paths.size() == 1 && positionCount == 9;
+
+  const editor::TrackDefinition defaultTrack = editor::generateRandomTrack(5, 777u, editor::RandomTrackRanges{});
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(defaultTrack));
+  result.defaultRangesStillBake = static_cast<bool>(baked);
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1267,6 +1306,11 @@ int main(int, char**) {
                gap7Smoke.redone ? "OK" : "MISMATCH", gap7Smoke.reset ? "OK" : "MISMATCH", gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap8SmokeCheckResult gap8Smoke = runGap8SmokeCheck();
+  std::fprintf(stdout, "Gap8 smoke check (random ranges panel): customTurnCountRespected=%s defaultRangesStillBake=%s\n",
+               gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   const Gap9SmokeCheckResult gap9Smoke = runGap9SmokeCheck();
   std::fprintf(stdout,
                "Gap9 smoke check (grid display / size / snap): noSnapByDefault=%s snapWhenEnabled=%s "
@@ -1296,6 +1340,10 @@ int main(int, char**) {
   bool elevationVisible = true;
   int randomSeed = 12345;
   int randomComplexity = 5;
+  // Random-track generator ranges (EDITOR_PARITY_FIXES.md gap 8), mirrors editor.js's
+  // randomRanges -- a session-only generator preference (see RandomRangesPanel.hpp), not track
+  // data, so it lives here rather than in EditorState/undo history.
+  editor::RandomTrackRanges randomRanges;
   std::string usdExportStatus;
   std::string fileIoStatus;
 
@@ -1437,6 +1485,9 @@ int main(int, char**) {
                       gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH", gap7Smoke.redone ? "OK" : "MISMATCH");
     ImGui::BulletText("reset to default / baked handling matches edited value: %s / %s", gap7Smoke.reset ? "OK" : "MISMATCH",
                       gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap8 smoke check (random ranges panel, exercised directly):");
+    ImGui::BulletText("custom turn-count range respected / default ranges still bake: %s / %s",
+                      gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap9 smoke check (grid display / size / snap, exercised directly):");
     ImGui::BulletText("no snap by default / snaps once shown+enabled / hidden grid disables snap: %s / %s / %s",
                       gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",
@@ -1618,7 +1669,7 @@ int main(int, char**) {
       // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history, so
       // the pre-generation state has to be pushed explicitly to stay undoable.
       editorState.history().push(editorState.track());
-      editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed)));
+      editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed), randomRanges));
       rebake();
     }
     ImGui::Separator();
@@ -1716,6 +1767,11 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(280, 180), ImGuiCond_FirstUseEver);
     ImGui::Begin("Handling");
     if (editor::DrawHandlingPanel(editorState)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Random Ranges");
+    editor::DrawRandomRangesPanel(randomRanges);
     ImGui::End();
 
     ImGui::Render();

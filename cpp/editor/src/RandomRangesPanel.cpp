@@ -1,0 +1,113 @@
+#include "RandomRangesPanel.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <string>
+
+#include "imgui.h"
+
+namespace editor {
+namespace {
+
+double clampNum(double v, double lo, double hi, double fallback) { return std::isfinite(v) ? std::clamp(v, lo, hi) : fallback; }
+int clampInt(int v, int lo, int hi) { return std::clamp(v, lo, hi); }
+
+// Direct port of sanitizeRandomRanges (js/editor.js:3679-3711): clamps every field to its own
+// range, then fixes each min/max pair's ordering so a lerp never sees max < min.
+void sanitize(RandomTrackRanges& r) {
+  const RandomTrackRanges d;  // default-constructed == RANDOM_RANGE_DEFAULTS
+  r.lengthMin = clampNum(r.lengthMin, 500.0, 100000.0, d.lengthMin);
+  r.lengthMax = clampNum(r.lengthMax, 500.0, 100000.0, d.lengthMax);
+  r.turnsMin = clampInt(r.turnsMin, 4, 40);
+  r.turnsMax = clampInt(r.turnsMax, 4, 40);
+  r.maxBanking = clampNum(r.maxBanking, 0.0, 60.0, d.maxBanking);
+  r.maxHill = clampNum(r.maxHill, 0.0, 5000.0, d.maxHill);
+  r.widthMin = clampNum(r.widthMin, 1.0, 2000.0, d.widthMin);
+  r.widthMax = clampNum(r.widthMax, 1.0, 2000.0, d.widthMax);
+  r.maxCurvature = clampNum(r.maxCurvature, 0.0, 1.0, d.maxCurvature);
+  r.meshChanceMin = clampNum(r.meshChanceMin, 0.0, 100.0, d.meshChanceMin);
+  r.meshChanceMax = clampNum(r.meshChanceMax, 0.0, 100.0, d.meshChanceMax);
+  r.sequenceChance = clampNum(r.sequenceChance, 0.0, 100.0, d.sequenceChance);
+  r.maxMeshSections = clampInt(r.maxMeshSections, 0, 5);
+  r.meshLengthMin = clampNum(r.meshLengthMin, 60.0, 1000.0, d.meshLengthMin);
+  r.meshLengthMax = clampNum(r.meshLengthMax, 60.0, 1000.0, d.meshLengthMax);
+  r.endDropMin = clampNum(r.endDropMin, 1.0, 200.0, d.endDropMin);
+  r.endDropMax = clampNum(r.endDropMax, 1.0, 200.0, d.endDropMax);
+  r.boostMin = clampInt(r.boostMin, 0, 50);
+  r.boostMax = clampInt(r.boostMax, 0, 50);
+
+  if (r.lengthMax < r.lengthMin) r.lengthMax = r.lengthMin;
+  if (r.turnsMax < r.turnsMin) r.turnsMax = r.turnsMin;
+  if (r.widthMax < r.widthMin) r.widthMax = r.widthMin;
+  if (r.meshChanceMax < r.meshChanceMin) r.meshChanceMax = r.meshChanceMin;
+  if (r.meshLengthMax < r.meshLengthMin) r.meshLengthMax = r.meshLengthMin;
+  if (r.endDropMax < r.endDropMin) r.endDropMax = r.endDropMin;
+  if (r.boostMax < r.boostMin) r.boostMax = r.boostMin;
+}
+
+constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
+
+bool doubleRow(const char* label, double& lo, double& hi, const char* fmt = "%.1f") {
+  bool changed = false;
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble((std::string("Min##") + label).c_str(), &lo, 0.0, 0.0, fmt, kCommitOnEnter);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble((std::string("Max##") + label).c_str(), &hi, 0.0, 0.0, fmt, kCommitOnEnter);
+  return changed;
+}
+
+bool intRow(const char* label, int& lo, int& hi) {
+  bool changed = false;
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputInt((std::string("Min##") + label).c_str(), &lo);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputInt((std::string("Max##") + label).c_str(), &hi);
+  return changed;
+}
+
+}  // namespace
+
+bool DrawRandomRangesPanel(RandomTrackRanges& ranges) {
+  bool changed = false;
+
+  ImGui::TextUnformatted("Length (m)");
+  changed |= doubleRow("length", ranges.lengthMin, ranges.lengthMax);
+  ImGui::TextUnformatted("Turns");
+  changed |= intRow("turns", ranges.turnsMin, ranges.turnsMax);
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Max Banking (deg)", &ranges.maxBanking, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Max Hill (m)", &ranges.maxHill, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  ImGui::TextUnformatted("Width");
+  changed |= doubleRow("width", ranges.widthMin, ranges.widthMax);
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Max Curvature", &ranges.maxCurvature, 0.0, 0.0, "%.2f", kCommitOnEnter);
+
+  ImGui::Separator();
+  ImGui::TextUnformatted("Mesh Chance (%)");
+  changed |= doubleRow("meshChance", ranges.meshChanceMin, ranges.meshChanceMax);
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Sequence Chance (%)", &ranges.sequenceChance, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputInt("Max Mesh Sections", &ranges.maxMeshSections);
+  ImGui::TextUnformatted("Mesh Length (m)");
+  changed |= doubleRow("meshLength", ranges.meshLengthMin, ranges.meshLengthMax);
+  ImGui::TextUnformatted("End Drop (m)");
+  changed |= doubleRow("endDrop", ranges.endDropMin, ranges.endDropMax);
+  ImGui::TextUnformatted("Boost Zones");
+  changed |= intRow("boost", ranges.boostMin, ranges.boostMax);
+
+  if (changed) sanitize(ranges);
+
+  ImGui::Separator();
+  if (ImGui::Button("Reset to Default")) {
+    ranges = RandomTrackRanges{};
+    changed = true;
+  }
+
+  return changed;
+}
+
+}  // namespace editor
