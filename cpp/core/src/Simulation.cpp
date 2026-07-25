@@ -336,8 +336,10 @@ void Simulation::detectTriggers(Ship& ship, const Vec3& p0, const Vec3& p1) cons
 }
 
 void Simulation::fireTrigger(Ship& ship, const Trigger& rec, const std::string& dir) const {
-  // The onTriggerFired hook (console log, player checkpoint flash) is game-only;
-  // the portable checkpoint/lap logic runs regardless.
+  // Game-only observation (event queue, console log, player checkpoint flash)
+  // fires for every trigger, including non-checkpoint "dummy" triggers; the
+  // portable checkpoint/lap logic below runs regardless of whether a sink is set.
+  if (onTriggerFired) onTriggerFired(ship, rec, dir, TriggerNotice::Fired);
   if (rec.type != "checkpoint") return;
   Checkpoint& checkpoint = ship.lastCheckpoint;
   checkpoint.valid = true;
@@ -349,14 +351,17 @@ void Simulation::fireTrigger(Ship& ship, const Trigger& rec, const std::string& 
   Race& race = ship.race;
   if (rec.role != "finish") {
     race.hit.insert(rec.id);
+    if (onTriggerFired) onTriggerFired(ship, rec, dir, TriggerNotice::CheckpointAccepted);
     return;
   }
   for (const std::string& id : race.intermediateIds)
     if (!race.hit.count(id)) return;
+  const double n = now();
   race.laps++;
   race.hit.clear();
-  // race.lapStartedAt/flashUntil are wall-clock fields (this.now()) the parity
-  // Race does not carry, so they are intentionally not tracked here.
+  race.lapStartedAt = n;
+  race.flashUntil = n + Consts::CHECKPOINT_FLASH_MS;
+  if (onTriggerFired) onTriggerFired(ship, rec, dir, TriggerNotice::LapCompleted);
 }
 
 void Simulation::clearBoost(Ship& ship) const {

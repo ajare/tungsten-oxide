@@ -6,11 +6,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
 
+#include "GameSession.hpp"
+#include "ShipFactory.hpp"
 #include "Simulation.hpp"
+#include "StartGrid.hpp"
 #include "Track.hpp"
 #include "nlohmann/json.hpp"
 
@@ -103,11 +107,11 @@ void checkVec2(const Vec2d& got, const json& want, double tolerance, const std::
   checkClose(got.y, want[1].get<double>(), tolerance, message + ".z");
 }
 
-Ship shipAt(const Simulation& simulation, const Vec3& position, const Vec3& forward = Vec3(0, 0, 1)) {
-  Ship ship;
-  ship.startPose = {position, UP, forward};
-  simulation.placeShipAtPose(ship, ship.startPose, {});
-  return ship;
+// Routes through the canonical ShipFactory::makeShip (NATIVE_GAME_RUNTIME_PLAN.md
+// §2.1) at an arbitrary test position/orientation, so ad hoc test ships get the
+// same handling/race initialization a real roster ship would.
+Ship shipAt(const Simulation& simulation, const Track& track, const Vec3& position, const Vec3& forward = Vec3(0, 0, 1)) {
+  return ShipFactory::makeShip(simulation, track, Pose{position, UP, forward});
 }
 
 double triangleArea(const MeshRegion& region) {
@@ -284,14 +288,14 @@ int main(int argc, char** argv) {
   if (holeTrack) {
     const Track& track = *holeTrack.track;
     Simulation simulation(track);
-    Ship ship = shipAt(simulation, {20, 4, -25}, {0, 0, -1});
+    Ship ship = shipAt(simulation, track, {20, 4, -25}, {0, 0, -1});
     ship.physics.speed = 60;
     simulation.stepPhysics(ship, 0.1, 0, 0, 0);
     check(!ship.physics.airborne && ship.physics.groundPos.z > -30 && ship.physics.moveDir.z > 0,
           "grounded mesh rail stops and reflects ship");
 
     auto airborneRun = [&](double y) {
-      Ship airborne = shipAt(simulation, {20, y, -35});
+      Ship airborne = shipAt(simulation, track, {20, y, -35});
       airborne.physics.airborne = true;
       airborne.physics.speed = 80;
       airborne.physics.moveDir.set(0, 0, 1);
@@ -304,7 +308,7 @@ int main(int argc, char** argv) {
     check(cleared.physics.groundPos.z > -30, "airborne ship above rail top clears wall");
 
     auto landingRun = [&](double x) {
-      Ship airborne = shipAt(simulation, {x, 7, 0});
+      Ship airborne = shipAt(simulation, track, {x, 7, 0});
       airborne.physics.airborne = true;
       airborne.physics.verticalVel = -15;
       airborne.physics.speed = 0;
@@ -326,7 +330,7 @@ int main(int argc, char** argv) {
     const auto loaded = Track::fromJson(transformed.dump());
     if (loaded) {
       Simulation simulation(*loaded.track);
-      Ship ship = shipAt(simulation, {120, 8, 35});
+      Ship ship = shipAt(simulation, *loaded.track, {120, 8, 35});
       ship.physics.speed = 60;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
       check(ship.physics.airborne && ship.physics.groundPos.z > 40,
@@ -341,7 +345,7 @@ int main(int argc, char** argv) {
     const auto loaded = Track::fromJson(overlap.dump());
     if (loaded) {
       Simulation simulation(*loaded.track);
-      Ship ship = shipAt(simulation, {10, 12, 0}, {1, 0, 0});
+      Ship ship = shipAt(simulation, *loaded.track, {10, 12, 0}, {1, 0, 0});
       ship.physics.speed = 80;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
       check(!ship.physics.airborne && ship.physics.groundPos.y == 0,
@@ -352,7 +356,7 @@ int main(int argc, char** argv) {
     const auto bridge = Track::fromFile(fixtureDir / "corridor-mesh-bridge.json");
     if (bridge) {
       Simulation simulation(*bridge.track);
-      Ship ship = shipAt(simulation, {0, 0, 35});
+      Ship ship = shipAt(simulation, *bridge.track, {0, 0, 35});
       ship.physics.speed = 80;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
       check(!ship.physics.airborne && ship.physics.groundPos.z > 40,
@@ -405,8 +409,8 @@ int main(int argc, char** argv) {
       check(trigger != effects.track->triggers.end() && trigger->center.y == 5,
             "mesh-hosted trigger compiles at region elevation");
       Simulation simulation(*effects.track);
-      Ship ship = shipAt(simulation, {0, 5, 0});
-      Ship otherShip = shipAt(simulation, {40, 5, 0});
+      Ship ship = shipAt(simulation, *effects.track, {0, 5, 0});
+      Ship otherShip = shipAt(simulation, *effects.track, {40, 5, 0});
       simulation.stepPhysics(ship, 1.0 / 120.0, 0, 0, 0);
       simulation.stepPhysics(otherShip, 1.0 / 120.0, 0, 0, 0);
       check(ship.physics.boostActive && ship.zoneInside["mesh-boost"] &&
@@ -418,6 +422,27 @@ int main(int argc, char** argv) {
       check(ship.lastCheckpoint.valid && ship.lastCheckpoint.triggerId == "mesh-finish" &&
                 !otherShip.lastCheckpoint.valid,
             "mesh-hosted checkpoint uses independent generic trigger state");
+
+      // NATIVE_GAME_RUNTIME_PLAN.md §2.6: onTriggerFired/now surface a
+      // TriggerFired notice for every crossing, and an additional
+      // CheckpointAccepted/LapCompleted notice for a checkpoint crossing that
+      // advances the race. "mesh-finish" has role finish and zero
+      // intermediates, so one crossing both fires and immediately laps.
+      std::vector<TriggerNotice> notices;
+      Simulation noticeSim(*effects.track);
+      noticeSim.now = [] { return 42.0; };
+      noticeSim.onTriggerFired = [&](Ship&, const Trigger&, const std::string&, TriggerNotice notice) {
+        notices.push_back(notice);
+      };
+      Ship lapShip = shipAt(noticeSim, *effects.track, {0, 5, 0});
+      lapShip.prevTriggerPos.set(0, 5, 19);
+      lapShip.physics.groundPos.set(0, 5, 21);
+      noticeSim.detectTriggers(lapShip, lapShip.prevTriggerPos, lapShip.physics.groundPos);
+      check(notices.size() == 2 && notices[0] == TriggerNotice::Fired && notices[1] == TriggerNotice::LapCompleted,
+            "fireTrigger notifies Fired then LapCompleted for a finish crossing with no intermediates");
+      check(lapShip.race.laps == 1 && lapShip.race.lapStartedAt == 42.0 &&
+                lapShip.race.flashUntil == 42.0 + Consts::CHECKPOINT_FLASH_MS,
+            "fireTrigger seeds the deterministic lap clock from the injected now()");
     }
   }
 
@@ -508,6 +533,71 @@ int main(int argc, char** argv) {
       checkVec(min, expectedBatch["min"], 2e-9, id + ".min");
       checkVec(max, expectedBatch["max"], 2e-9, id + ".max");
     }
+
+    // NATIVE_GAME_RUNTIME_PLAN.md §2.1/§2.2: starting-grid poses and the
+    // ship-factory roster, exercised on a closed, reversed-start, banked path
+    // with a non-uniform width (30..52) so lateral compression can engage.
+    Simulation gridSim(track);
+    const std::vector<Pose> poses = StartGrid::startingGridPoses(gridSim, track, 8);
+    check(poses.size() == 8, "startingGridPoses produces the requested roster size");
+    bool allFinite = true, allUnit = true;
+    for (const Pose& pose : poses) {
+      if (!std::isfinite(pose.pos.x) || !std::isfinite(pose.pos.y) || !std::isfinite(pose.pos.z)) allFinite = false;
+      if (std::fabs(pose.up.length() - 1.0) > 1e-9 || std::fabs(pose.forward.length() - 1.0) > 1e-9) allUnit = false;
+    }
+    check(allFinite, "starting grid poses are all finite");
+    check(allUnit, "starting grid pose forward/up are unit vectors");
+    check(poses[0].pos.distanceTo(poses[1].pos) > 0.1, "front row grid slots are laterally offset");
+
+    const std::vector<Ship> roster = ShipFactory::buildRoster(gridSim, track, 8);
+    check(roster.size() == 8, "buildRoster produces the requested roster size");
+    if (!roster.empty()) {
+      check(roster[0].race.finishId == "curve-finish", "buildRoster ships derive race state from track triggers");
+      const double expectedTurnRate = track.definition.handling.turnSpeed * 3.14159265358979323846 / 180.0;
+      check(std::fabs(roster[0].physics.maxSpeed - track.definition.handling.maxSpeed) < 1e-12 &&
+                std::fabs(roster[0].physics.turnRate - expectedTurnRate) < 1e-12,
+            "buildRoster applies authored handling (maxSpeed, turnRate conversion)");
+    }
+  }
+
+  if (pathLoaded) {
+    // NATIVE_GAME_RUNTIME_PLAN.md §2.3/§2.4: a GameSession's frame/substep
+    // orchestration and explicit-respawn handling (no autopilot/steering is
+    // exercised here — that belongs to the future raw-session parity layer's
+    // scripted intents, not this focused unit test).
+    auto trackPtr = std::make_shared<Track>(*pathLoaded.track);
+    GameSession session(trackPtr, 1);
+    check(session.ships().size() == 1, "GameSession builds the requested roster size");
+    if (!session.ships().empty()) {
+      check(session.ships()[0].race.finishId == "curve-finish" && session.ships()[0].race.intermediateIds.empty(),
+            "GameSession roster derives race state from track triggers");
+    }
+
+    const Vec3 startPos = session.ships()[0].physics.groundPos;
+    std::vector<ControlIntent> idle(1);
+    session.step(idle, 1.0 / 60.0);
+    check(session.ships()[0].physics.groundPos.distanceTo(startPos) < 1.0,
+          "an idle intent leaves a parked ship close to its starting-grid pose");
+    check(session.sessionTime() > 0.0, "GameSession accumulates a deterministic session clock");
+
+    // Drive forward long enough to leave the starting-grid pose...
+    std::vector<ControlIntent> drive(1);
+    drive[0].throttle = 1.0;
+    for (int frame = 0; frame < 30; frame++) session.step(drive, 1.0 / 60.0);
+    check(session.ships()[0].physics.groundPos.distanceTo(startPos) > 1.0,
+          "throttle moves the ship away from its starting-grid pose");
+
+    // ...then an explicit respawn should snap it back (no checkpoint reached
+    // yet, so the fallback is the starting-grid pose itself).
+    std::vector<ControlIntent> respawnIntent(1);
+    respawnIntent[0].respawn = true;
+    session.step(respawnIntent, 1.0 / 60.0);
+    bool sawExplicitRespawn = false;
+    for (const GameEvent& event : session.events())
+      if (event.type == GameEventType::Respawned && !event.automatic) sawExplicitRespawn = true;
+    check(sawExplicitRespawn, "an explicit respawn intent fires a non-automatic Respawned event");
+    check(session.ships()[0].physics.groundPos.distanceTo(startPos) < 1.0,
+          "an explicit respawn with no checkpoint reached returns to the starting-grid pose");
   }
 
   const std::filesystem::path basePath = fixtureDir / "transformed-square.json";

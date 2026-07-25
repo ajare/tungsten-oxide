@@ -1,0 +1,14 @@
+[
+  {
+    "file": "raw-session-init-closed-reversed.json",
+    "shipCount": 8
+  },
+  {
+    "file": "raw-session-init-open.json",
+    "shipCount": 8
+  },
+  {
+    "file": "raw-session-init-narrow.json",
+    "shipCount": 8
+  }
+]

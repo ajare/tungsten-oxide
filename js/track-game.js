@@ -1,7 +1,7 @@
 
 import * as TrackMesh from './track-mesh.js';
 import { bakeTrackPhysics } from './track-bake.js';
-import { DEFAULT_SHIP_COUNT, gridSlot } from './ship-grid.js';
+import { DEFAULT_SHIP_COUNT } from './ship-grid.js';
 import { Vec3 } from './vec3.js';
 // The physics core was extracted, verbatim, into track-physics.js (see
 // CPP_PORT_PLAN.md milestone 0). This module keeps only the THREE rendering,
@@ -9,10 +9,11 @@ import { Vec3 } from './vec3.js';
 // is imported. Stateful physics lives on `sim` (a Simulation), which buildTrack
 // populates with the baked track data.
 import {
-  Simulation, MAX_PHYSICS_STEP, RESPAWN_FALL_DEPTH,
-  createPhysicsState, createRaceState, applyHandling,
-  curvedSurfaceFrame, projectToSurface, tangentize
+  Simulation, MAX_PHYSICS_STEP, RESPAWN_FALL_DEPTH, curvedSurfaceFrame
 } from './track-physics.js';
+// Starting-grid layout + the physics-only ship factory (also cpp/core's
+// StartGrid.hpp/ShipFactory.hpp reference and the parity harness's oracle).
+import * as TrackSession from './track-session.js';
 
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
@@ -93,7 +94,8 @@ let trackStart = { path: 0, point: 0, reverse: false };
 const sim = new Simulation({
   TrackMesh,
   now: () => performance.now(),
-  onTriggerFired: (ship, rec, dir, state) => {
+  onTriggerFired: (ship, rec, dir, notice, state) => {
+    if (notice !== 'fired') return;  // one flash/log per crossing, not per race-state notice
     if (ship === playerShip) state.flash = TRIGGER_FLASH_TIME;
     console.log(`[trigger][${ship.id}] ${rec.id} fired (${dir})`);
   }
@@ -902,7 +904,6 @@ function updateTriggerDebug(dt) {
 // ---------- Ships / starting grid ----------
 const bodyGeo = new THREE.BoxGeometry(2.4, 0.8, 4.0);
 const noseGeo = new THREE.ConeGeometry(0.7, 1.6, 4);
-const SHIP_HALF_WIDTH = 1.2;
 const SHIP_COLORS = [0xd85f14, 0x3f8cff, 0x45c96b, 0xe5c642, 0xa66cff, 0xff5ca8, 0x38ced1, 0xf28b30];
 function shipColor(index) {
   if (index < SHIP_COLORS.length) return SHIP_COLORS[index];
@@ -935,74 +936,23 @@ function disposeShips() {
   ships = []; playerShip = null;
 }
 
-function interpolatedGridFrame(path, startIndex, distanceBehind) {
-  const cl = path.centerline, count = cl.length;
-  const step = trackStart.reverse ? 1 : -1;
-  let at = startIndex, remaining = distanceBehind, next = at, frac = 0;
-  for (let n = 0; n < count && remaining > 1e-9; n++) {
-    const candidate = path.closed ? (at + step + count) % count : at + step;
-    if (candidate < 0 || candidate >= count) break;
-    const len = cl[at].pos.distanceTo(cl[candidate].pos);
-    if (remaining <= len && len > 0) { next = candidate; frac = remaining / len; remaining = 0; break; }
-    remaining -= len; at = candidate; next = at; frac = 0;
-  }
-  const a = cl[at], b = cl[next];
-  const lerpVec = key => a[key].clone().lerp(b[key], frac).normalize();
-  return {
-    pos: a.pos.clone().lerp(b.pos, frac), tangent: lerpVec('tangent'), edgeRight: lerpVec('edgeRight'), normal: lerpVec('normal'),
-    sLeft: a.sLeft + (b.sLeft - a.sLeft) * frac, sRight: a.sRight + (b.sRight - a.sRight) * frac,
-    crossSectionCurvature: a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * frac,
-    crossSectionTightness: a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * frac
-  };
-}
+// (Grid layout + settling — startingGridPoses/interpolatedGridFrame — and the
+// physics-only ship factory — makeShip — moved to track-session.js, the
+// authoritative description also used by the parity harness and mirrored by
+// cpp/core's StartGrid.hpp/ShipFactory.hpp. This file only layers THREE
+// groups, ship colors, and controller assignment on top.)
 
-function startingGridPoses(count) {
-  const pathIndex = THREE.MathUtils.clamp(trackStart.path, 0, paths.length - 1);
-  const path = paths[pathIndex];
-  const pointIndex = THREE.MathUtils.clamp(trackStart.point, 0, path.anchors.length - 1);
-  const anchor = path.anchors[pointIndex];
-  let startIndex = 0, bestD = Infinity;
-  for (let i = 0; i < path.centerline.length; i++) {
-    const d = path.centerline[i].pos.distanceToSquared(anchor);
-    if (d < bestD) { bestD = d; startIndex = i; }
-  }
-  return Array.from({ length: count }, (_, i) => {
-    const rough = gridSlot(i);
-    const frame = interpolatedGridFrame(path, startIndex, rough.behind);
-    const lo = frame.sLeft + TrackCore.COLLISION_WALL_MARGIN + SHIP_HALF_WIDTH;
-    const hi = frame.sRight - TrackCore.COLLISION_WALL_MARGIN - SHIP_HALF_WIDTH;
-    const slot = gridSlot(i, { lateralLimit: Math.max(0, Math.min(-lo, hi)) });
-    let surface = curvedSurfaceFrame(frame, slot.lateral);
-    let canonical = frame;
-    // Settle the analytically-placed slot onto the exact same sampled surface
-    // the parked physics branch uses, so an idle ship does not creep while the
-    // two representations converge over its first frames.
-    for (let n = 0; n < 3; n++) {
-      canonical = sim.sampleTrack(surface.pos.x, surface.pos.y, surface.pos.z);
-      const proj = projectToSurface(canonical, surface.pos.x, surface.pos.y, surface.pos.z);
-      surface = curvedSurfaceFrame(canonical, THREE.MathUtils.clamp(proj.s, proj.loS, proj.hiS));
-    }
-    const forward = canonical.tangent.clone().multiplyScalar(trackStart.reverse ? -1 : 1).normalize();
-    tangentize(forward, surface.normal, forward);
-    return { pos: surface.pos, up: surface.normal, forward, slot };
-  });
-}
-
-function createShip(index, track, now) {
+function createShip(index, track, pose, now) {
   const isPlayer = index === 0;
   const color = shipColor(index);
-  return {
+  const ship = TrackSession.makeShip(sim, track, pose, now);
+  return Object.assign(ship, {
     id: isPlayer ? 'player' : `ai-${index}`,
     controllerKind: isPlayer ? 'player' : 'ai',
     controller: isPlayer ? playerController : idleController,
     color,
-    group: makeShipGroup(color, isPlayer),
-    physics: createPhysicsState(),
-    zoneInside: new Map(), triggerStates: new Map(), prevTriggerPos: new THREE.Vector3(),
-    race: createRaceState(track, now),
-    lastCheckpoint: { valid: false, triggerId: null, pos: new THREE.Vector3(), forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0) },
-    startPose: null
-  };
+    group: makeShipGroup(color, isPlayer)
+  });
 }
 
 // (Physics — placeShipAtPose, respawn — moved to track-physics.js; a thin
@@ -1012,14 +962,9 @@ function createShip(index, track, now) {
 function buildRoster(track, count = DEFAULT_SHIP_COUNT) {
   disposeShips();
   const now = performance.now();
-  ships = Array.from({ length: count }, (_, i) => createShip(i, track, now));
+  const poses = TrackSession.startingGridPoses(sim, track, count);
+  ships = poses.map((pose, i) => createShip(i, track, pose, now));
   playerShip = ships[0] || null;
-  const poses = startingGridPoses(ships.length);
-  ships.forEach((ship, i) => {
-    applyHandling(track, ship.physics);
-    ship.startPose = poses[i];
-    sim.placeShipAtPose(ship, ship.startPose);
-  });
   rebuildCheckpointLights();
 }
 
