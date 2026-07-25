@@ -159,6 +159,14 @@ public:
 
   void clearSelection() { selection_ = {}; }
 
+  // Read-only counterpart to selectPositionAt: the nearest Position point within
+  // `pickRadiusWorld` of (worldX, worldZ), or nullopt, without mutating selection_ -- used to
+  // render a hover highlight distinct from the actual click-driven selection (see
+  // TopDownCanvas.cpp/ElevationView.cpp's hover-highlight rendering).
+  std::optional<SelectedPoint> hoverTestPosition(double worldX, double worldZ, double pickRadiusWorld) const {
+    return hitTestPosition(worldX, worldZ, pickRadiusWorld);
+  }
+
   // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
 
   void selectMesh(const std::string& placementId) {

@@ -23,6 +23,10 @@ const ImU32 kRoadColor = IM_COL32(60, 70, 82, 255);
 const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
+// Hover is drawn as an outline ring on top of whichever fill (normal/selected) already applies,
+// rather than its own fill color, so "hovered" and "hovered + selected" both read clearly without
+// a fourth distinct fill color to keep track of.
+const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 220);
 const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
 const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
 const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
@@ -515,14 +519,19 @@ void drawMeshRails(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
 }
 
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
-                                const SelectedPoint& selection) {
+                                const SelectedPoint& selection, const std::optional<SelectedPoint>& hovered) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
     const auto& points = track.paths[pi].points;
     for (int i = 0; i < static_cast<int>(points.size()); ++i) {
       if (points[i].kind != PointKind::Position) continue;
       const bool isSelected = selection.pathIndex == pi && selection.pointIndex == i;
+      const bool isHovered = hovered.has_value() && hovered->pathIndex == pi && hovered->pointIndex == i;
       const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
-      drawList->AddCircleFilled(screen, isSelected ? kPointRadius + 2.0f : kPointRadius, isSelected ? kSelectedPointColor : kPositionPointColor);
+      const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
+      drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : kPositionPointColor);
+      // Hover is an outline ring on top of the fill, so it reads clearly whether or not the point
+      // is also selected, without needing a fourth distinct fill color.
+      if (isHovered) drawList->AddCircle(screen, radius + 2.5f, kHoverRingColor, 0, 2.0f);
     }
   }
 }
@@ -864,7 +873,17 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
   }
   drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
-  if (view.showPositionPoints()) drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
+  if (view.showPositionPoints()) {
+    // Hover highlight (distinct from click-driven selection): only meaningful in Edit mode, the
+    // only mode where a plain click on a position point does anything (Create mode's clicks build
+    // a draft path; Rails mode picks mesh edges, not authored points).
+    std::optional<SelectedPoint> hoveredPosition;
+    if (hovered && state.mode() == EditMode::Edit) {
+      const WorldPoint2D hoverWorld = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+      hoveredPosition = state.hoverTestPosition(hoverWorld.x, hoverWorld.z, pickRadiusWorld);
+    }
+    drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition);
+  }
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
   ImGui::EndChild();

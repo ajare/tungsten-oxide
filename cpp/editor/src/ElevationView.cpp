@@ -20,6 +20,9 @@ const ImU32 kAxisColor = IM_COL32(255, 255, 255, 60);
 const ImU32 kProfileColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
+// Mirrors TopDownCanvas.cpp's kHoverRingColor: an outline ring drawn on top of whichever fill
+// already applies, so hover reads clearly whether or not the point is also selected.
+const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 220);
 
 struct Layout {
   float w{1.0f}, h{1.0f};
@@ -85,6 +88,23 @@ void drawAxis(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& la
   drawList->AddText(ImVec2(canvasOrigin.x + 2.0f, canvasOrigin.y + layout.h - kPadY - 6.0f), kAxisColor, label);
 }
 
+// Nearest position-point's raw Path::points index to `mouseLocal`, within kPickRadiusPx, or -1.
+// Shared by click-to-select and hover-highlight so they always agree on what's "under the cursor".
+int nearestPointIndex(const std::vector<std::pair<int, double>>& points, const Layout& layout, const ImVec2& mouseLocal) {
+  int hitIndex = -1;
+  float bestDistSq = kPickRadiusPx * kPickRadiusPx;
+  for (int order = 0; order < static_cast<int>(points.size()); ++order) {
+    const float px = screenX(layout, order), py = screenY(layout, points[order].second);
+    const float dx = mouseLocal.x - px, dy = mouseLocal.y - py;
+    const float distSq = dx * dx + dy * dy;
+    if (distSq <= bestDistSq) {
+      bestDistSq = distSq;
+      hitIndex = points[order].first;
+    }
+  }
+  return hitIndex;
+}
+
 void drawBakedProfile(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& layout, const tox::Path& bakedPath) {
   const std::size_t n = bakedPath.centerline.size();
   if (n < 2) return;
@@ -132,18 +152,13 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   const SelectedPoint selection = state.selection();
   const bool selectionOnThisPath = selection.valid() && selection.pathIndex == pathIndex && path.points[selection.pointIndex].kind == PointKind::Position;
 
+  // Hover highlight (distinct from click-driven selection): mirrors TopDownCanvas.cpp's, and
+  // shares the same nearest-point search the click handler below uses, so hovering and clicking
+  // always agree on which point is "under the cursor".
+  const int hoveredRawIndex = hovered ? nearestPointIndex(points, layout, mouseLocal) : -1;
+
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    int hitIndex = -1;
-    float bestDistSq = kPickRadiusPx * kPickRadiusPx;
-    for (int order = 0; order < static_cast<int>(points.size()); ++order) {
-      const float px = screenX(layout, order), py = screenY(layout, points[order].second);
-      const float dx = mouseLocal.x - px, dy = mouseLocal.y - py;
-      const float distSq = dx * dx + dy * dy;
-      if (distSq <= bestDistSq) {
-        bestDistSq = distSq;
-        hitIndex = points[order].first;
-      }
-    }
+    const int hitIndex = nearestPointIndex(points, layout, mouseLocal);
     if (hitIndex >= 0) state.selectPoint(pathIndex, hitIndex);
   }
 
@@ -159,8 +174,11 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   if (baked != nullptr && pathIndex < static_cast<int>(baked->paths.size())) drawBakedProfile(drawList, canvasOrigin, layout, baked->paths[pathIndex]);
   for (int order = 0; order < static_cast<int>(points.size()); ++order) {
     const bool isSelected = selectionOnThisPath && selection.pointIndex == points[order].first;
+    const bool isHovered = points[order].first == hoveredRawIndex;
     const ImVec2 screen(canvasOrigin.x + screenX(layout, order), canvasOrigin.y + screenY(layout, points[order].second));
-    drawList->AddCircleFilled(screen, isSelected ? kPointRadius + 2.0f : kPointRadius, isSelected ? kSelectedPointColor : kPointColor);
+    const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
+    drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : kPointColor);
+    if (isHovered) drawList->AddCircle(screen, radius + 2.5f, kHoverRingColor, 0, 2.0f);
   }
 
   ImGui::EndChild();
