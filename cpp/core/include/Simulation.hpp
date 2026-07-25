@@ -34,7 +34,7 @@ struct SurfaceFrame {
 };
 struct StepResult {
   Vec3 surfaceNormal, surfaceRenderPos;
-  bool respawned{false};
+  bool respawned{false}, railHit{false};
 };
 
 // --- pure helpers (mirror of the track-physics.js exports) -----------------

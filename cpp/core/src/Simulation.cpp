@@ -427,6 +427,7 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
   Sample c = sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
   Vec3 surfaceNormal = c.normal;
   Vec3 surfaceRenderPos = p.groundPos;
+  bool railHit = false;
 
   const MeshRegion* meshRegion = surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, c);
 
@@ -458,6 +459,7 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
                                                    velocity, TrackCore::COLLISION_WALL_MARGIN,
                                                    weightRestitution(p));
       if (!moved.hit) continue;
+      railHit = true;
       px = moved.x;
       pz = moved.z;
       ax = velocity.x;
@@ -500,6 +502,7 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
                                                  velocity, TrackCore::COLLISION_WALL_MARGIN,
                                                  weightRestitution(p));
     if (moved.hit) {
+      railHit = true;
       const double before = std::hypot(vx, vz), after = std::hypot(velocity.x, velocity.y);
       p.speed = after * weightSpeedRetain(p);
       if (p.speed > 1e-6) p.moveDir.set(velocity.x, 0, velocity.y).normalize();
@@ -599,9 +602,9 @@ StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, doubl
 
   if (p.airborne && p.groundPos.y < track_.trackFloorY) {
     respawn(ship);
-    return {surfaceNormal, surfaceRenderPos, true};
+    return {surfaceNormal, surfaceRenderPos, true, railHit};
   }
-  return {surfaceNormal, surfaceRenderPos, false};
+  return {surfaceNormal, surfaceRenderPos, false, railHit};
 }
 
 }  // namespace tox

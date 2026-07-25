@@ -21,7 +21,7 @@ const TC = () => globalThis.TrackCore;
 
 // Place a headless ship on-track at the start control point, mirroring the
 // settling loop in track-game.js startingGridPoses (single ship, lateral 0).
-function placeAtStart(sim, track) {
+export function placeAtStart(sim, track) {
   const ship = createShipState(track, 0);
   const { frame, reverse } = startPose(sim, track);
   let surface = curvedSurfaceFrame(frame, 0);

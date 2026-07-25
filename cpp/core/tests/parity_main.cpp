@@ -7,6 +7,7 @@
 // mixed absolute+relative tolerance |a-b| <= atol + rtol*|b|. Booleans must match
 // exactly. It reports the worst-offending field/step (with ULP delta) so the gate
 // can be calibrated from evidence rather than guessed.
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -194,8 +195,19 @@ static double posDrift(const Ship& ship, const json& after) {
 // NOT pretend a long run stays close — the envelope grows geometrically and the
 // assertion is only that the trajectory tracks the JS one out to a documented
 // horizon before chaotic divergence is allowed to take over.
-static double trajectoryEnvelope(int k) {
-  return 1e-9 * std::pow(1.10, (double)k);  // 1 nm base, +10% per 1/120 s step
+static double trajectoryEnvelope(int k, bool rawTrack) {
+  // Native baking introduces a small starting-frame delta before runtime drift
+  // compounds, so raw-track traces use their own measured envelope.
+  return (rawTrack ? 1e-7 * std::pow(1.12, (double)k)
+                   : 1e-9 * std::pow(1.10, (double)k));
+}
+
+static std::string surfaceLabel(const Simulation& simulation, const Track& track, const Ship& ship) {
+  if (ship.physics.airborne) return "airborne";
+  const Vec3& p = ship.physics.groundPos;
+  const Sample sample = simulation.sampleTrack(p.x, p.y, p.z);
+  const MeshRegion* mesh = simulation.surfaceOwnerAt(p.x, p.z, p.y, sample);
+  return mesh ? "mesh:" + mesh->id : "path:" + std::to_string(sample.pathIndex);
 }
 
 int main(int argc, char** argv) {
@@ -209,6 +221,10 @@ int main(int argc, char** argv) {
   // cross-platform libm variance yet still catching any real regression (which
   // blows the ratio past 1). Override with --atol= --rtol= --gate=.
   double atol = 1e-12, rtol = 1e-12, gate = 1e-3;
+  // M6 raw-track lock: the 1116-step corpus observed |delta|=1.42e-14 and a
+  // worst mixed ratio 0.01051 at 1e-12/1e-12. A 0.1 gate leaves ~9.5x margin
+  // while keeping branch outcomes, surface IDs and collision hits exact.
+  double rawAtol = 1e-12, rawRtol = 1e-12, rawGate = 0.1;
   std::vector<std::string> files;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -219,11 +235,13 @@ int main(int argc, char** argv) {
       }
       return false;
     };
-    if (eat("--atol=", atol) || eat("--rtol=", rtol) || eat("--gate=", gate)) continue;
+    if (eat("--atol=", atol) || eat("--rtol=", rtol) || eat("--gate=", gate) ||
+        eat("--raw-atol=", rawAtol) || eat("--raw-rtol=", rawRtol) || eat("--raw-gate=", rawGate))
+      continue;
     files.push_back(a);
   }
   if (files.empty()) {
-    std::cerr << "usage: parity [--atol= --rtol= --gate=] trace.json...\n";
+    std::cerr << "usage: parity [--atol= --rtol= --gate= --raw-atol= --raw-rtol= --raw-gate=] trace.json...\n";
     return 2;
   }
 
@@ -233,8 +251,8 @@ int main(int argc, char** argv) {
   // guarantee; this only catches gross structural drift (a whole branch wrong).
   constexpr int FREE_MIN_HORIZON = 100;
 
-  Worst worst;
-  int boolFails = 0, totalSteps = 0, freeFails = 0;
+  Worst bakedWorst, rawWorst;
+  int boolFails = 0, bakedSteps = 0, rawSteps = 0, freeFails = 0;
 
   for (const auto& file : files) {
     std::ifstream in(file);
@@ -245,8 +263,22 @@ int main(int argc, char** argv) {
     json trace;
     in >> trace;
     const std::string name = trace.value("meta", json::object()).value("name", file);
-    Track track = loadTrack(trace.at("world"));
+    const bool rawTrack = trace.contains("sourceTrack");
+    Track track;
+    if (rawTrack) {
+      TrackLoadResult loaded = Track::fromJson(trace.at("sourceTrack").dump());
+      if (!loaded) {
+        std::cerr << "native raw-track load failed for " << name << ": " << loaded.error << "\n";
+        return 2;
+      }
+      track = std::move(*loaded.track);
+    } else {
+      track = loadTrack(trace.at("world"));
+    }
     Simulation sim(track);
+    const double traceAtol = rawTrack ? rawAtol : atol;
+    const double traceRtol = rawTrack ? rawRtol : rtol;
+    Worst& categoryWorst = rawTrack ? rawWorst : bakedWorst;
 
     const json* before = &trace.at("initialState");
     const auto& steps = trace.at("steps");
@@ -256,17 +288,17 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < steps.size(); ++i) {
       Ship ship = loadShip(*before);
       const auto& ctrl = steps[i].at("control");
-      sim.stepPhysics(ship, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
-                      ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
+      const StepResult result = sim.stepPhysics(ship, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
+                                                ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
       const json& exp = steps[i].at("after");
       const json& eph = exp.at("physics");
 
       auto checkD = [&](const std::string& fld, double got, double want) {
         const double ad = std::fabs(got - want);
-        const double ratio = ad / (atol + rtol * std::fabs(want));
+        const double ratio = ad / (traceAtol + traceRtol * std::fabs(want));
         if (ratio > localWorstRatio) localWorstRatio = ratio;
-        if (ratio > worst.ratio) {
-          worst = {ratio, ad, got, want, ulpDelta(got, want), (int)i, fld, name};
+        if (ratio > categoryWorst.ratio) {
+          categoryWorst = {ratio, ad, got, want, ulpDelta(got, want), (int)i, fld, name};
         }
       };
       auto checkV = [&](const std::string& fld, const Vec3& got, const json& want) {
@@ -318,10 +350,18 @@ int main(int argc, char** argv) {
       checkV("prevTriggerPos", ship.prevTriggerPos, exp.at("prevTriggerPos"));
 
       // --- M2 detection state: zones, trigger gates, checkpoint, lap gate ---
+      if (ship.zoneInside.size() != exp.value("zoneInside", json::array()).size()) {
+        ++localBoolFails;
+        std::cerr << "  ZONE MAP SIZE MISMATCH " << name << " step " << i << "\n";
+      }
       for (const auto& e : exp.value("zoneInside", json::array())) {
         const std::string id = e[0].get<std::string>();
         const bool got = ship.zoneInside.count(id) ? ship.zoneInside[id] : false;
         checkB("zoneInside[" + id + "]", got, e[1].get<bool>());
+      }
+      if (ship.triggerStates.size() != exp.value("triggerStates", json::array()).size()) {
+        ++localBoolFails;
+        std::cerr << "  TRIGGER MAP SIZE MISMATCH " << name << " step " << i << "\n";
       }
       for (const auto& e : exp.value("triggerStates", json::array())) {
         const std::string id = e[0].get<std::string>();
@@ -336,6 +376,12 @@ int main(int argc, char** argv) {
       checkV("lastCheckpoint.pos", ship.lastCheckpoint.pos, ecp.at("pos"));
       checkV("lastCheckpoint.forward", ship.lastCheckpoint.forward, ecp.at("forward"));
       checkV("lastCheckpoint.up", ship.lastCheckpoint.up, ecp.at("up"));
+      if (rawTrack) {
+        const json& outcome = steps[i].at("outcome");
+        checkB("outcome.railHit", result.railHit, outcome.at("railHit").get<bool>());
+        checkB("outcome.respawned", result.respawned, outcome.at("respawned").get<bool>());
+        checkStr("outcome.surface", surfaceLabel(sim, track, ship), outcome.at("surface").get<std::string>());
+      }
       if (exp.contains("race")) {
         const json& erace = exp.at("race");
         if (ship.race.laps != erace.at("laps").get<int>()) {
@@ -351,7 +397,10 @@ int main(int argc, char** argv) {
       }
 
       before = &steps[i].at("after");
-      ++totalSteps;
+      if (rawTrack)
+        ++rawSteps;
+      else
+        ++bakedSteps;
     }
     boolFails += localBoolFails;
     std::printf("  %-18s steps=%zu  worstRatio=%.3g%s\n", name.c_str(), steps.size(),
@@ -361,12 +410,47 @@ int main(int argc, char** argv) {
     Ship freeShip = loadShip(trace.at("initialState"));
     int horizon = (int)steps.size();
     double driftAtHorizon = 0.0;
+    bool freeDiscreteFailure = false;
     for (size_t i = 0; i < steps.size(); ++i) {
       const auto& ctrl = steps[i].at("control");
-      sim.stepPhysics(freeShip, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
-                      ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
-      const double drift = posDrift(freeShip, steps[i].at("after"));
-      if (drift > trajectoryEnvelope((int)i)) {
+      const StepResult result = sim.stepPhysics(freeShip, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
+                                                ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
+      const json& expectedStep = steps[i];
+      const json& expectedPhysics = expectedStep.at("after").at("physics");
+      const json& expectedAfter = expectedStep.at("after");
+      const json& expectedCheckpoint = expectedAfter.at("lastCheckpoint");
+      const std::string expectedTrigger = expectedCheckpoint.at("triggerId").is_null()
+                                              ? std::string()
+                                              : expectedCheckpoint.at("triggerId").get<std::string>();
+      bool discreteMatches = freeShip.physics.airborne == expectedPhysics.at("airborne").get<bool>() &&
+                             freeShip.physics.boostActive == expectedPhysics.at("boostActive").get<bool>() &&
+                             freeShip.physics.boostReleasing == expectedPhysics.at("boostReleasing").get<bool>() &&
+                             freeShip.lastCheckpoint.valid == expectedCheckpoint.at("valid").get<bool>() &&
+                             freeShip.lastCheckpoint.triggerId == expectedTrigger;
+      if (expectedAfter.contains("race"))
+        discreteMatches = discreteMatches && freeShip.race.laps == expectedAfter.at("race").at("laps").get<int>();
+      for (const auto& entry : expectedAfter.value("zoneInside", json::array())) {
+        const std::string id = entry[0].get<std::string>();
+        discreteMatches = discreteMatches && freeShip.zoneInside[id] == entry[1].get<bool>();
+      }
+      for (const auto& entry : expectedAfter.value("triggerStates", json::array())) {
+        const std::string id = entry[0].get<std::string>();
+        discreteMatches = discreteMatches && freeShip.triggerStates[id].armed == entry[1].at("armed").get<bool>();
+      }
+      if (rawTrack) {
+        const json& outcome = expectedStep.at("outcome");
+        discreteMatches = discreteMatches && result.railHit == outcome.at("railHit").get<bool>() &&
+                          result.respawned == outcome.at("respawned").get<bool>() &&
+                          surfaceLabel(sim, track, freeShip) == outcome.at("surface").get<std::string>();
+      }
+      if (!discreteMatches) {
+        freeDiscreteFailure = true;
+        horizon = static_cast<int>(i);
+        std::fprintf(stderr, "  FREE-RUN DISCRETE MISMATCH %s step %zu\n", name.c_str(), i);
+        break;
+      }
+      const double drift = posDrift(freeShip, expectedStep.at("after"));
+      if (drift > trajectoryEnvelope((int)i, rawTrack)) {
         horizon = (int)i;
         driftAtHorizon = drift;
         break;
@@ -374,22 +458,28 @@ int main(int argc, char** argv) {
     }
     if (horizon < (int)steps.size())
       std::printf("      free-run: tracks JS to step %d/%zu (drift %.3g m exceeds envelope %.3g m); chaotic beyond\n",
-                  horizon, steps.size(), driftAtHorizon, trajectoryEnvelope(horizon));
+                  horizon, steps.size(), driftAtHorizon, trajectoryEnvelope(horizon, rawTrack));
     else
       std::printf("      free-run: tracks JS within envelope for all %zu steps\n", steps.size());
-    if (horizon < FREE_MIN_HORIZON) {
+    const int requiredHorizon = std::min(FREE_MIN_HORIZON, static_cast<int>(steps.size()));
+    if (freeDiscreteFailure || horizon < requiredHorizon) {
       ++freeFails;
-      std::fprintf(stderr, "  FREE-RUN TOO SHORT %s: horizon %d < required %d steps\n", name.c_str(), horizon, FREE_MIN_HORIZON);
+      std::fprintf(stderr, "  FREE-RUN TOO SHORT %s: horizon %d < required %d steps\n", name.c_str(), horizon, requiredHorizon);
     }
   }
 
-  std::printf("\nparity over %d steps @ atol=%g rtol=%g (gate=%gx)\n", totalSteps, atol, rtol, gate);
-  std::printf("  worst combined ratio = %.4g  (step %d, field %s, trace %s)\n",
-              worst.ratio, worst.step, worst.field.c_str(), worst.trace.c_str());
-  std::printf("    a=%.17g  b=%.17g  |a-b|=%.3g  ulpDelta=%lld\n", worst.a, worst.b, worst.absD, worst.ulps);
-
-  const bool pass = (worst.ratio <= gate) && (boolFails == 0) && (freeFails == 0);
-  std::printf("  %s (worst ratio %.4g %s gate %g; bool mismatches %d; free-run failures %d)\n",
-              pass ? "PASS" : "FAIL", worst.ratio, worst.ratio <= gate ? "<=" : ">", gate, boolFails, freeFails);
+  auto report = [](const char* label, int steps, double aTol, double rTol, double categoryGate,
+                   const Worst& worst) {
+    if (!steps) return true;
+    std::printf("\n%s parity over %d steps @ atol=%g rtol=%g (gate=%gx)\n", label, steps, aTol, rTol, categoryGate);
+    std::printf("  worst combined ratio = %.4g  (step %d, field %s, trace %s)\n",
+                worst.ratio, worst.step, worst.field.c_str(), worst.trace.c_str());
+    std::printf("    a=%.17g  b=%.17g  |a-b|=%.3g  ulpDelta=%lld\n", worst.a, worst.b, worst.absD, worst.ulps);
+    return worst.ratio <= categoryGate;
+  };
+  const bool bakedNumericPass = report("baked-world", bakedSteps, atol, rtol, gate, bakedWorst);
+  const bool rawNumericPass = report("raw-track", rawSteps, rawAtol, rawRtol, rawGate, rawWorst);
+  const bool pass = bakedNumericPass && rawNumericPass && boolFails == 0 && freeFails == 0;
+  std::printf("  %s (discrete mismatches %d; free-run failures %d)\n", pass ? "PASS" : "FAIL", boolFails, freeFails);
   return pass ? 0 : 1;
 }

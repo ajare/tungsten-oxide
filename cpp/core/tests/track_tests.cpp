@@ -20,6 +20,8 @@ using namespace tox;
 namespace {
 
 int failures = 0;
+double worstOracleDelta = 0.0, worstOracleRatio = 0.0;
+std::string worstOracleField;
 
 void check(bool condition, const std::string& message) {
   if (condition) return;
@@ -79,7 +81,14 @@ json normalizedSummary(const TrackDefinition& track) {
 }
 
 void checkClose(double got, double want, double tolerance, const std::string& message) {
-  check(std::isfinite(got) && std::fabs(got - want) <= tolerance,
+  const double delta = std::fabs(got - want);
+  const double ratio = tolerance > 0 ? delta / tolerance : delta;
+  if (ratio > worstOracleRatio) {
+    worstOracleDelta = delta;
+    worstOracleRatio = ratio;
+    worstOracleField = message;
+  }
+  check(std::isfinite(got) && delta <= tolerance,
         message + ": got " + std::to_string(got) + ", want " + std::to_string(want));
 }
 
@@ -590,6 +599,8 @@ int main(int argc, char** argv) {
     std::cerr << failures << " track loader test(s) failed\n";
     return 1;
   }
+  std::cout << "geometry oracle worst: " << worstOracleDelta << " (" << worstOracleRatio
+            << "x gate, " << worstOracleField << ")\n";
   std::cout << "PASS: strict loader and " << found.size() << " JS-normalized mesh fixtures\n";
   return 0;
 }

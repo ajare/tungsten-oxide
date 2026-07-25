@@ -541,6 +541,7 @@ export class Simulation {
     let c = this.sampleTrack(physics.groundPos.x, physics.groundPos.y, physics.groundPos.z);
     let surfaceNormal = c.normal;
     let surfaceRenderPos = physics.groundPos;
+    let railHit = false;
 
     const meshRegion = this.surfaceOwnerAt(physics.groundPos.x, physics.groundPos.z, physics.groundPos.y, c);
 
@@ -570,6 +571,7 @@ export class Simulation {
         const before = Math.hypot(ax, az);
         const moved = this.slideAlongRails(physics, region, { x: physics.groundPos.x, z: physics.groundPos.z }, { x: px, z: pz }, velocity);
         if (!moved.hit) continue;
+        railHit = true;
         px = moved.x; pz = moved.z; ax = velocity.x; az = velocity.z;
         physics.speed = Math.hypot(ax, az) * weightSpeedRetain(physics);
         addImpactJolt(physics, before - Math.hypot(ax, az));
@@ -608,6 +610,7 @@ export class Simulation {
       const velocity = { x: vx, z: vz };
       const moved = this.slideAlongRails(physics, meshRegion, from, { x: from.x + vx * dt, z: from.z + vz * dt }, velocity);
       if (moved.hit) {
+        railHit = true;
         const before = Math.hypot(vx, vz), after = Math.hypot(velocity.x, velocity.z);
         physics.speed = after * weightSpeedRetain(physics);
         if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();
@@ -703,8 +706,8 @@ export class Simulation {
 
     if (physics.airborne && physics.groundPos.y < this.trackFloorY) {
       this.respawn(ship);
-      return { respawned: true };
+      return { respawned: true, railHit };
     }
-    return { surfaceNormal, surfaceRenderPos, respawned: false };
+    return { surfaceNormal, surfaceRenderPos, respawned: false, railHit };
   }
 }

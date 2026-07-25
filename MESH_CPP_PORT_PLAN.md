@@ -1,6 +1,6 @@
 # C++ Full-Track and Mesh-Region Port Plan
 
-Status: **milestones M0–M5 complete.** This is the follow-on to
+Status: **milestones M0–M6 complete.** This is the follow-on to
 `CPP_PORT_PLAN.md`. The existing baked-corridor C++ parity suite remains intact.
 
 - **M0:** combined MSVC/CMake baseline, shared fixtures, and focused C++ test harness.
@@ -14,6 +14,9 @@ Status: **milestones M0–M5 complete.** This is the follow-on to
   equivalent triangulation, outward rail records, mesh containment, and mesh surface/rail geometry.
 - **M5:** native mesh surface ownership, two-sided swept rail collision, grounded/airborne transfers
   and landing, mesh-hosted zones/checkpoints, and equivalent renderer-neutral zone geometry.
+- **M6:** committed current-schema raw-track corpus (12 deterministic scenarios / 1116 steps),
+  independent JS/C++ loading and baking, exact discrete branch outcomes, bounded free runs, and a
+  separately measured native-bake physics tolerance lock.
 
 ## 1. Goal
 
@@ -333,6 +336,19 @@ tolerance.
   and event state compare exactly.
 - Keep fixtures away from ambiguous boundaries unless testing the boundary itself; boundary tests
   assert the shared semantic rule rather than expecting tolerance to choose a side.
+
+Locked M6 measurements (MSVC Release, `/fp:precise`):
+
+- Existing baked-world gate remains unchanged: `atol=rtol=1e-12`, ratio gate `1e-3`; observed worst
+  remains `7.322e-5` (1 ULP) over 4000 steps.
+- Raw-track physics uses `atol=rtol=1e-12`, ratio gate `0.1`; observed worst is `0.01051`
+  (`1.42e-14`, 256 ULP at a small-magnitude banked-path Y coordinate) over 1116 steps, leaving about
+  9.5x margin. Surface IDs, airborne/boost states, rail hits, trigger state, checkpoint/lap state and
+  respawn outcomes are exact and never covered by numeric tolerance.
+- Geometry oracle gates remain separated by representation: `2e-12` for rigid mesh bounds/rails,
+  `2e-9` for equivalent triangulated area/render bounds, and up to `2e-10` for selected native spline
+  frames, offsets, zone windows, trigger frames and floor. The current worst is `3.55e-15`
+  (`frame.sLeft`, `1.78e-5` of its applicable gate); `track_tests` reports this diagnostic every run.
 
 ## 8. Implementation milestones
 

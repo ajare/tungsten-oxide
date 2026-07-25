@@ -83,10 +83,25 @@ endif()
 enable_testing()
 set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/traces)
 set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/mesh)
+set(RAW_TRACE_DIR ${TRACE_DIR}/raw)
 add_test(NAME parity
   COMMAND parity
     ${TRACE_DIR}/starter-circle.json
     ${TRACE_DIR}/open-curve.json
     ${TRACE_DIR}/boost-circuit.json
     ${TRACE_DIR}/recovery-run.json)
+add_test(NAME raw_parity
+  COMMAND parity
+    ${RAW_TRACE_DIR}/raw-corridor-mesh-corridor.json
+    ${RAW_TRACE_DIR}/raw-bare-ledge-lower-landing.json
+    ${RAW_TRACE_DIR}/raw-head-on-rail.json
+    ${RAW_TRACE_DIR}/raw-glancing-rail.json
+    ${RAW_TRACE_DIR}/raw-corner-rail.json
+    ${RAW_TRACE_DIR}/raw-airborne-outside-below-rail.json
+    ${RAW_TRACE_DIR}/raw-airborne-clears-rail.json
+    ${RAW_TRACE_DIR}/raw-overlapping-elevations.json
+    ${RAW_TRACE_DIR}/raw-mesh-boost-checkpoint.json
+    ${RAW_TRACE_DIR}/raw-hole-traversal.json
+    ${RAW_TRACE_DIR}/raw-curved-banked-native-bake.json
+    ${RAW_TRACE_DIR}/raw-long-mixed-course.json)
 add_test(NAME track_tests COMMAND track_tests ${MESH_FIXTURE_DIR})
