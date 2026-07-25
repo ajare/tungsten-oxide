@@ -77,6 +77,14 @@ class TopDownView {
   double zoomMultiplier() const { return std::pow(2.0, zoomSlider_ / 50.0); }
   double scale() const { return scale_; }
 
+  // Raw slider value in [kZoomSliderMin, kZoomSliderMax] (0 => 1x, 50 units per doubling) --
+  // mirrors editor.js's #topZoomSlider. Unlike zoomAt(), setZoomSlider() does NOT re-anchor on a
+  // screen point: editor.js's own topZoomSlider 'input' handler calls setTopZoomSliderValue()
+  // directly (not zoomTopAt()), so dragging the slider zooms about the view's current center
+  // (auto-fit center + pan), the same way this method does by leaving panX_/panY_ untouched.
+  double zoomSlider() const { return zoomSlider_; }
+  void setZoomSlider(double value) { zoomSlider_ = std::clamp(value, kZoomSliderMin, kZoomSliderMax); }
+
   // The world point currently at the viewport's centre pixel -- mirrors editor.js's
   // screenToWorld(view.w/2, view.h/2), used to centre a freshly imported mesh asset (M9) when the
   // caller has no click position to place it at.

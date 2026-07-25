@@ -576,6 +576,13 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
 bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
                          const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered, bool itemActive) {
   bool mutated = false;
+  // Decided once per gesture, at the mousedown that starts it -- mirrors editor.js's mousedown
+  // handler picking a `dragging` mode ('top'/'meshTop'/'panTop'/...) once and sticking with it,
+  // rather than re-deriving "what to drag" from whatever happens to be selected on every
+  // subsequent frame (which would let a stale selection from an earlier, unrelated click hijack a
+  // later empty-space pan drag). Left-drag-on-empty-space panning itself mirrors editor.js's
+  // mousedown fallthrough to `dragging = 'panTop'` when nothing else was hit.
+  static bool panDragActive = false;
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     const bool hitPosition = view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld);
@@ -618,6 +625,8 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         }
       }
     }
+    panDragActive = !state.selection().valid() && !state.selectedMeshId().has_value() && !state.selectedZoneId().has_value() &&
+                    !state.selectedTriggerId().has_value();
   }
 
   // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
@@ -628,7 +637,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // mouse happens to be over in THIS view. Mirrors the itemActive gating handleRailsModeInput
   // already uses for right-click panning, just applied to the left-click point/mesh drag path too.
   const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
-  if (draggingGesture && state.selection().valid()) {
+  if (draggingGesture && state.selection().valid() && !panDragActive) {
     if (!state.dragging()) {
       state.beginDrag();
       view.freezeBounds(preDragBounds);
@@ -639,6 +648,10 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
     state.endDrag();
     view.releaseBoundsFreeze();
+  } else if (draggingGesture && panDragActive) {
+    // Left-drag-on-empty-space pan, mirrors editor.js's 'panTop' -- decided at mousedown (see
+    // panDragActive's own comment above), not just "nothing happens to be selected right now".
+    view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
   } else if (draggingGesture && state.selectedMeshId().has_value()) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     const bool rotate = ImGui::GetIO().KeyShift;
@@ -706,8 +719,6 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 
 bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked) {
   const TrackBounds2D bounds = computeViewBounds(state.track(), baked);
-
-  if (ImGui::Button("Home")) view.resetView();
 
   ImGui::BeginChild("TopDownCanvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   const ImVec2 canvasOrigin = ImGui::GetCursorScreenPos();
@@ -901,6 +912,32 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition);
   }
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
+
+  // Zoom slider + Home (EDITOR_PARITY_FIXES.md-adjacent UI pass), mirrors editor.html's
+  // #topZoomControl: a vertical zoom slider (same -100..250 range as scroll-wheel zoom, see
+  // TopDownView::kZoomSliderMin/Max) plus a reset-to-default button, overlaid at the bottom-right
+  // corner of the canvas. Drawn last (after every drawList call above) so its own ImGui draw
+  // commands land on top of the canvas background fill rather than under it. Unlike zoomAt()
+  // (scroll wheel), dragging the slider does not re-anchor on a screen point -- mirrors
+  // editor.js's topZoomSlider 'input' handler, which calls setTopZoomSliderValue() directly
+  // rather than zoomTopAt(), so it zooms about the view's current center.
+  {
+    constexpr float kControlWidth = 36.0f, kSliderHeight = 160.0f, kMargin = 14.0f;
+    const float totalHeight = ImGui::GetTextLineHeight() * 2.0f + kSliderHeight + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 3.0f;
+    ImGui::SetCursorScreenPos(
+        ImVec2(canvasOrigin.x + canvasSize.x - kControlWidth - kMargin, canvasOrigin.y + canvasSize.y - totalHeight - kMargin));
+    ImGui::PushID("TopDownZoomControl");
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("+");
+    float zoomValue = static_cast<float>(view.zoomSlider());
+    if (ImGui::VSliderFloat("##zoom", ImVec2(kControlWidth, kSliderHeight), &zoomValue, static_cast<float>(TopDownView::kZoomSliderMin),
+                            static_cast<float>(TopDownView::kZoomSliderMax), ""))
+      view.setZoomSlider(zoomValue);
+    ImGui::TextUnformatted("-");
+    if (ImGui::Button("Home", ImVec2(kControlWidth, 0))) view.resetView();
+    ImGui::EndGroup();
+    ImGui::PopID();
+  }
 
   ImGui::EndChild();
   return mutated;
