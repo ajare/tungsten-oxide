@@ -58,15 +58,21 @@ set(IMGUI_SOURCES
 # --- Vendored gl3w GL loader -------------------------------------------------
 set(GL3W_SOURCES src/gl3w/gl3w.c)
 
+# --- Editor-owned authoring model (EDITOR_CPP_PORT_PLAN.md M1) --------------
+set(EDITOR_SOURCES
+  src/EditorTrackDefinition.cpp)
+
 add_executable(track_editor
   main.cpp
+  ${EDITOR_SOURCES}
   ${IMGUI_SOURCES}
   ${GL3W_SOURCES})
 
 target_include_directories(track_editor PRIVATE
   include
   include/imgui
-  include/gl3w)
+  include/gl3w
+  third_party)
 
 target_link_libraries(track_editor PRIVATE
   core
