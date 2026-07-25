@@ -799,6 +799,13 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     ImGui::PopID();
   }
   drawList->ChannelsSetCurrent(0);
+  // The zoom control's SetCursorScreenPos(groupPos)/EndGroup() left ImGui's cursor wherever the
+  // control's group ended (bottom-right corner), not back at canvasOrigin -- every subsequent
+  // widget positions itself from the CURRENT cursor, not from any parameter, so without this
+  // reset topDownCanvasInput below would be placed at the wrong screen location entirely, and
+  // every hover/click test against it (control points, mesh regions, zones, triggers -- the whole
+  // canvas) would silently stop matching the mouse's actual position.
+  ImGui::SetCursorScreenPos(canvasOrigin);
 
   ImGui::InvisibleButton("topDownCanvasInput", canvasSize,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
