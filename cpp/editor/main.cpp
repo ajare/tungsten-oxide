@@ -7,9 +7,11 @@
 // new path in Create mode, edit|create|rails mode switching with E/C/R shortcuts, and Ctrl+Z/
 // Ctrl+Y undo/redo wired to real mutations. M4 added mesh region placement: select/drag/rotate/
 // delete a placed mesh (there's no asset-import UI, so a single hardcoded rectangle asset is all
-// that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions. M5 adds
-// Rails mode: click an edge to toggle it as a rail on the shared asset (core doesn't bake
+// that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions. M5
+// added Rails mode: click an edge to toggle it as a rail on the shared asset (core doesn't bake
 // unflagged edges, so this one path works from the authored mesh asset instead of a core bake).
+// M6 adds the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
+// current path's baked Y profile plus draggable position-point elevation markers, collapsible.
 #include <cstdio>
 #include <string>
 
@@ -24,6 +26,7 @@
 #include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
+#include "ElevationView.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 
@@ -278,6 +281,31 @@ M5SmokeCheckResult runM5SmokeCheck() {
   return result;
 }
 
+// M6 smoke check: select a position point and drag its elevation, mirroring what
+// ElevationView.cpp's input handling calls (selectPoint + the shared beginDrag/
+// dragSelectedElevationTo/endDrag lifecycle also used by the top-down x/z drag).
+struct M6SmokeCheckResult {
+  bool elevationChanged = false, undone = false, redone = false;
+};
+
+M6SmokeCheckResult runM6SmokeCheck() {
+  M6SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const double originalY = state.track().paths[0].points[0].pos.y;
+  state.selectPoint(0, 0);
+  state.beginDrag();
+  state.dragSelectedElevationTo(originalY + 25.0);
+  state.endDrag();
+  const double movedY = state.track().paths[0].points[0].pos.y;
+  result.elevationChanged = (movedY == originalY + 25.0);  // +25.0 already lands on a 0.1m boundary
+
+  result.undone = state.undo() && state.track().paths[0].points[0].pos.y == originalY;
+  result.redone = state.redo() && state.track().paths[0].points[0].pos.y == movedY;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -298,7 +326,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M5: rails mode)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M6: elevation profile)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -360,6 +388,11 @@ int main(int, char**) {
                m5Smoke.selectionSet ? "OK" : "MISMATCH", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const M6SmokeCheckResult m6Smoke = runM6SmokeCheck();
+  std::fprintf(stdout, "M6 smoke check: elevationDrag=%s undo=%s redo=%s\n", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
+               m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -367,6 +400,7 @@ int main(int, char**) {
   tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   editor::TopDownView topDownView;
+  bool elevationVisible = true;
 
   auto rebake = [&]() {
     bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
@@ -427,6 +461,9 @@ int main(int, char**) {
     ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
                        m5Smoke.selectionSet ? "OK" : "MISMATCH");
     ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
+    ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
+                       m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -468,6 +505,21 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("Top-Down View");
     if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack)) rebake();
+    ImGui::End();
+
+    // Mirrors editor.js's elevCollapsed: the panel can be hidden (its own persisted preference in
+    // the web editor; a plain in-session toggle here, since there's no settings file yet).
+    ImGui::SetNextWindowSize(ImVec2(900, 260), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Elevation Profile");
+    ImGui::Checkbox("Show", &elevationVisible);
+    if (elevationVisible) {
+      ImGui::Separator();
+      // Mirrors editor.js's curPath(): the currently selected point's path if there is one,
+      // otherwise the first path -- so there's always something sensible to show.
+      const int elevationPathIndex =
+          editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
+      if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex)) rebake();
+    }
     ImGui::End();
 
     ImGui::Render();

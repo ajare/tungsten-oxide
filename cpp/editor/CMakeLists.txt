@@ -58,10 +58,11 @@ set(IMGUI_SOURCES
 # --- Vendored gl3w GL loader -------------------------------------------------
 set(GL3W_SOURCES src/gl3w/gl3w.c)
 
-# --- Editor-owned authoring model (EDITOR_CPP_PORT_PLAN.md M1) + views (M2) -
+# --- Editor-owned authoring model (M1) + views (M2/M6) ----------------------
 set(EDITOR_SOURCES
   src/EditorTrackDefinition.cpp
-  src/TopDownCanvas.cpp)
+  src/TopDownCanvas.cpp
+  src/ElevationView.cpp)
 
 add_executable(track_editor
   main.cpp

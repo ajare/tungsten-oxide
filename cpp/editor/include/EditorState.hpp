@@ -243,9 +243,29 @@ class EditorState {
     point.pos.z = std::round(worldZ * 10.0) / 10.0;
   }
 
+  // Elevation-view counterpart to dragSelectedTo: same point, same drag lifecycle
+  // (beginDrag/endDrag/one-push-per-gesture), different axis -- mirrors editor.js's
+  // dragging === 'elev' branch (curPoint().pos[1] = ...), which shares the same `dragging` state
+  // machine the top-down view's x/z drag uses.
+  void dragSelectedElevationTo(double y) {
+    if (!dragging_ || !selection_.valid()) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    track_.paths[selection_.pathIndex].points[selection_.pointIndex].pos.y = std::round(y * 10.0) / 10.0;
+  }
+
   void endDrag() {
     dragging_ = false;
     dragMutated_ = false;
+  }
+
+  // Direct index-based selection, for callers (the elevation view) that already know exactly
+  // which point they hit rather than needing a world-space radius search.
+  void selectPoint(int pathIndex, int pointIndex) {
+    selection_ = {pathIndex, pointIndex};
+    selectedMeshId_.reset();
   }
 
   // Mirrors deleteSelected(): refuses to drop a path below 4 position points (a track path needs
