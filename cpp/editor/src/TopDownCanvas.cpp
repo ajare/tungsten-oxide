@@ -10,11 +10,14 @@ namespace {
 
 constexpr double kWorldGridSize = 100.0;  // metres between grid lines
 constexpr float kPointRadius = 4.0f;
+constexpr float kPickRadiusPx = 10.0f;  // matches editor.js's nodeAtTop hit radius
 const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);   // matches editor.html's #canvasWrap
 const ImU32 kGridColor = IM_COL32(255, 255, 255, 18);
 const ImU32 kRoadColor = IM_COL32(60, 70, 82, 255);
 const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
+const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
+const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
 
 TrackBounds2D computeAuthoredBounds(const TrackDefinition& track) {
   TrackBounds2D bounds{1e300, -1e300, 1e300, -1e300};
@@ -85,20 +88,73 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
                         path.closed ? ImDrawFlags_Closed : ImDrawFlags_None, 2.0f);
 }
 
-void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track) {
-  for (const auto& path : track.paths) {
-    for (const auto& point : path.points) {
-      if (point.kind != PointKind::Position) continue;
-      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(point.pos.x, point.pos.z));
-      drawList->AddCircleFilled(screen, kPointRadius, kPositionPointColor);
+void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
+                                const SelectedPoint& selection) {
+  for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
+    const auto& points = track.paths[pi].points;
+    for (int i = 0; i < static_cast<int>(points.size()); ++i) {
+      if (points[i].kind != PointKind::Position) continue;
+      const bool isSelected = selection.pathIndex == pi && selection.pointIndex == i;
+      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
+      drawList->AddCircleFilled(screen, isSelected ? kPointRadius + 2.0f : kPointRadius, isSelected ? kSelectedPointColor : kPositionPointColor);
     }
   }
 }
 
+void drawCreateDraft(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::Vec3>& draft) {
+  if (draft.empty()) return;
+  std::vector<ImVec2> screen;
+  screen.reserve(draft.size());
+  for (const auto& p : draft) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z)));
+  if (screen.size() > 1) drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), kCreateDraftColor, ImDrawFlags_None, 2.0f);
+  for (const auto& s : screen) drawList->AddCircleFilled(s, kPointRadius, kCreateDraftColor);
+}
+
+// Left click/drag: hit-test + select + move a position point (Edit mode only -- mirrors
+// editor.js's dragging === 'top'). Returns true if the track was mutated this frame. Freezes the
+// view's auto-fit bounds for the duration of the drag (see TopDownView::freezeBounds) so moving a
+// point doesn't fight the camera that's auto-fitting around it.
+bool handleEditModeInput(EditorState& state, TopDownView& view, const TrackBounds2D& preDragBounds, const ImVec2& mouseLocal,
+                         double pickRadiusWorld, bool hovered) {
+  bool mutated = false;
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    state.selectPositionAt(world.x, world.z, pickRadiusWorld);
+  }
+  if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && state.selection().valid()) {
+    if (!state.dragging()) {
+      state.beginDrag();
+      view.freezeBounds(preDragBounds);
+    }
+    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    state.dragSelectedTo(world.x, world.z);
+    mutated = true;
+  } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+    state.endDrag();
+    view.releaseBoundsFreeze();
+  }
+  return mutated;
+}
+
+// Left click: add a draft point, or close/finish the draft (mirrors createModeClick). Right
+// click: cancel the draft (mirrors create mode's button===2 handling).
+bool handleCreateModeInput(EditorState& state, const TopDownView& view, const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
+  if (!hovered) return false;
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    state.cancelCreateDraft();
+    return false;
+  }
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    return state.createModeClick(world.x, world.z, pickRadiusWorld);
+  }
+  return false;
+}
+
 }  // namespace
 
-void DrawTopDownCanvas(TopDownView& view, const TrackDefinition& authored, const tox::Track* baked) {
-  const TrackBounds2D bounds = computeAuthoredBounds(authored);
+bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked) {
+  const TrackBounds2D bounds = computeAuthoredBounds(state.track());
 
   if (ImGui::Button("Home")) view.resetView();
 
@@ -113,15 +169,32 @@ void DrawTopDownCanvas(TopDownView& view, const TrackDefinition& authored, const
   ImGui::InvisibleButton("topDownCanvasInput", canvasSize,
                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
   const bool hovered = ImGui::IsItemHovered();
+  const bool windowFocused = ImGui::IsWindowFocused();
+  const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
+
   if (hovered && ImGui::GetIO().MouseWheel != 0.0f) {
-    const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
     // 15 slider units per wheel notch (editor.js uses deltaY*0.16 against ~100px/notch deltaY,
     // i.e. ~16 units/notch); ImGui's MouseWheel is already normalized to ~1 per notch.
     view.zoomAt(mouseLocal.x, mouseLocal.y, ImGui::GetIO().MouseWheel * 15.0, bounds);
   }
-  if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
-    const ImVec2 delta = ImGui::GetIO().MouseDelta;
-    view.pan(delta.x, delta.y);
+
+  bool mutated = false;
+  const double pickRadiusWorld = kPickRadiusPx / view.scale();
+  switch (state.mode()) {
+    case EditMode::Edit:
+      mutated = handleEditModeInput(state, view, bounds, mouseLocal, pickRadiusWorld, hovered);
+      if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
+      if (windowFocused && state.selection().valid() && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
+        mutated = state.deleteSelectedPoint() || mutated;
+      break;
+    case EditMode::Create:
+      mutated = handleCreateModeInput(state, view, mouseLocal, pickRadiusWorld, hovered);
+      if (mutated) state.setMode(EditMode::Edit);  // mirrors setEditMode('edit') after finishCreateDraft
+      break;
+    case EditMode::Rails:
+      // No mesh regions exist yet (M4+), so Rails mode has nothing to pick -- still pans.
+      if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
+      break;
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -129,9 +202,11 @@ void DrawTopDownCanvas(TopDownView& view, const TrackDefinition& authored, const
   drawGrid(drawList, canvasOrigin, canvasSize, view);
   if (baked != nullptr)
     for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
-  drawAuthoredPositionPoints(drawList, canvasOrigin, view, authored);
+  drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
+  if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
   ImGui::EndChild();
+  return mutated;
 }
 
 }  // namespace editor

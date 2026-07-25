@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace editor {
 
@@ -32,7 +33,8 @@ class TopDownView {
 
   // Recomputes scale/origin for the given viewport size and current track bounds. Call once per
   // frame before drawing or converting coordinates (view.js does this at the top of draw()).
-  void computeView(const TrackBounds2D& bounds, double viewportW, double viewportH) {
+  void computeView(const TrackBounds2D& requestedBounds, double viewportW, double viewportH) {
+    const TrackBounds2D& bounds = frozenBounds_.has_value() ? *frozenBounds_ : requestedBounds;
     width_ = std::max(1.0, viewportW);
     height_ = std::max(1.0, viewportH);
     const double spanX = (bounds.maxX - bounds.minX) != 0.0 ? (bounds.maxX - bounds.minX) : 1.0;
@@ -75,11 +77,21 @@ class TopDownView {
   double zoomMultiplier() const { return std::pow(2.0, zoomSlider_ / 50.0); }
   double scale() const { return scale_; }
 
+  // Mirrors editor.js's frozenViewBounds: while a point is being dragged, computeView() must keep
+  // using the bounds captured *before* the drag started, not the ones the moving point produces
+  // each frame -- otherwise the auto-fit view fights the drag (it re-centers/rescales around the
+  // very point the user is trying to move, so the point barely appears to move on screen at all).
+  void freezeBounds(const TrackBounds2D& bounds) {
+    if (!frozenBounds_.has_value()) frozenBounds_ = bounds;
+  }
+  void releaseBoundsFreeze() { frozenBounds_.reset(); }
+
  private:
   double scale_{1.0}, originX_{0.0}, originY_{0.0};
   double width_{1.0}, height_{1.0};
   double zoomSlider_{0.0};  // 0 => 1x, matching editor.js's initial topZoom = 1
   double panX_{0.0}, panY_{0.0};
+  std::optional<TrackBounds2D> frozenBounds_;
 };
 
 }  // namespace editor

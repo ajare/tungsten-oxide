@@ -1,9 +1,11 @@
 // cpp/editor/main.cpp — track_editor: native ImGui/SDL2/OpenGL track editor.
 // M0 (EDITOR_CPP_PORT_PLAN.md) proved the toolchain: window + one ImGui frame + core linked.
 // M1 wired in the editor-owned authoring model (EditorTrackDefinition, undo/redo), verified with a
-// startup smoke check. M2 adds the top-down 2D view (TopDownCanvas.cpp): the baked road/centerline
-// and authored control points render via ImDrawList, with pan/zoom navigation. Still no editing
-// (M3+) -- the starter track is read-only here.
+// startup smoke check. M2 added the top-down 2D view: the baked road/centerline and authored
+// control points render via ImDrawList, with pan/zoom navigation. M3 adds point editing
+// (EditorState.hpp): select/drag/delete position points in Edit mode, click-to-add/close/finish a
+// new path in Create mode, edit|create|rails mode switching with E/C/R shortcuts, and Ctrl+Z/
+// Ctrl+Y undo/redo wired to real mutations (not just the M1 smoke check anymore).
 #include <cstdio>
 #include <string>
 
@@ -15,6 +17,7 @@
 #include <SDL.h>
 
 #include "EditorHistory.hpp"
+#include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 #include "TopDownCanvas.hpp"
@@ -133,6 +136,67 @@ SmokeCheckResult runSmokeCheck() {
   return result;
 }
 
+// M3 smoke check: exercises EditorState's actual mutation logic directly (select/drag/undo,
+// delete-guard, create-mode draft-to-path) rather than through simulated mouse/window input --
+// this is what TopDownCanvas.cpp's input handlers call, so it proves the underlying edits are
+// correct independent of window-manager focus/input quirks.
+struct M3SmokeCheckResult {
+  bool dragMovedPoint = false, dragUndoRestored = false, dragRedoReapplied = false;
+  bool deleteGuardHeld = false, deleteRemovedPoint = false;
+  bool createDraftMadeClosedPath = false;
+};
+
+M3SmokeCheckResult runM3SmokeCheck() {
+  M3SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const tox::Vec3 originalPos = state.track().paths[0].points[0].pos;
+  state.selectPositionAt(originalPos.x, originalPos.z, 1.0);
+  state.beginDrag();
+  state.dragSelectedTo(originalPos.x + 50.0, originalPos.z + 50.0);
+  state.endDrag();
+  const tox::Vec3 movedPos = state.track().paths[0].points[0].pos;
+  // dragSelectedTo rounds to 0.1m (mirrors editor.js's Math.round(w.x*10)/10), so the expected
+  // value must go through the same rounding rather than comparing against the raw +50.0 literal.
+  const double expectedX = std::round((originalPos.x + 50.0) * 10.0) / 10.0;
+  const double expectedZ = std::round((originalPos.z + 50.0) * 10.0) / 10.0;
+  result.dragMovedPoint = (movedPos.x == expectedX) && (movedPos.z == expectedZ);
+
+  result.dragUndoRestored = state.undo() && state.track().paths[0].points[0].pos.x == originalPos.x &&
+                            state.track().paths[0].points[0].pos.z == originalPos.z;
+  result.dragRedoReapplied = state.redo() && state.track().paths[0].points[0].pos.x == movedPos.x;
+
+  // The starter path has 12 position points, well above the 4-point floor -- deleting one should
+  // succeed and drop the count by exactly one.
+  const std::size_t countBefore = state.track().paths[0].points.size();
+  state.selectPositionAt(state.track().paths[0].points[1].pos.x, state.track().paths[0].points[1].pos.z, 1.0);
+  result.deleteRemovedPoint = state.deleteSelectedPoint() && state.track().paths[0].points.size() == countBefore - 1;
+
+  // A 4-point path is exactly at the floor: one more delete must be refused.
+  editor::EditorState guardState(buildStarterTrack());
+  while (std::count_if(guardState.track().paths[0].points.begin(), guardState.track().paths[0].points.end(),
+                       [](const editor::TrackPoint& p) { return p.kind == editor::PointKind::Position; }) > 4) {
+    const auto& p = guardState.track().paths[0].points[0];
+    guardState.selectPositionAt(p.pos.x, p.pos.z, 1.0);
+    guardState.deleteSelectedPoint();
+  }
+  const auto& lastPoint = guardState.track().paths[0].points[0];
+  guardState.selectPositionAt(lastPoint.pos.x, lastPoint.pos.z, 1.0);
+  result.deleteGuardHeld = !guardState.deleteSelectedPoint();
+
+  // Create mode: four clicks, the fourth landing back on the first point closes the path.
+  editor::EditorState createState(buildStarterTrack());
+  createState.setMode(editor::EditMode::Create);
+  createState.createModeClick(2000.0, 0.0, 1.0);
+  createState.createModeClick(2000.0, 500.0, 1.0);
+  createState.createModeClick(1500.0, 500.0, 1.0);
+  createState.createModeClick(1500.0, 0.0, 1.0);
+  const bool closed = createState.createModeClick(2000.0, 0.0, 1.0);  // back to the first point
+  result.createDraftMadeClosedPath = closed && createState.track().paths.size() == 2 && createState.track().paths.back().closed;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -153,7 +217,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M1: authoring model)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M3: point editing)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -196,13 +260,26 @@ int main(int, char**) {
                smoke.warningCount, smoke.bakeOk ? "" : (" error=" + smoke.bakeError).c_str(), smoke.undoRedoOk ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
-  // M2's canvas needs a persistent authored track + its baked preview + view/camera state that
-  // survive across frames (pan/zoom accumulate). There is no "new track"/load UI yet (M3+), so
-  // the starter track is the only thing on screen.
-  const editor::TrackDefinition authoredTrack = buildStarterTrack();
-  const tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(authoredTrack));
+  const M3SmokeCheckResult m3Smoke = runM3SmokeCheck();
+  std::fprintf(stdout,
+               "M3 smoke check: drag=%s dragUndo=%s dragRedo=%s deleteGuard=%s deleteRemoves=%s createDraftCloses=%s\n",
+               m3Smoke.dragMovedPoint ? "OK" : "MISMATCH", m3Smoke.dragUndoRestored ? "OK" : "MISMATCH",
+               m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH", m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH",
+               m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
+  // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
+  // plus its baked preview and view/camera state, all surviving across frames. There is no
+  // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
+  editor::EditorState editorState(buildStarterTrack());
+  tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   editor::TopDownView topDownView;
+
+  auto rebake = [&]() {
+    bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
+    bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
+  };
 
   bool running = true;
   while (running) {
@@ -220,6 +297,17 @@ int main(int, char**) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
+    // E/C/R switch mode (mirrors editor.js's shortcuts), Ctrl+Z/Ctrl+Y undo/redo -- all global
+    // since there's no text-input widget yet that would need to steal these keys.
+    if (!io.WantTextInput) {
+      if (ImGui::IsKeyPressed(ImGuiKey_E)) editorState.setMode(editor::EditMode::Edit);
+      if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
+      if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
+      const bool ctrl = io.KeyCtrl;
+      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) && editorState.undo()) rebake();
+      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) && editorState.redo()) rebake();
+    }
+
     ImGui::Begin("track_editor — status");
     ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
     ImGui::Separator();
@@ -232,14 +320,44 @@ int main(int, char**) {
       ImGui::BulletText("tox::Track::fromJson bake: FAILED (%s)", smoke.bakeError.c_str());
     }
     ImGui::BulletText("EditorHistory undo/redo round trip: %s", smoke.undoRedoOk ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M3 smoke check (EditorState logic, exercised directly):");
+    ImGui::BulletText("drag moves point / undo restores / redo reapplies: %s / %s / %s", m3Smoke.dragMovedPoint ? "OK" : "MISMATCH",
+                       m3Smoke.dragUndoRestored ? "OK" : "MISMATCH", m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH");
+    ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
+                       m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
+    ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
     ImGui::Separator();
-    ImGui::TextUnformatted("Point/mesh editing lands in later EDITOR_CPP_PORT_PLAN.md milestones (M3+).");
+    ImGui::TextUnformatted("Mode (E/C/R):");
+    ImGui::SameLine();
+    int modeIndex = static_cast<int>(editorState.mode());
+    const char* modeNames[] = {"Edit", "Create", "Rails"};
+    if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    if (ImGui::Button("Undo (Ctrl+Z)")) {
+      if (editorState.undo()) rebake();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Redo (Ctrl+Y)")) {
+      if (editorState.redo()) rebake();
+    }
+    ImGui::Separator();
+    switch (editorState.mode()) {
+      case editor::EditMode::Edit:
+        ImGui::TextUnformatted("Edit mode: click a point to select, drag to move, Delete/Backspace to remove.");
+        break;
+      case editor::EditMode::Create:
+        ImGui::TextUnformatted("Create mode: click to add points; click the first point to close, the last to finish open.");
+        ImGui::TextUnformatted("Right-click cancels the in-progress draft.");
+        break;
+      case editor::EditMode::Rails:
+        ImGui::TextUnformatted("Rails mode: no mesh regions exist yet (EDITOR_CPP_PORT_PLAN.md M4+), nothing to pick.");
+        break;
+    }
     ImGui::TextUnformatted("Top-down view: right-drag to pan, scroll to zoom, Home to reset.");
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("Top-Down View");
-    editor::DrawTopDownCanvas(topDownView, authoredTrack, bakedTrack);
+    if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack)) rebake();
     ImGui::End();
 
     ImGui::Render();
