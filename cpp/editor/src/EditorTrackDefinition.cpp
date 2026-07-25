@@ -520,9 +520,13 @@ std::string toJson(const TrackDefinition& track) {
   // 10. Matching that (rather than "fixing" it here) keeps a track this editor round-trips
   // byte-identical to one round-tripped through js/editor.js; `TrackDefinition::samples` is kept
   // in memory only so a load-time value still feeds a live preview bake within this session.
+  // Falls back at serialize time only, matching serializeTrack's `track.name || 'Untitled Track'`
+  // -- an empty in-memory name (mid-edit, e.g. the track-name field cleared but not yet retyped) is
+  // otherwise left alone rather than forced to a placeholder the instant it's empty (see
+  // EDITOR_PARITY_FIXES.md gap 2's EditorState::setTrackName).
   const json out = {
       {"version", kSchemaVersion},
-      {"name", track.name},
+      {"name", track.name.empty() ? "Untitled Track" : track.name},
       {"start", json{{"path", track.start.path}, {"point", track.start.point}, {"reverse", track.start.reverse}}},
       {"handling", json{{"maxSpeed", track.handling.maxSpeed},
                         {"accel", track.handling.accel},

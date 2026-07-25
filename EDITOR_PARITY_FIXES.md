@@ -306,8 +306,17 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    full track. A dedicated "Gap1 smoke check" in `main.cpp` verifies an edited roll/width value
    reaches the physics bake, not just the schema. Still open: on-canvas handles, point-type
    conversion.
-2. **Track name editing.** No input exists, so M8's `sanitizeFilenameStem` always resolves to
-   `New_Track.json`.
+2. ~~**Track name editing.**~~ **Implemented.** A "Track Name" text field in `main.cpp`'s toolbar
+   area, backed by new `EditorState::setTrackName`. Commits once on
+   `ImGui::IsItemDeactivatedAfterEdit()` (Enter or losing focus) rather than JS's live
+   every-keystroke update (`nameHistoryArmed`, `js/editor.js:3637-3644`) -- both collapse a whole
+   typing session into one undo step, this one just does it by deferring the commit instead of
+   arming/disarming across live updates. Also fixed a latent mismatch this surfaced: `toJson` wrote
+   `track.name` directly with no fallback, while `serializeTrack` falls back to `"Untitled Track"`
+   only at serialize time (`track.name || 'Untitled Track'`) -- `toJson` now does the same, and an
+   empty name is allowed to exist live in memory mid-edit rather than being forced to the
+   placeholder immediately. Verified with a "Gap2 smoke check" (rename/undo/redo, same-name no-op,
+   empty-name-live-vs-serialized).
 3. **Zones** (boost / start grid) — add, select, drag, delete.
 4. **Triggers** (dummy / checkpoint) — add, select, drag, delete, role and direction.
 5. **Curve management** — curve selector, Delete Curve, Connect/join, make-disjoint/reconnect,

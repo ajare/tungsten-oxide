@@ -504,6 +504,22 @@ class EditorState {
     return true;
   }
 
+  // Track name (EDITOR_PARITY_FIXES.md gap 2). js/editor.js's #nameInput commits every keystroke
+  // live, collapsing a whole typing session into one undo step (nameHistoryArmed,
+  // js/editor.js:3637-3644); this instead commits once when the caller's text field is deactivated
+  // after an edit (ImGui::IsItemDeactivatedAfterEdit), the same single-commit-per-session outcome
+  // without needing focus/blur state threaded in from the caller -- consistent with every other
+  // typed-field setter in this file (setSelectedPositionFields, editAuxPoint), which all commit
+  // once rather than living-sync every keystroke. An empty name is accepted here (matches
+  // track.name = e.target.value having no fallback); only serialization falls back to "Untitled
+  // Track" (toJson), same as serializeTrack's `track.name || 'Untitled Track'`.
+  bool setTrackName(const std::string& name) {
+    if (name == track_.name) return false;
+    history_.push(track_);
+    track_.name = name;
+    return true;
+  }
+
   // Create mode: click adds a point to the in-progress draft, unless the click lands on the
   // draft's first point (closes as a closed path) or last point (finishes as open) -- mirrors
   // createModeClick/finishCreateDraft. Returns true if the draft was just finished into a new

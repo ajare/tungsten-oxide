@@ -676,6 +676,31 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   return result;
 }
 
+// Gap-2 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #2): rename the track, undo/redo it,
+// and confirm an empty name falls back to "Untitled Track" only at serialize time, not live.
+struct Gap2SmokeCheckResult {
+  bool renamed = false, undone = false, redone = false, noOpRefused = false;
+  bool emptyNameLiveInMemory = false, emptyNameFallsBackOnSerialize = false;
+};
+
+Gap2SmokeCheckResult runGap2SmokeCheck() {
+  Gap2SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const std::string originalName = state.track().name;
+  result.renamed = state.setTrackName("Renamed Track") && state.track().name == "Renamed Track";
+  result.undone = state.undo() && state.track().name == originalName;
+  result.redone = state.redo() && state.track().name == "Renamed Track";
+  result.noOpRefused = !state.setTrackName("Renamed Track");  // setting the same name is a no-op
+
+  state.setTrackName("");
+  result.emptyNameLiveInMemory = state.track().name.empty();
+  const std::string json = editor::toJson(state.track());
+  result.emptyNameFallsBackOnSerialize = json.find("\"name\": \"Untitled Track\"") != std::string::npos;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -810,6 +835,13 @@ int main(int, char**) {
                gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap2SmokeCheckResult gap2Smoke = runGap2SmokeCheck();
+  std::fprintf(stdout, "Gap2 smoke check (track name editing): rename=%s undo=%s redo=%s noOpRefused=%s emptyLive=%s emptyFallback=%s\n",
+               gap2Smoke.renamed ? "OK" : "MISMATCH", gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH",
+               gap2Smoke.noOpRefused ? "OK" : "MISMATCH", gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH",
+               gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -920,6 +952,27 @@ int main(int, char**) {
                        gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
                        gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
+    ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
+                       gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
+    ImGui::BulletText("empty name stays live in memory / falls back only on serialize: %s / %s",
+                       gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
+    ImGui::Separator();
+    // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
+    // resyncs from editorState.track().name when that value has actually changed since last frame
+    // (undo/redo/New/Import all go through setTrackName or replaceTrack, not live typing) --
+    // otherwise a resync every frame would stomp in-progress keystrokes before they're committed.
+    {
+      static char nameBuf[256] = "";
+      static std::string lastSyncedName;
+      if (lastSyncedName != editorState.track().name) {
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", editorState.track().name.c_str());
+        lastSyncedName = editorState.track().name;
+      }
+      ImGui::SetNextItemWidth(220);
+      ImGui::InputText("Track Name", nameBuf, sizeof(nameBuf));
+      if (ImGui::IsItemDeactivatedAfterEdit() && editorState.setTrackName(nameBuf)) lastSyncedName = editorState.track().name;
+    }
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
