@@ -1,9 +1,12 @@
-# cpp/ — root CMake project tying together the two independent C++ trees:
+# cpp/ — root CMake project tying together the independent C++ trees:
 #
 #   willpower/  the Willpower geometry/math libraries (Willpower.Common,
 #               Willpower.Geometry, ...) — see willpower/CMakeLists.txt.
 #   core/       the track-physics engine ported from js/track-physics.js,
 #               parity-tested against the JS oracle — see core/CMakeLists.txt.
+#   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
+#   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
+#               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
 #
 # core links Willpower.Geometry for current-schema mesh topology validation and
 # triangulation. The target link establishes build order; explicit dependencies
@@ -26,6 +29,7 @@ enable_testing()
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)
+add_subdirectory(editor)
 
 foreach(_willpower_target Willpower.Common Willpower.Geometry)
   if (TARGET ${_willpower_target})
@@ -35,6 +39,9 @@ foreach(_willpower_target Willpower.Common Willpower.Geometry)
     endif()
     if (TARGET track_runner)
       add_dependencies(track_runner ${_willpower_target})
+    endif()
+    if (TARGET track_editor)
+      add_dependencies(track_editor ${_willpower_target})
     endif()
   endif()
 endforeach()
