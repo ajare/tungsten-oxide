@@ -414,8 +414,15 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    set-start-point/no-op-when-already-start/undo, and -- going beyond schema plumbing -- that
    flipping `reverse` actually reverses the baked starting grid's forward direction
    (`StartGrid::startingGridPoses`), not just a bool in the JSON.
-7. **Handling panel** — maxSpeed/accel/turnSpeed/weight. The schema fields round-trip; there is no
-   UI.
+7. ~~**Handling panel**~~ **Implemented.** New "Handling" window (`HandlingPanel.hpp/.cpp`) plus
+   `EditorState::setHandling`/`resetHandling`, mirroring `#handlingPanel`'s field-change handler
+   and `#handlingResetBtn`. `setHandling` clamps each field to the same ranges
+   `TrackCore.normalizeHandling`/`EditorTrackDefinition.cpp`'s `fromJson` already use (so a panel
+   edit and a hand-edited JSON file converge on the same value); `resetHandling` restores
+   `Handling{}`'s defaults (140/71/137.5/1000, matching `TrackCore.DEFAULT_HANDLING`). A "Gap7
+   smoke check" in `main.cpp` covers edit, out-of-range clamping, undo/redo, reset, and that an
+   edited value reaches the physics bake (`tox::Track::definition.handling`), not just the
+   editor's own schema.
 8. **Random ranges panel** — JS exposes twelve configurable bounds with persistence; `RandomTrack.cpp`
    hardcodes them.
 9. **Grid display, grid size, snap-to-grid.**

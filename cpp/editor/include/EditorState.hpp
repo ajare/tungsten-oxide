@@ -987,6 +987,26 @@ public:
     return track_.start.path == pathIndex && track_.start.point == rawIndexToPositionIndex(track_.paths[pathIndex], pointIndex);
   }
 
+  // Handling panel (EDITOR_PARITY_FIXES.md gap 7), mirrors #handlingPanel's field-change handler:
+  // clamps each field to the same ranges TrackCore.normalizeHandling/EditorTrackDefinition's
+  // fromJson use (so a panel edit and a hand-edited JSON file converge on the same value), then
+  // commits one undo step. Always pushes -- unlike setTrackName/setSelectedPositionFields there's
+  // no cheap "did anything actually change" check worth doing across four fields, and JS's own
+  // 'change' handler pushes unconditionally too.
+  void setHandling(double maxSpeed, double accel, double turnSpeed, double weight) {
+    history_.push(track_);
+    track_.handling.maxSpeed = std::clamp(maxSpeed, 10.0, 1000.0);
+    track_.handling.accel = std::clamp(accel, 5.0, 1000.0);
+    track_.handling.turnSpeed = std::clamp(turnSpeed, 10.0, 720.0);
+    track_.handling.weight = std::clamp(weight, 50.0, 100000.0);
+  }
+
+  // Mirrors #handlingResetBtn: restores TrackCore.DEFAULT_HANDLING (Handling{}'s own defaults).
+  void resetHandling() {
+    history_.push(track_);
+    track_.handling = Handling{};
+  }
+
   // Create mode: click adds a point to the in-progress draft, unless the click lands on the
   // draft's first point (closes as a closed path) or last point (finishes as open) -- mirrors
   // createModeClick/finishCreateDraft. Returns true if the draft was just finished into a new

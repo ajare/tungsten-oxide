@@ -73,7 +73,8 @@ set(EDITOR_SOURCES
   src/PropertiesPanel.cpp
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp
-  src/CurvesPanel.cpp)
+  src/CurvesPanel.cpp
+  src/HandlingPanel.cpp)
 
 add_executable(track_editor
   main.cpp

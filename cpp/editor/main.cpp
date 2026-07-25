@@ -59,6 +59,7 @@
 #include "StartGrid.hpp"
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
+#include "HandlingPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
@@ -965,6 +966,45 @@ Gap6SmokeCheckResult runGap6SmokeCheck() {
   return result;
 }
 
+// Gap-7 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #7): the handling panel
+// (maxSpeed/accel/turnSpeed/weight), mirroring #handlingPanel's field-change handler and
+// #handlingResetBtn. Confirms setHandling clamps to the same ranges
+// TrackCore.normalizeHandling/fromJson use, undo/redo work, and resetHandling restores defaults --
+// plus that an edited value actually reaches the physics bake (tox::Track::handling), not just the
+// editor's own schema.
+struct Gap7SmokeCheckResult {
+  bool edited = false, clamped = false, undone = false, redone = false, reset = false;
+  bool bakedHandlingMatches = false;
+};
+
+Gap7SmokeCheckResult runGap7SmokeCheck() {
+  Gap7SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  state.setHandling(200.0, 90.0, 200.0, 1200.0);
+  const editor::Handling& h1 = state.track().handling;
+  result.edited = h1.maxSpeed == 200.0 && h1.accel == 90.0 && h1.turnSpeed == 200.0 && h1.weight == 1200.0;
+
+  state.setHandling(5000.0, -10.0, 900.0, 1.0);  // out of range on every field
+  const editor::Handling& h2 = state.track().handling;
+  result.clamped = h2.maxSpeed == 1000.0 && h2.accel == 5.0 && h2.turnSpeed == 720.0 && h2.weight == 50.0;
+
+  result.undone = state.undo() && state.track().handling.maxSpeed == 200.0;
+  result.redone = state.redo() && state.track().handling.maxSpeed == 1000.0;
+
+  state.resetHandling();
+  const editor::Handling& h3 = state.track().handling;
+  result.reset = h3.maxSpeed == 140.0 && h3.accel == 71.0 && h3.turnSpeed == 137.5 && h3.weight == 1000.0;
+
+  state.setHandling(180.0, 60.0, 160.0, 900.0);
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  result.bakedHandlingMatches = static_cast<bool>(baked) && baked.track->definition.handling.maxSpeed == 180.0 &&
+                                 baked.track->definition.handling.accel == 60.0 && baked.track->definition.handling.turnSpeed == 160.0 &&
+                                 baked.track->definition.handling.weight == 900.0;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1148,6 +1188,12 @@ int main(int, char**) {
                gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap7SmokeCheckResult gap7Smoke = runGap7SmokeCheck();
+  std::fprintf(stdout, "Gap7 smoke check (handling panel): edit=%s clamp=%s undo=%s redo=%s reset=%s bakedMatches=%s\n",
+               gap7Smoke.edited ? "OK" : "MISMATCH", gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH",
+               gap7Smoke.redone ? "OK" : "MISMATCH", gap7Smoke.reset ? "OK" : "MISMATCH", gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -1294,6 +1340,11 @@ int main(int, char**) {
     ImGui::BulletText("set start point / no-op when already start / undo: %s / %s / %s", gap6Smoke.startMoved ? "OK" : "MISMATCH",
                       gap6Smoke.startMoveNoOpWhenAlreadyStart ? "OK" : "MISMATCH", gap6Smoke.startMoveUndone ? "OK" : "MISMATCH");
     ImGui::BulletText("baked starting-grid forward direction actually flips: %s", gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap7 smoke check (handling panel, exercised directly):");
+    ImGui::BulletText("edit / out-of-range clamp / undo / redo: %s / %s / %s / %s", gap7Smoke.edited ? "OK" : "MISMATCH",
+                      gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH", gap7Smoke.redone ? "OK" : "MISMATCH");
+    ImGui::BulletText("reset to default / baked handling matches edited value: %s / %s", gap7Smoke.reset ? "OK" : "MISMATCH",
+                      gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1527,6 +1578,11 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
     ImGui::Begin("Textures");
     if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(280, 180), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Handling");
+    if (editor::DrawHandlingPanel(editorState)) rebake();
     ImGui::End();
 
     ImGui::Render();
