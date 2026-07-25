@@ -1,9 +1,9 @@
 // cpp/editor/main.cpp — track_editor: native ImGui/SDL2/OpenGL track editor.
 // M0 (EDITOR_CPP_PORT_PLAN.md) proved the toolchain: window + one ImGui frame + core linked.
-// M1 wires in the editor-owned authoring model (EditorTrackDefinition, undo/redo): this file
-// builds an in-memory starter track, round-trips it through toJson/fromJson, hands it to
-// tox::Track::fromJson for a live preview bake, and exercises one undo/redo step -- all shown in
-// the ImGui window as a manual pass/fail smoke check. No point/mesh editing UI yet (M2+).
+// M1 wired in the editor-owned authoring model (EditorTrackDefinition, undo/redo), verified with a
+// startup smoke check. M2 adds the top-down 2D view (TopDownCanvas.cpp): the baked road/centerline
+// and authored control points render via ImDrawList, with pan/zoom navigation. Still no editing
+// (M3+) -- the starter track is read-only here.
 #include <cstdio>
 #include <string>
 
@@ -17,6 +17,8 @@
 #include "EditorHistory.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
+#include "TopDownCanvas.hpp"
+#include "TopDownView.hpp"
 
 namespace {
 
@@ -194,6 +196,14 @@ int main(int, char**) {
                smoke.warningCount, smoke.bakeOk ? "" : (" error=" + smoke.bakeError).c_str(), smoke.undoRedoOk ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  // M2's canvas needs a persistent authored track + its baked preview + view/camera state that
+  // survive across frames (pan/zoom accumulate). There is no "new track"/load UI yet (M3+), so
+  // the starter track is the only thing on screen.
+  const editor::TrackDefinition authoredTrack = buildStarterTrack();
+  const tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(authoredTrack));
+  const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
+  editor::TopDownView topDownView;
+
   bool running = true;
   while (running) {
     SDL_Event event;
@@ -210,7 +220,7 @@ int main(int, char**) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::Begin("track_editor — M1: authoring model");
+    ImGui::Begin("track_editor — status");
     ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
     ImGui::Separator();
     ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
@@ -223,7 +233,13 @@ int main(int, char**) {
     }
     ImGui::BulletText("EditorHistory undo/redo round trip: %s", smoke.undoRedoOk ? "OK" : "MISMATCH");
     ImGui::Separator();
-    ImGui::TextUnformatted("Point/mesh editing UI lands in later EDITOR_CPP_PORT_PLAN.md milestones.");
+    ImGui::TextUnformatted("Point/mesh editing lands in later EDITOR_CPP_PORT_PLAN.md milestones (M3+).");
+    ImGui::TextUnformatted("Top-down view: right-drag to pan, scroll to zoom, Home to reset.");
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Top-Down View");
+    editor::DrawTopDownCanvas(topDownView, authoredTrack, bakedTrack);
     ImGui::End();
 
     ImGui::Render();

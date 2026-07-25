@@ -1,10 +1,12 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M1 complete**. `track_editor` builds under the combined `cpp/` configure, opens an
-SDL2/OpenGL window with a docking-enabled ImGui frame, and on startup round-trips an in-memory
-starter track through `editor::TrackDefinition`'s JSON (de)serialization, bakes it via
-`tox::Track::fromJson` for a live preview, and exercises one undo/redo step — all verified OK.
-No point/mesh editing UI yet (M2+). This document records the plan to port `editor.html`/`js/editor.js`
+Status: **M2 complete**. `track_editor` builds under the combined `cpp/` configure, opens an
+SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
+through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
+(verified OK), and now renders that track's baked road/centerline plus authored control points in
+a top-down `ImDrawList` canvas with working pan (right-drag) and zoom (scroll), confirmed visually
+via screenshot. No point/mesh editing UI yet (M3+). This document records the plan to port
+`editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
 `cpp/CMakeLists.txt`.

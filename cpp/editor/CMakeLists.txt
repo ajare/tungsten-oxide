@@ -58,9 +58,10 @@ set(IMGUI_SOURCES
 # --- Vendored gl3w GL loader -------------------------------------------------
 set(GL3W_SOURCES src/gl3w/gl3w.c)
 
-# --- Editor-owned authoring model (EDITOR_CPP_PORT_PLAN.md M1) --------------
+# --- Editor-owned authoring model (EDITOR_CPP_PORT_PLAN.md M1) + views (M2) -
 set(EDITOR_SOURCES
-  src/EditorTrackDefinition.cpp)
+  src/EditorTrackDefinition.cpp
+  src/TopDownCanvas.cpp)
 
 add_executable(track_editor
   main.cpp
@@ -81,6 +82,9 @@ target_link_libraries(track_editor PRIVATE
 
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32)
+  # windows.h's min/max macros (pulled in transitively via <SDL.h> and gl3w.c) collide with
+  # std::min/std::max and Willpower/nlohmann headers; suppress them everywhere in this target.
+  target_compile_definitions(track_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 # SDL2 (and, with multi-config generators, Willpower) leave shared-library
