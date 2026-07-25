@@ -24,6 +24,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -135,6 +137,58 @@ class EditorState {
     track_.meshes.push_back(std::move(placement));
     selectMesh(placedId);
     return true;
+  }
+
+  // Registers a freshly parsed mesh (EDITOR_NATIVE_FILE_IO_PLAN.md M9, e.g. from
+  // parseMeshAssetJson) under a fresh id derived from `name`, rails every boundary edge by
+  // default (mirrors railBoundaryEdges -- an imported region should be enclosed the instant it
+  // lands, not a bare rim the ship slides straight off), and drops one placement of it centred at
+  // (centerWorldX, centerWorldZ) -- the caller passes either the current view centre (toolbar
+  // import) or a click position (paste-from-context-menu), mirroring addMeshAsset's `at` param.
+  // Returns the new asset id.
+  std::string importMeshAsset(MeshAsset asset, const std::string& name, double centerWorldX, double centerWorldZ) {
+    railBoundaryEdgesOf(asset);
+
+    history_.push(track_);
+    const std::string assetId = uniqueMeshAssetId(name);
+    asset.id = assetId;
+    asset.name = assetId;
+
+    double minX = std::numeric_limits<double>::infinity(), maxX = -std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity(), maxY = -std::numeric_limits<double>::infinity();
+    for (const auto& v : asset.vertices) {
+      minX = std::min(minX, v.x);
+      maxX = std::max(maxX, v.x);
+      minY = std::min(minY, v.y);
+      maxY = std::max(maxY, v.y);
+    }
+    const double centroidX = std::isfinite(minX) ? (minX + maxX) / 2.0 : 0.0;
+    const double centroidY = std::isfinite(minY) ? (minY + maxY) / 2.0 : 0.0;
+
+    track_.meshAssets.emplace(assetId, std::move(asset));
+
+    MeshPlacement placement;
+    placement.id = "mesh" + std::to_string(nextId_++);
+    placement.assetId = assetId;
+    placement.x = std::round((centerWorldX - centroidX) * 10.0) / 10.0;
+    placement.z = std::round((centerWorldZ - centroidY) * 10.0) / 10.0;
+    const std::string placedId = placement.id;
+    track_.meshes.push_back(std::move(placement));
+    selectMesh(placedId);
+    return assetId;
+  }
+
+  // Parses `text` (a file's contents or the clipboard) as a mesh export and imports it via
+  // importMeshAsset if it parses -- the shared path behind both the toolbar's Import/Paste Mesh
+  // buttons and the top-down canvas's right-click "Paste Mesh" (EDITOR_NATIVE_FILE_IO_PLAN.md M9,
+  // mirrors importMeshFile/pasteMeshFromClipboard sharing js/editor.js's parseMeshJSON). Returns
+  // the parse error, or nullopt on success.
+  std::optional<std::string> importMeshFromJsonText(const std::string& text, const std::string& name, double centerWorldX,
+                                                     double centerWorldZ) {
+    MeshAssetParseResult parsed = parseMeshAssetJson(text);
+    if (!parsed.asset) return parsed.error;
+    importMeshAsset(std::move(*parsed.asset), name, centerWorldX, centerWorldZ);
+    return std::nullopt;
   }
 
   // One pushUndo() per drag gesture, mirroring dragSelectedTo. `worldX`/`worldZ` is the mouse's
@@ -430,6 +484,32 @@ class EditorState {
       std::string candidate = base + "-" + std::to_string(i);
       if (!track_.textureAssets.count(candidate)) return candidate;
     }
+  }
+
+  // Mirrors TrackMesh.uniqueAssetId: same sanitizeAssetId scheme as texture ids, deduped against
+  // mesh asset ids instead -- a re-import of the same file always yields a fresh asset rather than
+  // disturbing existing placements.
+  std::string uniqueMeshAssetId(const std::string& filename) const {
+    const std::string base = sanitizeAssetId(filename);
+    if (!track_.meshAssets.count(base)) return base;
+    for (int i = 2;; ++i) {
+      std::string candidate = base + "-" + std::to_string(i);
+      if (!track_.meshAssets.count(candidate)) return candidate;
+    }
+  }
+
+  // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
+  // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
+  // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
+  // edge->polygon backrefs, since editor::MeshAsset (unlike wp::geometry::Mesh) doesn't retain
+  // those -- equivalent as long as no polygon lists the same edge twice, which a valid mesh export
+  // never does.
+  static void railBoundaryEdgesOf(MeshAsset& asset) {
+    std::map<int, int> ownerCount;
+    for (const auto& polygon : asset.polygons)
+      for (const auto& directed : polygon.edges) ++ownerCount[directed.edge];
+    for (auto& edge : asset.edges)
+      if (ownerCount[edge.id] == 1) edge.rail = true;
   }
 
   static bool withinPick(const tox::Vec3& p, double worldX, double worldZ, double pickRadiusWorld) {

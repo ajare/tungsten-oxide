@@ -25,11 +25,16 @@
 // RandomTrack.hpp) to land each drop exactly. M8 (EDITOR_NATIVE_FILE_IO_PLAN.md) adds New/Export
 // JSON/Export USD/Import JSON, backed by FileDialog.hpp/.cpp's modern IFileOpenDialog/
 // IFileSaveDialog wrappers -- the first native replacement for editor.html's browser file-picker
-// primitives.
+// primitives. M9 adds mesh asset import: EditorTrackDefinition.hpp's parseMeshAssetJson (reusing
+// its existing file-local normalizeMeshAsset -- no new from-scratch parser needed after all) plus
+// EditorState::importMeshAsset/importMeshFromJsonText back the toolbar's Import/Paste Mesh buttons
+// and TopDownCanvas.cpp's new minimal right-click "Paste Mesh" context menu; Clipboard.hpp/.cpp
+// wraps CF_UNICODETEXT for the paste path.
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
@@ -39,6 +44,7 @@
 
 #include <SDL.h>
 
+#include "Clipboard.hpp"
 #include "EditorHistory.hpp"
 #include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
@@ -456,6 +462,57 @@ M7bSmokeCheckResult runM7bSmokeCheck() {
   return result;
 }
 
+// M9 smoke check: parse a bare geometry-js mesh export (no track/asset wrapper, no pre-flagged
+// rail edges), import it through EditorState::importMeshFromJsonText the same way the toolbar's
+// Import Mesh button does, and confirm it registers a new asset, rails every boundary edge by
+// default (mirrors TrackMesh.railBoundaryEdges), and bakes cleanly through core's unmodified
+// loader. Also checks parseMeshAssetJson rejects non-mesh JSON, mirroring parseMeshJSON's never-
+// throws contract.
+struct M9SmokeCheckResult {
+  bool parsedFromJson = false, imported = false, railedBoundary = false, bakesCleanly = false, badJsonRejected = false;
+};
+
+M9SmokeCheckResult runM9SmokeCheck() {
+  M9SmokeCheckResult result;
+
+  const std::string meshJson = R"({
+    "vertices": [
+      {"id": 0, "position": {"x": -10, "y": -10}},
+      {"id": 1, "position": {"x": 10, "y": -10}},
+      {"id": 2, "position": {"x": 10, "y": 10}},
+      {"id": 3, "position": {"x": -10, "y": 10}}
+    ],
+    "edges": [
+      {"id": 0, "vertices": [0, 1]},
+      {"id": 1, "vertices": [1, 2]},
+      {"id": 2, "vertices": [2, 3]},
+      {"id": 3, "vertices": [3, 0]}
+    ],
+    "polygons": [
+      {"id": 0, "edges": [{"edge":0,"v0":0,"v1":1},{"edge":1,"v0":1,"v1":2},{"edge":2,"v0":2,"v1":3},{"edge":3,"v0":3,"v1":0}]}
+    ]
+  })";
+  result.parsedFromJson = editor::parseMeshAssetJson(meshJson).asset.has_value();
+
+  editor::EditorState state(buildStarterTrack());
+  const std::size_t assetsBefore = state.track().meshAssets.size();
+  const auto error = state.importMeshFromJsonText(meshJson, "test-import.json", 2000.0, 0.0);
+  result.imported = !error.has_value() && state.track().meshAssets.size() == assetsBefore + 1 && state.selectedMeshId().has_value();
+
+  if (result.imported) {
+    const auto* placement = state.findMeshPlacement(*state.selectedMeshId());
+    const auto& asset = state.track().meshAssets.at(placement->assetId);
+    result.railedBoundary = std::all_of(asset.edges.begin(), asset.edges.end(), [](const editor::MeshEdge& e) { return e.rail; });
+  }
+
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  result.bakesCleanly = static_cast<bool>(baked) && baked.warnings.empty();
+
+  result.badJsonRejected = !editor::parseMeshAssetJson("not json").asset.has_value() && !editor::parseMeshAssetJson("{}").asset.has_value();
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -476,7 +533,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M8: native save/load)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M9: native mesh import)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -561,6 +618,13 @@ int main(int, char**) {
                m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED (no seed in [1,200] rolled a mesh section)",
                m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount, m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount,
                m7cSmoke.warningCount);
+  std::fflush(stdout);
+
+  const M9SmokeCheckResult m9Smoke = runM9SmokeCheck();
+  std::fprintf(stdout, "M9 smoke check: parse=%s import=%s railedBoundary=%s bakesCleanly=%s badJsonRejected=%s\n",
+               m9Smoke.parsedFromJson ? "OK" : "MISMATCH", m9Smoke.imported ? "OK" : "MISMATCH",
+               m9Smoke.railedBoundary ? "OK" : "MISMATCH", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
+               m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
@@ -654,6 +718,11 @@ int main(int, char**) {
     ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
                        m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
                        m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
+    ImGui::TextUnformatted("M9 smoke check (mesh JSON import, exercised directly):");
+    ImGui::BulletText("parse / import / rails boundary by default: %s / %s / %s", m9Smoke.parsedFromJson ? "OK" : "MISMATCH",
+                       m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
+    ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
+                       m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -713,6 +782,35 @@ int main(int, char**) {
       // of the track -- there's no asset library/drag-from-palette UI yet (M4 is placement, not
       // authoring), so this is the only way to get a mesh region onto the canvas at all.
       if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
+    }
+    ImGui::SameLine();
+    // Import Mesh/Paste Mesh mirror editor.html's #importMeshBtn/#pasteMeshBtn
+    // (EDITOR_NATIVE_FILE_IO_PLAN.md M9); the right-click "Paste Mesh" in TopDownCanvas.cpp shares
+    // EditorState::importMeshFromJsonText with the toolbar button below.
+    if (ImGui::Button("Import Mesh...")) {
+      const editor::FileDialogResult picked =
+          editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
+      if (picked.ok) {
+        std::ifstream input(picked.path, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const editor::WorldPoint2D center = topDownView.center();
+        const auto error = editorState.importMeshFromJsonText(text, picked.path.filename().string(), center.x, center.z);
+        if (error) fileIoStatus = "Mesh import failed: " + *error;
+        else rebake();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Paste Mesh")) {
+      // Unlike Import Mesh (centred on the current view) and the right-click paste (centred on the
+      // click), the toolbar paste has no position to centre on -- mirrors
+      // importMeshFromClipboard's own `at = {x:0,z:0}` default when called without centreOn.
+      if (const auto text = editor::readClipboardText()) {
+        const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
+        if (error) fileIoStatus = "Clipboard does not contain a mesh: " + *error;
+        else rebake();
+      } else {
+        fileIoStatus = "Could not read the clipboard";
+      }
     }
     ImGui::Separator();
     ImGui::TextUnformatted("Random track (single-loop generator; see RandomTrack.hpp for scope):");

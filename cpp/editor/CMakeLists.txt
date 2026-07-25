@@ -68,7 +68,8 @@ set(EDITOR_SOURCES
   src/RandomTrack.cpp
   src/TextureCache.cpp
   src/TexturePanel.cpp
-  src/FileDialog.cpp)
+  src/FileDialog.cpp
+  src/Clipboard.cpp)
 
 add_executable(track_editor
   main.cpp

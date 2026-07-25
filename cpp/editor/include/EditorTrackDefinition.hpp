@@ -173,4 +173,17 @@ TrackDefinition fromFile(const std::filesystem::path& path);
 std::string toJson(const TrackDefinition& track);
 void toFile(const TrackDefinition& track, const std::filesystem::path& path);
 
+struct MeshAssetParseResult {
+  std::optional<MeshAsset> asset;
+  std::string error;  // set only when asset is nullopt
+};
+
+// Parses a standalone geometry-js mesh export (the "mesh" field of one track.meshAssets[id]
+// entry, or a bare {vertices,edges,polygons} document straight from the ext/geoemetry-js editor's
+// "Copy JSON" button) for mesh import/paste (EDITOR_NATIVE_FILE_IO_PLAN.md M9). Mirrors
+// js/editor.js's parseMeshJSON: never throws, reports why parsing failed instead. The returned
+// asset's `id`/`name` are unset -- callers assign a fresh id when registering it (see
+// EditorState::importMeshAsset).
+MeshAssetParseResult parseMeshAssetJson(const std::string& text);
+
 }  // namespace editor

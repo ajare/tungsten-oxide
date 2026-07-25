@@ -470,4 +470,18 @@ void toFile(const TrackDefinition& track, const std::filesystem::path& path) {
   output << toJson(track);
 }
 
+MeshAssetParseResult parseMeshAssetJson(const std::string& text) {
+  if (text.find_first_not_of(" \t\r\n") == std::string::npos) return {std::nullopt, "nothing to import (the clipboard is empty)"};
+  json data;
+  try {
+    data = json::parse(text);
+  } catch (const std::exception& error) {
+    return {std::nullopt, std::string("not valid JSON (") + error.what() + ")"};
+  }
+  auto asset = normalizeMeshAsset(std::string(), data);
+  if (!asset) return {std::nullopt, "no vertices/polygons array found -- is this a geometry-js mesh?"};
+  if (asset->vertices.empty() || asset->polygons.empty()) return {std::nullopt, "mesh contains no usable polygons"};
+  return {std::move(asset), {}};
+}
+
 }  // namespace editor

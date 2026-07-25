@@ -9,6 +9,8 @@
 
 #include "imgui.h"
 
+#include "Clipboard.hpp"
+
 namespace editor {
 namespace {
 
@@ -355,16 +357,41 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   }
 
   bool mutated = false;
+  static WorldPoint2D contextMenuWorld;  // set right before OpenPopup, read once BeginPopup opens it
   const double pickRadiusWorld = kPickRadiusPx / view.scale();
   switch (state.mode()) {
-    case EditMode::Edit:
+    case EditMode::Edit: {
       mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid()) mutated = state.deleteSelectedPoint() || mutated;
         else if (state.selectedMeshId().has_value()) mutated = state.deleteSelectedMesh() || mutated;
       }
+      // Minimal right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9): a right-*click* (no
+      // drag) opens it instead of panning; a real drag still pans, since ResetMouseDragDelta below
+      // only ever fires on release, after the drag's own per-frame pan deltas already applied.
+      // Scoped to just "Paste Mesh" -- editor.js's real menu has many more entries, out of scope
+      // here (see the plan's scope-creep note).
+      if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        const ImVec2 dragDelta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
+        if (std::abs(dragDelta.x) < 3.0f && std::abs(dragDelta.y) < 3.0f) {
+          contextMenuWorld = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+          ImGui::OpenPopup("TopDownContextMenu");
+        }
+        ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
+      }
+      if (ImGui::BeginPopup("TopDownContextMenu")) {
+        if (ImGui::MenuItem("Paste Mesh")) {
+          // Mirrors importMeshFromClipboard(centreOn): centred on the click, unlike the toolbar
+          // Paste Mesh button (world origin) or Import Mesh (current view centre).
+          if (const auto text = readClipboardText()) {
+            mutated = !state.importMeshFromJsonText(*text, "pasted-mesh", contextMenuWorld.x, contextMenuWorld.z).has_value() || mutated;
+          }
+        }
+        ImGui::EndPopup();
+      }
       break;
+    }
     case EditMode::Create:
       mutated = handleCreateModeInput(state, view, mouseLocal, pickRadiusWorld, hovered);
       if (mutated) state.setMode(EditMode::Edit);  // mirrors setEditMode('edit') after finishCreateDraft

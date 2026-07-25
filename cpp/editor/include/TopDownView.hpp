@@ -77,6 +77,11 @@ class TopDownView {
   double zoomMultiplier() const { return std::pow(2.0, zoomSlider_ / 50.0); }
   double scale() const { return scale_; }
 
+  // The world point currently at the viewport's centre pixel -- mirrors editor.js's
+  // screenToWorld(view.w/2, view.h/2), used to centre a freshly imported mesh asset (M9) when the
+  // caller has no click position to place it at.
+  WorldPoint2D center() const { return screenToWorld(width_ / 2.0, height_ / 2.0); }
+
   // Mirrors editor.js's frozenViewBounds: while a point is being dragged, computeView() must keep
   // using the bounds captured *before* the drag started, not the ones the moving point produces
   // each frame -- otherwise the auto-fit view fights the drag (it re-centers/rescales around the
