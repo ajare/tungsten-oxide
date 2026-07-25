@@ -728,6 +728,78 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
 
   view.computeView(bounds, canvasSize.x, canvasSize.y);
 
+  // Zoom slider + Home (EDITOR_PARITY_FIXES.md-adjacent UI pass), mirrors editor.html's
+  // #topZoomControl: a vertical zoom slider (same -100..250 range as scroll-wheel zoom, see
+  // TopDownView::kZoomSliderMin/Max) plus a reset-to-default button, overlaid at the bottom-right
+  // corner of the canvas.
+  //
+  // Submitted here, BEFORE topDownCanvasInput below, so it gets first claim on clicks in its own
+  // screen rect: ImGui resolves overlapping widgets by submission order, not draw order -- once
+  // ANY earlier-submitted item under the mouse becomes ImGui's ActiveId, every later-submitted
+  // item's own ItemHoverable() check fails for the rest of that click (ActiveIdAllowOverlap isn't
+  // set here), so it can never become hovered/clicked either. topDownCanvasInput is a single
+  // InvisibleButton spanning the WHOLE canvas; if it were submitted first (as it originally was,
+  // with this control drawn afterward purely for visual layering), it would silently swallow
+  // every click landing anywhere inside the slider's rect, including on the slider itself -- this
+  // is exactly why the slider previously didn't register clicks at all.
+  //
+  // To still render on top of the canvas background/road/point drawing (which happens later, via
+  // raw drawList calls that don't participate in hover/active resolution at all -- only actual
+  // widgets like this one do), the window draw list is split into two channels: this control's
+  // own draw commands go to channel 1 now, everything else stays on channel 0, and
+  // ChannelsMerge() at the very end concatenates them back in that order (0 under 1) so the
+  // control paints over the canvas content regardless of submission order.
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->ChannelsSplit(2);
+  drawList->ChannelsSetCurrent(1);
+  {
+    constexpr float kControlWidth = 40.0f, kSliderHeight = 160.0f, kMargin = 14.0f, kPad = 8.0f;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float lineHeight = ImGui::GetTextLineHeight();
+    const float groupHeight = lineHeight + style.ItemSpacing.y + kSliderHeight + style.ItemSpacing.y + lineHeight + style.ItemSpacing.y +
+                              ImGui::GetFrameHeight();
+    const ImVec2 groupPos(canvasOrigin.x + canvasSize.x - kControlWidth - kMargin - kPad,
+                          canvasOrigin.y + canvasSize.y - groupHeight - kMargin - kPad);
+    const ImVec2 panelMin(groupPos.x - kPad, groupPos.y - kPad);
+    const ImVec2 panelMax(groupPos.x + kControlWidth + kPad, groupPos.y + groupHeight + kPad);
+    // Mirrors #topZoomControl's CSS: rgba(16,32,46,0.82) fill, #2c6a9e 1px border, 8px radius.
+    drawList->AddRectFilled(panelMin, panelMax, IM_COL32(16, 32, 46, 209), 8.0f);
+    drawList->AddRect(panelMin, panelMax, IM_COL32(44, 106, 158, 255), 8.0f, 0, 1.0f);
+
+    ImGui::SetCursorScreenPos(groupPos);
+    ImGui::PushID("TopDownZoomControl");
+    ImGui::BeginGroup();
+    // Mirrors .zoomLabel's --accent (#4fd6ff) colour.
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(79, 214, 255, 255));
+    ImGui::TextUnformatted(" +");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(10, 26, 38, 255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(15, 36, 52, 255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(20, 46, 66, 255));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(79, 214, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(140, 230, 255, 255));
+    float zoomValue = static_cast<float>(view.zoomSlider());
+    // Unlike zoomAt() (scroll wheel), dragging the slider does not re-anchor on a screen point --
+    // mirrors editor.js's topZoomSlider 'input' handler, which calls setTopZoomSliderValue()
+    // directly rather than zoomTopAt(), so it zooms about the view's current center.
+    if (ImGui::VSliderFloat("##zoom", ImVec2(kControlWidth, kSliderHeight), &zoomValue, static_cast<float>(TopDownView::kZoomSliderMin),
+                            static_cast<float>(TopDownView::kZoomSliderMax), ""))
+      view.setZoomSlider(zoomValue);
+    ImGui::PopStyleColor(5);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(79, 214, 255, 255));
+    ImGui::TextUnformatted(" -");
+    ImGui::PopStyleColor();
+    // Mirrors #topHomeBtn's #16344a bg / #1f4c6b hover.
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(22, 52, 74, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(31, 76, 107, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(44, 106, 158, 255));
+    if (ImGui::Button("Home", ImVec2(kControlWidth, 0))) view.resetView();
+    ImGui::PopStyleColor(3);
+    ImGui::EndGroup();
+    ImGui::PopID();
+  }
+  drawList->ChannelsSetCurrent(0);
+
   ImGui::InvisibleButton("topDownCanvasInput", canvasSize,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
   const bool hovered = ImGui::IsItemHovered();
@@ -878,7 +950,6 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
   }
 
-  ImDrawList* drawList = ImGui::GetWindowDrawList();
   drawList->AddRectFilled(canvasOrigin, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), kBackgroundColor);
   drawGrid(drawList, canvasOrigin, canvasSize, view);
   if (baked != nullptr) {
@@ -913,31 +984,9 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   }
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
-  // Zoom slider + Home (EDITOR_PARITY_FIXES.md-adjacent UI pass), mirrors editor.html's
-  // #topZoomControl: a vertical zoom slider (same -100..250 range as scroll-wheel zoom, see
-  // TopDownView::kZoomSliderMin/Max) plus a reset-to-default button, overlaid at the bottom-right
-  // corner of the canvas. Drawn last (after every drawList call above) so its own ImGui draw
-  // commands land on top of the canvas background fill rather than under it. Unlike zoomAt()
-  // (scroll wheel), dragging the slider does not re-anchor on a screen point -- mirrors
-  // editor.js's topZoomSlider 'input' handler, which calls setTopZoomSliderValue() directly
-  // rather than zoomTopAt(), so it zooms about the view's current center.
-  {
-    constexpr float kControlWidth = 36.0f, kSliderHeight = 160.0f, kMargin = 14.0f;
-    const float totalHeight = ImGui::GetTextLineHeight() * 2.0f + kSliderHeight + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 3.0f;
-    ImGui::SetCursorScreenPos(
-        ImVec2(canvasOrigin.x + canvasSize.x - kControlWidth - kMargin, canvasOrigin.y + canvasSize.y - totalHeight - kMargin));
-    ImGui::PushID("TopDownZoomControl");
-    ImGui::BeginGroup();
-    ImGui::TextUnformatted("+");
-    float zoomValue = static_cast<float>(view.zoomSlider());
-    if (ImGui::VSliderFloat("##zoom", ImVec2(kControlWidth, kSliderHeight), &zoomValue, static_cast<float>(TopDownView::kZoomSliderMin),
-                            static_cast<float>(TopDownView::kZoomSliderMax), ""))
-      view.setZoomSlider(zoomValue);
-    ImGui::TextUnformatted("-");
-    if (ImGui::Button("Home", ImVec2(kControlWidth, 0))) view.resetView();
-    ImGui::EndGroup();
-    ImGui::PopID();
-  }
+  // Merges channel 1 (the zoom control, submitted early for interaction priority -- see the
+  // comment where ChannelsSplit was called) back on top of channel 0 (everything drawn above).
+  drawList->ChannelsMerge();
 
   ImGui::EndChild();
   return mutated;
