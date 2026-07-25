@@ -605,9 +605,58 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
     for (const auto& [id, count] : endpointCounts)
       if (count >= 2) track.connectedEndpointIds.insert(id);
 
+    compileTrackMeshes(track, warnings);
+    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
+    std::map<std::string, int> regionIds;
+    for (std::size_t i = 0; i < track.meshRegions.size(); ++i)
+      regionIds.emplace(track.meshRegions[i].id, static_cast<int>(i));
+
     std::map<std::string, int> pathIds;
-    for (size_t i = 0; i < track.definition.paths.size(); i++) pathIds[track.definition.paths[i].id] = (int)i;
-    for (auto& z : track.definition.zones)
+    for (size_t i = 0; i < track.definition.paths.size(); i++)
+      pathIds.emplace(track.definition.paths[i].id, static_cast<int>(i));
+    for (auto& z : track.definition.zones) {
+      if (z.host.kind == "mesh") {
+        const auto found = regionIds.find(z.host.meshId);
+        if (found == regionIds.end()) continue;
+        Zone zone;
+        zone.id = z.id;
+        zone.kind = "mesh";
+        zone.effect = z.effect;
+        zone.factor = z.factor;
+        zone.duration = z.duration;
+        zone.hostRegionIndex = found->second;
+        zone.x = z.host.x;
+        zone.z = z.host.z;
+        zone.rotation = z.host.rotation * DEG2RAD;
+        zone.halfLength = std::max(0.25, z.length / 2);
+        zone.halfWidth = std::max(0.25, z.width / 2);
+        track.zones.push_back(zone);
+
+        const double cosine = std::cos(zone.rotation), sine = std::sin(zone.rotation);
+        auto corner = [&](double x, double z) {
+          return Vec3(zone.x + x * cosine - z * sine,
+                      track.meshRegions[zone.hostRegionIndex].elevation + 0.15,
+                      zone.z + x * sine + z * cosine);
+        };
+        const Vec3 a = corner(-zone.halfLength, -zone.halfWidth);
+        const Vec3 b = corner(zone.halfLength, -zone.halfWidth);
+        const Vec3 c = corner(zone.halfLength, zone.halfWidth);
+        const Vec3 d = corner(-zone.halfLength, zone.halfWidth);
+        constexpr double uvScale = 1.0 / 12.0;
+        Builder geometry;
+        geometry.b.id = "zone-" + z.id;
+        geometry.b.kind = GeometryKind::ZoneSurface;
+        geometry.b.materialKey = "zone-" + z.effect;
+        geometry.b.hasUv = true;
+        geometry.tri(a, b, c, {-zone.halfLength * uvScale, -zone.halfWidth * uvScale},
+                     {zone.halfLength * uvScale, -zone.halfWidth * uvScale},
+                     {zone.halfLength * uvScale, zone.halfWidth * uvScale});
+        geometry.tri(a, c, d, {-zone.halfLength * uvScale, -zone.halfWidth * uvScale},
+                     {zone.halfLength * uvScale, zone.halfWidth * uvScale},
+                     {-zone.halfLength * uvScale, zone.halfWidth * uvScale});
+        track.geometry.push_back(std::move(geometry.b));
+        continue;
+      }
       if (z.host.kind == "path") {
         int pi = pathIds[z.host.pathId];
         Evaluator e(track.definition.paths[pi]);
@@ -680,6 +729,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         }
         track.geometry.push_back(std::move(zone.b));
       }
+    }
     std::vector<TriggerDefinition> triggerDefinitions = track.definition.triggers;
     const bool hasFinish = std::any_of(triggerDefinitions.begin(), triggerDefinitions.end(), [](const auto& t) {
       return t.type == "checkpoint" && t.role == "finish";
@@ -742,29 +792,40 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       finish.height = 12;
       triggerDefinitions.push_back(std::move(finish));
     }
-    for (auto& t : triggerDefinitions)
-      if (t.host.kind == "path") {
+    for (auto& t : triggerDefinitions) {
+      Trigger trigger;
+      trigger.id = t.id;
+      trigger.type = t.type;
+      trigger.role = t.role;
+      trigger.direction = t.direction;
+      trigger.halfWidth = std::max(0.25, t.width / 2);
+      trigger.height = std::max(0.25, t.height);
+      if (t.host.kind == "mesh") {
+        const auto found = regionIds.find(t.host.meshId);
+        if (found == regionIds.end()) continue;
+        const double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
+        trigger.center = {t.host.x, track.meshRegions[found->second].elevation, t.host.z};
+        trigger.fwd = {sine, 0, cosine};
+        trigger.right = {cosine, 0, -sine};
+        trigger.up = UP;
+      } else if (t.host.kind == "path") {
         int pi = pathIds[t.host.pathId];
-        Evaluator e(track.definition.paths[pi]);
-        double gm = (e.closed ? e.n : e.n - 1);
-        Frame f = frame(e.eval(t.host.t * gm));
-        double lift = TrackCore::crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, .5, f.width);
-        double a = t.rotation * DEG2RAD, c = std::cos(a), s = std::sin(a);
-        Trigger o;
-        o.id = t.id;
-        o.type = t.type;
-        o.role = t.role;
-        o.direction = t.direction;
-        o.center = f.pos.clone().addScaledVector(f.normal, lift);
-        o.fwd = f.tangent.clone().multiplyScalar(c).addScaledVector(f.edgeRight, s).normalize();
-        o.right = f.edgeRight.clone().multiplyScalar(c).addScaledVector(f.tangent, -s).normalize();
-        o.up = f.normal;
-        o.halfWidth = t.width / 2;
-        o.height = t.height;
-        track.triggers.push_back(o);
+        Evaluator evaluator(track.definition.paths[pi]);
+        double gMax = evaluator.closed ? evaluator.n : evaluator.n - 1;
+        Frame frameAtTrigger = frame(evaluator.eval(t.host.t * gMax));
+        double lift = TrackCore::crossSectionHeight(frameAtTrigger.crossSectionCurvature,
+                                                    frameAtTrigger.crossSectionTightness, .5,
+                                                    frameAtTrigger.width);
+        double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
+        trigger.center = frameAtTrigger.pos.clone().addScaledVector(frameAtTrigger.normal, lift);
+        trigger.fwd = frameAtTrigger.tangent.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.edgeRight, sine).normalize();
+        trigger.right = frameAtTrigger.edgeRight.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.tangent, -sine).normalize();
+        trigger.up = frameAtTrigger.normal;
+      } else {
+        continue;
       }
-    compileTrackMeshes(track, warnings);
-    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
+      track.triggers.push_back(std::move(trigger));
+    }
     track.trackFloorY = (std::isfinite(low) ? low : 0) - Consts::RESPAWN_FALL_DEPTH;
     return true;
   } catch (const std::exception& e) {

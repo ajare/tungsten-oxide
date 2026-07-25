@@ -201,6 +201,51 @@ bool MeshRegion::withinBounds(double x, double z, double padding) const {
   return x >= bounds.minX - padding && x <= bounds.maxX + padding && z >= bounds.minZ - padding && z <= bounds.maxZ + padding;
 }
 
+std::optional<double> segmentCrossing(const Vec2d& a, const Vec2d& b, const Vec2d& c, const Vec2d& d) {
+  const double rx = b.x - a.x, rz = b.y - a.y;
+  const double sx = d.x - c.x, sz = d.y - c.y;
+  const double denominator = rx * sz - rz * sx;
+  if (std::fabs(denominator) < 1e-12) return std::nullopt;
+  const double t = ((c.x - a.x) * sz - (c.y - a.y) * sx) / denominator;
+  const double u = ((c.x - a.x) * rz - (c.y - a.y) * rx) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return std::nullopt;
+  return t;
+}
+
+MeshMoveResult slideAlongRails(const MeshRegion& region, const Vec2d& from, const Vec2d& to, Vec2d& velocity,
+                               double margin, double restitution) {
+  Vec2d current = from, target = to;
+  bool hit = false;
+  for (int iteration = 0; iteration < 3; ++iteration) {
+    const MeshRail* nearest = nullptr;
+    double nearestT = 0;
+    for (const auto& rail : region.rails) {
+      const auto t = segmentCrossing(current, target, rail.a, rail.b);
+      if (t && (!nearest || *t < nearestT)) {
+        nearest = &rail;
+        nearestT = *t;
+      }
+    }
+    if (!nearest) break;
+    hit = true;
+    const double directionX = target.x - current.x, directionZ = target.y - current.y;
+    const double side = directionX * nearest->nx + directionZ * nearest->nz >= 0 ? 1.0 : -1.0;
+    const double hitX = current.x + directionX * nearestT, hitZ = current.y + directionZ * nearestT;
+    current = {hitX - nearest->nx * margin * side, hitZ - nearest->nz * margin * side};
+    const double remainderX = target.x - hitX, remainderZ = target.y - hitZ;
+    const double into = remainderX * nearest->nx + remainderZ * nearest->nz;
+    target = {current.x + remainderX - nearest->nx * into,
+              current.y + remainderZ - nearest->nz * into};
+    const double velocityInto = velocity.x * nearest->nx + velocity.y * nearest->nz;
+    if (velocityInto * side > 0) {
+      const double impulse = velocityInto * (1 + restitution);
+      velocity.x -= nearest->nx * impulse;
+      velocity.y -= nearest->nz * impulse;
+    }
+  }
+  return {target.x, target.y, hit};
+}
+
 void compileTrackMeshes(Track& track, std::vector<TrackWarning>& warnings) {
   track.meshRegions.clear();
   std::map<std::string, std::unique_ptr<AssetTopology>> topologies;

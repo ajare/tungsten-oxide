@@ -2,13 +2,9 @@
 // from js/track-physics.js (Simulation.stepPhysics + its helpers). Bodies live in
 // src/Simulation.cpp.
 //
-// SCOPE (milestones 1–2): kinematics + guard-rail corridor collision + airborne
-// launch/landing on the spline corridor, plus zone boost + checkpoint/trigger
-// effects and respawn recovery. Mesh-region physics is out of scope
-// (CPP_PORT_PLAN.md §2) and the parity corpus emits zero mesh sections, so
-// surfaceOwnerAt() is always null here and the mesh branches of the JS step are
-// provably dead — they are omitted, with the surviving branches kept verbatim.
-// The mesh branches of detectZoneTriggers likewise never run (path zones only).
+// Includes spline-corridor and mesh-region ownership, collision, transitions,
+// airborne landing, zones/triggers, and respawn recovery. The old baked-world
+// parity corpus still exercises the exact mesh-free branches.
 #pragma once
 #include "Vec3.hpp"
 #include "TrackCore.hpp"
@@ -66,8 +62,10 @@ public:
   // Recovers the ship's evaluator parameter g on the path the sample landed on.
   double shipParamG(const Sample& sample) const;
 
-  // Zone boost + checkpoint/trigger detection (mirror of track-physics.js).
-  void detectZoneTriggers(Ship& ship, const Sample& sample, bool meshRegion) const;
+  // Surface ownership and zone/trigger detection (mirror of track-physics.js).
+  const MeshRegion* meshRegionAt(double x, double z, double shipY) const;
+  const MeshRegion* surfaceOwnerAt(double x, double z, double shipY, const Sample& corridorSample) const;
+  void detectZoneTriggers(Ship& ship, const Sample& sample, const MeshRegion* meshRegion) const;
   void detectTriggers(Ship& ship, const Vec3& p0, const Vec3& p1) const;
   void fireTrigger(Ship& ship, const Trigger& rec, const std::string& dir) const;
 

@@ -38,15 +38,14 @@ struct Path {
   std::vector<Frame> centerline;
 };
 
-// A compiled path-hosted boost zone (mirror of track-game.js buildZones / the
-// bake in js/track-bake.js). Detection compares the sampled path by index
-// (JS compares the path object identity `sample.pathObj === z.hostPath`).
+// A compiled path- or mesh-hosted effect zone.
 struct Zone {
   std::string id;
-  std::string kind;    // "path" (mesh zones are out of scope, corpus emits none)
+  std::string kind;
   std::string effect;  // "velocityChange" | "startGrid"
   double factor{0.0}, duration{0.0};
-  int hostPathIndex{0};
+  int hostPathIndex{0}, hostRegionIndex{-1};
+  double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};
   double gLo{0.0}, gHi{0.0}, gMax{1.0};
   bool closed{true};
   double lateral{0.0}, halfWidth{0.0};

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,15 @@ struct MeshRegion {
   bool contains(double x, double z) const;
   bool withinBounds(double x, double z, double padding = 0.0) const;
 };
+
+struct MeshMoveResult {
+  double x{0.0}, z{0.0};
+  bool hit{false};
+};
+
+std::optional<double> segmentCrossing(const Vec2d& a, const Vec2d& b, const Vec2d& c, const Vec2d& d);
+MeshMoveResult slideAlongRails(const MeshRegion& region, const Vec2d& from, const Vec2d& to, Vec2d& velocity,
+                               double margin, double restitution = 0.0);
 
 struct Track;
 struct TrackWarning;

@@ -94,6 +94,13 @@ void checkVec2(const Vec2d& got, const json& want, double tolerance, const std::
   checkClose(got.y, want[1].get<double>(), tolerance, message + ".z");
 }
 
+Ship shipAt(const Simulation& simulation, const Vec3& position, const Vec3& forward = Vec3(0, 0, 1)) {
+  Ship ship;
+  ship.startPose = {position, UP, forward};
+  simulation.placeShipAtPose(ship, ship.startPose, {});
+  return ship;
+}
+
 double triangleArea(const MeshRegion& region) {
   double area = 0;
   for (const auto& triangle : region.triangles) {
@@ -247,6 +254,163 @@ int main(int argc, char** argv) {
   const auto seamTrack = Track::fromFile(fixtureDir / "shared-seam.json");
   if (seamTrack && !seamTrack.track->meshRegions.empty())
     check(seamTrack.track->meshRegions[0].rails.size() == 6, "shared interior polygon edge is not railed");
+
+  // M5: native mesh ownership, collision, transitions, landing and effects.
+  const auto overlapTrack = Track::fromFile(fixtureDir / "overlapping-elevations.json");
+  if (overlapTrack) {
+    Simulation simulation(*overlapTrack.track);
+    const Sample upperSample = simulation.sampleTrack(0, 11, 0);
+    const MeshRegion* upper = simulation.surfaceOwnerAt(0, 0, 11, upperSample);
+    const Sample lowerSample = simulation.sampleTrack(0, 1, 0);
+    const MeshRegion* lower = simulation.surfaceOwnerAt(0, 0, 1, lowerSample);
+    check(upper && upper->id == "upper-deck", "surface ownership selects nearest upper mesh");
+    check(lower && lower->id == "lower-deck", "surface ownership selects nearest lower mesh");
+
+    json lowered = readJson(fixtureDir / "overlapping-elevations.json");
+    lowered["meshes"][0]["elevation"] = -35;
+    const auto loweredTrack = Track::fromJson(lowered.dump());
+    check(loweredTrack && loweredTrack.track->trackFloorY == -135,
+          "lowest mesh elevation contributes to respawn floor");
+  }
+  if (holeTrack) {
+    const Track& track = *holeTrack.track;
+    Simulation simulation(track);
+    Ship ship = shipAt(simulation, {20, 4, -25}, {0, 0, -1});
+    ship.physics.speed = 60;
+    simulation.stepPhysics(ship, 0.1, 0, 0, 0);
+    check(!ship.physics.airborne && ship.physics.groundPos.z > -30 && ship.physics.moveDir.z > 0,
+          "grounded mesh rail stops and reflects ship");
+
+    auto airborneRun = [&](double y) {
+      Ship airborne = shipAt(simulation, {20, y, -35});
+      airborne.physics.airborne = true;
+      airborne.physics.speed = 80;
+      airborne.physics.moveDir.set(0, 0, 1);
+      simulation.stepPhysics(airborne, 0.1, 0, 0, 0);
+      return airborne;
+    };
+    const Ship blocked = airborneRun(6);
+    const Ship cleared = airborneRun(12);
+    check(blocked.physics.groundPos.z < -29, "airborne ship below rail top is blocked from outside");
+    check(cleared.physics.groundPos.z > -30, "airborne ship above rail top clears wall");
+
+    auto landingRun = [&](double x) {
+      Ship airborne = shipAt(simulation, {x, 7, 0});
+      airborne.physics.airborne = true;
+      airborne.physics.verticalVel = -15;
+      airborne.physics.speed = 0;
+      simulation.stepPhysics(airborne, 0.15, 0, 0, 0);
+      return airborne;
+    };
+    const Ship solidLanding = landingRun(20);
+    const Ship holeLanding = landingRun(0);
+    check(!solidLanding.physics.airborne && solidLanding.physics.groundPos.y == 4,
+          "airborne ship lands on solid mesh polygon");
+    check(holeLanding.physics.airborne, "airborne ship does not land in polygon hole");
+  }
+  {
+    json transformed = readJson(fixtureDir / "transformed-square.json");
+    transformed["meshes"][0]["x"] = 100;
+    transformed["meshes"][0]["z"] = 0;
+    transformed["meshes"][0]["rotation"] = 0;
+    transformed["meshes"][0]["elevation"] = 8;
+    const auto loaded = Track::fromJson(transformed.dump());
+    if (loaded) {
+      Simulation simulation(*loaded.track);
+      Ship ship = shipAt(simulation, {120, 8, 35});
+      ship.physics.speed = 60;
+      simulation.stepPhysics(ship, 0.1, 0, 0, 0);
+      check(ship.physics.airborne && ship.physics.groundPos.z > 40,
+            "crossing an unrailed mesh edge launches ship when no corridor receives it");
+    }
+  }
+  {
+    json overlap = readJson(fixtureDir / "overlapping-elevations.json");
+    overlap["meshes"][1]["x"] = -55;
+    overlap["meshes"][1]["z"] = -35;
+    overlap["meshes"][1]["rotation"] = 0;
+    const auto loaded = Track::fromJson(overlap.dump());
+    if (loaded) {
+      Simulation simulation(*loaded.track);
+      Ship ship = shipAt(simulation, {10, 12, 0}, {1, 0, 0});
+      ship.physics.speed = 80;
+      simulation.stepPhysics(ship, 0.1, 0, 0, 0);
+      check(!ship.physics.airborne && ship.physics.groundPos.y == 0,
+            "leaving upper mesh transfers directly to overlapping lower mesh");
+    }
+  }
+  {
+    const auto bridge = Track::fromFile(fixtureDir / "corridor-mesh-bridge.json");
+    if (bridge) {
+      Simulation simulation(*bridge.track);
+      Ship ship = shipAt(simulation, {0, 0, 35});
+      ship.physics.speed = 80;
+      simulation.stepPhysics(ship, 0.1, 0, 0, 0);
+      check(!ship.physics.airborne && ship.physics.groundPos.z > 40,
+            "leaving mesh transfers to underlying corridor");
+    }
+  }
+  {
+    const auto effects = Track::fromFile(fixtureDir / "mesh-effects.json");
+    if (effects) {
+      const MeshRegion& arena = effects.track->meshRegions[0];
+      Vec2d elasticVelocity{0, -20};
+      const MeshMoveResult elastic = slideAlongRails(arena, {0, -40}, {0, -60}, elasticVelocity,
+                                                     TrackCore::COLLISION_WALL_MARGIN, 1);
+      check(elastic.hit && elastic.z >= -50 + TrackCore::COLLISION_WALL_MARGIN - 1e-9 &&
+                std::fabs(elasticVelocity.y - 20) < 1e-9,
+            "head-on mesh rail sweep applies restitution without tunneling");
+      Vec2d glancingVelocity{20, -5};
+      const MeshMoveResult glancing = slideAlongRails(arena, {-10, -48}, {10, -52}, glancingVelocity,
+                                                      TrackCore::COLLISION_WALL_MARGIN);
+      check(glancing.hit && glancing.x > -10 && std::fabs(glancingVelocity.x - 20) < 1e-9,
+            "glancing mesh rail sweep preserves tangential velocity");
+      Vec2d fastVelocity{0, -500};
+      const MeshMoveResult fast = slideAlongRails(arena, {0, -40}, {0, -400}, fastVelocity,
+                                                  TrackCore::COLLISION_WALL_MARGIN);
+      check(fast.hit && fast.z >= -50 + TrackCore::COLLISION_WALL_MARGIN - 1e-9,
+            "high-speed mesh rail sweep cannot tunnel");
+      Vec2d outsideVelocity{0, 20};
+      const MeshMoveResult outside = slideAlongRails(arena, {0, -60}, {0, -40}, outsideVelocity,
+                                                     TrackCore::COLLISION_WALL_MARGIN);
+      check(outside.hit && !arena.contains(outside.x, outside.z),
+            "mesh rail blocks an approach from outside");
+      Vec2d cornerVelocity{-20, -20};
+      const MeshMoveResult corner = slideAlongRails(arena, {-45, -45}, {-55, -55}, cornerVelocity,
+                                                    TrackCore::COLLISION_WALL_MARGIN);
+      check(corner.hit && corner.x >= -50 + TrackCore::COLLISION_WALL_MARGIN - 1e-9 &&
+                corner.z >= -50 + TrackCore::COLLISION_WALL_MARGIN - 1e-9,
+            "mesh rail sweep resolves both walls of a corner");
+
+      const auto zone = std::find_if(effects.track->zones.begin(), effects.track->zones.end(),
+                                     [](const Zone& value) { return value.id == "mesh-boost"; });
+      const auto trigger = std::find_if(effects.track->triggers.begin(), effects.track->triggers.end(),
+                                        [](const Trigger& value) { return value.id == "mesh-finish"; });
+      check(zone != effects.track->zones.end() && zone->kind == "mesh" && zone->hostRegionIndex == 0,
+            "mesh-hosted boost compiles against native region");
+      const auto zoneGeometry = std::find_if(effects.track->geometry.begin(), effects.track->geometry.end(),
+                                             [](const GeometryBatch& batch) { return batch.id == "zone-mesh-boost"; });
+      check(zoneGeometry != effects.track->geometry.end() && zoneGeometry->kind == GeometryKind::ZoneSurface &&
+                zoneGeometry->vertices.size() == 6 && zoneGeometry->hasUv,
+            "mesh-hosted zone emits renderer-neutral rectangle geometry");
+      check(trigger != effects.track->triggers.end() && trigger->center.y == 5,
+            "mesh-hosted trigger compiles at region elevation");
+      Simulation simulation(*effects.track);
+      Ship ship = shipAt(simulation, {0, 5, 0});
+      Ship otherShip = shipAt(simulation, {40, 5, 0});
+      simulation.stepPhysics(ship, 1.0 / 120.0, 0, 0, 0);
+      simulation.stepPhysics(otherShip, 1.0 / 120.0, 0, 0, 0);
+      check(ship.physics.boostActive && ship.zoneInside["mesh-boost"] &&
+                !otherShip.physics.boostActive && !otherShip.zoneInside["mesh-boost"],
+            "mesh-hosted boost uses independent per-ship zone state");
+      ship.prevTriggerPos.set(0, 5, 19);
+      ship.physics.groundPos.set(0, 5, 21);
+      simulation.detectTriggers(ship, ship.prevTriggerPos, ship.physics.groundPos);
+      check(ship.lastCheckpoint.valid && ship.lastCheckpoint.triggerId == "mesh-finish" &&
+                !otherShip.lastCheckpoint.valid,
+            "mesh-hosted checkpoint uses independent generic trigger state");
+    }
+  }
 
   // M3: independently baked curved/banked path against selected JS oracle data.
   const std::filesystem::path pathFixture = fixtureDir.parent_path() / "path" / "curved-banked.json";

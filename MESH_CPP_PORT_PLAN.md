@@ -1,6 +1,6 @@
 # C++ Full-Track and Mesh-Region Port Plan
 
-Status: **milestones M0–M4 complete.** This is the follow-on to
+Status: **milestones M0–M5 complete.** This is the follow-on to
 `CPP_PORT_PLAN.md`. The existing baked-corridor C++ parity suite remains intact.
 
 - **M0:** combined MSVC/CMake baseline, shared fixtures, and focused C++ test harness.
@@ -12,6 +12,8 @@ Status: **milestones M0–M4 complete.** This is the follow-on to
   triggers (including automatic Finish repair), and renderer-neutral path/shell/rail/zone geometry.
 - **M4:** embedded Willpower.Geometry topology adapter, double-precision world loops/holes/bounds,
   equivalent triangulation, outward rail records, mesh containment, and mesh surface/rail geometry.
+- **M5:** native mesh surface ownership, two-sided swept rail collision, grounded/airborne transfers
+  and landing, mesh-hosted zones/checkpoints, and equivalent renderer-neutral zone geometry.
 
 ## 1. Goal
 
