@@ -167,6 +167,15 @@ public:
     return hitTestPosition(worldX, worldZ, pickRadiusWorld);
   }
 
+  // Whether the current selection is in range AND a Position point specifically -- used to guard
+  // on-canvas X/Z dragging (TopDownCanvas.cpp) from also firing when a roll/width/cross-section
+  // handle is selected (EDITOR_PARITY_FIXES.md gap 1's on-canvas handles are click-to-select
+  // only, no on-canvas drag; dragSelectedTo() itself has no kind guard, since every OTHER caller
+  // already only ever selects a Position point before dragging).
+  bool selectionIsPosition() const {
+    return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Position;
+  }
+
   // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
 
   void selectMesh(const std::string& placementId) {

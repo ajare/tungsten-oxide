@@ -642,6 +642,7 @@ struct Gap1SmokeCheckResult {
   bool fieldsEdited = false, deleted = false;
   bool bakedRollApplied = false, bakedWidthApplied = false;
   bool deletingBelowFourPositionsRefused = false, deletingAuxPointsUnguarded = false;
+  bool selectionIsPositionTrueForPosition = false, selectionIsPositionFalseForAux = false, selectionIsPositionFalseWhenInvalid = false;
 };
 
 Gap1SmokeCheckResult runGap1SmokeCheck() {
@@ -650,10 +651,19 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   editor::EditorState state(buildStarterTrack());
   const auto rollIndex = state.addAuxPoint(0, editor::PointKind::Roll, 0.1);
   result.rollAdded = rollIndex.has_value() && state.selection().pathIndex == 0 && state.selection().pointIndex == *rollIndex;
+  // addAuxPoint() selects the point it just added -- selectionIsPosition() (EDITOR_PARITY_FIXES.md
+  // gap 1's on-canvas handles: click-to-select, but no on-canvas drag) must say false for it, and
+  // true once a real Position point is selected instead, so TopDownCanvas.cpp's drag-continuation
+  // guard can tell them apart.
+  result.selectionIsPositionFalseForAux = !state.selectionIsPosition();
   const auto widthIndex = state.addAuxPoint(0, editor::PointKind::Width, 0.1);
   result.widthAdded = widthIndex.has_value();
   const auto crossSectionIndex = state.addAuxPoint(0, editor::PointKind::CrossSection, 0.1);
   result.crossSectionAdded = crossSectionIndex.has_value();
+  result.selectionIsPositionFalseWhenInvalid = (state.clearSelection(), !state.selectionIsPosition());
+  const auto& firstPosition = state.track().paths[0].points[0];
+  state.selectPositionAt(firstPosition.pos.x, firstPosition.pos.z, 1.0);
+  result.selectionIsPositionTrueForPosition = state.selectionIsPosition();
 
   result.fieldsEdited = state.editAuxPoint(0, *rollIndex, [](editor::TrackPoint& p) { p.roll = 25.0; }) &&
                         state.track().paths[0].points[*rollIndex].roll == 25.0;
@@ -1539,12 +1549,14 @@ int main(int, char**) {
   const Gap1SmokeCheckResult gap1Smoke = runGap1SmokeCheck();
   std::fprintf(stdout,
                "Gap1 smoke check (roll/width/crossSection editing): add=%s/%s/%s edit=%s delete=%s bakedRoll=%s bakedWidth=%s "
-               "positionFloorHeld=%s auxUnguarded=%s\n",
+               "positionFloorHeld=%s auxUnguarded=%s selectionIsPosition=%s/%s/%s\n",
                gap1Smoke.rollAdded ? "OK" : "MISMATCH", gap1Smoke.widthAdded ? "OK" : "MISMATCH",
                gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH", gap1Smoke.fieldsEdited ? "OK" : "MISMATCH",
                gap1Smoke.deleted ? "OK" : "MISMATCH", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
                gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH", gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH",
-               gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+               gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH",
+               gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
+               gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const Gap2SmokeCheckResult gap2Smoke = runGap2SmokeCheck();
@@ -2152,6 +2164,9 @@ int main(int, char**) {
                       gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
                       gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+    ImGui::BulletText("selectionIsPosition true for position / false for aux / false when invalid: %s / %s / %s",
+                      gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
+                      gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
     ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
                       gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");

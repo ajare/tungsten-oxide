@@ -32,6 +32,13 @@ const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
 // and "hovered + selected" both read clearly without a fourth distinct fill color to track, and
 // without being confusable with the tighter selection border above.
 const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
+// Matches editor.js's WIDTH_COLOR (#b6ff3c) / CROSS_SECTION_COLOR (#d58cff); roll's own stroke
+// colour is computed per-point by rollTint() below, matching editor.js's rollTint(), not a fixed
+// constant. All three handles fill white (matches editor.js's roll/width/cross-section handles,
+// which are always '#ffffff' regardless of selection -- only stroke width/handle size change).
+const ImU32 kWidthColor = IM_COL32(182, 255, 60, 255);
+const ImU32 kCrossSectionColor = IM_COL32(213, 140, 255, 255);
+const ImU32 kAuxHandleFillColor = IM_COL32(255, 255, 255, 255);
 const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
 const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
 const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
@@ -87,6 +94,7 @@ TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* 
 ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ScreenPoint2D& local) {
   return ImVec2(canvasOrigin.x + static_cast<float>(local.x), canvasOrigin.y + static_cast<float>(local.y));
 }
+ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ImVec2& local) { return ImVec2(canvasOrigin.x + local.x, canvasOrigin.y + local.y); }
 
 // Road-fill color formulas for Flat/Elevation render modes (EDITOR_PARITY_FIXES.md gap 10),
 // ported 1:1 from js/editor.js's rollColor/elevationColor (js/editor.js:774-787).
@@ -207,17 +215,23 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
 // (TrackCore.adaptiveSampleCount, ~6m spacing) that the visual difference at editor zoom levels is
 // imperceptible; this is a 2D outline for editing, never fed back into physics.
 
-// Maps a path parameter g in [0, gMax] to an interpolated centerline position + edgeRight, given
-// core's own sampling convention: closed paths sample N points spanning [0, gMax) (wrapping,
+// Maps a path parameter g in [0, gMax] to an interpolated centerline frame, given core's own
+// sampling convention: closed paths sample N points spanning [0, gMax) (wrapping,
 // track-core.js:471-472), open paths sample N points spanning [0, gMax] inclusive of both ends.
+// `hX/hZ` is the UNROLLED horizontal axis (roll/width/cross-section handles are drawn along this,
+// not the banked `edgeRight`, matching js/editor.js's own frame.h usage in its roll/width/
+// cross-section rendering); `width`/`roll` (radians) are the frame's own baked values.
 struct WorldFrame2D {
-  double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0};
+  double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0}, hX{1.0}, hZ{0.0}, width{1.0}, roll{0.0};
 };
 
 WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
   const std::size_t n = centerline.size();
   if (n == 0) return {};
-  if (n == 1) return {centerline[0].pos.x, centerline[0].pos.z, centerline[0].edgeRight.x, centerline[0].edgeRight.z};
+  if (n == 1) {
+    const tox::Frame& only = centerline[0];
+    return {only.pos.x, only.pos.z, only.edgeRight.x, only.edgeRight.z, only.h.x, only.h.z, only.width, only.roll};
+  }
   const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
   const double indexF = frac * static_cast<double>(closed ? n : n - 1);
   auto index0 = static_cast<std::size_t>(std::floor(indexF));
@@ -232,8 +246,14 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
   }
   const tox::Frame& a = centerline[index0];
   const tox::Frame& b = centerline[index1];
-  return {a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.z + (b.pos.z - a.pos.z) * t, a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t,
-          a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t};
+  return {a.pos.x + (b.pos.x - a.pos.x) * t,
+          a.pos.z + (b.pos.z - a.pos.z) * t,
+          a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t,
+          a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t,
+          a.h.x + (b.h.x - a.h.x) * t,
+          a.h.z + (b.h.z - a.h.z) * t,
+          a.width + (b.width - a.width) * t,
+          a.roll + (b.roll - a.roll) * t};
 }
 
 // Rotated rectangle for a mesh-hosted zone; zone.rotation is already radians (baked that way in
@@ -523,6 +543,132 @@ void drawMeshRails(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
   }
 }
 
+// ---- Roll/width/cross-section on-canvas handles (EDITOR_PARITY_FIXES.md gap 1) ---------------
+//
+// Mirrors js/editor.js's drawTop() roll/width/crossSection blocks (js/editor.js:1238-1310) and
+// their rollTint()/rollLineEnd() helpers, restricted -- as JS itself is -- to only the
+// CURRENTLY-SELECTED path's points (`curPrev = pathPreviews[sel.path]`), to avoid cluttering
+// every other path's curve with handles. Positions come from sampleCenterlineAtG() (smooth
+// interpolation over the baked centerline) rather than JS's frameAtT() (nearest-frame rounding);
+// same "close enough, no evaluator exposed" tradeoff already used for zone outlines above, and
+// the visual difference is imperceptible at editor zoom levels. This finishes what gap 1's own
+// note deferred ("no on-canvas handle to click") now that sampleCenterlineAtG already exists for
+// zones -- still no on-canvas DRAG, though (values are edited via PropertiesPanel.cpp only).
+
+// Mirrors rollTint(): right-lean (negative) -> cyan, left-lean (positive) -> magenta-ish.
+ImU32 rollTint(double rollDeg) {
+  const double t = std::clamp(rollDeg / 25.0, -1.0, 1.0);
+  const int r = static_cast<int>(std::lround(120.0 + 120.0 * std::max(0.0, t)));
+  const int b = static_cast<int>(std::lround(120.0 + 120.0 * std::max(0.0, -t)));
+  return IM_COL32(r, 150, b, 255);
+}
+
+// The screen-space endpoint of a roll point's line, mirrors rollLineEnd(): right (+h) if roll >
+// 0, left if roll < 0, length scaled by how much of the full +-180 range is used.
+ImVec2 rollHandleScreen(const TopDownView& view, const WorldFrame2D& f, double rollDeg) {
+  const double sign = rollDeg > 0.0 ? 1.0 : (rollDeg < 0.0 ? -1.0 : 0.0);
+  const double len = f.width * (std::min(180.0, std::abs(rollDeg)) / 180.0);
+  const auto p = view.worldToScreen(f.x + f.hX * sign * len, f.z + f.hZ * sign * len);
+  return {static_cast<float>(p.x), static_cast<float>(p.y)};
+}
+// Width's two line-end handles, symmetric about the centerline along +-h.
+std::pair<ImVec2, ImVec2> widthHandlesScreen(const TopDownView& view, const WorldFrame2D& f, double width) {
+  const double halfW = std::max(1.0, width) / 2.0;
+  const auto right = view.worldToScreen(f.x + f.hX * halfW, f.z + f.hZ * halfW);
+  const auto left = view.worldToScreen(f.x - f.hX * halfW, f.z - f.hZ * halfW);
+  return {ImVec2(static_cast<float>(left.x), static_cast<float>(left.y)), ImVec2(static_cast<float>(right.x), static_cast<float>(right.y))};
+}
+// Cross-section's single line-end handle, offset from the centerline along +-h by curvature.
+ImVec2 crossSectionHandleScreen(const TopDownView& view, const WorldFrame2D& f, double curvature) {
+  const double len = (f.width / 2.0) * std::clamp(curvature, -1.0, 1.0);
+  const auto p = view.worldToScreen(f.x + f.hX * len, f.z + f.hZ * len);
+  return {static_cast<float>(p.x), static_cast<float>(p.y)};
+}
+
+void drawAuxPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
+                   const tox::Track* baked, int currentPathIndex, const SelectedPoint& selection) {
+  if (currentPathIndex < 0 || currentPathIndex >= static_cast<int>(track.paths.size())) return;
+  if (baked == nullptr || currentPathIndex >= static_cast<int>(baked->paths.size())) return;
+  const Path& path = track.paths[currentPathIndex];
+  const auto& centerline = baked->paths[currentPathIndex].centerline;
+  if (centerline.empty()) return;
+
+  for (int i = 0; i < static_cast<int>(path.points.size()); ++i) {
+    const TrackPoint& point = path.points[i];
+    if (point.kind == PointKind::Position) continue;
+    if (point.kind == PointKind::Roll && !view.showRollPoints()) continue;
+    if (point.kind == PointKind::Width && !view.showWidthPoints()) continue;
+    if (point.kind == PointKind::CrossSection && !view.showCrossSectionPoints()) continue;
+
+    const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0);
+    const bool isSelected = selection.pathIndex == currentPathIndex && selection.pointIndex == i;
+    const ImVec2 center = toAbsolute(canvasOrigin, view.worldToScreen(f.x, f.z));
+    const float handleRadius = isSelected ? 7.0f : 5.0f;
+    const float strokeWidth = isSelected ? 3.0f : 1.5f;
+
+    if (point.kind == PointKind::Roll) {
+      const ImVec2 end = toAbsolute(canvasOrigin, rollHandleScreen(view, f, point.roll));
+      const ImU32 tint = rollTint(point.roll);
+      drawList->AddLine(center, end, tint, isSelected ? 3.0f : 2.0f);
+      drawList->AddCircleFilled(end, handleRadius, kAuxHandleFillColor);
+      drawList->AddCircle(end, handleRadius, tint, 0, strokeWidth);
+    } else if (point.kind == PointKind::Width) {
+      const auto [leftLocal, rightLocal] = widthHandlesScreen(view, f, point.width);
+      const ImVec2 leftS = toAbsolute(canvasOrigin, leftLocal), rightS = toAbsolute(canvasOrigin, rightLocal);
+      drawList->AddLine(leftS, rightS, kWidthColor, isSelected ? 3.0f : 2.0f);
+      for (const ImVec2& hs : {leftS, rightS}) {
+        drawList->AddCircleFilled(hs, handleRadius, kAuxHandleFillColor);
+        drawList->AddCircle(hs, handleRadius, kWidthColor, 0, strokeWidth);
+      }
+    } else {  // CrossSection
+      const ImVec2 end = toAbsolute(canvasOrigin, crossSectionHandleScreen(view, f, point.curvature));
+      drawList->AddLine(center, end, kCrossSectionColor, isSelected ? 3.0f : 2.0f);
+      drawList->AddRectFilled(ImVec2(end.x - handleRadius, end.y - handleRadius), ImVec2(end.x + handleRadius, end.y + handleRadius),
+                              kAuxHandleFillColor);
+      drawList->AddRect(ImVec2(end.x - handleRadius, end.y - handleRadius), ImVec2(end.x + handleRadius, end.y + handleRadius),
+                        kCrossSectionColor, 0.0f, 0, strokeWidth);
+    }
+  }
+}
+
+// Nearest roll/width/cross-section handle to a LOCAL (canvas-relative) screen point, within
+// `pickRadiusPx`, on the current path -- mirrors editor.js's crossSectionHandleAtTop/
+// widthHandleAtTop/rollHandleAtTop and their mousedown priority (checked in that exact order,
+// all three before a position-point hit -- js/editor.js:3270-3277).
+std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, const tox::Track* baked, int currentPathIndex,
+                                              const TopDownView& view, const ImVec2& mouseLocal, float pickRadiusPx) {
+  if (currentPathIndex < 0 || currentPathIndex >= static_cast<int>(track.paths.size())) return std::nullopt;
+  if (baked == nullptr || currentPathIndex >= static_cast<int>(baked->paths.size())) return std::nullopt;
+  const Path& path = track.paths[currentPathIndex];
+  const auto& centerline = baked->paths[currentPathIndex].centerline;
+  if (centerline.empty()) return std::nullopt;
+
+  auto within = [&](const ImVec2& p) {
+    const float dx = mouseLocal.x - p.x, dy = mouseLocal.y - p.y;
+    return dx * dx + dy * dy <= pickRadiusPx * pickRadiusPx;
+  };
+
+  for (PointKind kind : {PointKind::CrossSection, PointKind::Width, PointKind::Roll}) {
+    if (kind == PointKind::Roll && !view.showRollPoints()) continue;
+    if (kind == PointKind::Width && !view.showWidthPoints()) continue;
+    if (kind == PointKind::CrossSection && !view.showCrossSectionPoints()) continue;
+    for (int i = 0; i < static_cast<int>(path.points.size()); ++i) {
+      const TrackPoint& point = path.points[i];
+      if (point.kind != kind) continue;
+      const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0);
+      if (kind == PointKind::Roll) {
+        if (within(rollHandleScreen(view, f, point.roll))) return SelectedPoint{currentPathIndex, i};
+      } else if (kind == PointKind::Width) {
+        const auto [left, right] = widthHandlesScreen(view, f, point.width);
+        if (within(left) || within(right)) return SelectedPoint{currentPathIndex, i};
+      } else {
+        if (within(crossSectionHandleScreen(view, f, point.curvature))) return SelectedPoint{currentPathIndex, i};
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
                                 const SelectedPoint& selection, const std::optional<SelectedPoint>& hovered) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
@@ -584,9 +730,15 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // mousedown fallthrough to `dragging = 'panTop'` when nothing else was hit.
   static bool panDragActive = false;
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1) win over a position-point
+    // hit, mirroring editor.js's mousedown priority (crossSection, then width, then roll, all
+    // before nodeAtTop's position check -- js/editor.js:3270-3277).
+    const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx);
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    const bool hitPosition = view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld);
-    if (hitPosition) {
+    if (auxHit.has_value()) {
+      state.selectPoint(auxHit->pathIndex, auxHit->pointIndex);
+      view.clearPhysicsSelection();
+    } else if (view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
       view.clearPhysicsSelection();
     } else {
       // Physics sample points (debug overlay, EDITOR_PARITY_FIXES.md gap 10): picked after
@@ -637,7 +789,13 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // mouse happens to be over in THIS view. Mirrors the itemActive gating handleRailsModeInput
   // already uses for right-click panning, just applied to the left-click point/mesh drag path too.
   const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
-  if (draggingGesture && state.selection().valid() && !panDragActive) {
+  // selectionIsPosition() (not just selection().valid()) guards this: a roll/width/cross-section
+  // handle counts as a valid selection too (EDITOR_PARITY_FIXES.md gap 1's handles are click-to-
+  // select only), but dragSelectedTo() writes to Vec3 pos.x/z, which those point kinds don't use
+  // for placement at all (they're positioned by `t` along the baked centerline) -- without this
+  // guard, dragging after clicking a roll handle would silently mutate an inert field and push a
+  // no-visible-effect undo step instead of doing nothing, which is what gap 1 actually promises.
+  if (draggingGesture && state.selectionIsPosition() && !panDragActive) {
     if (!state.dragging()) {
       state.beginDrag();
       view.freezeBounds(preDragBounds);
@@ -989,6 +1147,10 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition);
   }
+  // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1), drawn after position points
+  // -- mirrors editor.js's drawTop() drawing them in that same order (position at
+  // js/editor.js:1171, roll/width/crossSection at :1245-1298), so they sit on top.
+  drawAuxPoints(drawList, canvasOrigin, view, state.track(), baked, state.currentPathIndex(), state.selection());
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
   // Merges channel 1 (the zoom control, submitted early for interaction priority -- see the
