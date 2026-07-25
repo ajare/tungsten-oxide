@@ -136,9 +136,17 @@ struct Trigger {
   TriggerHost host;
 };
 
+// `kind` distinguishes junctions ("", created only as a side effect of joining two paths) from
+// disjoint seams ("opened-closed" | "split-open", created by splitting a shared point back into a
+// hard, unsmoothed corner). sourcePathId/sourceEnd/targetPathId/targetEnd are junction-only fields;
+// pathId (opened-closed) / leftPathId+rightPathId (split-open) are disjoint-seam-only fields --
+// mirrors js/editor.js's seam records exactly (EDITOR_PARITY_FIXES.md gap 5), which is why this
+// carries both field sets rather than a variant: JS's own objects are equally loose duck-typed
+// records keyed by `kind`.
 struct Connection {
   std::string id, pointId, kind;
   std::string sourcePathId, sourceEnd, targetPathId, targetEnd;
+  std::string pathId, leftPathId, rightPathId;
 };
 
 struct SelfIntersectionOverride {

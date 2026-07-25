@@ -61,6 +61,7 @@
 #include "PropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
+#include "CurvesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
@@ -815,6 +816,103 @@ Gap4SmokeCheckResult runGap4SmokeCheck() {
   return result;
 }
 
+// Gap-5 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #5, curve management): exercises
+// makeDisjoint/reconnectDisjoint on both a closed path (opened-closed seam) and an open path
+// (split-open seam, producing two paths), confirms core's own bake still accepts the result at
+// each step, confirms deleteCurrentPath prunes a disjoint seam left dangling by removing one of
+// its two paths, and confirms joinPathEndpoints both closes a same-path loop and merges two
+// separate open paths into a junction that still bakes.
+struct Gap5SmokeCheckResult {
+  bool defaultCurrentPathIsZero = false, clampsWithOnePath = false;
+  bool closedMadeDisjoint = false, closedBakesOpen = false, closedReconnected = false;
+  bool openSplitDisjoint = false, openSplitBakes = false;
+  bool deleteCurrentPathPrunesDanglingSeam = false;
+  bool joinedSamePathCloses = false;
+  bool joinedCrossPathCreatesJunction = false, joinedCrossPathBakes = false;
+};
+
+Gap5SmokeCheckResult runGap5SmokeCheck() {
+  Gap5SmokeCheckResult result;
+
+  // --- closed-path disjoint/reconnect, on the starter track's single closed loop ---
+  {
+    editor::EditorState state(buildStarterTrack());
+    result.defaultCurrentPathIsZero = state.currentPathIndex() == 0;
+    state.setCurrentPathIndex(5);  // only one path exists -- must clamp back to 0
+    result.clampsWithOnePath = state.currentPathIndex() == 0;
+
+    result.closedMadeDisjoint = state.makeDisjoint(0, 3) && !state.track().paths[0].closed && state.disjointSeams().size() == 1 &&
+                                state.disjointSeams()[0].kind == "opened-closed";
+
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+    result.closedBakesOpen = static_cast<bool>(baked) && !baked.track->paths.empty() && !baked.track->paths[0].closed;
+
+    const std::string seamId = state.disjointSeams()[0].id;
+    result.closedReconnected = state.reconnectDisjoint(seamId) && state.track().paths[0].closed && state.disjointSeams().empty();
+  }
+
+  // --- open-path disjoint split, producing two paths joined by a seam ---
+  editor::TrackDefinition openTrack;
+  openTrack.name = "Open Test";
+  {
+    editor::Path path;
+    path.id = "open-path";
+    path.closed = false;
+    for (int i = 0; i < 8; ++i) {
+      editor::TrackPoint point;
+      point.kind = editor::PointKind::Position;
+      point.pos = tox::Vec3(static_cast<double>(i) * 100.0, 0.0, 0.0);
+      point.weight = 1.0;
+      path.points.push_back(point);
+    }
+    openTrack.paths.push_back(std::move(path));
+  }
+  editor::EditorState openState(openTrack);  // constructor backfills point ids (p1..p8)
+  result.openSplitDisjoint =
+      openState.makeDisjoint(0, 3) && openState.track().paths.size() == 2 && openState.disjointSeams().size() == 1 &&
+      openState.disjointSeams()[0].kind == "split-open";
+  {
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(openState.track()));
+    result.openSplitBakes = static_cast<bool>(baked) && baked.track->paths.size() == 2;
+  }
+
+  // Deleting one of the two split paths leaves the disjoint seam referencing a path that no
+  // longer exists -- pruneStaleReferences (called inside deleteCurrentPath) should drop it.
+  openState.setCurrentPathIndex(1);
+  result.deleteCurrentPathPrunesDanglingSeam =
+      openState.deleteCurrentPath() && openState.track().paths.size() == 1 && openState.disjointSeams().empty();
+
+  // --- join: same path closes; two separate open paths merge into a junction ---
+  {
+    editor::TrackDefinition closeTrack = openTrack;  // reuse the 8-point open path shape
+    editor::EditorState closeState(closeTrack);
+    result.joinedSamePathCloses = closeState.joinPathEndpoints(0, false, 0, true) && closeState.track().paths[0].closed;
+  }
+  {
+    editor::TrackDefinition twoPathTrack;
+    twoPathTrack.name = "Join Test";
+    for (int side = 0; side < 2; ++side) {
+      editor::Path path;
+      path.id = side == 0 ? "path-a" : "path-b";
+      path.closed = false;
+      for (int i = 0; i < 4; ++i) {
+        editor::TrackPoint point;
+        point.kind = editor::PointKind::Position;
+        point.pos = tox::Vec3(static_cast<double>(side * 1000 + i * 100), 0.0, 0.0);
+        point.weight = 1.0;
+        path.points.push_back(point);
+      }
+      twoPathTrack.paths.push_back(std::move(path));
+    }
+    editor::EditorState joinState(twoPathTrack);
+    result.joinedCrossPathCreatesJunction = joinState.joinPathEndpoints(0, true, 1, false) && joinState.junctions().size() == 1;
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(joinState.track()));
+    result.joinedCrossPathBakes = static_cast<bool>(baked);
+  }
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -976,6 +1074,18 @@ int main(int, char**) {
                gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap5SmokeCheckResult gap5Smoke = runGap5SmokeCheck();
+  std::fprintf(stdout,
+               "Gap5 smoke check (curve management): defaultPath=%s clamp=%s closedDisjoint=%s closedBakes=%s closedReconnect=%s "
+               "openSplit=%s openSplitBakes=%s deletePrunesSeam=%s joinSameCloses=%s joinCrossJunction=%s joinCrossBakes=%s\n",
+               gap5Smoke.defaultCurrentPathIsZero ? "OK" : "MISMATCH", gap5Smoke.clampsWithOnePath ? "OK" : "MISMATCH",
+               gap5Smoke.closedMadeDisjoint ? "OK" : "MISMATCH", gap5Smoke.closedBakesOpen ? "OK" : "MISMATCH",
+               gap5Smoke.closedReconnected ? "OK" : "MISMATCH", gap5Smoke.openSplitDisjoint ? "OK" : "MISMATCH",
+               gap5Smoke.openSplitBakes ? "OK" : "MISMATCH", gap5Smoke.deleteCurrentPathPrunesDanglingSeam ? "OK" : "MISMATCH",
+               gap5Smoke.joinedSamePathCloses ? "OK" : "MISMATCH", gap5Smoke.joinedCrossPathCreatesJunction ? "OK" : "MISMATCH",
+               gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -1105,6 +1215,17 @@ int main(int, char**) {
     ImGui::BulletText("second checkpoint / finish stays unique / delete blocked while finish / delete after demotion: %s / %s / %s / %s",
                       gap4Smoke.secondCheckpointAdded ? "OK" : "MISMATCH", gap4Smoke.finishUniqueAfterPromotion ? "OK" : "MISMATCH",
                       gap4Smoke.deleteBlockedWhileFinish ? "OK" : "MISMATCH", gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap5 smoke check (curve management, exercised directly):");
+    ImGui::BulletText("default current path / clamps with one path: %s / %s", gap5Smoke.defaultCurrentPathIsZero ? "OK" : "MISMATCH",
+                      gap5Smoke.clampsWithOnePath ? "OK" : "MISMATCH");
+    ImGui::BulletText("closed-path disjoint / bakes open / reconnect: %s / %s / %s", gap5Smoke.closedMadeDisjoint ? "OK" : "MISMATCH",
+                      gap5Smoke.closedBakesOpen ? "OK" : "MISMATCH", gap5Smoke.closedReconnected ? "OK" : "MISMATCH");
+    ImGui::BulletText("open-path split / bakes as two paths / delete prunes dangling seam: %s / %s / %s",
+                      gap5Smoke.openSplitDisjoint ? "OK" : "MISMATCH", gap5Smoke.openSplitBakes ? "OK" : "MISMATCH",
+                      gap5Smoke.deleteCurrentPathPrunesDanglingSeam ? "OK" : "MISMATCH");
+    ImGui::BulletText("join same-path closes / join cross-path junction / bakes: %s / %s / %s",
+                      gap5Smoke.joinedSamePathCloses ? "OK" : "MISMATCH", gap5Smoke.joinedCrossPathCreatesJunction ? "OK" : "MISMATCH",
+                      gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1298,16 +1419,16 @@ int main(int, char**) {
     if (elevationVisible) {
       ImGui::Separator();
       // Mirrors editor.js's curPath(): the currently selected point's path if there is one,
-      // otherwise the first path -- so there's always something sensible to show.
-      const int elevationPathIndex =
-          editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
+      // otherwise EditorState::currentPathIndex()'s own fallback (the curve-selector dropdown's
+      // choice, or path 0 -- EDITOR_PARITY_FIXES.md gap 5).
+      const int elevationPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
       if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex)) rebake();
     }
     ImGui::End();
 
-    // Mirrors currentCurve(): the selected point's path, or the first path if nothing's selected.
-    const int currentPathIndex =
-        editorState.selection().valid() ? editorState.selection().pathIndex : (editorState.track().paths.empty() ? -1 : 0);
+    // Mirrors currentCurve(): see EditorState::currentPathIndex()'s own comment for how "current"
+    // is resolved (selection wins while a point is selected; otherwise the curve-selector dropdown).
+    const int currentPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
 
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("Point Properties");
@@ -1322,6 +1443,11 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("Triggers");
     if (editor::DrawTriggersPanel(editorState, currentPathIndex)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(360, 460), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Curves");
+    if (editor::DrawCurvesPanel(editorState)) rebake();
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);

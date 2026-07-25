@@ -353,8 +353,57 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    world-space gate (not just schema plumbing), that editing reaches the right record even though
    `buildStarterTrack()`'s own checkpoints (one already Finish) sit ahead of it in the list, and
    the Finish-uniqueness/delete-guard invariants end to end.
-5. **Curve management** — curve selector, Delete Curve, Connect/join, make-disjoint/reconnect,
-   junctions, self-intersection overrides.
+5. ~~**Curve management**~~ **Implemented: curve selector, Delete Curve, Connect/join,
+   disjoint/reconnect, junctions (read-only). Not implemented: self-intersection overrides.**
+   New "Curves" window (`CurvesPanel.hpp/.cpp`) plus `EditorState::currentPathIndex`/
+   `setCurrentPathIndex`/`deleteCurrentPath`/`joinPathEndpoints`/`makeDisjoint`/`reconnectDisjoint`.
+   `currentPathIndex()` mirrors `sel.path`: a control-point selection wins while one exists,
+   otherwise the curve-selector dropdown's own choice -- `main.cpp`'s `currentPathIndex`/
+   `elevationPathIndex` locals (previously computed inline) now both go through it, so every panel
+   agrees on "the current curve." `deleteCurrentPath` mirrors `deleteSelectedCurve` +
+   `removeStaleSeams`: refuses to drop the last path, and prunes every zone/trigger/junction/
+   disjoint-seam/self-intersection-override left dangling by the deletion (re-promoting a Finish
+   checkpoint if the one that was Finish got pruned). The `Connection` struct (`disjointSeams`/
+   `junctions`) gained `pathId`/`leftPathId`/`rightPathId` fields it was missing entirely --
+   without them, a disjoint seam's `kind: 'opened-closed' | 'split-open'` shape couldn't round-trip
+   or be validated at all (the same gap already existed in `cpp/core`'s identical
+   `ConnectionDefinition`, but core's own seam-matching only needs `pointId`, so it never surfaced
+   there).
+
+   **Connect/join** (`joinPathEndpoints`) is endpoint-to-endpoint only: same-path closes the loop;
+   different-path shares the target endpoint's identity (copies the whole point, id included) and
+   records a junction. **Not implemented:** joining onto an *interior* point of an open path
+   (`splitTargetPathAt` in JS, which splits the target path there first) -- out of scope for this
+   panel.
+
+   **Disjoint/reconnect** (`makeDisjoint`/`reconnectDisjoint`, also surfaced as a "Disjoint (hard
+   seam)" checkbox on the selected point's own Position fields in `PropertiesPanel.cpp`, matching
+   where `editor.html` puts it) is a smoothing annotation, not an identity split -- the point id
+   stays shared on both sides, matching JS exactly (`makeDisjoint`/`reconnectDisjoint`). **Known
+   simplification:** unlike JS's `rollWidthForSourceRange`/`sampleRollWidthForClosedReconnect`/
+   `sampleRollWidthFromJoinedPaths`, a path rebuilt by a split/reconnect here does **not**
+   proportionally redistribute its roll/width/cross-section points from the original curve --
+   they're reset to schema defaults (`appendDefaultAuxPoints`). Banking/width authored before a
+   split/reconnect is lost on the rebuilt path(s) and must be re-entered via the Point Properties
+   panel. Same tradeoff gaps 1/3/4 already made: authoring capability over pixel-perfect parity.
+
+   **Junctions** are read-only in the panel (JS has no standalone "add junction" UI either -- they
+   only ever come from Join) with no manual delete, matching JS.
+
+   **Not implemented at all: self-intersection overrides** (cycling a detected crossing between
+   auto/forced keep/collapse). This needs the crossing-detection geometry
+   (`TrackCore.findSelfIntersections`) ported to C++ first, which neither `cpp/core` nor
+   `cpp/editor` currently expose -- core applies `selfIntersectionOverrides` at bake time
+   (`TrackBake.cpp`) but never surfaces *detected* crossings back out, so there's nothing for the
+   editor to render/cycle yet. Left as a distinct follow-on; the schema field itself already
+   round-trips losslessly (`EditorTrackDefinition.cpp`) and `pruneStaleReferences` keeps existing
+   overrides valid.
+
+   A new "Gap5 smoke check" in `main.cpp` covers: `currentPathIndex()`'s default/clamp behavior;
+   `makeDisjoint`/`reconnectDisjoint` on a closed path (verifying core's own bake still accepts the
+   opened result); `makeDisjoint` splitting an open path into two, confirming both `deleteCurrentPath`
+   pruning a resulting dangling seam and the split bakes correctly; `joinPathEndpoints` closing a
+   same-path loop and merging two separate paths into a junction that still bakes.
 6. **Direction toggle and start-point selection** (`#dirBtn`).
 7. **Handling panel** — maxSpeed/accel/turnSpeed/weight. The schema fields round-trip; there is no
    UI.

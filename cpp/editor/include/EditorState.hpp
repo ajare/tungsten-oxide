@@ -74,6 +74,26 @@ public:
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
   const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
 
+  // ---- Curve management (EDITOR_PARITY_FIXES.md gap 5) ----
+  //
+  // "Current curve": mirrors js/editor.js's `sel.path`, which the curve-selector dropdown sets
+  // directly and a control-point click overrides (selectPositionAt/selectPoint always win while a
+  // point is selected; the dropdown only matters once nothing is). explicitCurrentPathIndex_ holds
+  // the dropdown's own choice, clamped to the track's current path count.
+  int currentPathIndex() const {
+    if (track_.paths.empty()) return 0;
+    if (selection_.valid() && selection_.pathIndex >= 0 && selection_.pathIndex < static_cast<int>(track_.paths.size()))
+      return selection_.pathIndex;
+    return std::clamp(explicitCurrentPathIndex_, 0, static_cast<int>(track_.paths.size()) - 1);
+  }
+
+  void setCurrentPathIndex(int index) {
+    explicitCurrentPathIndex_ = track_.paths.empty() ? 0 : std::clamp(index, 0, static_cast<int>(track_.paths.size()) - 1);
+  }
+
+  const std::vector<Connection>& junctions() const { return track_.junctions; }
+  const std::vector<Connection>& disjointSeams() const { return track_.disjointSeams; }
+
   const Zone* findZone(const std::string& id) const {
     for (const auto& zone : track_.zones)
       if (zone.id == id) return &zone;
@@ -303,6 +323,241 @@ public:
     track_.triggers.erase(it);
     selectedTriggerId_.reset();
     return true;
+  }
+
+  // Mirrors deleteSelectedCurve(): removes the current path, fixes track_.start, and prunes every
+  // dangling zone/trigger/junction/disjoint-seam/self-intersection-override reference the deletion
+  // left behind (mirrors removeStaleSeams()). Refuses to drop the last path -- a track needs at
+  // least one curve. Returns false (no-op) if there's nothing to delete.
+  bool deleteCurrentPath() {
+    if (track_.paths.size() <= 1) return false;
+    const int deleteIndex = currentPathIndex();
+    if (deleteIndex < 0 || deleteIndex >= static_cast<int>(track_.paths.size())) return false;
+    history_.push(track_);
+    track_.paths.erase(track_.paths.begin() + deleteIndex);
+    if (track_.start.path == deleteIndex) {
+      track_.start.path = std::clamp(deleteIndex, 0, static_cast<int>(track_.paths.size()) - 1);
+      track_.start.point = 0;
+    } else if (track_.start.path > deleteIndex) {
+      --track_.start.path;
+    }
+    pruneStaleReferences();
+    selection_ = {};
+    selectedZoneId_.reset();
+    selectedTriggerId_.reset();
+    explicitCurrentPathIndex_ = std::clamp(deleteIndex, 0, static_cast<int>(track_.paths.size()) - 1);
+    clampStart();
+    return true;
+  }
+
+  // ---- Connect/join (EDITOR_PARITY_FIXES.md gap 5) ----
+  //
+  // Endpoint-to-endpoint only -- mirrors performJoin()'s first two branches (same-path closes the
+  // loop; different-path shares the target endpoint's identity and records a junction), but NOT
+  // its third case (joining onto an INTERIOR point of an open path, which JS handles by splitting
+  // the target path there first via splitTargetPathAt). That's out of scope here; connecting to an
+  // existing curve's middle isn't offered by this panel. `pathA`/`pathB` must each be an OPEN path;
+  // `aAtEnd`/`bAtEnd` pick which of that path's two endpoints (false = first point, true = last).
+  bool joinPathEndpoints(int pathAIndex, bool aAtEnd, int pathBIndex, bool bAtEnd) {
+    if (pathAIndex < 0 || pathAIndex >= static_cast<int>(track_.paths.size())) return false;
+    if (pathBIndex < 0 || pathBIndex >= static_cast<int>(track_.paths.size())) return false;
+    if (track_.paths[pathAIndex].closed || track_.paths[pathBIndex].closed) return false;
+    if (hasDisjointSeamOnPath(track_.paths[pathAIndex].id) || hasDisjointSeamOnPath(track_.paths[pathBIndex].id)) return false;
+
+    if (pathAIndex == pathBIndex) {
+      if (aAtEnd == bAtEnd) return false;  // must be the path's two distinct endpoints
+      history_.push(track_);
+      track_.paths[pathAIndex].closed = true;
+      selection_ = {};
+      return true;
+    }
+
+    TrackPoint* sourcePoint = aAtEnd ? lastPositionMutable(track_.paths[pathAIndex]) : firstPositionMutable(track_.paths[pathAIndex]);
+    TrackPoint* targetPoint = bAtEnd ? lastPositionMutable(track_.paths[pathBIndex]) : firstPositionMutable(track_.paths[pathBIndex]);
+    if (!sourcePoint || !targetPoint) return false;
+    const TrackPoint targetCopy = *targetPoint;
+
+    history_.push(track_);
+    TrackPoint* sourceSlot = aAtEnd ? lastPositionMutable(track_.paths[pathAIndex]) : firstPositionMutable(track_.paths[pathAIndex]);
+    *sourceSlot = targetCopy;  // shares identity by copying the whole point (id included) -- mirrors replacePositionOccurrence
+    Connection junction;
+    junction.id = newConnectionId("j");
+    junction.pointId = targetCopy.id;
+    junction.sourcePathId = track_.paths[pathAIndex].id;
+    junction.sourceEnd = aAtEnd ? "end" : "start";
+    junction.targetPathId = track_.paths[pathBIndex].id;
+    track_.junctions.push_back(std::move(junction));
+    selection_ = {};
+    return true;
+  }
+
+  // ---- Disjoint / reconnect (EDITOR_PARITY_FIXES.md gap 5) ----
+  //
+  // "Disjoint" splits a shared/smooth control point into a hard, unsmoothed seam -- mirrors
+  // makeDisjoint(). The point ID itself stays shared (this is a smoothing annotation, not an
+  // identity split): core's baker reads disjointSeams to skip tangent/roll continuity there
+  // (TrackBake.cpp), so both sides remain physically coincident. Guarded like disjointDisabledReason:
+  // refuses an already-disjoint open endpoint, and refuses an open-path split that would leave
+  // fewer than 4 position points on either side.
+  //
+  // Unlike JS's rollWidthForSourceRange/sampleRollWidthForClosedReconnect/
+  // sampleRollWidthFromJoinedPaths, a path rebuilt by makeDisjoint/reconnectDisjoint here does NOT
+  // proportionally redistribute its roll/width/cross-section points from the original curve --
+  // they're reset to schema defaults (appendDefaultAuxPoints, the same helper finishCreateDraft
+  // uses). Banking/width authored before a split/reconnect is lost on the rebuilt path(s) and must
+  // be re-entered via the Point Properties panel; this is the same "authoring capability over
+  // pixel-perfect parity" scope reduction gaps 1/3/4 already document.
+  bool makeDisjoint(int pathIndex, int pointIndex) {
+    TrackPoint* point = mutablePointAt(pathIndex, pointIndex);
+    if (!point || point->kind != PointKind::Position) return false;
+    if (seamForPointId(point->id) != nullptr) return false;
+    Path& path = track_.paths[pathIndex];
+    const int positionIndex = rawIndexToPositionIndex(path, pointIndex);
+    if (positionIndex < 0) return false;
+    const int positionCount = static_cast<int>(
+        std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; }));
+    if (!path.closed) {
+      if (positionIndex == 0 || positionIndex == positionCount - 1) return false;  // already disjoint
+      if (positionIndex + 1 < 4 || positionCount - positionIndex < 4) return false;
+    }
+
+    const std::string startPointId = currentStartPointId();
+    const std::string pointId = point->id;
+    history_.push(track_);
+    Connection seam;
+    seam.id = newConnectionId("seam");
+    seam.pointId = pointId;
+
+    Path& mutablePath = track_.paths[pathIndex];
+    std::vector<TrackPoint> positions;
+    for (const auto& p : mutablePath.points)
+      if (p.kind == PointKind::Position) positions.push_back(p);
+
+    if (mutablePath.closed) {
+      std::rotate(positions.begin(), positions.begin() + positionIndex, positions.end());
+      positions.push_back(positions.front());  // duplicate the seam point at both ends
+      Path rebuilt;
+      rebuilt.id = mutablePath.id;
+      rebuilt.closed = false;
+      rebuilt.points = std::move(positions);
+      rebuilt.texture = mutablePath.texture;
+      appendDefaultAuxPoints(rebuilt);
+      seam.kind = "opened-closed";
+      seam.pathId = rebuilt.id;
+      mutablePath = std::move(rebuilt);
+      selection_ = {pathIndex, 0};
+    } else {
+      std::set<std::string> usedPathIds;
+      for (const auto& p : track_.paths) usedPathIds.insert(p.id);
+      const std::string leftId = firstUnusedId("path", usedPathIds);
+      usedPathIds.insert(leftId);
+      const std::string rightId = firstUnusedId("path", usedPathIds);
+
+      Path leftPath, rightPath;
+      leftPath.id = leftId;
+      leftPath.closed = false;
+      leftPath.points.assign(positions.begin(), positions.begin() + positionIndex + 1);
+      leftPath.texture = mutablePath.texture;
+      appendDefaultAuxPoints(leftPath);
+      rightPath.id = rightId;
+      rightPath.closed = false;
+      rightPath.points.assign(positions.begin() + positionIndex, positions.end());
+      rightPath.texture = mutablePath.texture;
+      appendDefaultAuxPoints(rightPath);
+
+      seam.kind = "split-open";
+      seam.leftPathId = leftId;
+      seam.rightPathId = rightId;
+
+      track_.paths.erase(track_.paths.begin() + pathIndex);
+      track_.paths.insert(track_.paths.begin() + pathIndex, {leftPath, rightPath});
+      selection_ = {pathIndex + 1, 0};
+    }
+
+    track_.disjointSeams.push_back(std::move(seam));
+    preserveStartPoint(startPointId);
+    pruneStaleReferences();
+    return true;
+  }
+
+  // Removes a disjoint seam, restoring smooth continuity: closes the path again (opened-closed) or
+  // re-merges the two split halves into one open path (split-open) -- mirrors reconnectDisjoint().
+  // Returns false if the seam id doesn't exist or its recorded path(s)/endpoints no longer match
+  // (mirrors seamIsValid's staleness checks).
+  bool reconnectDisjoint(const std::string& seamId) {
+    const auto seamIt = std::find_if(track_.disjointSeams.begin(), track_.disjointSeams.end(),
+                                     [&](const Connection& s) { return s.id == seamId; });
+    if (seamIt == track_.disjointSeams.end()) return false;
+    const Connection seam = *seamIt;
+
+    if (seam.kind == "opened-closed") {
+      const auto pathIt = std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.pathId; });
+      if (pathIt == track_.paths.end()) return false;
+      std::vector<TrackPoint> positions;
+      for (const auto& p : pathIt->points)
+        if (p.kind == PointKind::Position) positions.push_back(p);
+      if (positions.size() < 2 || positions.front().id != seam.pointId || positions.back().id != seam.pointId) return false;
+
+      const std::string startPointId = currentStartPointId();
+      history_.push(track_);
+      Path& mutablePath = track_.paths[std::distance(track_.paths.begin(), pathIt)];
+      positions.pop_back();  // drop the duplicated end -- front/back were the same point id
+      Path rebuilt;
+      rebuilt.id = mutablePath.id;
+      rebuilt.closed = true;
+      rebuilt.points = std::move(positions);
+      rebuilt.texture = mutablePath.texture;
+      appendDefaultAuxPoints(rebuilt);
+      mutablePath = std::move(rebuilt);
+      eraseDisjointSeamById(seamId);
+      preserveStartPoint(startPointId);
+      pruneStaleReferences();
+      return true;
+    }
+
+    if (seam.kind == "split-open") {
+      const auto leftIt = std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.leftPathId; });
+      const auto rightIt = std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.rightPathId; });
+      if (leftIt == track_.paths.end() || rightIt == track_.paths.end()) return false;
+      const TrackPoint* leftLast = lastPosition(*leftIt);
+      const TrackPoint* rightFirst = firstPosition(*rightIt);
+      if (!leftLast || !rightFirst || leftLast->id != seam.pointId || rightFirst->id != seam.pointId) return false;
+
+      std::vector<TrackPoint> merged;
+      for (const auto& p : leftIt->points)
+        if (p.kind == PointKind::Position) merged.push_back(p);
+      bool skippedFirst = false;
+      for (const auto& p : rightIt->points) {
+        if (p.kind != PointKind::Position) continue;
+        if (!skippedFirst) {
+          skippedFirst = true;
+          continue;  // drop the duplicated shared point
+        }
+        merged.push_back(p);
+      }
+
+      const std::string startPointId = currentStartPointId();
+      history_.push(track_);
+      Path mergedPath;
+      mergedPath.id = leftIt->id;
+      mergedPath.closed = false;
+      mergedPath.points = std::move(merged);
+      mergedPath.texture = leftIt->texture;
+      appendDefaultAuxPoints(mergedPath);
+
+      const int leftIndex = static_cast<int>(std::distance(track_.paths.begin(), leftIt));
+      const int rightIndex = static_cast<int>(std::distance(track_.paths.begin(), rightIt));
+      const int lo = std::min(leftIndex, rightIndex), hi = std::max(leftIndex, rightIndex);
+      track_.paths.erase(track_.paths.begin() + hi);
+      track_.paths[lo] = std::move(mergedPath);
+
+      eraseDisjointSeamById(seamId);
+      preserveStartPoint(startPointId);
+      pruneStaleReferences();
+      return true;
+    }
+
+    return false;
   }
 
   // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
@@ -728,6 +983,7 @@ private:
     selectedRail_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    explicitCurrentPathIndex_ = 0;
   }
 
   MeshPlacement* mutableSelectedMeshPlacement() {
@@ -904,6 +1160,138 @@ private:
     return firstUnusedId("tr", used);
   }
 
+  // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix), mirroring
+  // js/editor.js's newId('j')/newId('seam') -- each still scans only its own collection, since the
+  // two record kinds never share an id namespace in JS either.
+  std::string newConnectionId(const std::string& prefix) const {
+    std::set<std::string> used;
+    for (const auto& c : prefix == "j" ? track_.junctions : track_.disjointSeams) used.insert(c.id);
+    return firstUnusedId(prefix, used);
+  }
+
+  static TrackPoint* firstPositionMutable(Path& path) {
+    for (auto& p : path.points)
+      if (p.kind == PointKind::Position) return &p;
+    return nullptr;
+  }
+
+  static TrackPoint* lastPositionMutable(Path& path) {
+    for (auto it = path.points.rbegin(); it != path.points.rend(); ++it)
+      if (it->kind == PointKind::Position) return &*it;
+    return nullptr;
+  }
+
+  static const TrackPoint* firstPosition(const Path& path) {
+    for (const auto& p : path.points)
+      if (p.kind == PointKind::Position) return &p;
+    return nullptr;
+  }
+
+  static const TrackPoint* lastPosition(const Path& path) {
+    for (auto it = path.points.rbegin(); it != path.points.rend(); ++it)
+      if (it->kind == PointKind::Position) return &*it;
+    return nullptr;
+  }
+
+  // Raw Path::points index -> position-only index, the inverse of positionIndexToRaw. -1 if
+  // out of range or the point at that raw index isn't a Position point.
+  static int rawIndexToPositionIndex(const Path& path, int rawIndex) {
+    if (rawIndex < 0 || rawIndex >= static_cast<int>(path.points.size())) return -1;
+    if (path.points[rawIndex].kind != PointKind::Position) return -1;
+    int count = -1;
+    for (int i = 0; i <= rawIndex; ++i)
+      if (path.points[i].kind == PointKind::Position) ++count;
+    return count;
+  }
+
+  bool hasDisjointSeamOnPath(const std::string& pathId) const {
+    for (const auto& s : track_.disjointSeams)
+      if (s.pathId == pathId || s.leftPathId == pathId || s.rightPathId == pathId) return true;
+    return false;
+  }
+
+  const Connection* seamForPointId(const std::string& pointId) const {
+    for (const auto& s : track_.disjointSeams)
+      if (s.pointId == pointId) return &s;
+    return nullptr;
+  }
+
+  void eraseDisjointSeamById(const std::string& seamId) {
+    const auto it =
+        std::find_if(track_.disjointSeams.begin(), track_.disjointSeams.end(), [&](const Connection& s) { return s.id == seamId; });
+    if (it != track_.disjointSeams.end()) track_.disjointSeams.erase(it);
+  }
+
+  // Mirrors removeStaleSeams(): prunes every disjoint seam/junction/self-intersection-override/
+  // zone/trigger whose referenced point or path/mesh no longer exists, then re-runs the
+  // one-Finish invariant in case the checkpoint that used to be Finish was just pruned (mirrors
+  // TrackCore.normalizeTriggers's call inside removeStaleSeams()). Called after any structural
+  // edit that can orphan these (deleteCurrentPath, makeDisjoint, reconnectDisjoint).
+  void pruneStaleReferences() {
+    std::set<std::string> positionIds;
+    for (const auto& path : track_.paths)
+      for (const auto& point : path.points)
+        if (point.kind == PointKind::Position && !point.id.empty()) positionIds.insert(point.id);
+
+    auto seamValid = [&](const Connection& seam) {
+      if (!positionIds.count(seam.pointId)) return false;
+      if (seam.kind == "opened-closed") {
+        const auto it = std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.pathId; });
+        if (it == track_.paths.end()) return false;
+        const int positionCount =
+            static_cast<int>(std::count_if(it->points.begin(), it->points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; }));
+        const TrackPoint* first = firstPosition(*it);
+        const TrackPoint* last = lastPosition(*it);
+        return positionCount >= 2 && first != nullptr && last != nullptr && first->id == seam.pointId && last->id == seam.pointId;
+      }
+      if (seam.kind == "split-open") {
+        const auto leftIt = std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.leftPathId; });
+        const auto rightIt =
+            std::find_if(track_.paths.begin(), track_.paths.end(), [&](const Path& p) { return p.id == seam.rightPathId; });
+        if (leftIt == track_.paths.end() || rightIt == track_.paths.end()) return false;
+        const TrackPoint* leftLast = lastPosition(*leftIt);
+        const TrackPoint* rightFirst = firstPosition(*rightIt);
+        return leftLast != nullptr && rightFirst != nullptr && leftLast->id == seam.pointId && rightFirst->id == seam.pointId;
+      }
+      return false;
+    };
+    track_.disjointSeams.erase(std::remove_if(track_.disjointSeams.begin(), track_.disjointSeams.end(),
+                                              [&](const Connection& s) { return !seamValid(s); }),
+                               track_.disjointSeams.end());
+
+    track_.junctions.erase(
+        std::remove_if(track_.junctions.begin(), track_.junctions.end(), [&](const Connection& j) { return !positionIds.count(j.pointId); }),
+        track_.junctions.end());
+
+    track_.selfIntersectionOverrides.erase(
+        std::remove_if(track_.selfIntersectionOverrides.begin(), track_.selfIntersectionOverrides.end(),
+                       [&](const SelfIntersectionOverride& o) { return !positionIds.count(o.a) || !positionIds.count(o.b); }),
+        track_.selfIntersectionOverrides.end());
+
+    std::set<std::string> pathIds, meshIds;
+    for (const auto& p : track_.paths) pathIds.insert(p.id);
+    for (const auto& m : track_.meshes) meshIds.insert(m.id);
+    track_.zones.erase(std::remove_if(track_.zones.begin(), track_.zones.end(),
+                                      [&](const Zone& z) {
+                                        return z.host.kind == "mesh" ? !meshIds.count(z.host.meshId) : !pathIds.count(z.host.pathId);
+                                      }),
+                       track_.zones.end());
+    track_.triggers.erase(std::remove_if(track_.triggers.begin(), track_.triggers.end(),
+                                         [&](const Trigger& t) {
+                                           return t.host.kind == "mesh" ? !meshIds.count(t.host.meshId) : !pathIds.count(t.host.pathId);
+                                         }),
+                          track_.triggers.end());
+    if (!track_.triggers.empty() &&
+        std::none_of(track_.triggers.begin(), track_.triggers.end(),
+                     [](const Trigger& t) { return t.type == "checkpoint" && t.role == "finish"; })) {
+      for (auto& t : track_.triggers)
+        if (t.type == "checkpoint") {
+          t.role = "finish";
+          break;
+        }
+    }
+  }
+
   // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
   // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
   // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
@@ -1010,6 +1398,7 @@ private:
   std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;
   std::optional<std::string> selectedTriggerId_;
+  int explicitCurrentPathIndex_{0};
 };
 
 }  // namespace editor

@@ -183,6 +183,9 @@ Connection normalizeConnection(const json& raw) {
   result.sourceEnd = stringOr(raw, "sourceEnd");
   result.targetPathId = stringOr(raw, "targetPathId");
   result.targetEnd = stringOr(raw, "targetEnd");
+  result.pathId = stringOr(raw, "pathId");
+  result.leftPathId = stringOr(raw, "leftPathId");
+  result.rightPathId = stringOr(raw, "rightPathId");
   return result;
 }
 
@@ -388,7 +391,10 @@ json meshAssetToJson(const MeshAsset& asset) {
     // Re-merge the structured `rail` field back into the preserved attribute bag, matching
     // js/track-mesh.js's setRailEdge: present (true) when railed, omitted entirely when not.
     json attributes = parseAttributes(e.attributesJson);
-    if (e.rail) attributes["rail"] = true; else attributes.erase("rail");
+    if (e.rail)
+      attributes["rail"] = true;
+    else
+      attributes.erase("rail");
     edges.push_back(json{{"id", e.id}, {"vertices", json::array({e.vertex0, e.vertex1})}, {"attributes", std::move(attributes)}});
   }
   json polygons = json::array();
@@ -423,7 +429,7 @@ json zoneToJson(const Zone& zone) {
 
 json triggerToJson(const Trigger& trigger) {
   json host = trigger.host.kind == "mesh" ? json{{"kind", "mesh"}, {"meshId", trigger.host.meshId}, {"x", trigger.host.x}, {"z", trigger.host.z}}
-                                           : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}};
+                                          : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}};
   json out = {{"id", trigger.id},
               {"type", trigger.type},
               {"direction", trigger.direction},
@@ -442,7 +448,10 @@ json connectionToJson(const Connection& connection) {
               {"sourcePathId", connection.sourcePathId},
               {"sourceEnd", connection.sourceEnd},
               {"targetPathId", connection.targetPathId},
-              {"targetEnd", connection.targetEnd}};
+              {"targetEnd", connection.targetEnd},
+              {"pathId", connection.pathId},
+              {"leftPathId", connection.leftPathId},
+              {"rightPathId", connection.rightPathId}};
 }
 
 }  // namespace
@@ -497,8 +506,7 @@ std::string toJson(const TrackDefinition& track) {
 
   json textureAssets = json::object();
   for (const auto& [id, asset] : track.textureAssets)
-    textureAssets[id] = json{{"name", asset.name}, {"path", asset.path}, {"width", asset.width}, {"height", asset.height},
-                              {"tileWidth", asset.tileWidth}, {"tileHeight", asset.tileHeight}};
+    textureAssets[id] = json{{"name", asset.name}, {"path", asset.path}, {"width", asset.width}, {"height", asset.height}, {"tileWidth", asset.tileWidth}, {"tileHeight", asset.tileHeight}};
 
   json zones = json::array();
   for (const auto& zone : track.zones) zones.push_back(zoneToJson(zone));

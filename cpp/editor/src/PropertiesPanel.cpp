@@ -1,5 +1,6 @@
 #include "PropertiesPanel.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "imgui.h"
@@ -22,6 +23,22 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Weight", &weight, 0.0, 0.0, "%.2f", kCommitOnEnter);
   if (changed && state.setSelectedPositionFields(x, y, z, weight)) mutated = true;
+
+  // Disjoint (EDITOR_PARITY_FIXES.md gap 5): mirrors editor.html's #disjointChk. Checking splits
+  // this point into a hard, unsmoothed seam (EditorState::makeDisjoint); unchecking merges it back
+  // (reconnectDisjoint). Silently no-ops when disallowed (open endpoint, or fewer than 4 position
+  // points on either side) rather than JS's alert() -- there's no modal dialog plumbing here yet.
+  const auto seamIt = std::find_if(state.disjointSeams().begin(), state.disjointSeams().end(),
+                                   [&](const Connection& s) { return s.pointId == point.id; });
+  const bool isDisjoint = seamIt != state.disjointSeams().end();
+  bool checked = isDisjoint;
+  if (ImGui::Checkbox("Disjoint (hard seam)", &checked)) {
+    if (checked && !isDisjoint) {
+      if (state.makeDisjoint(sel.pathIndex, sel.pointIndex)) mutated = true;
+    } else if (!checked && isDisjoint) {
+      if (state.reconnectDisjoint(seamIt->id)) mutated = true;
+    }
+  }
 }
 
 void drawRollFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, bool& mutated) {

@@ -72,7 +72,8 @@ set(EDITOR_SOURCES
   src/Clipboard.cpp
   src/PropertiesPanel.cpp
   src/ZonesPanel.cpp
-  src/TriggersPanel.cpp)
+  src/TriggersPanel.cpp
+  src/CurvesPanel.cpp)
 
 add_executable(track_editor
   main.cpp
