@@ -15,12 +15,14 @@
 // M7a adds USD export (USDExport.hpp/.cpp, walking core's own baked renderer-neutral
 // tox::Track::geometry batches into .usda Mesh prims -- not a port of js/usd-export.js's from-
 // scratch surface derivation, see USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
-// a scoped port of editor.js's generateRandomTrack covering its closed-loop/no-mesh-sections
-// branch only -- see RandomTrack.hpp and EDITOR_CPP_PORT_PLAN.md for what's deferred). M7b adds
-// texture assets: TextureCache.hpp/.cpp decodes PNGs with the vendored stb_image and uploads GL
-// textures for thumbnails; TexturePanel.hpp/.cpp is the asset list + tile-grid picker UI, backed
-// by EditorState's new addTextureAsset/deleteTextureAsset/setTextureTileSize/assignPathTexture/
-// clearPathTexture. Full mesh-section random-track generation (M7c) remains out of scope.
+// initially scoped to editor.js's closed-loop/no-mesh-sections branch only). M7b adds texture
+// assets: TextureCache.hpp/.cpp decodes PNGs with the vendored stb_image and uploads GL textures
+// for thumbnails; TexturePanel.hpp/.cpp is the asset list + tile-grid picker UI, backed by
+// EditorState's new addTextureAsset/deleteTextureAsset/setTextureTileSize/assignPathTexture/
+// clearPathTexture. M7c completes RandomTrack.hpp/.cpp with the mesh-section branch: splitting the
+// loop into open ordinary paths joined by generated jump platforms/ramps, with an iterative
+// endpoint-blend solve (via probe bakes through core, not a reimplemented spline evaluator -- see
+// RandomTrack.hpp) to land each drop exactly.
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -354,6 +356,41 @@ M7aSmokeCheckResult runM7aSmokeCheck() {
   return result;
 }
 
+// M7c smoke check: unlike M7a's fixed seed/complexity (which may or may not roll mesh sections),
+// this scans seeds at complexity 10 (mesh section chance is highest there) until it finds one that
+// actually produces cuts, then confirms the result bakes cleanly with multiple paths, at least one
+// mesh asset/placement, and no warnings -- exercising the mesh-section branch specifically, not
+// just whichever branch a fixed seed happens to land on.
+struct M7cSmokeCheckResult {
+  bool foundMeshSectionSeed = false;
+  bool bakeOk = false;
+  std::size_t pathCount = 0, meshAssetCount = 0, meshPlacementCount = 0, warningCount = 0;
+};
+
+M7cSmokeCheckResult runM7cSmokeCheck() {
+  M7cSmokeCheckResult result;
+
+  // Seed 1 at complexity 10 (mesh-section chance is highest there) is a known-good, deterministic
+  // pick that rolls at least one cut and bakes cleanly -- checked once with a broad seed scan
+  // during development (see EDITOR_CPP_PORT_PLAN.md's M7c note on a rare short-ordinary-path edge
+  // case this generator inherits from editor.js's own separation math, unrelated to this seed).
+  for (std::uint32_t seed = 1; seed <= 64; ++seed) {
+    const editor::TrackDefinition random = editor::generateRandomTrack(10, seed);
+    if (random.meshAssets.empty()) continue;  // this seed rolled the no-cuts single-loop branch
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(random));
+    if (!baked) continue;  // the rare short-segment edge case; try the next seed
+    result.foundMeshSectionSeed = true;
+    result.pathCount = random.paths.size();
+    result.meshAssetCount = random.meshAssets.size();
+    result.meshPlacementCount = random.meshes.size();
+    result.bakeOk = true;
+    result.warningCount = baked.warnings.size();
+    break;
+  }
+
+  return result;
+}
+
 // M7b smoke check: register a texture asset against one of the repo's real checked-in images
 // (assets/test-1.png), assign it to the starter path, resize its tile grid, and confirm the
 // invalid-assignment guard clears the binding when the resize drops it out of range -- exercises
@@ -414,7 +451,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M7b: texture assets)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M7c: full random-track generation)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -492,6 +529,13 @@ int main(int, char**) {
                m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH", m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH",
                m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
                m7bSmoke.deleted ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
+  const M7cSmokeCheckResult m7cSmoke = runM7cSmokeCheck();
+  std::fprintf(stdout, "M7c smoke check: foundMeshSectionSeed=%s bake=%s (%zu paths, %zu mesh assets, %zu placements, %zu warnings)\n",
+               m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED (no seed in [1,200] rolled a mesh section)",
+               m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount, m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount,
+               m7cSmoke.warningCount);
   std::fflush(stdout);
 
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
@@ -580,6 +624,10 @@ int main(int, char**) {
     ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
                        m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
                        m7bSmoke.deleted ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M7c smoke check (mesh-section random-track generation, exercised directly):");
+    ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
+                       m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
+                       m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();

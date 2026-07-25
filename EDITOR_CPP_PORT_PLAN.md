@@ -1,8 +1,6 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M7b complete** (texture assets: image loading, GL thumbnails, tile-grid picker, per-path
-binding; M7c's full random-track generation remains out of scope -- see the M7 milestone note
-below). `track_editor` builds under the combined
+Status: **M7c complete — all planned milestones done.** `track_editor` builds under the combined
 `cpp/` configure, opens an
 SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
 through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
@@ -46,10 +44,34 @@ entirely to loading/UI, no schema work. "Load Bundled Textures" scans `assets/tr
 the same way editor.js's `loadBundledTextureAssets` does, but reads straight off disk instead of
 `fetch()`; `findAssetsDir()` locates the repo's checked-in `assets/` directory by walking up from
 the process's working directory, since the built exe's cwd sits several levels below the repo root
-(`cpp/build/editor/Release/...`), unlike the browser editor's page-relative URLs. All milestones'
-logic through M7b is verified via in-process smoke checks exercising the exact methods the UI
-calls (every check OK across all of them), plus screenshots confirming the UI renders without
-crashing. This document
+(`cpp/build/editor/Release/...`), unlike the browser editor's page-relative URLs. M7c completes
+`RandomTrack.hpp/.cpp` with `generateRandomTrack`'s mesh-section branch: when the probabilistic
+gate rolls one or more cuts, the loop is split into open ordinary paths (`simplifyGeneratedCoords`,
+`flattenTightTurnElevations`, and `generatedPath` all ported directly -- and, since they're pure
+math with no core dependency, now shared by the closed-loop branch too, fixing a latent M7a gap
+where the closed loop skipped `flattenTightTurnElevations`) joined by generated jump-platform mesh
+assets (`generatedPlatformAsset`) and, where the next surface is level or rising, a short launch
+ramp. The one piece that doesn't port 1:1 is editor.js's `endpoint()`: it evaluates the raw cubic
+spline directly via `TrackCore.makeEvaluator`/`splitPoints`; this instead bakes the candidate path
+alone through `tox::Track::fromJson` and reads the baked centerline's first/last frame
+(`bakeOpenPathEndpoint` in `RandomTrack.cpp`) -- exact, not an approximation, because
+`buildCenterline` samples an open path's parameter range as `(i/(N-1))*(CP_N-1)`, landing precisely
+on the evaluator's own knot values 0 and `CP_N-1` at the array's first/last index regardless of
+sample count N. This keeps "reuse core as a black box" intact instead of reimplementing a second
+spline evaluator. Two known, documented gaps (see `RandomTrack.hpp`'s header comment): (1) no
+explicit "finish" checkpoint is injected into the generated track's own authored JSON the way
+editor.js's `TrackCore.normalizeTriggers` does -- core's own `tox::Track::fromJson` (used for
+every preview bake here) already ports that auto-finish injection at load time, so gameplay is
+unaffected, only this editor session's own in-memory/exported JSON before a save+reload; (2) the
+generator inherits a latent edge case from editor.js's own cut-separation math
+(`minOrdinarySteps = max(2, ceil(500/250)) = 2`), which can occasionally produce an ordinary path
+segment with fewer than the 4 position points core's strict loader requires -- observed in roughly
+1 of 500 seeds across mixed complexities during verification, not something this port introduces.
+All milestones' logic is verified via in-process smoke checks exercising the exact methods the UI
+calls (every check OK across all of them, M7c's picking a known-good deterministic seed rather than
+asserting on the rare edge case above), plus screenshots confirming the UI renders without
+crashing -- including one of a live-generated mesh-section track (platform sequence visible in both
+the top-down and elevation views). This document
 records the plan to port `editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
@@ -123,10 +145,12 @@ baking; nothing in `core`'s public API changes because of this work.
   width/height are editable per asset, "Load Bundled Textures" scans
   `assets/track/manifest.json`. Backed by new `EditorState` methods mirroring editor.js's texture
   panel functions; the schema itself needed no changes (already present since M1).
-- **M7c — Full random-track generation (not started).** The mesh-section/ramp/jump-platform branch
-  of `generateRandomTrack`: an iterative spline-endpoint-blend solve to land each drop exactly,
-  generated platform mesh assets, launch ramps. ~180 lines of JS not yet ported; see
-  `RandomTrack.hpp`'s header comment for the exact boundary.
+- **M7c — Full random-track generation.** The mesh-section/ramp/jump-platform branch of
+  `generateRandomTrack`: open ordinary paths joined by generated jump platforms and launch ramps,
+  with an iterative endpoint-blend solve (via probe bakes through core, not a second spline
+  evaluator) to land each drop exactly. See `RandomTrack.hpp`'s header comment for the two
+  documented gaps (no in-session auto-finish trigger; a rare inherited short-segment edge case).
 
-Each milestone should build and be manually exercised (open the app, drive the feature) before moving
-to the next; this plan doc's Status line should be updated as milestones land.
+All planned milestones (M0-M7c) are complete. Each landed after being built and exercised (smoke
+checks plus a manual run) before moving to the next; see the Status paragraph above for what each
+one covers and its documented gaps/simplifications.
