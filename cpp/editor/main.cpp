@@ -2,10 +2,12 @@
 // M0 (EDITOR_CPP_PORT_PLAN.md) proved the toolchain: window + one ImGui frame + core linked.
 // M1 wired in the editor-owned authoring model (EditorTrackDefinition, undo/redo), verified with a
 // startup smoke check. M2 added the top-down 2D view: the baked road/centerline and authored
-// control points render via ImDrawList, with pan/zoom navigation. M3 adds point editing
+// control points render via ImDrawList, with pan/zoom navigation. M3 added point editing
 // (EditorState.hpp): select/drag/delete position points in Edit mode, click-to-add/close/finish a
 // new path in Create mode, edit|create|rails mode switching with E/C/R shortcuts, and Ctrl+Z/
-// Ctrl+Y undo/redo wired to real mutations (not just the M1 smoke check anymore).
+// Ctrl+Y undo/redo wired to real mutations. M4 adds mesh region placement: select/drag/rotate/
+// delete a placed mesh (there's no asset-import UI, so a single hardcoded rectangle asset is all
+// that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions.
 #include <cstdio>
 #include <string>
 
@@ -89,6 +91,21 @@ editor::TrackDefinition buildStarterTrack() {
   track.triggers.push_back(checkpoint("starter-cp1", "intermediate", 0.2525, "both"));
   track.triggers.push_back(checkpoint("starter-cp2", "intermediate", 0.5025, "both"));
   track.triggers.push_back(checkpoint("starter-cp3", "intermediate", 0.7525, "both"));
+
+  // There's no mesh-asset import UI yet (EDITOR_CPP_PORT_PLAN.md M4 is placement, not authoring),
+  // so a single hardcoded 80x40m rectangle is the only asset available to place -- enough to
+  // exercise placement/drag/rotate/delete and core's mesh baking end to end.
+  editor::MeshAsset testAsset;
+  testAsset.id = "test-rect";
+  testAsset.name = "Test Rectangle";
+  testAsset.railHeight = 6.0;
+  testAsset.vertices = {{0, -40.0, -20.0}, {1, 40.0, -20.0}, {2, 40.0, 20.0}, {3, -40.0, 20.0}};
+  testAsset.edges = {{0, 0, 1, false}, {1, 1, 2, false}, {2, 2, 3, false}, {3, 3, 0, false}};
+  editor::MeshPolygon polygon;
+  polygon.id = 0;
+  polygon.edges = {{0, 0, 1}, {1, 1, 2}, {2, 2, 3}, {3, 3, 0}};
+  testAsset.polygons = {polygon};
+  track.meshAssets.emplace(testAsset.id, std::move(testAsset));
 
   return track;
 }
@@ -197,6 +214,40 @@ M3SmokeCheckResult runM3SmokeCheck() {
   return result;
 }
 
+// M4 smoke check: place/select/drag/rotate/delete a mesh placement, and confirm core's own mesh
+// baking (tox::Track::meshRegions, via the unmodified Track::fromJson bake) picks up the move.
+struct M4SmokeCheckResult {
+  bool placed = false, dragMoved = false, rotateApplied = false, deleted = false;
+  bool bakedRegionMoved = false;
+};
+
+M4SmokeCheckResult runM4SmokeCheck() {
+  M4SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  result.placed = state.placeMeshAsset("test-rect", 1600.0, 0.0) && state.selectedMeshId().has_value();
+
+  state.beginMeshDrag(1600.0, 0.0);
+  state.dragMeshTo(1650.0, 30.0);
+  state.endMeshDrag();
+  const editor::MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
+  result.dragMoved = placement != nullptr && placement->x == 1650.0 && placement->z == 30.0;
+
+  state.beginMeshRotate(0.0);
+  state.dragMeshRotateTo(90.0);
+  state.endMeshRotate();
+  placement = state.findMeshPlacement(*state.selectedMeshId());
+  result.rotateApplied = placement != nullptr && placement->rotation == 90.0;
+
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  result.bakedRegionMoved = baked && baked.track->meshRegions.size() == 1 &&
+                            baked.track->meshRegions[0].bounds.minX > 1600.0;  // shifted right of the placement point
+
+  result.deleted = state.deleteSelectedMesh() && !state.selectedMeshId().has_value() && state.track().meshes.empty();
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -217,7 +268,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M3: point editing)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M4: mesh regions)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -266,6 +317,12 @@ int main(int, char**) {
                m3Smoke.dragMovedPoint ? "OK" : "MISMATCH", m3Smoke.dragUndoRestored ? "OK" : "MISMATCH",
                m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH", m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH",
                m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
+  const M4SmokeCheckResult m4Smoke = runM4SmokeCheck();
+  std::fprintf(stdout, "M4 smoke check: place=%s drag=%s rotate=%s bakedRegionMoved=%s delete=%s\n",
+               m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH", m4Smoke.rotateApplied ? "OK" : "MISMATCH",
+               m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH", m4Smoke.deleted ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
@@ -326,6 +383,11 @@ int main(int, char**) {
     ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
                        m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
     ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M4 smoke check (mesh placement, exercised directly):");
+    ImGui::BulletText("place / drag / rotate: %s / %s / %s", m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH",
+                       m4Smoke.rotateApplied ? "OK" : "MISMATCH");
+    ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
+                       m4Smoke.deleted ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -339,17 +401,25 @@ int main(int, char**) {
     if (ImGui::Button("Redo (Ctrl+Y)")) {
       if (editorState.redo()) rebake();
     }
+    if (ImGui::Button("Place Test Mesh")) {
+      // Placed just outside the starter circle (radius ~1333m) so it's never accidentally on top
+      // of the track -- there's no asset library/drag-from-palette UI yet (M4 is placement, not
+      // authoring), so this is the only way to get a mesh region onto the canvas at all.
+      if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
+    }
     ImGui::Separator();
     switch (editorState.mode()) {
       case editor::EditMode::Edit:
-        ImGui::TextUnformatted("Edit mode: click a point to select, drag to move, Delete/Backspace to remove.");
+        ImGui::TextUnformatted("Edit mode: click to select a point or mesh region.");
+        ImGui::TextUnformatted("Drag to move; shift+drag a mesh to rotate it about its own origin.");
+        ImGui::TextUnformatted("Delete/Backspace removes whichever is selected.");
         break;
       case editor::EditMode::Create:
         ImGui::TextUnformatted("Create mode: click to add points; click the first point to close, the last to finish open.");
         ImGui::TextUnformatted("Right-click cancels the in-progress draft.");
         break;
       case editor::EditMode::Rails:
-        ImGui::TextUnformatted("Rails mode: no mesh regions exist yet (EDITOR_CPP_PORT_PLAN.md M4+), nothing to pick.");
+        ImGui::TextUnformatted("Rails mode: rail-edge flagging lands in EDITOR_CPP_PORT_PLAN.md M5; nothing to pick yet.");
         break;
     }
     ImGui::TextUnformatted("Top-down view: right-drag to pan, scroll to zoom, Home to reset.");

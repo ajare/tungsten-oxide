@@ -1,16 +1,20 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M3 complete**. `track_editor` builds under the combined `cpp/` configure, opens an
+Status: **M4 complete**. `track_editor` builds under the combined `cpp/` configure, opens an
 SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
 through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
 (verified OK), and renders that track's baked road/centerline plus authored control points in a
-top-down `ImDrawList` canvas with working pan (right-drag) and zoom (scroll). `EditorState` now
-adds point editing: select/drag/delete position points in Edit mode, click-to-add/close/finish a
-new path in Create mode, `edit | create | rails` mode switching with E/C/R shortcuts, and Ctrl+Z/
-Ctrl+Y undo/redo -- all verified via an in-process smoke check exercising the same mutation logic
-the canvas's input handlers call (six checks, all OK), plus a screenshot confirming the UI renders.
-Rails mode is wired but a no-op until mesh regions exist (M4+). This document records the plan to
-port `editor.html`/`js/editor.js`
+top-down `ImDrawList` canvas with working pan (right-drag) and zoom (scroll). `EditorState` covers
+point editing: select/drag/delete position points in Edit mode, click-to-add/close/finish a new
+path in Create mode, `edit | create | rails` mode switching with E/C/R shortcuts, and Ctrl+Z/Ctrl+Y
+undo/redo. M4 adds mesh region placement (reordered ahead of the original plan's rails-mode
+milestone, since rails need a mesh region to flag edges on): select/drag/shift+drag-rotate/delete a
+placed mesh, rendered and hit-tested via core's own baked `tox::Track::meshRegions` (no
+reimplemented placement-transform math). There's no asset-import UI yet, so a single hardcoded
+rectangle asset is the only placeable mesh. All three milestones' logic (M1/M3/M4) is verified via
+in-process smoke checks exercising the exact methods the UI calls (every check OK), plus
+screenshots confirming the UI renders without crashing. Rails mode is wired but a no-op until M5
+adds rail-edge flagging. This document records the plan to port `editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
 `cpp/CMakeLists.txt`.
@@ -68,8 +72,10 @@ baking; nothing in `core`'s public API changes because of this work.
   point add/select/drag; `pushUndo()`-per-gesture parity with `editor.js`.
 - **M3 — Point editing.** Add/select/drag/delete points; edit-mode parity with `editor.js`
   (`edit | create | rails` modes, `E`/`C`/`R` shortcuts).
-- **M4 — Rails mode.** Mesh-edge rail flagging, modal pickable-edges-only behavior.
-- **M5 — Mesh regions.** Place/drag/rotate mesh assets (shift+drag rotate about placement origin).
+- **M4 — Mesh regions.** Place/drag/rotate mesh assets (shift+drag rotate about placement origin).
+  Reordered ahead of the original plan's M4/M5: rails mode has nothing to flag until a mesh region
+  exists, so mesh placement has to land first.
+- **M5 — Rails mode.** Mesh-edge rail flagging, modal pickable-edges-only behavior.
 - **M6 — Elevation profile.** Second canvas view + editing, collapsible panel.
 - **M7 — Texture assets, random-track generation, USD export.** Texture thumbnail loading, the
   random-track panel/localStorage-equivalent ranges, `usd-export.js` parity.

@@ -1,11 +1,14 @@
 // EditorState.hpp — mode/selection/drag/create-draft state for point editing
 // (EDITOR_CPP_PORT_PLAN.md M3), mirroring js/editor.js's editMode/selectedPointId/dragging/
-// createDraft globals and setEditMode/nodeAtTop/deleteSelected/createModeClick functions.
+// createDraft globals and setEditMode/nodeAtTop/deleteSelected/createModeClick functions. M4 adds
+// mesh placement select/drag/rotate/delete, mirroring selectedMeshId/meshDragOffset/meshRotateStart
+// and the drag branches in editor.js's topCanvas mousedown handler.
 //
-// Scope: position points only, one path at a time -- roll/width/cross-section handles, segment
-// deletion/splitting, shared/disjoint point identity, and mesh/zone/trigger picking are all still
+// Scope: position points and mesh placements only -- roll/width/cross-section handles, segment
+// deletion/splitting, shared/disjoint point identity, zone/trigger picking, and mesh *asset*
+// authoring (there's no import UI; see main.cpp's hardcoded test asset) are all still
 // editor.js-only (later milestones or out of scope). Rails mode is wired for mode-switching parity
-// but is a no-op until mesh regions exist.
+// but is a no-op until M5 adds rail-edge flagging.
 #pragma once
 
 #include <algorithm>
@@ -38,6 +41,15 @@ class EditorState {
   SelectedPoint selection() const { return selection_; }
   const std::vector<tox::Vec3>& createDraft() const { return createDraft_; }
   bool dragging() const { return dragging_; }
+  const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
+  bool meshDragging() const { return meshDragging_; }
+  bool meshRotating() const { return meshRotating_; }
+
+  const MeshPlacement* findMeshPlacement(const std::string& id) const {
+    for (const auto& placement : track_.meshes)
+      if (placement.id == id) return &placement;
+    return nullptr;
+  }
 
   History& history() { return history_; }
 
@@ -64,6 +76,7 @@ class EditorState {
     createDraft_.clear();
     dragging_ = false;
     dragMutated_ = false;
+    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
   }
 
   // Returns true if a position point was hit within `pickRadiusWorld` of (worldX, worldZ).
@@ -73,10 +86,105 @@ class EditorState {
     const auto hit = hitTestPosition(worldX, worldZ, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
+    selectedMeshId_.reset();  // path points and mesh regions share one selection (props panel)
     return true;
   }
 
   void clearSelection() { selection_ = {}; }
+
+  // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
+
+  void selectMesh(const std::string& placementId) {
+    selectedMeshId_ = placementId;
+    selection_ = {};
+  }
+
+  void clearMeshSelection() { selectedMeshId_.reset(); }
+
+  // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
+  // (x, z), unrotated, selecting it. There is no asset-authoring UI yet, so the caller is
+  // responsible for the asset already existing.
+  bool placeMeshAsset(const std::string& assetId, double x, double z) {
+    if (!track_.meshAssets.count(assetId)) return false;
+    history_.push(track_);
+    MeshPlacement placement;
+    placement.id = "mesh" + std::to_string(nextId_++);
+    placement.assetId = assetId;
+    placement.x = std::round(x * 10.0) / 10.0;
+    placement.z = std::round(z * 10.0) / 10.0;
+    const std::string placedId = placement.id;
+    track_.meshes.push_back(std::move(placement));
+    selectMesh(placedId);
+    return true;
+  }
+
+  // One pushUndo() per drag gesture, mirroring dragSelectedTo. `worldX`/`worldZ` is the mouse's
+  // world position at drag start; the offset to the placement's current x/z is preserved for the
+  // whole gesture so the shape doesn't jump to the cursor.
+  void beginMeshDrag(double worldX, double worldZ) {
+    MeshPlacement* placement = mutableSelectedMeshPlacement();
+    if (!placement) return;
+    meshDragOffsetX_ = placement->x - worldX;
+    meshDragOffsetZ_ = placement->z - worldZ;
+    meshDragging_ = true;
+    meshDragMutated_ = false;
+  }
+
+  void dragMeshTo(double worldX, double worldZ) {
+    MeshPlacement* placement = mutableSelectedMeshPlacement();
+    if (!meshDragging_ || !placement) return;
+    if (!meshDragMutated_) {
+      history_.push(track_);
+      meshDragMutated_ = true;
+    }
+    placement->x = std::round((worldX + meshDragOffsetX_) * 10.0) / 10.0;
+    placement->z = std::round((worldZ + meshDragOffsetZ_) * 10.0) / 10.0;
+  }
+
+  void endMeshDrag() {
+    meshDragging_ = false;
+    meshDragMutated_ = false;
+  }
+
+  // Shift+drag rotate: `startAngleDeg` is the mouse's angle-from-placement-origin at drag start
+  // (atan2(dz, dx) in degrees, matching TrackMesh's localToWorld convention -- see
+  // js/track-mesh.js's placementTrig). The offset between that and the placement's rotation at
+  // mousedown is preserved for the whole gesture, so the shape doesn't jump to face the cursor the
+  // instant the drag begins (CLAUDE.md's editor-conventions note on this exact interaction).
+  void beginMeshRotate(double startAngleDeg) {
+    MeshPlacement* placement = mutableSelectedMeshPlacement();
+    if (!placement) return;
+    meshRotateOriginRotation_ = placement->rotation;
+    meshRotateStartAngle_ = startAngleDeg;
+    meshRotating_ = true;
+    meshRotateMutated_ = false;
+  }
+
+  void dragMeshRotateTo(double currentAngleDeg) {
+    MeshPlacement* placement = mutableSelectedMeshPlacement();
+    if (!meshRotating_ || !placement) return;
+    if (!meshRotateMutated_) {
+      history_.push(track_);
+      meshRotateMutated_ = true;
+    }
+    placement->rotation = meshRotateOriginRotation_ + (currentAngleDeg - meshRotateStartAngle_);
+  }
+
+  void endMeshRotate() {
+    meshRotating_ = false;
+    meshRotateMutated_ = false;
+  }
+
+  bool deleteSelectedMesh() {
+    if (!selectedMeshId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
+                                 [&](const MeshPlacement& m) { return m.id == *selectedMeshId_; });
+    if (it == track_.meshes.end()) return false;
+    history_.push(track_);
+    track_.meshes.erase(it);
+    selectedMeshId_.reset();
+    return true;
+  }
 
   // Wholesale replacement, e.g. loading a file: clears interaction state that no longer refers to
   // anything meaningful in the new track (mirrors setEditMode's own resets). Does NOT touch
@@ -142,6 +250,15 @@ class EditorState {
     dragging_ = false;
     dragMutated_ = false;
     createDraft_.clear();
+    selectedMeshId_.reset();
+    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
+  }
+
+  MeshPlacement* mutableSelectedMeshPlacement() {
+    if (!selectedMeshId_.has_value()) return nullptr;
+    for (auto& placement : track_.meshes)
+      if (placement.id == *selectedMeshId_) return &placement;
+    return nullptr;
   }
 
   static bool withinPick(const tox::Vec3& p, double worldX, double worldZ, double pickRadiusWorld) {
@@ -220,6 +337,12 @@ class EditorState {
   bool dragMutated_{false};
   std::vector<tox::Vec3> createDraft_;
   int nextId_{1};
+
+  std::optional<std::string> selectedMeshId_;
+  bool meshDragging_{false}, meshDragMutated_{false};
+  double meshDragOffsetX_{0.0}, meshDragOffsetZ_{0.0};
+  bool meshRotating_{false}, meshRotateMutated_{false};
+  double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
 };
 
 }  // namespace editor

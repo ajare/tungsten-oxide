@@ -1,6 +1,7 @@
 #include "TopDownCanvas.hpp"
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 #include "imgui.h"
@@ -18,8 +19,13 @@ const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
+const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
+const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
+const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 
-TrackBounds2D computeAuthoredBounds(const TrackDefinition& track) {
+// Mirrors editor.js's computeTrackBounds: authored control points plus every mesh region's baked
+// bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
+TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked) {
   TrackBounds2D bounds{1e300, -1e300, 1e300, -1e300};
   for (const auto& path : track.paths) {
     for (const auto& point : path.points) {
@@ -28,6 +34,14 @@ TrackBounds2D computeAuthoredBounds(const TrackDefinition& track) {
       bounds.maxX = std::max(bounds.maxX, point.pos.x);
       bounds.minZ = std::min(bounds.minZ, point.pos.z);
       bounds.maxZ = std::max(bounds.maxZ, point.pos.z);
+    }
+  }
+  if (baked != nullptr) {
+    for (const auto& region : baked->meshRegions) {
+      bounds.minX = std::min(bounds.minX, region.bounds.minX);
+      bounds.maxX = std::max(bounds.maxX, region.bounds.maxX);
+      bounds.minZ = std::min(bounds.minZ, region.bounds.minZ);
+      bounds.maxZ = std::max(bounds.maxZ, region.bounds.maxZ);
     }
   }
   if (bounds.minX > bounds.maxX) return TrackBounds2D{-1.0, 1.0, -1.0, 1.0};
@@ -88,6 +102,25 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
                         path.closed ? ImDrawFlags_Closed : ImDrawFlags_None, 2.0f);
 }
 
+// Mesh polygons are already baked into world space by core's compileTrackMeshes (Vec2d{x, y}
+// where y is world Z, matching js/track-mesh.js's localToWorld) -- the editor draws that directly
+// rather than re-deriving placement transforms itself, the same reuse-core approach as the road.
+void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::MeshRegion>& regions,
+                     const std::optional<std::string>& selectedMeshId) {
+  for (const auto& region : regions) {
+    const bool isSelected = selectedMeshId.has_value() && *selectedMeshId == region.id;
+    for (const auto& polygon : region.polygons) {
+      if (polygon.outer.size() < 3) continue;
+      std::vector<ImVec2> screen;
+      screen.reserve(polygon.outer.size());
+      for (const auto& v : polygon.outer) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(v.x, v.y)));
+      drawList->AddConcavePolyFilled(screen.data(), static_cast<int>(screen.size()), kMeshFillColor);
+      drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor,
+                            ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
+    }
+  }
+}
+
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
                                 const SelectedPoint& selection) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
@@ -110,18 +143,40 @@ void drawCreateDraft(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   for (const auto& s : screen) drawList->AddCircleFilled(s, kPointRadius, kCreateDraftColor);
 }
 
-// Left click/drag: hit-test + select + move a position point (Edit mode only -- mirrors
-// editor.js's dragging === 'top'). Returns true if the track was mutated this frame. Freezes the
-// view's auto-fit bounds for the duration of the drag (see TopDownView::freezeBounds) so moving a
-// point doesn't fight the camera that's auto-fitting around it.
-bool handleEditModeInput(EditorState& state, TopDownView& view, const TrackBounds2D& preDragBounds, const ImVec2& mouseLocal,
-                         double pickRadiusWorld, bool hovered) {
+// Mesh regions are hit-tested against the baked (world-space) region polygons, matched back to
+// the authored placement by id -- picked only after every position point, so a large region can
+// never steal a click from a control point drawn on top of it (CLAUDE.md's editor conventions).
+const tox::MeshRegion* meshRegionAt(const tox::Track* baked, double worldX, double worldZ) {
+  if (baked == nullptr) return nullptr;
+  for (const auto& region : baked->meshRegions)
+    if (region.contains(worldX, worldZ)) return &region;
+  return nullptr;
+}
+
+double angleFromOriginDeg(double originX, double originZ, double worldX, double worldZ) {
+  return std::atan2(worldZ - originZ, worldX - originX) * 180.0 / std::numbers::pi;
+}
+
+// Left click/drag: hit-test + select + move a position point or mesh placement (Edit mode only --
+// mirrors editor.js's dragging === 'top'/'meshTop'/'meshRotate'). Shift+drag on a mesh rotates it
+// about its own placement origin instead of moving it. Returns true if the track was mutated this
+// frame. Freezes the view's auto-fit bounds for the duration of any drag (see
+// TopDownView::freezeBounds) so moving/rotating something doesn't fight the camera auto-fitting
+// around it.
+bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
+                         const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
   bool mutated = false;
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    state.selectPositionAt(world.x, world.z, pickRadiusWorld);
+    if (!state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
+      const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
+      if (region != nullptr) state.selectMesh(region->id);
+      else state.clearMeshSelection();
+    }
   }
-  if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && state.selection().valid()) {
+
+  const bool draggingGesture = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+  if (draggingGesture && state.selection().valid()) {
     if (!state.dragging()) {
       state.beginDrag();
       view.freezeBounds(preDragBounds);
@@ -131,6 +186,29 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const TrackBound
     mutated = true;
   } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
     state.endDrag();
+    view.releaseBoundsFreeze();
+  } else if (draggingGesture && state.selectedMeshId().has_value()) {
+    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    const bool rotate = ImGui::GetIO().KeyShift;
+    if (!state.meshDragging() && !state.meshRotating()) {
+      view.freezeBounds(preDragBounds);
+      if (rotate) {
+        const MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
+        if (placement != nullptr) state.beginMeshRotate(angleFromOriginDeg(placement->x, placement->z, world.x, world.z));
+      } else {
+        state.beginMeshDrag(world.x, world.z);
+      }
+    }
+    if (state.meshRotating()) {
+      const MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
+      if (placement != nullptr) state.dragMeshRotateTo(angleFromOriginDeg(placement->x, placement->z, world.x, world.z));
+    } else if (state.meshDragging()) {
+      state.dragMeshTo(world.x, world.z);
+    }
+    mutated = true;
+  } else if ((state.meshDragging() || state.meshRotating()) && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+    state.endMeshDrag();
+    state.endMeshRotate();
     view.releaseBoundsFreeze();
   }
   return mutated;
@@ -154,7 +232,7 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 }  // namespace
 
 bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked) {
-  const TrackBounds2D bounds = computeAuthoredBounds(state.track());
+  const TrackBounds2D bounds = computeViewBounds(state.track(), baked);
 
   if (ImGui::Button("Home")) view.resetView();
 
@@ -182,17 +260,20 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   const double pickRadiusWorld = kPickRadiusPx / view.scale();
   switch (state.mode()) {
     case EditMode::Edit:
-      mutated = handleEditModeInput(state, view, bounds, mouseLocal, pickRadiusWorld, hovered);
+      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
-      if (windowFocused && state.selection().valid() && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
-        mutated = state.deleteSelectedPoint() || mutated;
+      if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
+        if (state.selection().valid()) mutated = state.deleteSelectedPoint() || mutated;
+        else if (state.selectedMeshId().has_value()) mutated = state.deleteSelectedMesh() || mutated;
+      }
       break;
     case EditMode::Create:
       mutated = handleCreateModeInput(state, view, mouseLocal, pickRadiusWorld, hovered);
       if (mutated) state.setMode(EditMode::Edit);  // mirrors setEditMode('edit') after finishCreateDraft
       break;
     case EditMode::Rails:
-      // No mesh regions exist yet (M4+), so Rails mode has nothing to pick -- still pans.
+      // Rail-edge flagging is M5+ -- mesh regions exist as of M4, but nothing is pickable as a
+      // rail yet, so Rails mode still just pans.
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       break;
   }
@@ -200,8 +281,10 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   drawList->AddRectFilled(canvasOrigin, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), kBackgroundColor);
   drawGrid(drawList, canvasOrigin, canvasSize, view);
-  if (baked != nullptr)
+  if (baked != nullptr) {
     for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
+    drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
+  }
   drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 
