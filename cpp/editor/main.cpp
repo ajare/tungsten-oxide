@@ -1052,6 +1052,32 @@ Gap9SmokeCheckResult runGap9SmokeCheck() {
   return result;
 }
 
+// Gap-14 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #14): undo/redo disabled state,
+// mirroring editor.html's #undoBtn/#redoBtn -- disabled while their stack is empty rather than
+// always active. Exercises EditorHistory::canUndo/canRedo directly through the same mutation/undo/
+// redo calls the UI's BeginDisabled guards now read.
+struct Gap14SmokeCheckResult {
+  bool emptyAtStart = false, undoEnabledAfterEdit = false, redoDisabledAfterEdit = false;
+  bool redoEnabledAfterUndo = false, undoDisabledAfterUndoingEverything = false;
+};
+
+Gap14SmokeCheckResult runGap14SmokeCheck() {
+  Gap14SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  result.emptyAtStart = !state.history().canUndo() && !state.history().canRedo();
+
+  state.setTrackName("Gap14 Test");
+  result.undoEnabledAfterEdit = state.history().canUndo();
+  result.redoDisabledAfterEdit = !state.history().canRedo();
+
+  state.undo();
+  result.redoEnabledAfterUndo = state.history().canRedo();
+  result.undoDisabledAfterUndoingEverything = !state.history().canUndo();
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1250,6 +1276,15 @@ int main(int, char**) {
                gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH", gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap14SmokeCheckResult gap14Smoke = runGap14SmokeCheck();
+  std::fprintf(stdout,
+               "Gap14 smoke check (undo/redo disabled state): emptyAtStart=%s undoEnabledAfterEdit=%s "
+               "redoDisabledAfterEdit=%s redoEnabledAfterUndo=%s undoDisabledAfterUndoingEverything=%s\n",
+               gap14Smoke.emptyAtStart ? "OK" : "MISMATCH", gap14Smoke.undoEnabledAfterEdit ? "OK" : "MISMATCH",
+               gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
+               gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -1409,6 +1444,12 @@ int main(int, char**) {
     ImGui::BulletText("respects configured grid size / create-click snaps new point / closing stays unsnapped: %s / %s / %s",
                       gap9Smoke.respectsGridSize ? "OK" : "MISMATCH", gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH",
                       gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap14 smoke check (undo/redo disabled state, exercised directly):");
+    ImGui::BulletText("empty at start / undo enabled after edit / redo disabled after edit: %s / %s / %s",
+                      gap14Smoke.emptyAtStart ? "OK" : "MISMATCH", gap14Smoke.undoEnabledAfterEdit ? "OK" : "MISMATCH",
+                      gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH");
+    ImGui::BulletText("redo enabled after undo / undo disabled once exhausted: %s / %s", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
+                      gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1459,13 +1500,19 @@ int main(int, char**) {
       if (ImGui::Checkbox("Snap", &snapToGrid)) topDownView.setSnapToGrid(snapToGrid);
       ImGui::EndDisabled();
     }
+    // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors editor.html's
+    // #undoBtn/#redoBtn: disabled while their respective stack is empty rather than always active.
+    ImGui::BeginDisabled(!editorState.history().canUndo());
     if (ImGui::Button("Undo (Ctrl+Z)")) {
       if (editorState.undo()) rebake();
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
+    ImGui::BeginDisabled(!editorState.history().canRedo());
     if (ImGui::Button("Redo (Ctrl+Y)")) {
       if (editorState.redo()) rebake();
     }
+    ImGui::EndDisabled();
     ImGui::Separator();
     // New/Export JSON/Import JSON mirror editor.html's #newBtn/#exportBtn/#importBtn row
     // (EDITOR_NATIVE_FILE_IO_PLAN.md M8); Export USD (below) is the same row's #exportUsdBtn.

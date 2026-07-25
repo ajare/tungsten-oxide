@@ -454,8 +454,13 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
 12. **Elevation view roll points** — the orange roll line and its draggable diamonds.
 13. **Add-point context menu.** M9 added a minimal right-click popup with only "Paste Mesh"; JS
     offers position/roll/width/crossSection plus zone and trigger creation.
-14. **Undo/redo button disabled state.** JS disables them when the stacks are empty; the native
-    buttons always render active.
+14. ~~**Undo/redo button disabled state.**~~ **Implemented.** `main.cpp`'s Undo/Redo buttons are now
+    wrapped in `ImGui::BeginDisabled(!editorState.history().canUndo()/canRedo())`, mirroring
+    `#undoBtn`/`#redoBtn`. `EditorHistory::canUndo()`/`canRedo()` already existed (unused until
+    now); the Ctrl+Z/Ctrl+Y keyboard shortcuts are left unconditional, matching JS, where the
+    buttons are a visual affordance only and the global keydown handler doesn't consult them. A
+    "Gap14 smoke check" in `main.cpp` covers both empty-at-start and every enable/disable
+    transition around an edit/undo/redo cycle.
 
 ## Suggested order (as executed)
 
