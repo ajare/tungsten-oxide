@@ -1,0 +1,46 @@
+{
+  "version": 10,
+  "name": "Random geometry parity 1592594996",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": {"maxSpeed":160,"accel":85,"turnSpeed":170,"weight":1600},
+  "zones": [{"id":"random-path-zone-1592594996","effect":"velocityChange","width":13.939673189073801,"length":38.58240449754521,"host":{"kind":"path","pathId":"random-path-1592594996","t":0.47256836388260126,"lateral":-0.6906936205923557},"factor":1.6586879340000449,"duration":0.7382458867505193},{"id":"random-mesh-zone-1592594996","effect":"startGrid","width":15.642585138091817,"length":22.017445753328502,"host":{"kind":"mesh","meshId":"random-placement-1592594996-a","x":-24.047056990675628,"z":-82.78395471628755,"rotation":-29.428344709333032}}],
+  "triggers": [{"id":"random-finish-1592594996","type":"checkpoint","host":{"kind":"path","pathId":"random-path-1592594996","t":0.2446777515579015},"width":34.732718399958685,"height":8.245252955006436,"rotation":18.78373819636181,"direction":"forward","role":"finish"}],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "meshAssets": {
+    "random-asset-1592594996": {"name":"Seeded polygon 1592594996","railHeight":3.2238324070349336,"mesh":{"vertices":[{"id":0,"position":{"x":60.76211940124631,"y":0},"attributes":{}},{"id":1,"position":{"x":41.64006160495244,"y":52.21498571044195},"attributes":{}},{"id":2,"position":{"x":-12.912351057877219,"y":56.572706371466225},"attributes":{}},{"id":3,"position":{"x":-61.95085234930207,"y":29.833958104916643},"attributes":{}},{"id":4,"position":{"x":-49.80869868859227,"y":-23.98660508425787},"attributes":{}},{"id":5,"position":{"x":-14.739998257342718,"y":-64.58015194838282},"attributes":{}},{"id":6,"position":{"x":35.02737727872425,"y":-43.922941839868},"attributes":{}},{"id":7,"position":{"x":11.874648284539957,"y":3.408725507136524},"attributes":{}},{"id":8,"position":{"x":-2.8980361968043606,"y":10.0956091890855},"attributes":{}},{"id":9,"position":{"x":-12.043501149775905,"y":-3.4571962537970533},"attributes":{}},{"id":10,"position":{"x":2.716130970723658,"y":-9.461923497378795},"attributes":{}}],"edges":[{"id":0,"vertices":[0,1],"attributes":{}},{"id":1,"vertices":[1,2],"attributes":{"rail":true}},{"id":2,"vertices":[2,3],"attributes":{"rail":true}},{"id":3,"vertices":[3,4],"attributes":{}},{"id":4,"vertices":[4,5],"attributes":{"rail":true}},{"id":5,"vertices":[5,6],"attributes":{"rail":true}},{"id":6,"vertices":[6,0],"attributes":{}},{"id":7,"vertices":[7,8],"attributes":{"rail":true}},{"id":8,"vertices":[8,9],"attributes":{}},{"id":9,"vertices":[9,10],"attributes":{"rail":true}},{"id":10,"vertices":[10,7],"attributes":{}}],"polygons":[{"id":0,"edges":[{"edge":0,"v0":0,"v1":1},{"edge":1,"v0":1,"v1":2},{"edge":2,"v0":2,"v1":3},{"edge":3,"v0":3,"v1":4},{"edge":4,"v0":4,"v1":5},{"edge":5,"v0":5,"v1":6},{"edge":6,"v0":6,"v1":0}],"holes":[1],"hole":false,"attributes":{}},{"id":1,"edges":[{"edge":7,"v0":7,"v1":8},{"edge":8,"v0":8,"v1":9},{"edge":9,"v0":9,"v1":10},{"edge":10,"v0":10,"v1":7}],"holes":[],"hole":true,"attributes":{}}]}}
+  },
+  "meshes": [
+    { "id": "random-placement-1592594996-a", "asset": "random-asset-1592594996", "x": -24.047056990675628, "z": -82.78395471628755, "rotation": -42.42834470933303, "elevation": 3.5912339659407735 },
+    { "id": "random-placement-1592594996-b", "asset": "random-asset-1592594996", "x": -81.0865523898974, "z": -102.72305450867862, "rotation": 15.887518017552793, "elevation": 27.87640363443643 }
+  ],
+  "textureAssets": {},
+  "paths": [
+    { "id": "random-path-1592594996", "closed": true, "points": [
+      { "type": "position", "id": "seed-1592594996-p0", "pos": [291.68017099602764, 13.939273125546247, 19.773513039763692], "weight": 1.049552524741739 },
+      { "type": "position", "id": "seed-1592594996-p1", "pos": [248.94809356017277, 5.139370919626633, 210.40881505549385], "weight": 0.8758818229660392 },
+      { "type": "position", "id": "seed-1592594996-p2", "pos": [70.76308152444642, -26.574286247246977, 290.5958719418105], "weight": 1.1867861121194436 },
+      { "type": "position", "id": "seed-1592594996-p3", "pos": [-112.04951826063659, 32.67414933771484, 305.47338134527166], "weight": 1.268905286048539 },
+      { "type": "position", "id": "seed-1592594996-p4", "pos": [-239.5436775138934, -19.004521846795935, 184.39420684605855], "weight": 1.1113998875487596 },
+      { "type": "position", "id": "seed-1592594996-p5", "pos": [-329.5278395184598, 10.145177281011057, -11.086541931266142], "weight": 1.1554036032175645 },
+      { "type": "position", "id": "seed-1592594996-p6", "pos": [-238.05762749420737, 19.96240336989903, -170.06679783296914], "weight": 1.4111789269605652 },
+      { "type": "position", "id": "seed-1592594996-p7", "pos": [-102.42352097597855, -31.43206153673379, -294.12920925756026], "weight": 0.8866597820539028 },
+      { "type": "position", "id": "seed-1592594996-p8", "pos": [81.89753785320184, 31.76322888734561, -286.9569629843318], "weight": 0.9585662463912741 },
+      { "type": "position", "id": "seed-1592594996-p9", "pos": [280.39869954605774, -24.784320311788886, -193.99554032306543], "weight": 1.4030730924336239 },
+      { "type": "roll", "t": 0, "roll": -26.609977768734097 },
+      { "type": "width", "t": 0, "width": 50.120842033298686 },
+      { "type": "crossSection", "t": 0, "curvature": 0.30477695690933615, "tightness": 1.692472524754703, "thickness": 1.850944163510576 },
+      { "type": "roll", "t": 0.27, "roll": 4.888235941529274 },
+      { "type": "width", "t": 0.27, "width": 32.15893778973259 },
+      { "type": "crossSection", "t": 0.27, "curvature": -0.1626585825579241, "tightness": 0.5683037407696248, "thickness": 1.7063736959826201 },
+      { "type": "roll", "t": 0.59, "roll": -19.451614821329713 },
+      { "type": "width", "t": 0.59, "width": 45.69351233611815 },
+      { "type": "crossSection", "t": 0.59, "curvature": -0.33850538497790694, "tightness": 2.493404135107994, "thickness": 4.037084290524945 },
+      { "type": "roll", "t": 0.83, "roll": -19.669947927817702 },
+      { "type": "width", "t": 0.83, "width": 44.04405592591502 },
+      { "type": "crossSection", "t": 0.83, "curvature": 0.06376160227227956, "tightness": 0.6830174025148154, "thickness": 0 }
+    ] }
+  ]
+}
+

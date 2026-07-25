@@ -431,6 +431,14 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     sh.b.kind = GeometryKind::PathShell;
     sh.b.materialKey = "shell";
     auto under = [](const Frame& f, Vec3 p) { return p.addScaledVector(f.normal, -f.crossSectionThickness); };
+    auto ringUnderPoint = [&](int ring, double v) {
+      const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
+      if (exact != br[ring].end()) return under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], v));
+      auto upper = std::upper_bound(br[ring].begin(), br[ring].end(), v);
+      const double hi = *upper, lo = *(upper - 1), t = (v - lo) / (hi - lo);
+      Vec3 a = under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], lo));
+      return a.lerp(under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], hi)), t);
+    };
     for (int i = 0; i < sc; i++) {
       int j = def.closed ? (i + 1) % n : i + 1;
       for (int side = 0; side < 2; side++) {
@@ -448,10 +456,10 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       shellBreaks.insert(br[j].begin(), br[j].end());
       std::vector<double> shellV(shellBreaks.begin(), shellBreaks.end());
       for (std::size_t k = 0; k + 1 < shellV.size(); ++k) {
-        Vec3 a = under(frames[i], surface(frames[i], e.left[i], e.right[i], shellV[k]));
-        Vec3 b = under(frames[i], surface(frames[i], e.left[i], e.right[i], shellV[k + 1]));
-        Vec3 c = under(frames[j], surface(frames[j], e.left[j], e.right[j], shellV[k]));
-        Vec3 d = under(frames[j], surface(frames[j], e.left[j], e.right[j], shellV[k + 1]));
+        Vec3 a = ringUnderPoint(i, shellV[k]);
+        Vec3 b = ringUnderPoint(i, shellV[k + 1]);
+        Vec3 c = ringUnderPoint(j, shellV[k]);
+        Vec3 d = ringUnderPoint(j, shellV[k + 1]);
         sh.tri(a, c, b);
         sh.tri(b, c, d);
       }
@@ -642,7 +650,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         const Vec3 b = corner(zone.halfLength, -zone.halfWidth);
         const Vec3 c = corner(zone.halfLength, zone.halfWidth);
         const Vec3 d = corner(-zone.halfLength, zone.halfWidth);
-        constexpr double uvScale = 1.0 / 12.0;
+        constexpr double uvScale = 1.0 / 6.0;
         Builder geometry;
         geometry.b.id = "zone-" + z.id;
         geometry.b.kind = GeometryKind::ZoneSurface;
@@ -718,9 +726,11 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         zone.b.materialKey = "zone-" + z.effect;
         zone.b.hasUv = true;
         const double uvWidth = z.width / 6.0;
+        std::vector<double> rowDistances(rows + 1);
+        for (int ri = 1; ri <= rows; ++ri) rowDistances[ri] = rowDistances[ri - 1] + points[ri][0].distanceTo(points[ri - 1][0]);
         for (int ri = 0; ri < rows; ++ri) {
-          const double u0 = static_cast<double>(ri) / rows * z.length / 6.0;
-          const double u1 = static_cast<double>(ri + 1) / rows * z.length / 6.0;
+          const double u0 = rowDistances[ri] / 6.0;
+          const double u1 = rowDistances[ri + 1] / 6.0;
           for (int ai = 0; ai < acrossSteps; ++ai) {
             const double v0 = uvWidth * ai / acrossSteps, v1 = uvWidth * (ai + 1) / acrossSteps;
             zone.tri(points[ri][ai], points[ri][ai + 1], points[ri + 1][ai], {u0, v0}, {u0, v1}, {u1, v0});

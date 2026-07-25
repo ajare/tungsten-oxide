@@ -59,18 +59,19 @@ cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
-The combined build uses the embedded `cpp/willpower` sources and copies required Willpower DLLs next to test executables. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md` and `MESH_CPP_PORT_PLAN.md`.
+The combined build uses the embedded `cpp/willpower` sources and copies required Willpower DLLs next to test executables. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md` and `MESH_CPP_PORT_PLAN.md`. The remaining non-graphics work needed for a self-contained native game session is tracked in `NATIVE_GAME_RUNTIME_PLAN.md`.
 
 ## Tests
 
 ```sh
 npm test                                   # Node logic + JS trace replay
 node tools/browser-smoke.mjs               # real pages in headless Chromium
-npm run parity                             # JS + C++ baked/raw parity layers
+npm run parity                             # JS + C++ physics and random-geometry parity
 npm run gen-traces                         # deliberately regenerate committed traces
+npm run gen-random-mesh-fixtures           # regenerate seeded JSON/geometry fixtures
 ```
 
-`npm run parity` uses a previously built `cpp/build` when available. The committed parity corpus has two layers: byte-identical baked-world traces that isolate runtime math, and raw schema-10 tracks independently loaded and baked by both engines. See `test/traces/raw/README.md`.
+`npm run parity` uses a previously built `cpp/build` when available. The committed physics corpus has two layers: byte-identical baked-world traces that isolate runtime math, and raw schema-10 tracks independently loaded and baked by both engines. A separate seeded-random corpus compares complete renderer-neutral track geometry from generated JSON. See `test/traces/raw/README.md` and `test/fixtures/random-track-mesh/README.md`.
 
 The browser suite needs Playwright, which is not a project dependency:
 

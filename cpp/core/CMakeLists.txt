@@ -68,11 +68,17 @@ add_executable(track_tests tests/track_tests.cpp)
 target_include_directories(track_tests PRIVATE third_party)
 target_link_libraries(track_tests PRIVATE core)
 
+# Cross-language renderer-neutral geometry parity over deterministic randomly
+# generated current-schema JSON tracks.
+add_executable(random_geometry_parity tests/random_geometry_parity_main.cpp)
+target_include_directories(random_geometry_parity PRIVATE third_party)
+target_link_libraries(random_geometry_parity PRIVATE core)
+
 # Multi-config generators leave Willpower DLLs in sibling output directories.
 # Put runtime dependencies beside each executable so direct runs and CTest use
 # the same self-contained layout.
 if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
-  foreach(_executable parity track_tests)
+  foreach(_executable parity track_tests random_geometry_parity)
     add_custom_command(TARGET ${_executable} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_RUNTIME_DLLS:${_executable}> $<TARGET_FILE_DIR:${_executable}>
@@ -83,6 +89,7 @@ endif()
 enable_testing()
 set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/traces)
 set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/mesh)
+set(RANDOM_GEOMETRY_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/random-track-mesh)
 set(RAW_TRACE_DIR ${TRACE_DIR}/raw)
 add_test(NAME parity
   COMMAND parity
@@ -105,3 +112,4 @@ add_test(NAME raw_parity
     ${RAW_TRACE_DIR}/raw-curved-banked-native-bake.json
     ${RAW_TRACE_DIR}/raw-long-mixed-course.json)
 add_test(NAME track_tests COMMAND track_tests ${MESH_FIXTURE_DIR})
+add_test(NAME random_geometry_parity COMMAND random_geometry_parity ${RANDOM_GEOMETRY_FIXTURE_DIR})

@@ -54,10 +54,14 @@ CTest entries:
 
 - `parity` — unchanged 4000-step baked-world runtime gate;
 - `raw_parity` — 12 independently loaded/baked tracks, 1116 steps;
-- `track_tests` — loader, bake, topology, geometry and simulation scenarios.
+- `track_tests` — loader, bake, topology, geometry and simulation scenarios;
+- `random_geometry_parity` — five seeded random schema-10 JSON tracks independently baked into
+  renderer-neutral geometry by JavaScript and C++.
 
-Run `npm run parity` from the repository root for JS self-replay followed by both
-C++ parity layers. Trace regeneration is deliberate: `npm run gen-traces`.
+Run `npm run parity` from the repository root for JS self-replay followed by all
+C++ parity layers. Trace regeneration is deliberate: `npm run gen-traces`. The random geometry
+corpus is regenerated separately with `npm run gen-random-mesh-fixtures`; see
+`test/fixtures/random-track-mesh/README.md`.
 
 ## Public data flow
 

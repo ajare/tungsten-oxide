@@ -5,8 +5,8 @@
  *
  *  1. JS<->JS self-check (test/parity.test.js): the trace pipeline replays
  *     bit-exact, proving the oracle + lossless serialization.
- *  2. C++ baked-world and independently loaded raw-track parity, IF the engine
- *     has been built from cpp/ (combined)
+ *  2. C++ baked-world and independently loaded raw-track parity, plus seeded
+ *     random JSON-to-render-geometry parity, IF the engine has been built from cpp/ (combined)
  *     or cpp/core (standalone). Skipped
  *     with a note otherwise, so contributors without the C++ toolchain still get
  *     the JS half.
@@ -48,6 +48,21 @@ const exeCandidates = [
 const exe = exeCandidates.find(existsSync);
 if (exe) {
   failed += run('C++ baked-world + raw-track parity', exe, [...traces, ...rawTraces]) ? 1 : 0;
+  const geometryCandidates = [
+    `${root}cpp/build/core/Release/random_geometry_parity.exe`,
+    `${root}cpp/build/core/random_geometry_parity`,
+    `${root}cpp/build/random_geometry_parity.exe`,
+    `${root}cpp/build/random_geometry_parity`,
+    `${root}cpp/build/Release/random_geometry_parity.exe`
+  ];
+  const geometryExe = geometryCandidates.find(existsSync);
+  if (geometryExe) {
+    failed += run('C++ random track-mesh geometry parity', geometryExe,
+      [`${root}test/fixtures/random-track-mesh`]) ? 1 : 0;
+  } else {
+    console.log('\n=== C++ random track-mesh geometry parity ===');
+    console.log('  SKIPPED — rebuild the engine to add random_geometry_parity');
+  }
 } else {
   console.log('\n=== C++ per-step parity ===');
   console.log('  SKIPPED — build the engine first:');
