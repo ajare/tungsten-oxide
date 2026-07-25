@@ -177,9 +177,15 @@ public:
   }
 
   // Width-drag counterpart to selectionIsPosition() -- gates dragSelectedWidthTo()'s on-canvas
-  // drag path (roll/cross-section remain click-to-select only, still panel-edited).
+  // drag path (cross-section remains click-to-select only, still panel-edited).
   bool selectionIsWidth() const {
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Width;
+  }
+
+  // Roll-drag counterpart to selectionIsPosition()/selectionIsWidth() -- gates
+  // dragSelectedRollTo()'s on-canvas drag path.
+  bool selectionIsRoll() const {
+    return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Roll;
   }
 
   // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
@@ -875,6 +881,21 @@ public:
       dragMutated_ = true;
     }
     point.width = std::max(1.0, width);
+  }
+
+  // On-canvas roll-handle drag: same drag lifecycle as dragSelectedWidthTo(), for a Roll point's
+  // `roll` field -- mirrors editor.js's `dragging === 'rollTop'` branch (js/editor.js:3453-3467).
+  // The caller computes the roll value itself from the baked frame (position/h axis/width at the
+  // point's `t`), same THE-free split as dragSelectedWidthTo().
+  void dragSelectedRollTo(double rollDegrees) {
+    if (!dragging_ || !selectionInRange()) return;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::Roll) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    point.roll = std::clamp(rollDegrees, -180.0, 180.0);
   }
 
   void endDrag() {

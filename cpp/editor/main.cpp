@@ -645,6 +645,8 @@ struct Gap1SmokeCheckResult {
   bool selectionIsPositionTrueForPosition = false, selectionIsPositionFalseForAux = false, selectionIsPositionFalseWhenInvalid = false;
   bool selectionIsWidthTrueForWidth = false, selectionIsWidthFalseForPosition = false;
   bool widthDragged = false, widthDragClampsToFloor = false, widthDragUndone = false, widthDragRefusedForPositionSelection = false;
+  bool selectionIsRollTrueForRoll = false, selectionIsRollFalseForPosition = false;
+  bool rollDragged = false, rollDragClampsToRange = false, rollDragUndone = false, rollDragRefusedForPositionSelection = false;
 };
 
 Gap1SmokeCheckResult runGap1SmokeCheck() {
@@ -669,6 +671,7 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   state.selectPositionAt(firstPositionX, firstPositionZ, 1.0);
   result.selectionIsPositionTrueForPosition = state.selectionIsPosition();
   result.selectionIsWidthFalseForPosition = !state.selectionIsWidth();
+  result.selectionIsRollFalseForPosition = !state.selectionIsRoll();
 
   result.fieldsEdited = state.editAuxPoint(0, *rollIndex, [](editor::TrackPoint& p) { p.roll = 25.0; }) &&
                         state.track().paths[0].points[*rollIndex].roll == 25.0;
@@ -699,6 +702,28 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   state.dragSelectedWidthTo(999.0);
   state.endDrag();
   result.widthDragRefusedForPositionSelection = state.track().paths[0].points[*widthIndex].width == widthBeforeMisdirectedDrag;
+
+  // On-canvas roll-handle drag (mirrors editor.js's `dragging === 'rollTop'`): same split as the
+  // width-drag block above -- EditorState's clamp/undo bookkeeping only, screen-position -> roll
+  // math lives in TopDownCanvas.cpp.
+  state.selectPoint(0, *rollIndex);
+  result.selectionIsRollTrueForRoll = state.selectionIsRoll();
+  state.beginDrag();
+  state.dragSelectedRollTo(90.0);
+  result.rollDragged = state.track().paths[0].points[*rollIndex].roll == 90.0;
+  state.dragSelectedRollTo(250.0);  // must clamp to the 180 ceiling, mirroring editAuxPoint's own clamp
+  result.rollDragClampsToRange = state.track().paths[0].points[*rollIndex].roll == 180.0;
+  state.endDrag();
+  result.rollDragUndone = state.undo() && state.track().paths[0].points[*rollIndex].roll == 25.0;
+
+  // Dragging via dragSelectedRollTo() while a POSITION point is selected must be a no-op, same as
+  // the width-drag guard above.
+  state.selectPositionAt(firstPositionX, firstPositionZ, 1.0);
+  const double rollBeforeMisdirectedDrag = state.track().paths[0].points[*rollIndex].roll;
+  state.beginDrag();
+  state.dragSelectedRollTo(-999.0);
+  state.endDrag();
+  result.rollDragRefusedForPositionSelection = state.track().paths[0].points[*rollIndex].roll == rollBeforeMisdirectedDrag;
 
   // Roll/width points near the same t as the added ones (0.1) should carry through to the bake --
   // exercises that this isn't just schema plumbing (a huge roll/width would be unmistakable in the
@@ -1592,6 +1617,12 @@ int main(int, char**) {
                gap1Smoke.selectionIsWidthTrueForWidth ? "OK" : "MISMATCH", gap1Smoke.selectionIsWidthFalseForPosition ? "OK" : "MISMATCH",
                gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH",
                gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
+  std::fprintf(stdout,
+               "Gap1 roll-drag smoke check: selectionIsRoll=%s/%s rollDragged=%s clampsToRange=%s undone=%s "
+               "refusedForPositionSelection=%s\n",
+               gap1Smoke.selectionIsRollTrueForRoll ? "OK" : "MISMATCH", gap1Smoke.selectionIsRollFalseForPosition ? "OK" : "MISMATCH",
+               gap1Smoke.rollDragged ? "OK" : "MISMATCH", gap1Smoke.rollDragClampsToRange ? "OK" : "MISMATCH",
+               gap1Smoke.rollDragUndone ? "OK" : "MISMATCH", gap1Smoke.rollDragRefusedForPositionSelection ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const Gap2SmokeCheckResult gap2Smoke = runGap2SmokeCheck();
@@ -2207,6 +2238,11 @@ int main(int, char**) {
                       gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH");
     ImGui::BulletText("width-drag: undo restores / refused while a position point is selected: %s / %s",
                       gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
+    ImGui::BulletText("roll-drag: selectionIsRoll true/false / dragged / clamps to range: %s / %s / %s / %s",
+                      gap1Smoke.selectionIsRollTrueForRoll ? "OK" : "MISMATCH", gap1Smoke.selectionIsRollFalseForPosition ? "OK" : "MISMATCH",
+                      gap1Smoke.rollDragged ? "OK" : "MISMATCH", gap1Smoke.rollDragClampsToRange ? "OK" : "MISMATCH");
+    ImGui::BulletText("roll-drag: undo restores / refused while a position point is selected: %s / %s",
+                      gap1Smoke.rollDragUndone ? "OK" : "MISMATCH", gap1Smoke.rollDragRefusedForPositionSelection ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
     ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
                       gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");

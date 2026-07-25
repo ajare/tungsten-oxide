@@ -822,6 +822,26 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       state.dragSelectedWidthTo(std::round(std::abs(dist) * 2.0 * 10.0) / 10.0);
       mutated = true;
     }
+  } else if (draggingGesture && state.selectionIsRoll() && !panDragActive) {
+    // On-canvas roll-handle drag (mirrors editor.js's `dragging === 'rollTop'`,
+    // js/editor.js:3453-3467): signed distance of the mouse from the roll point's centerline
+    // position, projected onto the frame's unrolled h axis (+h = right), divided by the frame's
+    // width and scaled to degrees -- inverse of the perpendicular indicator line's own length.
+    const int pathIndex = state.selection().pathIndex;
+    const Path& path = state.track().paths[pathIndex];
+    const TrackPoint& point = path.points[state.selection().pointIndex];
+    if (baked != nullptr && pathIndex < static_cast<int>(baked->paths.size()) && !baked->paths[pathIndex].centerline.empty()) {
+      if (!state.dragging()) {
+        state.beginDrag();
+        view.freezeBounds(preDragBounds);
+      }
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+      const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
+      const double roll = f.width > 0.0 ? (dist / f.width) * 180.0 : 0.0;
+      state.dragSelectedRollTo(std::round(roll * 10.0) / 10.0);
+      mutated = true;
+    }
   } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
     state.endDrag();
     view.releaseBoundsFreeze();
