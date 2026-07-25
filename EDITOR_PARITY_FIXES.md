@@ -491,7 +491,19 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
     ported here too. A "Gap11 smoke check" in `main.cpp` covers both nullopt edge cases (aux point
     selected, open-path start/end), all three delete-segment cases and their guards (floor,
     split-too-small, disjoint-seam), and that an inserted point lands at the right index and bakes.
-12. **Elevation view roll points** — the orange roll line and its draggable diamonds.
+12. ~~**Elevation view roll points**~~ **N/A — no longer live in JS.** Re-audited before porting
+    and found nothing to mirror: `rollHandleAtElev(sx, sy)` (`js/editor.js:2721-2723`) is a stub
+    that unconditionally `return null`s, and `insertRollPoint` (the click-to-add handler for a new
+    roll point in the elevation strip) is defined but never called from anywhere in the file.
+    `drawElev` itself carries an explicit comment: *"Roll is intentionally not drawn in the side
+    view; edit roll control points from the top-down view so this panel stays focused on
+    elevation."* Roll's on-canvas indicator/dragging (`rollLineEnd`, the orange perpendicular
+    line, diamond handles) only exists in the **top-down** view (`js/editor.js:1248-1253`) --
+    already correctly tracked as gap 1's unimplemented `rollHandleAtTop` on-canvas drag, not this
+    item. The only surviving trace of "elevation-view roll diamonds" is stale copy in
+    `editor.html`'s badge text (line 295), describing a feature the JS behind it no longer
+    implements. Since this doc tracks JS parity, not aspirational UI copy, there is nothing left
+    to port here; closed without a native-side change.
 13. ~~**Add-point context menu.**~~ **Implemented (Roll/Width/Cross-section, zone, trigger; not
     Position).** `TopDownCanvas.cpp`'s right-click popup (previously M9's minimal "Paste Mesh"
     only) now mirrors `#addPointMenu`'s remaining sections: "Add control point" (Roll/Width/
