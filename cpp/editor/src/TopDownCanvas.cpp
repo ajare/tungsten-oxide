@@ -14,7 +14,6 @@
 namespace editor {
 namespace {
 
-constexpr double kWorldGridSize = 100.0;  // metres between grid lines
 constexpr float kPointRadius = 4.0f;
 constexpr float kPickRadiusPx = 10.0f;                    // matches editor.js's nodeAtTop hit radius
 const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);  // matches editor.html's #canvasWrap
@@ -74,19 +73,25 @@ ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ScreenPoint2D& local) {
   return ImVec2(canvasOrigin.x + static_cast<float>(local.x), canvasOrigin.y + static_cast<float>(local.y));
 }
 
+// Configurable top-down reference grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
+// drawTop() grid block: gated on view.showGrid(), spaced at view.gridSize() world units, skipped
+// once screen spacing drops below drawTop's own `step > 6` threshold rather than smearing into a
+// solid fill.
 void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& canvasSize, const TopDownView& view) {
-  const double step = kWorldGridSize * view.scale();
-  if (step < 4.0) return;  // grid would be denser than pixels can show -- skip rather than smear
+  if (!view.showGrid()) return;
+  const double gridSize = view.gridSize();
+  const double step = gridSize * view.scale();
+  if (step <= 6.0) return;
   const WorldPoint2D topLeft = view.screenToWorld(0.0, 0.0);
   const WorldPoint2D bottomRight = view.screenToWorld(canvasSize.x, canvasSize.y);
-  const double startX = std::floor(topLeft.x / kWorldGridSize) * kWorldGridSize;
-  for (double x = startX; x <= bottomRight.x; x += kWorldGridSize) {
+  const double startX = std::floor(topLeft.x / gridSize) * gridSize;
+  for (double x = startX; x <= bottomRight.x; x += gridSize) {
     const ScreenPoint2D top = view.worldToScreen(x, topLeft.z);
     const ScreenPoint2D bottom = view.worldToScreen(x, bottomRight.z);
     drawList->AddLine(toAbsolute(canvasOrigin, top), toAbsolute(canvasOrigin, bottom), kGridColor);
   }
-  const double startZ = std::floor(topLeft.z / kWorldGridSize) * kWorldGridSize;
-  for (double z = startZ; z <= bottomRight.z; z += kWorldGridSize) {
+  const double startZ = std::floor(topLeft.z / gridSize) * gridSize;
+  for (double z = startZ; z <= bottomRight.z; z += gridSize) {
     const ScreenPoint2D left = view.worldToScreen(topLeft.x, z);
     const ScreenPoint2D right = view.worldToScreen(bottomRight.x, z);
     drawList->AddLine(toAbsolute(canvasOrigin, left), toAbsolute(canvasOrigin, right), kGridColor);
@@ -466,7 +471,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       state.beginDrag();
       view.freezeBounds(preDragBounds);
     }
-    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    const WorldPoint2D world = view.snapWorldXZ(view.screenToWorld(mouseLocal.x, mouseLocal.y));
     state.dragSelectedTo(world.x, world.z);
     mutated = true;
   } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -488,7 +493,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       const MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
       if (placement != nullptr) state.dragMeshRotateTo(angleFromOriginDeg(placement->x, placement->z, world.x, world.z));
     } else if (state.meshDragging()) {
-      state.dragMeshTo(world.x, world.z);
+      const WorldPoint2D snapped =
+          view.snapWorldXZ({world.x + state.meshDragOffsetX(), world.z + state.meshDragOffsetZ()});
+      state.dragMeshTo(snapped.x, snapped.z);
     }
     mutated = true;
   } else if ((state.meshDragging() || state.meshRotating()) && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -527,7 +534,8 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
   }
   if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    return state.createModeClick(world.x, world.z, pickRadiusWorld);
+    const WorldPoint2D snapped = view.snapWorldXZ(world);
+    return state.createModeClick(world.x, world.z, pickRadiusWorld, snapped.x, snapped.z);
   }
   return false;
 }

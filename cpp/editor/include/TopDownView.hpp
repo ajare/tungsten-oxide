@@ -91,12 +91,34 @@ class TopDownView {
   }
   void releaseBoundsFreeze() { frozenBounds_.reset(); }
 
+  // Top-down grid display / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
+  // module-level showGrid/gridSize/snapToGrid: UI/view preferences, not track data, so they live
+  // here rather than in EditorState/undo history. showGrid(false) does NOT clear snapToGrid_ --
+  // the checkbox's own preference is retained so re-showing the grid restores the prior snap
+  // setting (CLAUDE.md's editor conventions), and snapWorldXZ() re-checks showGrid_ itself so a
+  // hidden grid can never leave snapping silently active.
+  bool showGrid() const { return showGrid_; }
+  void setShowGrid(bool show) { showGrid_ = show; }
+  double gridSize() const { return gridSize_; }
+  void setGridSize(double size) { gridSize_ = size; }
+  bool snapToGrid() const { return snapToGrid_; }
+  void setSnapToGrid(bool snap) { snapToGrid_ = snap; }
+
+  // Mirrors snapWorldXZ(): a no-op unless both the grid is visible and snap is enabled.
+  WorldPoint2D snapWorldXZ(const WorldPoint2D& w) const {
+    if (!showGrid_ || !snapToGrid_) return w;
+    return {std::round(w.x / gridSize_) * gridSize_, std::round(w.z / gridSize_) * gridSize_};
+  }
+
  private:
   double scale_{1.0}, originX_{0.0}, originY_{0.0};
   double width_{1.0}, height_{1.0};
   double zoomSlider_{0.0};  // 0 => 1x, matching editor.js's initial topZoom = 1
   double panX_{0.0}, panY_{0.0};
   std::optional<TrackBounds2D> frozenBounds_;
+  bool showGrid_{true};
+  double gridSize_{32.0};
+  bool snapToGrid_{false};
 };
 
 }  // namespace editor

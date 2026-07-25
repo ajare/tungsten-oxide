@@ -1005,6 +1005,53 @@ Gap7SmokeCheckResult runGap7SmokeCheck() {
   return result;
 }
 
+// Gap-9 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #9): top-down grid display, grid
+// size, and snap-to-grid, mirroring editor.js's showGrid/gridSize/snapToGrid module state and
+// snapWorldXZ(). Exercises TopDownView::snapWorldXZ directly (no ImGui needed -- it's pure view
+// state) and EditorState::createModeClick's snapped-point overload, confirming a click near an
+// existing draft point still closes/finishes the draft (hit-testing stays unsnapped) while a
+// genuinely new point lands on the grid.
+struct Gap9SmokeCheckResult {
+  bool noSnapByDefault = false, snapOnlyWhenGridShownAndSnapEnabled = false, hiddenGridDisablesSnap = false;
+  bool respectsGridSize = false;
+  bool createClickSnapsNewPoint = false, createClickClosingStaysUnsnapped = false;
+};
+
+Gap9SmokeCheckResult runGap9SmokeCheck() {
+  Gap9SmokeCheckResult result;
+
+  editor::TopDownView view;
+  const editor::WorldPoint2D raw{37.0, -53.0};
+  result.noSnapByDefault = view.snapWorldXZ(raw).x == raw.x && view.snapWorldXZ(raw).z == raw.z;  // snap starts off
+
+  view.setSnapToGrid(true);
+  view.setGridSize(32.0);
+  const editor::WorldPoint2D snapped32 = view.snapWorldXZ(raw);
+  result.snapOnlyWhenGridShownAndSnapEnabled = snapped32.x == 32.0 && snapped32.z == -64.0;  // round(37/32)*32, round(-53/32)*32
+
+  view.setShowGrid(false);
+  result.hiddenGridDisablesSnap = view.snapWorldXZ(raw).x == raw.x && view.snapWorldXZ(raw).z == raw.z;
+  view.setShowGrid(true);
+
+  view.setGridSize(8.0);
+  const editor::WorldPoint2D snapped8 = view.snapWorldXZ(raw);
+  result.respectsGridSize = snapped8.x == 40.0 && snapped8.z == -56.0;  // round(37/8)*8, round(-53/8)*8
+
+  editor::EditorState createState(editor::TrackDefinition{});
+  createState.createModeClick(100.0, 100.0, 1.0, 96.0, 96.0);  // snapped point differs from raw
+  createState.createModeClick(200.0, 100.0, 1.0, 200.0, 100.0);
+  createState.createModeClick(200.0, 200.0, 1.0, 200.0, 200.0);
+  createState.createModeClick(100.0, 200.0, 1.0, 100.0, 200.0);  // finishCreateDraft needs 4+ points
+  result.createClickSnapsNewPoint = createState.createDraft().size() == 4 && createState.createDraft()[0].x == 96.0 &&
+                                     createState.createDraft()[0].z == 96.0;
+  // Click near the stored (already-snapped) first draft point using the raw hit-test coordinate,
+  // but pass a deliberately bogus "snapped" pair -- if the draft closes anyway, that proves
+  // hit-testing used the raw click, not the snapped argument only meant for a genuinely new point.
+  result.createClickClosingStaysUnsnapped = createState.createModeClick(96.4, 95.7, 1.0, 999.0, 999.0);
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1194,6 +1241,15 @@ int main(int, char**) {
                gap7Smoke.redone ? "OK" : "MISMATCH", gap7Smoke.reset ? "OK" : "MISMATCH", gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap9SmokeCheckResult gap9Smoke = runGap9SmokeCheck();
+  std::fprintf(stdout,
+               "Gap9 smoke check (grid display / size / snap): noSnapByDefault=%s snapWhenEnabled=%s "
+               "hiddenGridDisablesSnap=%s respectsGridSize=%s createClickSnaps=%s createClickClosingUnsnapped=%s\n",
+               gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",
+               gap9Smoke.hiddenGridDisablesSnap ? "OK" : "MISMATCH", gap9Smoke.respectsGridSize ? "OK" : "MISMATCH",
+               gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH", gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -1235,6 +1291,7 @@ int main(int, char**) {
       if (ImGui::IsKeyPressed(ImGuiKey_E)) editorState.setMode(editor::EditMode::Edit);
       if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
       if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
+      if (ImGui::IsKeyPressed(ImGuiKey_G)) topDownView.setShowGrid(!topDownView.showGrid());
       const bool ctrl = io.KeyCtrl;
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) && editorState.undo()) rebake();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) && editorState.redo()) rebake();
@@ -1345,6 +1402,13 @@ int main(int, char**) {
                       gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH", gap7Smoke.redone ? "OK" : "MISMATCH");
     ImGui::BulletText("reset to default / baked handling matches edited value: %s / %s", gap7Smoke.reset ? "OK" : "MISMATCH",
                       gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap9 smoke check (grid display / size / snap, exercised directly):");
+    ImGui::BulletText("no snap by default / snaps once shown+enabled / hidden grid disables snap: %s / %s / %s",
+                      gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",
+                      gap9Smoke.hiddenGridDisablesSnap ? "OK" : "MISMATCH");
+    ImGui::BulletText("respects configured grid size / create-click snaps new point / closing stays unsnapped: %s / %s / %s",
+                      gap9Smoke.respectsGridSize ? "OK" : "MISMATCH", gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH",
+                      gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1373,6 +1437,28 @@ int main(int, char**) {
     int modeIndex = static_cast<int>(editorState.mode());
     const char* modeNames[] = {"Edit", "Create", "Rails"};
     if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9), mirrors
+    // editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid disables (but
+    // doesn't clear) the size and snap controls -- snapWorldXZ() itself re-checks showGrid, so
+    // there's no way to leave snapping silently active behind a hidden grid.
+    {
+      bool showGrid = topDownView.showGrid();
+      if (ImGui::Checkbox("Grid (G)", &showGrid)) topDownView.setShowGrid(showGrid);
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!showGrid);
+      int gridSizeIndex = 2;
+      const int gridSizeOptions[] = {8, 16, 32, 64};
+      for (int i = 0; i < 4; ++i)
+        if (static_cast<double>(gridSizeOptions[i]) == topDownView.gridSize()) gridSizeIndex = i;
+      const char* gridSizeLabels[] = {"8", "16", "32", "64"};
+      ImGui::SetNextItemWidth(60);
+      if (ImGui::Combo("##gridSize", &gridSizeIndex, gridSizeLabels, 4))
+        topDownView.setGridSize(static_cast<double>(gridSizeOptions[gridSizeIndex]));
+      ImGui::SameLine();
+      bool snapToGrid = topDownView.snapToGrid();
+      if (ImGui::Checkbox("Snap", &snapToGrid)) topDownView.setSnapToGrid(snapToGrid);
+      ImGui::EndDisabled();
+    }
     if (ImGui::Button("Undo (Ctrl+Z)")) {
       if (editorState.undo()) rebake();
     }

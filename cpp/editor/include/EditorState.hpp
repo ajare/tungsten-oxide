@@ -641,6 +641,9 @@ public:
     meshDragMutated_ = false;
   }
 
+  // `worldX`/`worldZ` here is already offset+snapped by the caller (mirrors editor.js computing
+  // `moved = snapWorldXZ({x: w.x + offset.dx, z: w.z + offset.dz})` before assigning
+  // placement.x/z) -- see meshDragOffsetX/Z below for the raw offset a caller needs to do that.
   void dragMeshTo(double worldX, double worldZ) {
     MeshPlacement* placement = mutableSelectedMeshPlacement();
     if (!meshDragging_ || !placement) return;
@@ -648,9 +651,12 @@ public:
       history_.push(track_);
       meshDragMutated_ = true;
     }
-    placement->x = std::round((worldX + meshDragOffsetX_) * 10.0) / 10.0;
-    placement->z = std::round((worldZ + meshDragOffsetZ_) * 10.0) / 10.0;
+    placement->x = std::round(worldX * 10.0) / 10.0;
+    placement->z = std::round(worldZ * 10.0) / 10.0;
   }
+
+  double meshDragOffsetX() const { return meshDragOffsetX_; }
+  double meshDragOffsetZ() const { return meshDragOffsetZ_; }
 
   void endMeshDrag() {
     meshDragging_ = false;
@@ -1011,13 +1017,21 @@ public:
   // draft's first point (closes as a closed path) or last point (finishes as open) -- mirrors
   // createModeClick/finishCreateDraft. Returns true if the draft was just finished into a new
   // path (the caller may want to switch back to Edit mode, matching setEditMode('edit') in JS).
-  bool createModeClick(double worldX, double worldZ, double pickRadiusWorld) {
+  // `worldX`/`worldZ` is used for hit-testing against the draft's own closing/finishing points
+  // (unsnapped, matching the raw click position); `snappedX`/`snappedZ` is what a genuinely new
+  // point gets, letting the caller apply grid-snap (EDITOR_PARITY_FIXES.md gap 9) without it
+  // fighting the pick tolerance on an already-placed draft point. Defaults to the raw click when
+  // the caller has no snapping to apply.
+  bool createModeClick(double worldX, double worldZ, double pickRadiusWorld, double snappedX, double snappedZ) {
     if (!createDraft_.empty()) {
       if (withinPick(createDraft_.front(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(true);
       if (createDraft_.size() > 1 && withinPick(createDraft_.back(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(false);
     }
-    createDraft_.emplace_back(std::round(worldX * 10.0) / 10.0, 0.0, std::round(worldZ * 10.0) / 10.0);
+    createDraft_.emplace_back(std::round(snappedX * 10.0) / 10.0, 0.0, std::round(snappedZ * 10.0) / 10.0);
     return false;
+  }
+  bool createModeClick(double worldX, double worldZ, double pickRadiusWorld) {
+    return createModeClick(worldX, worldZ, pickRadiusWorld, worldX, worldZ);
   }
 
   void cancelCreateDraft() { createDraft_.clear(); }

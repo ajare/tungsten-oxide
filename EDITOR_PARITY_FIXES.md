@@ -425,7 +425,30 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    editor's own schema.
 8. **Random ranges panel** — JS exposes twelve configurable bounds with persistence; `RandomTrack.cpp`
    hardcodes them.
-9. **Grid display, grid size, snap-to-grid.**
+9. ~~**Grid display, grid size, snap-to-grid.**~~ **Implemented.** `TopDownView` gained
+   `showGrid`/`gridSize`/`snapToGrid` (view/UI preference, not track data, so it lives there rather
+   than in `EditorState`/undo history, mirroring `js/editor.js`'s module-level `showGrid`/
+   `gridSize`/`snapToGrid`) plus `snapWorldXZ()`, a direct port of the same-named JS function.
+   `TopDownCanvas.cpp`'s `drawGrid` (previously an always-on fixed 100 m decorative grid) now
+   renders the configurable grid at `gridSize` spacing, gated on `showGrid`, using the same
+   `step > 6` screen-density cutoff as `drawTop()`. New toolbar controls in `main.cpp` ("Grid (G)"
+   checkbox, 8/16/32/64 size dropdown, "Snap" checkbox) mirror `#showGridChk`/`#gridSizeSelect`/
+   `#snapGridChk`, including that hiding the grid disables (but doesn't clear) the size/snap
+   controls -- `snapWorldXZ()` itself re-checks `showGrid`, so a hidden grid can never leave
+   snapping silently active. The `G` shortcut toggles it. Wired into the three places JS calls
+   `snapWorldXZ`: position-point dragging (`dragSelectedTo`), mesh-placement dragging (`dragMeshTo`,
+   which gained public `meshDragOffsetX/Z()` accessors so the caller can reproduce JS's
+   snap-after-offset order), and Create mode's point placement. `EditorState::createModeClick`
+   gained a `(worldX, worldZ, pickRadiusWorld, snappedX, snappedZ)` overload (old 3-arg form still
+   present, forwarding raw==snapped) so a snapped click position is used only for a genuinely new
+   point, never for hit-testing against the draft's own closing/finishing points -- otherwise
+   snapping could push a click that should close the loop out of pick range. **Not implemented:**
+   zone/trigger on-canvas drag were never snapped in JS either (`dragging === 'zoneTop'`/
+   `'triggerTop'` don't call `snapWorldXZ`), so nothing to port there; native drag for both is
+   already absent (gaps 3/4). A "Gap9 smoke check" in `main.cpp` covers the default (no-snap),
+   snap-only-when-shown-and-enabled, hidden-grid-disables-snap, grid-size respect, and that a
+   Create-mode click both snaps a new point and still closes the draft off the raw (unsnapped) hit
+   test.
 10. **Render modes** (banked / flat / elevation), point-type filters, physics-sample overlay.
 11. **Segment selection, deletion and splitting; insert-point-on-segment.**
 12. **Elevation view roll points** — the orange roll line and its draggable diamonds.
