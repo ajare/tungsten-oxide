@@ -1,7 +1,10 @@
 #include "TopDownCanvas.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -22,6 +25,9 @@ const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
 const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
 const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
+const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
+const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
+constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_PX
 
 // Mirrors editor.js's computeTrackBounds: authored control points plus every mesh region's baked
 // bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
@@ -121,6 +127,82 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   }
 }
 
+// Local-to-world for one mesh vertex, mirroring js/track-mesh.js's localToWorld and
+// TrackMesh.cpp's transform() exactly (rotation in degrees, CCW, local y -> world z). Needed only
+// for rail-edge picking/highlighting: core's baked MeshRegion carries just the rail SUBSET already
+// flagged (what physics needs), not every edge, but Rails mode must be able to pick ANY edge to
+// flag it in the first place -- so this one case works from the authored asset instead of reusing
+// a core bake, unlike every other rendering path in this file.
+WorldPoint2D meshVertexWorld(const MeshPlacement& placement, const MeshVertex& vertex) {
+  const double angle = placement.rotation * std::numbers::pi / 180.0;
+  const double cosine = std::cos(angle), sine = std::sin(angle);
+  return {vertex.x * cosine - vertex.y * sine + placement.x, vertex.x * sine + vertex.y * cosine + placement.z};
+}
+
+const MeshVertex* findVertex(const MeshAsset& asset, int id) {
+  for (const auto& v : asset.vertices)
+    if (v.id == id) return &v;
+  return nullptr;
+}
+
+double distanceSqToSegment(double px, double pz, double ax, double az, double bx, double bz) {
+  const double dx = bx - ax, dz = bz - az;
+  const double lengthSq = dx * dx + dz * dz;
+  const double t = lengthSq > 0.0 ? std::clamp(((px - ax) * dx + (pz - az) * dz) / lengthSq, 0.0, 1.0) : 0.0;
+  const double cx = ax + t * dx, cz = az + t * dz;
+  return (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
+}
+
+struct MeshEdgeHit {
+  std::string meshId, assetId;
+  int edgeId;
+};
+
+// Nearest mesh edge (any edge, flagged or not) to a world point, within a screen-space-derived
+// world tolerance -- mirrors editor.js's meshEdgeAtWorld, iterating every placement's asset edges.
+std::optional<MeshEdgeHit> meshEdgeAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld) {
+  std::optional<MeshEdgeHit> best;
+  double bestDistSq = tolWorld * tolWorld;
+  for (const auto& placement : track.meshes) {
+    const auto assetIt = track.meshAssets.find(placement.assetId);
+    if (assetIt == track.meshAssets.end()) continue;
+    for (const auto& edge : assetIt->second.edges) {
+      const MeshVertex* v0 = findVertex(assetIt->second, edge.vertex0);
+      const MeshVertex* v1 = findVertex(assetIt->second, edge.vertex1);
+      if (v0 == nullptr || v1 == nullptr) continue;
+      const WorldPoint2D a = meshVertexWorld(placement, *v0);
+      const WorldPoint2D b = meshVertexWorld(placement, *v1);
+      const double distSq = distanceSqToSegment(worldX, worldZ, a.x, a.z, b.x, b.z);
+      if (distSq <= bestDistSq) {
+        bestDistSq = distSq;
+        best = MeshEdgeHit{placement.id, placement.assetId, edge.id};
+      }
+    }
+  }
+  return best;
+}
+
+// Every rail-flagged edge across every placement, highlighted on top of the mesh fill so Rails
+// mode shows what's already flagged (not just what's being hovered/toggled this click).
+void drawMeshRails(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
+                   const std::optional<SelectedRail>& selectedRail) {
+  for (const auto& placement : track.meshes) {
+    const auto assetIt = track.meshAssets.find(placement.assetId);
+    if (assetIt == track.meshAssets.end()) continue;
+    for (const auto& edge : assetIt->second.edges) {
+      if (!edge.rail) continue;
+      const MeshVertex* v0 = findVertex(assetIt->second, edge.vertex0);
+      const MeshVertex* v1 = findVertex(assetIt->second, edge.vertex1);
+      if (v0 == nullptr || v1 == nullptr) continue;
+      const bool isSelected = selectedRail.has_value() && selectedRail->meshId == placement.id && selectedRail->edgeId == edge.id;
+      const WorldPoint2D a = meshVertexWorld(placement, *v0);
+      const WorldPoint2D b = meshVertexWorld(placement, *v1);
+      drawList->AddLine(toAbsolute(canvasOrigin, view.worldToScreen(a.x, a.z)), toAbsolute(canvasOrigin, view.worldToScreen(b.x, b.z)),
+                        isSelected ? kRailEdgeSelectedColor : kRailEdgeColor, isSelected ? 4.0f : 3.0f);
+    }
+  }
+}
+
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
                                 const SelectedPoint& selection) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
@@ -214,6 +296,22 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   return mutated;
 }
 
+// Rails mode is modal: a left click either toggles the nearest edge within pick tolerance, or (no
+// edge hit) falls back to panning -- mirrors editor.js's topCanvas mousedown 'rails' branch
+// exactly, including that a miss still starts a pan rather than doing nothing.
+bool handleRailsModeInput(EditorState& state, TopDownView& view, const ImVec2& mouseLocal, double edgePickToleranceWorld, bool hovered,
+                          bool itemActive) {
+  bool mutated = false;
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+    const auto hit = meshEdgeAtWorld(state.track(), world.x, world.z, edgePickToleranceWorld);
+    if (hit.has_value()) mutated = state.toggleRailEdge(hit->meshId, hit->assetId, hit->edgeId);
+    else state.clearRailSelection();
+  }
+  if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
+  return mutated;
+}
+
 // Left click: add a draft point, or close/finish the draft (mirrors createModeClick). Right
 // click: cancel the draft (mirrors create mode's button===2 handling).
 bool handleCreateModeInput(EditorState& state, const TopDownView& view, const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
@@ -271,11 +369,11 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       mutated = handleCreateModeInput(state, view, mouseLocal, pickRadiusWorld, hovered);
       if (mutated) state.setMode(EditMode::Edit);  // mirrors setEditMode('edit') after finishCreateDraft
       break;
-    case EditMode::Rails:
-      // Rail-edge flagging is M5+ -- mesh regions exist as of M4, but nothing is pickable as a
-      // rail yet, so Rails mode still just pans.
-      if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
+    case EditMode::Rails: {
+      const double edgePickToleranceWorld = kMeshEdgePickPx / view.scale();
+      mutated = handleRailsModeInput(state, view, mouseLocal, edgePickToleranceWorld, hovered, ImGui::IsItemActive());
       break;
+    }
   }
 
   ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -285,6 +383,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
   }
+  drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 

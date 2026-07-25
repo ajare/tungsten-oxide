@@ -1,6 +1,7 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M4 complete**. `track_editor` builds under the combined `cpp/` configure, opens an
+Status: **M5 complete — all originally planned milestones (M0-M5) landed.** `track_editor` builds
+under the combined `cpp/` configure, opens an
 SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
 through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
 (verified OK), and renders that track's baked road/centerline plus authored control points in a
@@ -11,10 +12,15 @@ undo/redo. M4 adds mesh region placement (reordered ahead of the original plan's
 milestone, since rails need a mesh region to flag edges on): select/drag/shift+drag-rotate/delete a
 placed mesh, rendered and hit-tested via core's own baked `tox::Track::meshRegions` (no
 reimplemented placement-transform math). There's no asset-import UI yet, so a single hardcoded
-rectangle asset is the only placeable mesh. All three milestones' logic (M1/M3/M4) is verified via
-in-process smoke checks exercising the exact methods the UI calls (every check OK), plus
-screenshots confirming the UI renders without crashing. Rails mode is wired but a no-op until M5
-adds rail-edge flagging. This document records the plan to port `editor.html`/`js/editor.js`
+rectangle asset is the only placeable mesh. M5 adds Rails mode: clicking near an edge toggles its
+rail flag on the shared MeshAsset (so every placement of that asset picks up the change at once),
+falling back to panning on a miss, exactly like `editor.js`'s modal Rails-mode click handling. Since
+core only bakes the already-flagged rail subset (what physics needs), Rails-mode picking/rendering
+is the one path in the editor that computes its own local-to-world edge transform from the
+authored mesh asset rather than reusing a core bake -- documented inline where that happens. All
+four milestones' logic (M1/M3/M4/M5) is verified via in-process smoke checks exercising the exact
+methods the UI calls (every check OK across all of them), plus screenshots confirming the UI
+renders without crashing. This document records the plan to port `editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
 `cpp/CMakeLists.txt`.

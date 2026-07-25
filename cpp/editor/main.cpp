@@ -5,9 +5,11 @@
 // control points render via ImDrawList, with pan/zoom navigation. M3 added point editing
 // (EditorState.hpp): select/drag/delete position points in Edit mode, click-to-add/close/finish a
 // new path in Create mode, edit|create|rails mode switching with E/C/R shortcuts, and Ctrl+Z/
-// Ctrl+Y undo/redo wired to real mutations. M4 adds mesh region placement: select/drag/rotate/
+// Ctrl+Y undo/redo wired to real mutations. M4 added mesh region placement: select/drag/rotate/
 // delete a placed mesh (there's no asset-import UI, so a single hardcoded rectangle asset is all
-// that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions.
+// that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions. M5 adds
+// Rails mode: click an edge to toggle it as a rail on the shared asset (core doesn't bake
+// unflagged edges, so this one path works from the authored mesh asset instead of a core bake).
 #include <cstdio>
 #include <string>
 
@@ -248,6 +250,34 @@ M4SmokeCheckResult runM4SmokeCheck() {
   return result;
 }
 
+// M5 smoke check: toggle a rail edge directly (mirrors clicking it in Rails mode), confirm it
+// flips the shared asset's edge (not a per-placement copy), undo restores it, and that
+// meshEdgeAtWorld's hit-testing (exercised via toggleRailEdge's caller in TopDownCanvas.cpp) would
+// find the same edge from its world-space midpoint.
+struct M5SmokeCheckResult {
+  bool toggled = false, undone = false, redone = false, selectionSet = false;
+};
+
+M5SmokeCheckResult runM5SmokeCheck() {
+  M5SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  state.placeMeshAsset("test-rect", 1600.0, 0.0);
+  const std::string meshId = *state.selectedMeshId();
+
+  // Edge 0 connects vertices (0,-40,-20) and (1,40,-20) -- its local midpoint (0,-20) sits at
+  // world (1600, -20) for an unrotated placement at (1600, 0).
+  result.toggled = state.toggleRailEdge(meshId, "test-rect", 0);
+  const auto& asset = state.track().meshAssets.at("test-rect");
+  const bool flaggedAfterToggle = asset.edges[0].rail;
+  result.selectionSet = state.selectedRail().has_value() && state.selectedRail()->meshId == meshId && state.selectedRail()->edgeId == 0;
+
+  result.undone = state.undo() && !state.track().meshAssets.at("test-rect").edges[0].rail;
+  result.redone = state.redo() && state.track().meshAssets.at("test-rect").edges[0].rail == flaggedAfterToggle;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -268,7 +298,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M4: mesh regions)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M5: rails mode)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -323,6 +353,11 @@ int main(int, char**) {
   std::fprintf(stdout, "M4 smoke check: place=%s drag=%s rotate=%s bakedRegionMoved=%s delete=%s\n",
                m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH", m4Smoke.rotateApplied ? "OK" : "MISMATCH",
                m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH", m4Smoke.deleted ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
+  const M5SmokeCheckResult m5Smoke = runM5SmokeCheck();
+  std::fprintf(stdout, "M5 smoke check: toggle=%s selectionSet=%s undo=%s redo=%s\n", m5Smoke.toggled ? "OK" : "MISMATCH",
+               m5Smoke.selectionSet ? "OK" : "MISMATCH", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
@@ -388,6 +423,10 @@ int main(int, char**) {
                        m4Smoke.rotateApplied ? "OK" : "MISMATCH");
     ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
                        m4Smoke.deleted ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M5 smoke check (rail-edge toggle, exercised directly):");
+    ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
+                       m5Smoke.selectionSet ? "OK" : "MISMATCH");
+    ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -419,7 +458,8 @@ int main(int, char**) {
         ImGui::TextUnformatted("Right-click cancels the in-progress draft.");
         break;
       case editor::EditMode::Rails:
-        ImGui::TextUnformatted("Rails mode: rail-edge flagging lands in EDITOR_CPP_PORT_PLAN.md M5; nothing to pick yet.");
+        ImGui::TextUnformatted("Rails mode: click near a mesh edge to toggle it as a rail (orange = flagged).");
+        ImGui::TextUnformatted("A miss pans instead, same as Edit/Create mode's right-drag.");
         break;
     }
     ImGui::TextUnformatted("Top-down view: right-drag to pan, scroll to zoom, Home to reset.");

@@ -4,11 +4,14 @@
 // mesh placement select/drag/rotate/delete, mirroring selectedMeshId/meshDragOffset/meshRotateStart
 // and the drag branches in editor.js's topCanvas mousedown handler.
 //
+// M5 adds rail-edge toggling (toggleRailEdge), mirroring TrackMesh.toggleRailEdge and railSel:
+// rails live on the shared MeshAsset, not the placement, so toggling one flips it for every placed
+// instance of that asset.
+//
 // Scope: position points and mesh placements only -- roll/width/cross-section handles, segment
 // deletion/splitting, shared/disjoint point identity, zone/trigger picking, and mesh *asset*
 // authoring (there's no import UI; see main.cpp's hardcoded test asset) are all still
-// editor.js-only (later milestones or out of scope). Rails mode is wired for mode-switching parity
-// but is a no-op until M5 adds rail-edge flagging.
+// editor.js-only (later milestones or out of scope).
 #pragma once
 
 #include <algorithm>
@@ -30,6 +33,12 @@ struct SelectedPoint {
   int pathIndex{-1};
   int pointIndex{-1};
   bool valid() const { return pathIndex >= 0 && pointIndex >= 0; }
+};
+
+// The picked-edge highlight, mirroring editor.js's railSel -- meaningful only in Rails mode.
+struct SelectedRail {
+  std::string meshId;  // placement id, so the highlight follows a specific placed instance
+  int edgeId{-1};
 };
 
 class EditorState {
@@ -77,6 +86,8 @@ class EditorState {
     dragging_ = false;
     dragMutated_ = false;
     meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
+    // The picked-edge highlight only means anything inside Rails mode (mirrors setEditMode()).
+    if (mode != EditMode::Rails) selectedRail_.reset();
   }
 
   // Returns true if a position point was hit within `pickRadiusWorld` of (worldX, worldZ).
@@ -175,6 +186,30 @@ class EditorState {
     meshRotateMutated_ = false;
   }
 
+  // ---- Rails (EDITOR_CPP_PORT_PLAN.md M5) ----
+
+  const std::optional<SelectedRail>& selectedRail() const { return selectedRail_; }
+
+  // Flips a shared MeshAsset edge's rail flag -- rails live on the asset, not the placement, so
+  // toggling one affects every placed instance of that asset at once (mirrors
+  // TrackMesh.toggleRailEdge). `meshId` is the placement the edge was picked through, kept only
+  // for the selection highlight. Returns false if the asset/edge no longer exist.
+  bool toggleRailEdge(const std::string& meshId, const std::string& assetId, int edgeId) {
+    const auto assetIt = track_.meshAssets.find(assetId);
+    if (assetIt == track_.meshAssets.end()) return false;
+    const auto edgeIt = std::find_if(assetIt->second.edges.begin(), assetIt->second.edges.end(),
+                                     [&](const MeshEdge& e) { return e.id == edgeId; });
+    if (edgeIt == assetIt->second.edges.end()) return false;
+    history_.push(track_);
+    edgeIt->rail = !edgeIt->rail;
+    selectedMeshId_ = meshId;
+    selection_ = {};
+    selectedRail_ = SelectedRail{meshId, edgeId};
+    return true;
+  }
+
+  void clearRailSelection() { selectedRail_.reset(); }
+
   bool deleteSelectedMesh() {
     if (!selectedMeshId_.has_value()) return false;
     const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
@@ -252,6 +287,7 @@ class EditorState {
     createDraft_.clear();
     selectedMeshId_.reset();
     meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
+    selectedRail_.reset();
   }
 
   MeshPlacement* mutableSelectedMeshPlacement() {
@@ -343,6 +379,8 @@ class EditorState {
   double meshDragOffsetX_{0.0}, meshDragOffsetZ_{0.0};
   bool meshRotating_{false}, meshRotateMutated_{false};
   double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
+
+  std::optional<SelectedRail> selectedRail_;
 };
 
 }  // namespace editor
