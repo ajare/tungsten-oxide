@@ -1,0 +1,8 @@
+Bugs:
+- Track disappears in top down view when moving points about
+- Elevation Profile view pretty broken
+
+Refactor:
+- Move things to menu and toolbar
+- Dock top-down window to background
+- Auto-load all textures from assets/track
