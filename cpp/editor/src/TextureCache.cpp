@@ -5,7 +5,15 @@
 // This is the one translation unit that owns stb_image's implementation.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO_WARNING
+// Without this, stbi_load/stbi_info open files via ANSI fopen, so a `char const*` path outside the
+// system codepage silently fails to open. TextureAsset::path and the paths this module receives
+// are UTF-8 throughout (see FileDialog.hpp's pathToUtf8) -- STBI_WINDOWS_UTF8 makes stb_image
+// interpret its `char const*` filename arguments as UTF-8 and route through _wfopen internally
+// (EDITOR_PARITY_FIXES.md finding 7).
+#define STBI_WINDOWS_UTF8
 #include "stb/stb_image.h"
+
+#include "FileDialog.hpp"
 
 namespace editor {
 
@@ -20,7 +28,7 @@ std::string textureNameFromPath(const std::string& path) {
 
 bool readImageSize(const std::filesystem::path& file, int& outWidth, int& outHeight) {
   int comp = 0;
-  return stbi_info(file.string().c_str(), &outWidth, &outHeight, &comp) != 0;
+  return stbi_info(pathToUtf8(file).c_str(), &outWidth, &outHeight, &comp) != 0;
 }
 
 std::filesystem::path findAssetsDir() {

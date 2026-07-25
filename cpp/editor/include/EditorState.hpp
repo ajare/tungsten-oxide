@@ -27,6 +27,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -53,7 +54,14 @@ struct SelectedRail {
 
 class EditorState {
  public:
-  explicit EditorState(TrackDefinition initial) : track_(std::move(initial)) {}
+  // backfillPointIds() mirrors js/editor.js's ensureTrackIds(), called after every track
+  // construction/replacement there (initial load, New, Random, Import). Without it here, a track
+  // built in memory rather than loaded from JSON (main.cpp's buildStarterTrack(), New,
+  // generateRandomTrack()) has no point ids at all, which silently defeats both the id-collision
+  // fix (ids are minted by scanning for a gap -- irrelevant if nothing has an id yet) and the
+  // start-point-preservation fix (which matches by id) the moment this constructor is skipped --
+  // see EDITOR_PARITY_FIXES.md findings 1 and 4.
+  explicit EditorState(TrackDefinition initial) : track_(std::move(initial)) { backfillPointIds(track_); }
 
   const TrackDefinition& track() const { return track_; }
   EditMode mode() const { return mode_; }
@@ -129,7 +137,7 @@ class EditorState {
     if (!track_.meshAssets.count(assetId)) return false;
     history_.push(track_);
     MeshPlacement placement;
-    placement.id = "mesh" + std::to_string(nextId_++);
+    placement.id = newMeshPlacementId();
     placement.assetId = assetId;
     placement.x = std::round(x * 10.0) / 10.0;
     placement.z = std::round(z * 10.0) / 10.0;
@@ -168,7 +176,7 @@ class EditorState {
     track_.meshAssets.emplace(assetId, std::move(asset));
 
     MeshPlacement placement;
-    placement.id = "mesh" + std::to_string(nextId_++);
+    placement.id = newMeshPlacementId();
     placement.assetId = assetId;
     placement.x = std::round((centerWorldX - centroidX) * 10.0) / 10.0;
     placement.z = std::round((centerWorldZ - centroidY) * 10.0) / 10.0;
@@ -365,7 +373,7 @@ class EditorState {
   }
 
   void dragSelectedTo(double worldX, double worldZ) {
-    if (!dragging_ || !selection_.valid()) return;
+    if (!dragging_ || !selectionInRange()) return;
     if (!dragMutated_) {
       history_.push(track_);
       dragMutated_ = true;
@@ -380,7 +388,7 @@ class EditorState {
   // dragging === 'elev' branch (curPoint().pos[1] = ...), which shares the same `dragging` state
   // machine the top-down view's x/z drag uses.
   void dragSelectedElevationTo(double y) {
-    if (!dragging_ || !selection_.valid()) return;
+    if (!dragging_ || !selectionInRange()) return;
     if (!dragMutated_) {
       history_.push(track_);
       dragMutated_ = true;
@@ -402,16 +410,22 @@ class EditorState {
 
   // Mirrors deleteSelected(): refuses to drop a path below 4 position points (a track path needs
   // that many to bake). No shared/disjoint-id guard -- this editor doesn't alias points by id yet
-  // (see EditorTrackDefinition.hpp).
+  // (see EditorTrackDefinition.hpp). Preserves track_.start across the deletion (mirrors
+  // deleteSelected()'s preserveStartPoint call, EDITOR_PARITY_FIXES.md finding 4) -- without this,
+  // start silently drifted to whatever point ended up at the old index, or went out of range
+  // entirely once enough points were removed.
   bool deleteSelectedPoint() {
-    if (!selection_.valid()) return false;
+    if (!selectionInRange()) return false;
     Path& path = track_.paths[selection_.pathIndex];
     const auto positionCount =
         std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; });
     if (positionCount <= 4) return false;
+
+    const std::string startPointId = currentStartPointId();
     history_.push(track_);
     path.points.erase(path.points.begin() + selection_.pointIndex);
     selection_ = {};
+    preserveStartPoint(startPointId);
     return true;
   }
 
@@ -433,6 +447,7 @@ class EditorState {
  private:
   void replaceTrackKeepHistory(TrackDefinition replacement) {
     track_ = std::move(replacement);
+    backfillPointIds(track_);  // see the constructor's comment on why this must never be skipped
     selection_ = {};
     dragging_ = false;
     dragMutated_ = false;
@@ -498,6 +513,110 @@ class EditorState {
     }
   }
 
+  // SelectedPoint::valid() only checks that both indices are non-negative, not that they're
+  // in-range for the CURRENT track -- every structural mutation today happens to clear the
+  // selection first, so this was unreachable, but it was a latent out-of-bounds write one edit
+  // away (EDITOR_PARITY_FIXES.md finding 12). Mutating methods that index by selection_ should use
+  // this instead of selection_.valid() directly.
+  bool selectionInRange() const {
+    return selection_.pathIndex >= 0 && selection_.pathIndex < static_cast<int>(track_.paths.size()) && selection_.pointIndex >= 0 &&
+           selection_.pointIndex < static_cast<int>(track_.paths[selection_.pathIndex].points.size());
+  }
+
+  // track_.start.point is a POSITION-only index (matches core's TrackDefinition.hpp/StartGrid.cpp:
+  // clamped against positionCount, not points.size()) -- unlike SelectedPoint::pointIndex, which is
+  // a raw index into Path::points (mixed position/roll/width/crossSection). These two convert
+  // between them; mirrors js/editor.js's positionIndices()/parts().controlPoints indexing split.
+  static int positionIndexToRaw(const Path& path, int positionIndex) {
+    int seen = -1;
+    for (int i = 0; i < static_cast<int>(path.points.size()); ++i) {
+      if (path.points[i].kind != PointKind::Position) continue;
+      if (++seen == positionIndex) return i;
+    }
+    return -1;
+  }
+
+  // Mirrors startPointObject(): the id of the point track_.start currently refers to, or empty if
+  // start is out of range or the track has no paths.
+  std::string currentStartPointId() const {
+    if (track_.start.path < 0 || track_.start.path >= static_cast<int>(track_.paths.size())) return {};
+    const Path& path = track_.paths[track_.start.path];
+    const int rawIndex = positionIndexToRaw(path, track_.start.point);
+    return rawIndex >= 0 ? path.points[rawIndex].id : std::string();
+  }
+
+  // Mirrors preserveStartPoint(): re-finds the point that used to be at track_.start by id (first
+  // match, scanning paths in authored order -- same as findPointOccurrence) so a structural edit
+  // doesn't leave start silently pointing at a different physical point. Falls back to clampStart()
+  // when the point is gone (EDITOR_PARITY_FIXES.md finding 4).
+  void preserveStartPoint(const std::string& startPointId) {
+    if (!startPointId.empty()) {
+      for (int pi = 0; pi < static_cast<int>(track_.paths.size()); ++pi) {
+        int posIdx = -1;
+        for (const auto& point : track_.paths[pi].points) {
+          if (point.kind != PointKind::Position) continue;
+          ++posIdx;
+          if (point.id == startPointId) {
+            track_.start.path = pi;
+            track_.start.point = posIdx;
+            return;
+          }
+        }
+      }
+    }
+    clampStart();
+  }
+
+  // Mirrors clampStart(): keeps track_.start's indices in range after paths/points are added or
+  // removed. Does not try to track "the same" point through a restructure that has no id match --
+  // same caveat as the JS original.
+  void clampStart() {
+    if (track_.paths.empty()) {
+      track_.start.path = 0;
+      track_.start.point = 0;
+      return;
+    }
+    track_.start.path = std::clamp(track_.start.path, 0, static_cast<int>(track_.paths.size()) - 1);
+    const Path& path = track_.paths[track_.start.path];
+    const int positionCount =
+        static_cast<int>(std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; }));
+    track_.start.point = std::clamp(track_.start.point, 0, std::max(0, positionCount - 1));
+  }
+
+  // Scans for the first unused "<prefix><N>" id starting at N=1, collision-proof by construction
+  // (mirrors js/editor.js's newId/newMeshPlacementId -- see EDITOR_PARITY_FIXES.md finding 1,
+  // which replaced an ever-incrementing-but-never-seeded counter that collided with ids already
+  // present in a loaded track). `reserved` lets a caller mint several ids in one call before any of
+  // them exist on track_ yet (see finishCreateDraft).
+  static std::string firstUnusedId(const std::string& prefix, const std::set<std::string>& used) {
+    for (int i = 1;; ++i) {
+      std::string candidate = prefix + std::to_string(i);
+      if (!used.count(candidate)) return candidate;
+    }
+  }
+
+  std::string newPathId() const {
+    std::set<std::string> used;
+    for (const auto& path : track_.paths) used.insert(path.id);
+    return firstUnusedId("path", used);
+  }
+
+  std::string newPointId(const std::set<std::string>& reserved = {}) const {
+    std::set<std::string> used = reserved;
+    for (const auto& path : track_.paths)
+      for (const auto& point : path.points)
+        if (point.kind == PointKind::Position && !point.id.empty()) used.insert(point.id);
+    return firstUnusedId("p", used);
+  }
+
+  // "m" prefix (not "mesh") mirrors js/editor.js's newMeshPlacementId exactly
+  // (EDITOR_PARITY_FIXES.md finding 11).
+  std::string newMeshPlacementId() const {
+    std::set<std::string> used;
+    for (const auto& placement : track_.meshes) used.insert(placement.id);
+    return firstUnusedId("m", used);
+  }
+
   // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
   // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
   // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
@@ -561,12 +680,19 @@ class EditorState {
     }
     history_.push(track_);
     Path path;
-    path.id = "path" + std::to_string(nextId_++);
+    path.id = newPathId();
     path.closed = closed;
+    // Points minted in this same loop aren't in track_ yet, so newPointId's scan can't see them --
+    // `reserved` tracks ids minted so far this call so two points in one draft can never collide
+    // with each other, only with what's already on the track (mirrors js/editor.js's newId, which
+    // has the same problem solved by a single shared, ever-advancing counter -- see
+    // EDITOR_PARITY_FIXES.md finding 1).
+    std::set<std::string> reserved;
     for (const auto& pos : createDraft_) {
       TrackPoint point;
       point.kind = PointKind::Position;
-      point.id = "p" + std::to_string(nextId_++);
+      point.id = newPointId(reserved);
+      reserved.insert(point.id);
       point.pos = pos;
       path.points.push_back(point);
     }
@@ -587,7 +713,6 @@ class EditorState {
   bool dragging_{false};
   bool dragMutated_{false};
   std::vector<tox::Vec3> createDraft_;
-  int nextId_{1};
 
   std::optional<std::string> selectedMeshId_;
   bool meshDragging_{false}, meshDragMutated_{false};

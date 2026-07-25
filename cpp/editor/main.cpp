@@ -37,6 +37,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <string>
 
 #include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
@@ -81,7 +82,9 @@ std::string sanitizeFilenameStem(const std::string& name) {
   return out.empty() ? "track" : out;
 }
 
-std::wstring toWide(const std::string& text) { return std::wstring(text.begin(), text.end()); }
+// Was std::wstring(text.begin(), text.end()) -- widens BYTES, not code points, mangling any
+// non-ASCII track name in the Save dialog's default filename (EDITOR_PARITY_FIXES.md finding 7).
+std::wstring toWide(const std::string& text) { return editor::utf8ToWide(text); }
 
 // A flat 8km circle, mirroring track-core.js's STARTER_TRACK exactly (same 12 control points,
 // same calibrated radius, same roll/width/crossSection defaults, same finish + 3 intermediate
@@ -184,7 +187,13 @@ SmokeCheckResult runSmokeCheck() {
   const std::string json1 = editor::toJson(starter);
   const editor::TrackDefinition reparsed = editor::fromJson(json1);
   const std::string json2 = editor::toJson(reparsed);
-  result.roundTripOk = (json1 == json2);
+  // Not json1 == json2: buildStarterTrack() constructs points with no id at all (mirroring
+  // track-core.js's own STARTER_TRACK literal, which is likewise id-less until parseTrack backfills
+  // it -- EDITOR_PARITY_FIXES.md finding 2), so json1's ids are legitimately empty and json2's are
+  // legitimately p1..p12. That first parse is where backfilling happens, same as in JS; it is not
+  // supposed to be a fixed point. The real idempotence claim -- toJson . fromJson . toJson stops
+  // changing anything once ids exist -- is what json2 == toJson(fromJson(json2)) checks instead.
+  result.roundTripOk = (json2 == editor::toJson(editor::fromJson(json2)));
 
   const tox::TrackLoadResult loaded = tox::Track::fromJson(json1);
   result.warningCount = loaded.warnings.size();
@@ -515,6 +524,94 @@ M9SmokeCheckResult runM9SmokeCheck() {
   return result;
 }
 
+// Parity-fix smoke check (EDITOR_PARITY_FIXES.md): regression coverage for findings 1, 2, 4, 5 --
+// the ones that silently corrupted or lost authored data rather than crashing or misformatting.
+// findings 3/6/7/8/9/10/11/12 are covered by the differential JS<->C++ harness described in that
+// document (not committed -- see its "Regression coverage worth adding" section) or are too
+// UI/encoding-specific for a headless check.
+struct ParitySmokeCheckResult {
+  bool noIdCollisionOnCreate = false, drawnPathBakesAsDrawn = false;
+  bool startPointPreservedOnDelete = false, startClampedInRange = false;
+  bool orphanedMeshAssetPruned = false;
+};
+
+ParitySmokeCheckResult runParitySmokeCheck() {
+  ParitySmokeCheckResult result;
+
+  // Finding 1: a fresh EditorState must never mint an id that collides with one already on the
+  // track, even for a track built in memory (buildStarterTrack()) rather than loaded from JSON --
+  // this exercises EditorState's constructor backfilling ids (finding 4's fix) feeding
+  // finishCreateDraft's id-scan (finding 1's fix), not just the fix in isolation.
+  {
+    editor::EditorState state(buildStarterTrack());
+    state.setMode(editor::EditMode::Create);
+    state.createModeClick(3000.0, 0.0, 1.0);
+    state.createModeClick(3000.0, 500.0, 1.0);
+    state.createModeClick(3500.0, 500.0, 1.0);
+    state.createModeClick(3500.0, 0.0, 1.0);
+    state.createModeClick(3000.0, 0.0, 1.0);  // closes the draft into a second path
+
+    std::set<std::string> allIds;
+    bool collision = false;
+    for (const auto& path : state.track().paths)
+      for (const auto& point : path.points) {
+        if (point.kind != editor::PointKind::Position) continue;
+        if (!allIds.insert(point.id).second) collision = true;
+      }
+    result.noIdCollisionOnCreate = !collision && state.track().paths.size() == 2;
+
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+    result.drawnPathBakesAsDrawn = baked && baked.track->paths.size() == 2 &&
+                                   baked.track->definition.paths[1].points[0].pos.x == 3000.0 &&
+                                   baked.track->definition.paths[1].points[0].pos.z == 0.0;
+  }
+
+  // Finding 4: deleting a point before the start point must move track_.start along with the
+  // physical point it names, not leave it pointing at whatever slid into the old index.
+  {
+    editor::TrackDefinition seeded = buildStarterTrack();
+    seeded.start.point = 5;
+    editor::EditorState state(seeded);
+    const tox::Vec3 startPos = state.track().paths[0].points[5].pos;
+    state.selectPoint(0, 1);  // a different, earlier point
+    state.deleteSelectedPoint();
+    const auto& points = state.track().paths[0].points;
+    int posIdx = -1, rawIdx = -1;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      if (points[i].kind != editor::PointKind::Position) continue;
+      if (++posIdx == state.track().start.point) {
+        rawIdx = static_cast<int>(i);
+        break;
+      }
+    }
+    result.startPointPreservedOnDelete =
+        rawIdx >= 0 && points[rawIdx].pos.x == startPos.x && points[rawIdx].pos.z == startPos.z;
+  }
+  {
+    editor::TrackDefinition seeded = buildStarterTrack();
+    seeded.start.point = 11;  // the last of 12 position points
+    editor::EditorState state(seeded);
+    for (int i = 0; i < 5; ++i) {
+      state.selectPoint(0, 0);
+      state.deleteSelectedPoint();
+    }
+    const auto positionCount = std::count_if(state.track().paths[0].points.begin(), state.track().paths[0].points.end(),
+                                             [](const editor::TrackPoint& p) { return p.kind == editor::PointKind::Position; });
+    result.startClampedInRange = state.track().start.point < positionCount;
+  }
+
+  // Finding 5: an asset no placement references anymore must not survive export.
+  {
+    editor::EditorState state(buildStarterTrack());
+    state.placeMeshAsset("test-rect", 1600.0, 0.0);
+    state.deleteSelectedMesh();
+    const std::string json = editor::toJson(state.track());
+    result.orphanedMeshAssetPruned = json.find("test-rect") == std::string::npos;
+  }
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -629,6 +726,15 @@ int main(int, char**) {
                m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const ParitySmokeCheckResult paritySmoke = runParitySmokeCheck();
+  std::fprintf(stdout,
+               "Parity-fix smoke check: noIdCollision=%s drawnPathBakesAsDrawn=%s startPreserved=%s startClamped=%s "
+               "orphanAssetPruned=%s\n",
+               paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH",
+               paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH",
+               paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -725,6 +831,12 @@ int main(int, char**) {
                        m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
     ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
                        m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Parity-fix smoke check (EDITOR_PARITY_FIXES.md findings 1/4/5, exercised directly):");
+    ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
+                       paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
+    ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
+                       paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
+    ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -753,8 +865,15 @@ int main(int, char**) {
           editor::showSaveFileDialog(L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}},
                                       toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
       if (picked.ok) {
-        editor::toFile(editorState.track(), picked.path);
-        fileIoStatus = "Wrote " + picked.path.string();
+        // toFile() throws when the stream won't open (read-only target, locked file, removed
+        // drive) -- uncaught here it took the whole process down and the user's unsaved track
+        // with it (EDITOR_PARITY_FIXES.md finding 3). Import JSON already caught; this didn't.
+        try {
+          editor::toFile(editorState.track(), picked.path);
+          fileIoStatus = "Wrote " + editor::pathToUtf8(picked.path);
+        } catch (const std::exception& error) {
+          fileIoStatus = std::string("Export failed: ") + error.what();
+        }
       }
     }
     ImGui::SameLine();
@@ -769,7 +888,7 @@ int main(int, char**) {
           editorState.history().push(editorState.track());
           editorState.replaceTrack(std::move(imported));
           rebake();
-          fileIoStatus = "Loaded " + picked.path.string();
+          fileIoStatus = "Loaded " + editor::pathToUtf8(picked.path);
         } catch (const std::exception& error) {
           fileIoStatus = std::string("Import failed: ") + error.what();
         }
@@ -794,11 +913,18 @@ int main(int, char**) {
           editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
       if (picked.ok) {
         std::ifstream input(picked.path, std::ios::binary);
-        std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        const editor::WorldPoint2D center = topDownView.center();
-        const auto error = editorState.importMeshFromJsonText(text, picked.path.filename().string(), center.x, center.z);
-        if (error) fileIoStatus = "Mesh import failed: " + *error;
-        else rebake();
+        if (!input) {
+          // Previously fell through to importMeshFromJsonText with empty text, which reported the
+          // clipboard-flavoured "nothing to import (the clipboard is empty)" for a file that simply
+          // couldn't be opened (EDITOR_PARITY_FIXES.md finding 8).
+          fileIoStatus = "Mesh import failed: could not open " + editor::pathToUtf8(picked.path);
+        } else {
+          std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+          const editor::WorldPoint2D center = topDownView.center();
+          const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
+          if (error) fileIoStatus = "Mesh import failed: " + *error;
+          else rebake();
+        }
       }
     }
     ImGui::SameLine();
@@ -839,9 +965,9 @@ int main(int, char**) {
           std::ofstream out(picked.path, std::ios::binary);
           if (out) {
             out << usd.text;
-            usdExportStatus = "Wrote " + picked.path.string() + " (" + std::to_string(usd.meshCount) + " mesh(es))";
+            usdExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(usd.meshCount) + " mesh(es))";
           } else {
-            usdExportStatus = "Failed to open " + picked.path.string() + " for writing";
+            usdExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
           }
         }
       } else {

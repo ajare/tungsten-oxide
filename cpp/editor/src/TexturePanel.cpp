@@ -4,6 +4,7 @@
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -61,16 +62,31 @@ bool DrawTexturePanel(EditorState& state, TextureCache& textures, int currentPat
   // built readImageSize/addTextureAsset, so this is almost entirely wiring. Unlike editor.js's
   // texturePreviewUrls bookkeeping for files outside assets/track/, TextureCache reads by path
   // lazily on demand, so whatever the dialog returns is stored as TextureAsset.path directly.
+  // Survives across frames until the next Browse click (single texture panel instance, same
+  // pattern as TopDownCanvas.cpp's right-click context-menu state) -- previously a readImageSize
+  // failure (corrupt/unsupported file) did nothing at all: no asset added, no status shown
+  // (EDITOR_PARITY_FIXES.md finding 9).
+  static std::string browseStatus;
   if (ImGui::Button("Browse...")) {
     const editor::FileDialogResult picked = editor::showOpenFileDialog(
         L"Open Texture Image", {{L"Images (*.png;*.jpg;*.jpeg;*.bmp)", L"*.png;*.jpg;*.jpeg;*.bmp"}});
     if (picked.ok) {
       int width = 0, height = 0;
       if (readImageSize(picked.path, width, height)) {
-        state.addTextureAsset(textureNameFromPath(picked.path.filename().string()), picked.path.string(), width, height);
+        // pathToUtf8, not path.string(): the latter narrows through the system ANSI codepage and
+        // mangles non-ASCII paths before they ever reach TextureAsset.path / stbi_load
+        // (EDITOR_PARITY_FIXES.md finding 7).
+        state.addTextureAsset(textureNameFromPath(editor::pathToUtf8(picked.path.filename())), editor::pathToUtf8(picked.path), width, height);
         mutated = true;
+        browseStatus.clear();
+      } else {
+        browseStatus = "Could not read image size: " + editor::pathToUtf8(picked.path);
       }
     }
+  }
+  if (!browseStatus.empty()) {
+    ImGui::SameLine();
+    ImGui::TextUnformatted(browseStatus.c_str());
   }
   ImGui::Separator();
 

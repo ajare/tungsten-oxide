@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -108,6 +109,13 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
   return path;
 }
 
+// Returns `raw.attributes` re-serialized verbatim if it's an object, else "{}" -- the fallback
+// used for both the "no attributes key at all" and "malformed attributes" cases, matching
+// normalizeMeshAsset's general lean-forward-on-malformed-input posture elsewhere in this function.
+std::string attributesJsonOf(const json& raw) {
+  return raw.is_object() && raw.contains("attributes") && raw.at("attributes").is_object() ? raw.at("attributes").dump() : "{}";
+}
+
 std::optional<MeshAsset> normalizeMeshAsset(const std::string& id, const json& entry) {
   if (!entry.is_object()) return std::nullopt;
   const json& mesh = entry.contains("mesh") && entry.at("mesh").is_object() ? entry.at("mesh") : entry;
@@ -123,16 +131,26 @@ std::optional<MeshAsset> normalizeMeshAsset(const std::string& id, const json& e
         !raw.at("position").is_object())
       continue;
     const json& pos = raw.at("position");
-    asset.vertices.push_back({raw.at("id").get<int>(), numberOr(pos, "x", 0.0), numberOr(pos, "y", 0.0)});
+    asset.vertices.push_back({raw.at("id").get<int>(), numberOr(pos, "x", 0.0), numberOr(pos, "y", 0.0), attributesJsonOf(raw)});
   }
   if (mesh.contains("edges") && mesh.at("edges").is_array()) {
     for (const auto& raw : mesh.at("edges")) {
       if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("vertices") ||
           !raw.at("vertices").is_array() || raw.at("vertices").size() != 2)
         continue;
-      bool rail = raw.contains("attributes") && raw.at("attributes").is_object() && raw.at("attributes").contains("rail") &&
-                  jsonTruthy(raw.at("attributes").at("rail"));
-      asset.edges.push_back({raw.at("id").get<int>(), raw.at("vertices")[0].get<int>(), raw.at("vertices")[1].get<int>(), rail});
+      // "rail" is peeled off into its own structured field (Rails mode reads/writes it directly);
+      // everything else in `attributes` is preserved opaquely and merged back in on serialize.
+      bool rail = false;
+      json rest = json::object();
+      if (raw.contains("attributes") && raw.at("attributes").is_object()) {
+        rest = raw.at("attributes");
+        if (rest.contains("rail")) {
+          rail = jsonTruthy(rest.at("rail"));
+          rest.erase("rail");
+        }
+      }
+      asset.edges.push_back(
+          {raw.at("id").get<int>(), raw.at("vertices")[0].get<int>(), raw.at("vertices")[1].get<int>(), rail, rest.dump()});
     }
   }
   for (const auto& raw : mesh.at("polygons")) {
@@ -141,10 +159,13 @@ std::optional<MeshAsset> normalizeMeshAsset(const std::string& id, const json& e
     MeshPolygon polygon;
     polygon.id = raw.at("id").get<int>();
     polygon.hole = raw.value("hole", false);
+    polygon.attributesJson = attributesJsonOf(raw);
     for (const auto& directed : raw.at("edges")) {
       if (!directed.is_object() || !directed.contains("edge") || !directed.contains("v0") || !directed.contains("v1")) continue;
       polygon.edges.push_back({directed.at("edge").get<int>(), directed.at("v0").get<int>(), directed.at("v1").get<int>()});
     }
+    // Always read `holes` as present-but-possibly-empty (mirrors geometry-js's Mesh.toJSON, which
+    // always emits the key) rather than only when non-empty -- see EDITOR_PARITY_FIXES.md finding 6.
     if (raw.contains("holes") && raw.at("holes").is_array())
       for (const auto& hole : raw.at("holes"))
         if (hole.is_number_integer()) polygon.holes.push_back(hole.get<int>());
@@ -181,6 +202,8 @@ TrackDefinition normalize(const json& data) {
   const double topLevelCurvature = clampSignedUnit(numberOr(data, "crossSectionCurvature", 0.0));
   if (data.contains("paths") && data.at("paths").is_array())
     for (const auto& raw : data.at("paths")) out.paths.push_back(normalizePath(raw, topLevelCurvature));
+
+  backfillPointIds(out);
 
   if (data.contains("textureAssets") && data.at("textureAssets").is_object()) {
     for (auto it = data.at("textureAssets").begin(); it != data.at("textureAssets").end(); ++it) {
@@ -344,19 +367,42 @@ json pathToJson(const Path& path) {
   return out;
 }
 
+// Parses an attributesJson blob back to an object, tolerating anything that isn't valid JSON (it
+// is always writer-controlled -- see MeshVertex/MeshEdge/MeshPolygon's doc comments -- so this
+// only guards against a hand-edited or otherwise corrupted in-memory value).
+json parseAttributes(const std::string& attributesJson) {
+  try {
+    json parsed = json::parse(attributesJson);
+    return parsed.is_object() ? parsed : json::object();
+  } catch (const std::exception&) {
+    return json::object();
+  }
+}
+
 json meshAssetToJson(const MeshAsset& asset) {
   json vertices = json::array();
-  for (const auto& v : asset.vertices) vertices.push_back(json{{"id", v.id}, {"position", json{{"x", v.x}, {"y", v.y}}}});
+  for (const auto& v : asset.vertices)
+    vertices.push_back(json{{"id", v.id}, {"position", json{{"x", v.x}, {"y", v.y}}}, {"attributes", parseAttributes(v.attributesJson)}});
   json edges = json::array();
-  for (const auto& e : asset.edges)
-    edges.push_back(json{{"id", e.id}, {"vertices", json::array({e.vertex0, e.vertex1})}, {"attributes", json{{"rail", e.rail}}}});
+  for (const auto& e : asset.edges) {
+    // Re-merge the structured `rail` field back into the preserved attribute bag, matching
+    // js/track-mesh.js's setRailEdge: present (true) when railed, omitted entirely when not.
+    json attributes = parseAttributes(e.attributesJson);
+    if (e.rail) attributes["rail"] = true; else attributes.erase("rail");
+    edges.push_back(json{{"id", e.id}, {"vertices", json::array({e.vertex0, e.vertex1})}, {"attributes", std::move(attributes)}});
+  }
   json polygons = json::array();
   for (const auto& p : asset.polygons) {
     json directedEdges = json::array();
     for (const auto& d : p.edges) directedEdges.push_back(json{{"edge", d.edge}, {"v0", d.v0}, {"v1", d.v1}});
-    json polygonJson = {{"id", p.id}, {"edges", std::move(directedEdges)}, {"hole", p.hole}};
-    if (!p.holes.empty()) polygonJson["holes"] = p.holes;
-    polygons.push_back(std::move(polygonJson));
+    // holes/attributes are always emitted, even empty -- geometry-js's Mesh.toJSON always writes
+    // both keys (see EDITOR_PARITY_FIXES.md finding 6), so omitting them on an empty/default value
+    // would itself be a divergence from the reference format.
+    polygons.push_back(json{{"id", p.id},
+                            {"edges", std::move(directedEdges)},
+                            {"holes", p.holes},
+                            {"hole", p.hole},
+                            {"attributes", parseAttributes(p.attributesJson)}});
   }
   return json{{"name", asset.name},
               {"railHeight", asset.railHeight},
@@ -401,6 +447,25 @@ json connectionToJson(const Connection& connection) {
 
 }  // namespace
 
+void backfillPointIds(TrackDefinition& track) {
+  std::set<std::string> usedPointIds;
+  for (const auto& path : track.paths)
+    for (const auto& point : path.points)
+      if (point.kind == PointKind::Position && !point.id.empty()) usedPointIds.insert(point.id);
+  int nextPointId = 1;
+  for (auto& path : track.paths) {
+    for (auto& point : path.points) {
+      if (point.kind != PointKind::Position || !point.id.empty()) continue;
+      std::string candidate;
+      do {
+        candidate = "p" + std::to_string(nextPointId++);
+      } while (usedPointIds.count(candidate));
+      point.id = candidate;
+      usedPointIds.insert(candidate);
+    }
+  }
+}
+
 TrackDefinition fromJson(const std::string& text) { return normalize(json::parse(text)); }
 
 TrackDefinition fromFile(const std::filesystem::path& path) {
@@ -415,8 +480,16 @@ std::string toJson(const TrackDefinition& track) {
   json paths = json::array();
   for (const auto& path : track.paths) paths.push_back(pathToJson(path));
 
+  // Only assets a placement still references are written out, mirroring track-core.js's
+  // referencedMeshAssets (track-core.js:1277-1283) -- see EDITOR_PARITY_FIXES.md finding 5.
+  // Otherwise an imported-then-deleted mesh accumulates in the file forever.
   json meshAssets = json::object();
-  for (const auto& [id, asset] : track.meshAssets) meshAssets[id] = meshAssetToJson(asset);
+  {
+    std::set<std::string> referenced;
+    for (const auto& placement : track.meshes) referenced.insert(placement.assetId);
+    for (const auto& [id, asset] : track.meshAssets)
+      if (referenced.count(id)) meshAssets[id] = meshAssetToJson(asset);
+  }
 
   json meshes = json::array();
   for (const auto& m : track.meshes)
@@ -442,10 +515,14 @@ std::string toJson(const TrackDefinition& track) {
   for (const auto& o : track.selfIntersectionOverrides)
     selfIntersectionOverrides.push_back(json{{"side", o.side}, {"a", o.a}, {"b", o.b}, {"action", o.action}});
 
+  // "samples" is intentionally omitted: serializeTrack never writes it either (track-core.js:1721-
+  // 1741), even though parseTrack reads one back if present -- see EDITOR_PARITY_FIXES.md finding
+  // 10. Matching that (rather than "fixing" it here) keeps a track this editor round-trips
+  // byte-identical to one round-tripped through js/editor.js; `TrackDefinition::samples` is kept
+  // in memory only so a load-time value still feeds a live preview bake within this session.
   const json out = {
       {"version", kSchemaVersion},
       {"name", track.name},
-      {"samples", track.samples},
       {"start", json{{"path", track.start.path}, {"point", track.start.point}, {"reverse", track.start.reverse}}},
       {"handling", json{{"maxSpeed", track.handling.maxSpeed},
                         {"accel", track.handling.accel},

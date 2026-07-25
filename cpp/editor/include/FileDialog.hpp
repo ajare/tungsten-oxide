@@ -29,4 +29,16 @@ FileDialogResult showOpenFileDialog(const std::wstring& title, const std::vector
 FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters,
                                      const std::wstring& defaultFileName, const std::wstring& defaultExtension);
 
+// UTF-8 <-> native-wide conversions for the Win32 text boundary (dialog default filenames, status
+// text built from a returned path, stb_image). track::Track/editor records hold UTF-8 in memory
+// throughout (TrackDefinition::name, TextureAsset::path, ...); convert only at this boundary.
+// std::wstring(narrow.begin(), narrow.end()) widens BYTES, not code points, and
+// std::filesystem::path::string() narrows through the system ANSI codepage -- both silently mangle
+// non-ASCII text (EDITOR_PARITY_FIXES.md finding 7). `pathToUtf8` exists because a
+// std::filesystem::path already holds native (wide, on Windows) text, so converting it via this
+// path avoids that ACP round trip entirely rather than doing wide->ACP->UTF-8.
+std::wstring utf8ToWide(const std::string& utf8);
+std::string wideToUtf8(const std::wstring& wide);
+std::string pathToUtf8(const std::filesystem::path& path);
+
 }  // namespace editor

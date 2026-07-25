@@ -55,15 +55,25 @@ struct Path {
   std::optional<TextureBinding> texture;
 };
 
+// `attributesJson` carries the geometry-js "attributes" object verbatim as opaque serialized JSON
+// text (default "{}"), so vertex/polygon attributes this editor doesn't understand (UVs, colours,
+// material keys) survive a load/save round trip rather than being silently dropped -- see
+// EDITOR_PARITY_FIXES.md finding 6. Kept as text rather than a structured type so this header
+// doesn't have to depend on a JSON library; EditorTrackDefinition.cpp parses/merges it as needed.
 struct MeshVertex {
   int id{-1};
   double x{0.0}, y{0.0};
+  std::string attributesJson{"{}"};
 };
 
+// `attributesJson` holds every edge attribute EXCEPT "rail", which stays its own structured field
+// since the editor actively reads/writes it (Rails mode). The two are merged back together on
+// serialize (see meshAssetToJson).
 struct MeshEdge {
   int id{-1};
   int vertex0{-1}, vertex1{-1};
   bool rail{false};
+  std::string attributesJson{"{}"};
 };
 
 struct DirectedMeshEdge {
@@ -75,6 +85,7 @@ struct MeshPolygon {
   std::vector<DirectedMeshEdge> edges;
   std::vector<int> holes;
   bool hole{false};
+  std::string attributesJson{"{}"};
 };
 
 struct MeshAsset {
@@ -158,6 +169,19 @@ struct TrackDefinition {
   Handling handling;
   Start start;
 };
+
+// Backfills missing position-point ids in place, mirroring track-core.js's parseTrack id
+// assignment (track-core.js:1665-1678) and, for state that doesn't come from JSON at all, its
+// ensureTrackIds() (called after every track construction/replacement in js/editor.js: initial
+// load, New, Random, Import). Without this, points have no stable identity at all -- every id
+// round-trips as "", not merely "unassigned" -- which is also what let freshly-minted ids collide
+// with ids already on the track (EDITOR_PARITY_FIXES.md findings 1, 2, 4). Existing non-empty ids
+// are preserved verbatim, even if duplicated across paths -- aliasing duplicate ids to a single
+// shared point identity is core's job (TrackLoader.cpp) and a separate, unimplemented feature here
+// (EDITOR_PARITY_FIXES.md gap 5, "shared/disjoint" editing). Called by fromJson/normalize() and by
+// EditorState's constructor/replaceTrack, so every TrackDefinition an EditorState ever holds has
+// had this run at least once, regardless of where it came from.
+void backfillPointIds(TrackDefinition& track);
 
 // Parses schema-10 JSON directly into a TrackDefinition, independently of tox::Track's loader.
 // Tolerant of a mid-edit/partial authoring state (e.g. a path with fewer than four position
