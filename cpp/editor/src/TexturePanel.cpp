@@ -9,6 +9,8 @@
 #include "imgui.h"
 #include "nlohmann/json.hpp"
 
+#include "FileDialog.hpp"
+
 namespace editor {
 
 int loadBundledTextureAssets(EditorState& state) {
@@ -53,6 +55,22 @@ bool DrawTexturePanel(EditorState& state, TextureCache& textures, int currentPat
 
   if (ImGui::Button("Load Bundled Textures")) {
     if (loadBundledTextureAssets(state) > 0) mutated = true;
+  }
+  ImGui::SameLine();
+  // Mirrors editor.html's #browseTextureBtn (EDITOR_NATIVE_FILE_IO_PLAN.md M10) -- M7b already
+  // built readImageSize/addTextureAsset, so this is almost entirely wiring. Unlike editor.js's
+  // texturePreviewUrls bookkeeping for files outside assets/track/, TextureCache reads by path
+  // lazily on demand, so whatever the dialog returns is stored as TextureAsset.path directly.
+  if (ImGui::Button("Browse...")) {
+    const editor::FileDialogResult picked = editor::showOpenFileDialog(
+        L"Open Texture Image", {{L"Images (*.png;*.jpg;*.jpeg;*.bmp)", L"*.png;*.jpg;*.jpeg;*.bmp"}});
+    if (picked.ok) {
+      int width = 0, height = 0;
+      if (readImageSize(picked.path, width, height)) {
+        state.addTextureAsset(textureNameFromPath(picked.path.filename().string()), picked.path.string(), width, height);
+        mutated = true;
+      }
+    }
   }
   ImGui::Separator();
 

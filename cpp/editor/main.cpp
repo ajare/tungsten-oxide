@@ -29,7 +29,9 @@
 // its existing file-local normalizeMeshAsset -- no new from-scratch parser needed after all) plus
 // EditorState::importMeshAsset/importMeshFromJsonText back the toolbar's Import/Paste Mesh buttons
 // and TopDownCanvas.cpp's new minimal right-click "Paste Mesh" context menu; Clipboard.hpp/.cpp
-// wraps CF_UNICODETEXT for the paste path.
+// wraps CF_UNICODETEXT for the paste path. M10 adds TexturePanel.cpp's "Browse..." button next to
+// "Load Bundled Textures", reusing M7b's readImageSize/addTextureAsset with FileDialog.hpp's
+// Open dialog -- almost entirely wiring.
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -533,7 +535,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M9: native mesh import)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M10: texture file picker)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
