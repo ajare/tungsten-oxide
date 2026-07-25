@@ -2025,8 +2025,7 @@ int main(int, char**) {
       ImGuiID topRightId = 0, bottomRightId = 0;
       ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.7f, &topRightId, &bottomRightId);
 
-      for (const char* panel : {"Point Properties", "Zones", "Triggers", "Curves", "Textures", "Handling", "Random Ranges", "Diagnostics"})
-        ImGui::DockBuilderDockWindow(panel, leftId);
+      ImGui::DockBuilderDockWindow("Panels", leftId);
       ImGui::DockBuilderDockWindow("Top-Down View", topRightId);
       ImGui::DockBuilderDockWindow("Elevation Profile", bottomRightId);
 
@@ -2035,7 +2034,56 @@ int main(int, char**) {
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
     ImGui::End();
 
-    ImGui::Begin("Diagnostics");
+    // Mirrors currentCurve(): see EditorState::currentPathIndex()'s own comment for how "current"
+    // is resolved (selection wins while a point is selected; otherwise the curve-selector dropdown).
+    // Computed up here (rather than between Top-Down View and this window, as before) since every
+    // section below that needs it now lives in the same "Panels" window.
+    const int currentPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
+
+    // Left-docked panel (EDITOR_PARITY_FIXES.md-adjacent UI pass): every property/tool section as
+    // a collapsing header in one window, rather than separate tabbed windows -- CollapsingHeader
+    // does NOT push an ID scope onto what follows it (unlike TreeNode), so each section's content
+    // is wrapped in its own PushID/PopID to keep same-labelled widgets in different sections
+    // (e.g. both HandlingPanel and RandomRangesPanel have a "Reset to Default" button) from
+    // colliding on ImGui ID.
+    ImGui::Begin("Panels");
+    if (ImGui::CollapsingHeader("Point Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::PushID("PointProperties");
+      if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Zones")) {
+      ImGui::PushID("Zones");
+      if (editor::DrawZonesPanel(editorState, currentPathIndex)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Triggers")) {
+      ImGui::PushID("Triggers");
+      if (editor::DrawTriggersPanel(editorState, currentPathIndex)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Curves")) {
+      ImGui::PushID("Curves");
+      if (editor::DrawCurvesPanel(editorState)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Textures")) {
+      ImGui::PushID("Textures");
+      if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Handling")) {
+      ImGui::PushID("Handling");
+      if (editor::DrawHandlingPanel(editorState)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Random Ranges")) {
+      ImGui::PushID("RandomRanges");
+      editor::DrawRandomRangesPanel(randomRanges);
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Diagnostics")) {
+    ImGui::PushID("Diagnostics");
     ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
     ImGui::Separator();
     ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
@@ -2181,6 +2229,8 @@ int main(int, char**) {
                       gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH");
     ImGui::BulletText("redo enabled after undo / undo disabled once exhausted: %s / %s", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
                       gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
+      ImGui::PopID();
+    }
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
@@ -2201,45 +2251,6 @@ int main(int, char**) {
       const int elevationPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
       if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex)) rebake();
     }
-    ImGui::End();
-
-    // Mirrors currentCurve(): see EditorState::currentPathIndex()'s own comment for how "current"
-    // is resolved (selection wins while a point is selected; otherwise the curve-selector dropdown).
-    const int currentPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
-
-    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Point Properties");
-    if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Zones");
-    if (editor::DrawZonesPanel(editorState, currentPathIndex)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Triggers");
-    if (editor::DrawTriggersPanel(editorState, currentPathIndex)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(360, 460), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Curves");
-    if (editor::DrawCurvesPanel(editorState)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Textures");
-    if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(280, 180), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Handling");
-    if (editor::DrawHandlingPanel(editorState)) rebake();
-    ImGui::End();
-
-    ImGui::SetNextWindowSize(ImVec2(320, 480), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Random Ranges");
-    editor::DrawRandomRangesPanel(randomRanges);
     ImGui::End();
 
     ImGui::Render();
