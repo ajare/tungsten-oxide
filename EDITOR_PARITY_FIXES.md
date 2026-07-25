@@ -317,7 +317,21 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    empty name is allowed to exist live in memory mid-edit rather than being forced to the
    placeholder immediately. Verified with a "Gap2 smoke check" (rename/undo/redo, same-name no-op,
    empty-name-live-vs-serialized).
-3. **Zones** (boost / start grid) — add, select, drag, delete.
+3. ~~**Zones**~~ **Implemented (add/select/edit/delete; no on-canvas drag).** New "Zones" window
+   (`ZonesPanel.hpp/.cpp`) plus `EditorState::addPathZone`/`editZone`/`selectZone`/
+   `deleteSelectedZone`. Zones now render on the top-down canvas and are click-selectable there too
+   (`TopDownCanvas.cpp`'s `zoneOutlineWorld`/`zoneAtWorld`), reusing core's own baked `tox::Zone`
+   records the same way mesh regions already do. Path-zone outlines are derived by linearly
+   interpolating the host path's baked **centerline** rather than re-evaluating the underlying
+   rational spline the way `zoneOutlineWorld`/`TrackCore.zonePathStrip` do -- core keeps its own
+   spline `Evaluator` private to `TrackBake.cpp`, nothing equivalent is exposed to `cpp/editor`.
+   Approximate (imperceptible at editor zoom given ~6m centerline spacing) but never fed back into
+   physics, so this is safe. **Not implemented:** on-canvas drag (`dragging === 'zoneTop'`, which
+   continuously re-projects onto the nearest path via a live evaluator call) and creating a
+   mesh-hosted zone from scratch (loading/viewing/editing/deleting one from an existing file still
+   works — only the panel's Add flow is path-only). A "Gap3 smoke check" verifies an added zone
+   bakes into a real path-relative `gLo`/`gHi` span with the correct default boost factor, not just
+   schema plumbing.
 4. **Triggers** (dummy / checkpoint) — add, select, drag, delete, role and direction.
 5. **Curve management** — curve selector, Delete Curve, Connect/join, make-disjoint/reconnect,
    junctions, self-intersection overrides.

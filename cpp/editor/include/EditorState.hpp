@@ -71,6 +71,13 @@ class EditorState {
   const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
   bool meshDragging() const { return meshDragging_; }
   bool meshRotating() const { return meshRotating_; }
+  const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
+
+  const Zone* findZone(const std::string& id) const {
+    for (const auto& zone : track_.zones)
+      if (zone.id == id) return &zone;
+    return nullptr;
+  }
 
   const MeshPlacement* findMeshPlacement(const std::string& id) const {
     for (const auto& placement : track_.meshes)
@@ -115,7 +122,10 @@ class EditorState {
     const auto hit = hitTestPosition(worldX, worldZ, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
-    selectedMeshId_.reset();  // path points and mesh regions share one selection (props panel)
+    // Points/mesh regions/zones share one selection (props panel), mirrors clearMeshSelection()
+    // also clearing selectedZoneId in js/editor.js.
+    selectedMeshId_.reset();
+    selectedZoneId_.reset();
     return true;
   }
 
@@ -126,9 +136,80 @@ class EditorState {
   void selectMesh(const std::string& placementId) {
     selectedMeshId_ = placementId;
     selection_ = {};
+    selectedZoneId_.reset();
   }
 
   void clearMeshSelection() { selectedMeshId_.reset(); }
+
+  // ---- Zones (EDITOR_PARITY_FIXES.md gap 3) ----
+  //
+  // Scoped like gap 1: full add/edit-fields/delete via a dedicated panel (ZonesPanel.hpp/.cpp),
+  // plus on-canvas rendering and click-to-select (reusing core's own baked tox::Zone records --
+  // see TopDownCanvas.cpp's zoneOutlineWorld/zoneAtWorld), but NOT js/editor.js's on-canvas drag
+  // (`dragging === 'zoneTop'`), which continuously re-projects the mouse onto the nearest path via
+  // TrackCore.makeEvaluator -- there is no equivalent spline evaluator exposed to cpp/editor (core
+  // keeps its own Evaluator private to TrackBake.cpp), so reproducing that exactly would mean
+  // porting or exposing one. Only path-hosted zone creation is wired up in the panel (the common
+  // case: boost pads/start grids on a driven path); mesh-hosted zones can still be loaded, viewed,
+  // selected and edited, just not created from scratch here.
+
+  void selectZone(const std::string& id) {
+    selectedZoneId_ = id;
+    selection_ = {};
+    selectedMeshId_.reset();
+  }
+
+  void clearZoneSelection() { selectedZoneId_.reset(); }
+
+  // Adds a path-hosted zone at parameter `t` along `pathIndex` with schema defaults (width 24,
+  // length 40, and factor 1.5/duration 2 if boost -- TrackDefinition.hpp's own field defaults,
+  // which already match TrackCore.DEFAULT_ZONE_WIDTH/LENGTH/DEFAULT_BOOST_FACTOR/DURATION exactly).
+  // `effect` must be "velocityChange" (boost) or "startGrid"; anything else is treated as boost,
+  // mirroring addZoneAt's own `effect === 'startGrid' ? 'startGrid' : 'velocityChange'` coercion.
+  // Selects the new zone and returns its id, or nullopt if pathIndex is invalid.
+  std::optional<std::string> addPathZone(int pathIndex, const std::string& effect, double t, double lateral) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
+    history_.push(track_);
+    Zone zone;
+    zone.id = newZoneId();
+    zone.effect = effect == "startGrid" ? "startGrid" : "velocityChange";
+    zone.host.kind = "path";
+    zone.host.pathId = track_.paths[pathIndex].id;
+    zone.host.t = std::clamp(t, 0.0, 1.0);
+    zone.host.lateral = lateral;
+    track_.zones.push_back(std::move(zone));
+    const std::string zoneId = track_.zones.back().id;
+    selectZone(zoneId);
+    return zoneId;
+  }
+
+  // Mutates the zone by id via `mutate`, pushing one undo step first and re-clamping afterward to
+  // the same bounds normalize() enforces on load (mirrors editAuxPoint's pattern for points).
+  template <typename Mutate>
+  bool editZone(const std::string& id, Mutate&& mutate) {
+    const auto it = std::find_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return z.id == id; });
+    if (it == track_.zones.end()) return false;
+    history_.push(track_);
+    mutate(*it);
+    it->width = std::max(0.5, it->width);
+    it->length = std::max(0.5, it->length);
+    if (it->effect == "velocityChange") {
+      it->factor = std::clamp(it->factor, 0.1, 5.0);
+      it->duration = std::clamp(it->duration, 0.1, 30.0);
+    }
+    if (it->host.kind == "path") it->host.t = std::clamp(it->host.t, 0.0, 1.0);
+    return true;
+  }
+
+  bool deleteSelectedZone() {
+    if (!selectedZoneId_.has_value()) return false;
+    const auto it = std::find_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return z.id == *selectedZoneId_; });
+    if (it == track_.zones.end()) return false;
+    history_.push(track_);
+    track_.zones.erase(it);
+    selectedZoneId_.reset();
+    return true;
+  }
 
   // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
   // (x, z), unrotated, selecting it. There is no asset-authoring UI yet, so the caller is
@@ -274,6 +355,7 @@ class EditorState {
     edgeIt->rail = !edgeIt->rail;
     selectedMeshId_ = meshId;
     selection_ = {};
+    selectedZoneId_.reset();
     selectedRail_ = SelectedRail{meshId, edgeId};
     return true;
   }
@@ -546,6 +628,7 @@ class EditorState {
     selectedMeshId_.reset();
     meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
     selectedRail_.reset();
+    selectedZoneId_.reset();
   }
 
   MeshPlacement* mutableSelectedMeshPlacement() {
@@ -708,6 +791,13 @@ class EditorState {
     return firstUnusedId("m", used);
   }
 
+  // "z" prefix mirrors js/editor.js's newId('z') for zones.
+  std::string newZoneId() const {
+    std::set<std::string> used;
+    for (const auto& zone : track_.zones) used.insert(zone.id);
+    return firstUnusedId("z", used);
+  }
+
   // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
   // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
   // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
@@ -812,6 +902,7 @@ class EditorState {
   double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
 
   std::optional<SelectedRail> selectedRail_;
+  std::optional<std::string> selectedZoneId_;
 };
 
 }  // namespace editor

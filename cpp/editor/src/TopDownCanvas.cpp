@@ -31,6 +31,14 @@ const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
 const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
 constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_PX
 
+// Matches editor.js's ZONE_FILL/ZONE_STROKE (js/editor.js:4209-4210) minus the startGrid checker
+// pattern, which is cosmetic only -- a flat fill reads fine at editor zoom levels.
+const ImU32 kZoneBoostFillColor = IM_COL32(255, 165, 32, 107);    // rgba(255,165,32,0.42)
+const ImU32 kZoneBoostStrokeColor = IM_COL32(255, 176, 32, 255);  // #ffb020
+const ImU32 kZoneStartGridFillColor = IM_COL32(207, 214, 221, 97);  // rgba(207,214,221,0.38)
+const ImU32 kZoneStartGridStrokeColor = IM_COL32(207, 214, 221, 255);  // #cfd6dd
+const ImU32 kZoneSelectedStrokeColor = IM_COL32(255, 90, 90, 255);
+
 // Mirrors editor.js's computeTrackBounds: authored control points plus every mesh region's baked
 // bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
 TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked) {
@@ -127,6 +135,119 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
                             ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
     }
   }
+}
+
+// ---- Zones (EDITOR_PARITY_FIXES.md gap 3) --------------------------------------------------
+//
+// core bakes zones into tox::Track::zones (a mesh-hosted rotated rectangle, or a path-hosted strip
+// described by gLo/gHi/gMax/lateral/halfWidth into the host path's own parameter space) but not
+// into a ready-made 2D outline the way MeshRegion's polygons already are. For a mesh-hosted zone
+// that's just a rotated rectangle; for a path-hosted one this samples the host path's baked
+// CENTERLINE (linear interpolation between the nearest two samples) rather than re-evaluating the
+// underlying rational spline the way js/editor.js's zoneOutlineWorld does via
+// TrackCore.zonePathStrip -- core keeps its own spline Evaluator private to TrackBake.cpp, so nothing
+// equivalent is exposed here. Approximate, but the centerline is already sampled densely enough
+// (TrackCore.adaptiveSampleCount, ~6m spacing) that the visual difference at editor zoom levels is
+// imperceptible; this is a 2D outline for editing, never fed back into physics.
+
+// Maps a path parameter g in [0, gMax] to an interpolated centerline position + edgeRight, given
+// core's own sampling convention: closed paths sample N points spanning [0, gMax) (wrapping,
+// track-core.js:471-472), open paths sample N points spanning [0, gMax] inclusive of both ends.
+struct WorldFrame2D {
+  double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0};
+};
+
+WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
+  const std::size_t n = centerline.size();
+  if (n == 0) return {};
+  if (n == 1) return {centerline[0].pos.x, centerline[0].pos.z, centerline[0].edgeRight.x, centerline[0].edgeRight.z};
+  const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
+  const double indexF = frac * static_cast<double>(closed ? n : n - 1);
+  auto index0 = static_cast<std::size_t>(std::floor(indexF));
+  const double t = indexF - static_cast<double>(index0);
+  std::size_t index1;
+  if (closed) {
+    index0 %= n;
+    index1 = (index0 + 1) % n;
+  } else {
+    index0 = std::min(index0, n - 1);
+    index1 = std::min(index0 + 1, n - 1);
+  }
+  const tox::Frame& a = centerline[index0];
+  const tox::Frame& b = centerline[index1];
+  return {a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.z + (b.pos.z - a.pos.z) * t, a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t,
+          a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t};
+}
+
+// Rotated rectangle for a mesh-hosted zone; zone.rotation is already radians (baked that way in
+// TrackBake.cpp), unlike the degrees the rest of this file works in for placements/edges.
+std::vector<WorldPoint2D> meshZoneOutline(const tox::Zone& zone) {
+  const double cosine = std::cos(zone.rotation), sine = std::sin(zone.rotation);
+  auto corner = [&](double x, double z) { return WorldPoint2D{zone.x + x * cosine - z * sine, zone.z + x * sine + z * cosine}; };
+  return {corner(-zone.halfLength, -zone.halfWidth), corner(zone.halfLength, -zone.halfWidth), corner(zone.halfLength, zone.halfWidth),
+          corner(-zone.halfLength, zone.halfWidth)};
+}
+
+// Left rail (gLo..gHi at lateral-halfWidth) followed by the reversed right rail, mirroring
+// zoneOutlineWorld's `strip.left` then reversed `strip.right` assembly exactly.
+std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zone& zone) {
+  if (zone.hostPathIndex < 0 || zone.hostPathIndex >= static_cast<int>(baked.paths.size())) return {};
+  const auto& centerline = baked.paths[zone.hostPathIndex].centerline;
+  if (centerline.empty()) return {};
+  constexpr int kRows = 8;
+  std::vector<WorldPoint2D> left(kRows + 1), right(kRows + 1);
+  for (int i = 0; i <= kRows; ++i) {
+    const double g = zone.gLo + (zone.gHi - zone.gLo) * (static_cast<double>(i) / kRows);
+    const WorldFrame2D sample = sampleCenterlineAtG(centerline, zone.closed, g, zone.gMax);
+    left[i] = {sample.x + sample.rightX * (zone.lateral - zone.halfWidth), sample.z + sample.rightZ * (zone.lateral - zone.halfWidth)};
+    right[i] = {sample.x + sample.rightX * (zone.lateral + zone.halfWidth), sample.z + sample.rightZ * (zone.lateral + zone.halfWidth)};
+  }
+  std::vector<WorldPoint2D> outline = std::move(left);
+  outline.reserve(outline.size() + right.size());
+  for (int i = kRows; i >= 0; --i) outline.push_back(right[i]);
+  return outline;
+}
+
+std::vector<WorldPoint2D> zoneOutlineWorld(const tox::Track& baked, const tox::Zone& zone) {
+  return zone.kind == "mesh" ? meshZoneOutline(zone) : pathZoneOutline(baked, zone);
+}
+
+bool pointInWorldPolygon(const std::vector<WorldPoint2D>& points, double x, double z) {
+  bool inside = false;
+  for (std::size_t i = 0, j = points.size() - 1; i < points.size(); j = i++) {
+    const WorldPoint2D& a = points[i];
+    const WorldPoint2D& b = points[j];
+    if ((a.z > z) != (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+void drawZones(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
+              const std::optional<std::string>& selectedZoneId) {
+  for (const auto& zone : baked.zones) {
+    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(baked, zone);
+    if (outline.size() < 3) continue;
+    std::vector<ImVec2> screen;
+    screen.reserve(outline.size());
+    for (const auto& p : outline) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z)));
+    const bool isStartGrid = zone.effect == "startGrid";
+    drawList->AddConcavePolyFilled(screen.data(), static_cast<int>(screen.size()), isStartGrid ? kZoneStartGridFillColor : kZoneBoostFillColor);
+    const bool isSelected = selectedZoneId.has_value() && *selectedZoneId == zone.id;
+    drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()),
+                          isSelected ? kZoneSelectedStrokeColor : (isStartGrid ? kZoneStartGridStrokeColor : kZoneBoostStrokeColor),
+                          ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
+  }
+}
+
+// Topmost zone under a world point, mirroring zoneAtTop's reverse iteration (later-added zones
+// draw on top).
+const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worldZ) {
+  if (baked == nullptr) return nullptr;
+  for (auto it = baked->zones.rbegin(); it != baked->zones.rend(); ++it) {
+    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(*baked, *it);
+    if (outline.size() >= 3 && pointInWorldPolygon(outline, worldX, worldZ)) return &*it;
+  }
+  return nullptr;
 }
 
 // Local-to-world for one mesh vertex, mirroring js/track-mesh.js's localToWorld and
@@ -253,9 +374,17 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     if (!state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
-      const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
-      if (region != nullptr) state.selectMesh(region->id);
-      else state.clearMeshSelection();
+      // Zones checked before mesh regions: a zone is usually the smaller, more specific thing
+      // drawn on top of a region it sits on (a boost pad on a mesh plaza, say), so it should win a
+      // click over the region beneath it.
+      const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z);
+      if (zone != nullptr) {
+        state.selectZone(zone->id);
+      } else {
+        const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
+        if (region != nullptr) state.selectMesh(region->id);
+        else state.clearMeshSelection();
+      }
     }
   }
 
@@ -366,6 +495,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid()) mutated = state.deleteSelectedPoint() || mutated;
         else if (state.selectedMeshId().has_value()) mutated = state.deleteSelectedMesh() || mutated;
+        else if (state.selectedZoneId().has_value()) mutated = state.deleteSelectedZone() || mutated;
       }
       // Minimal right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9): a right-*click* (no
       // drag) opens it instead of panning; a real drag still pans, since ResetMouseDragDelta below
@@ -409,6 +539,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   if (baked != nullptr) {
     for (const auto& path : baked->paths) drawBakedPath(drawList, canvasOrigin, view, path);
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
+    drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId());
   }
   drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection());

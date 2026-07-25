@@ -59,6 +59,7 @@
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
 #include "PropertiesPanel.hpp"
+#include "ZonesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
@@ -701,6 +702,50 @@ Gap2SmokeCheckResult runGap2SmokeCheck() {
   return result;
 }
 
+// Gap-3 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #3): add a path-hosted boost zone,
+// confirm core's own bake compiles it into a real path-relative gLo/gHi span (not just schema
+// plumbing) with the correct default boost factor, edit its fields, add a second (start grid) zone
+// and confirm the track still bakes with both, then delete.
+struct Gap3SmokeCheckResult {
+  bool added = false, selected = false;
+  bool bakedAsPathZone = false, bakedFactorApplied = false;
+  bool edited = false;
+  bool startGridAdded = false, bakesWithMultipleZones = false;
+  bool deleted = false;
+};
+
+Gap3SmokeCheckResult runGap3SmokeCheck() {
+  Gap3SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const auto zoneId = state.addPathZone(0, "velocityChange", 0.25, 0.0);
+  result.added = zoneId.has_value();
+  result.selected = state.selectedZoneId().has_value() && *state.selectedZoneId() == *zoneId;
+
+  tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  if (baked && !baked.track->zones.empty()) {
+    const auto& zone = baked.track->zones[0];
+    result.bakedAsPathZone = zone.kind == "path" && zone.hostPathIndex == 0 && zone.gHi > zone.gLo;
+    result.bakedFactorApplied = std::abs(zone.factor - 1.5) < 1e-9;  // schema default
+  }
+
+  result.edited = state.editZone(*zoneId, [](editor::Zone& zone) {
+                    zone.width = 99.0;
+                    zone.factor = 3.0;
+                  }) &&
+                  state.track().zones[0].width == 99.0 && state.track().zones[0].factor == 3.0;
+
+  const auto startGridId = state.addPathZone(0, "startGrid", 0.5, 0.0);
+  result.startGridAdded = startGridId.has_value();
+  baked = tox::Track::fromJson(editor::toJson(state.track()));
+  result.bakesWithMultipleZones = static_cast<bool>(baked) && baked.track->zones.size() == 2;
+
+  const std::size_t countBefore = state.track().zones.size();
+  result.deleted = state.deleteSelectedZone() && state.track().zones.size() == countBefore - 1;
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -842,6 +887,16 @@ int main(int, char**) {
                gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap3SmokeCheckResult gap3Smoke = runGap3SmokeCheck();
+  std::fprintf(stdout,
+               "Gap3 smoke check (zones): add=%s select=%s bakedPathZone=%s bakedFactor=%s edit=%s startGridAdd=%s "
+               "bakesWithBoth=%s delete=%s\n",
+               gap3Smoke.added ? "OK" : "MISMATCH", gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
+               gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH", gap3Smoke.edited ? "OK" : "MISMATCH",
+               gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
+               gap3Smoke.deleted ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -957,6 +1012,13 @@ int main(int, char**) {
                        gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
     ImGui::BulletText("empty name stays live in memory / falls back only on serialize: %s / %s",
                        gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap3 smoke check (zones, exercised directly):");
+    ImGui::BulletText("add / select / baked as path zone / baked factor default: %s / %s / %s / %s", gap3Smoke.added ? "OK" : "MISMATCH",
+                       gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
+                       gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH");
+    ImGui::BulletText("edit fields / add start-grid zone / bakes with both / delete: %s / %s / %s / %s", gap3Smoke.edited ? "OK" : "MISMATCH",
+                       gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
+                       gap3Smoke.deleted ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1160,6 +1222,11 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("Point Properties");
     if (editor::DrawPropertiesPanel(editorState, currentPathIndex)) rebake();
+    ImGui::End();
+
+    ImGui::SetNextWindowSize(ImVec2(340, 420), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Zones");
+    if (editor::DrawZonesPanel(editorState, currentPathIndex)) rebake();
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(420, 600), ImGuiCond_FirstUseEver);
