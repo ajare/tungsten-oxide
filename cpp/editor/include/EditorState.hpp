@@ -176,6 +176,12 @@ public:
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Position;
   }
 
+  // Width-drag counterpart to selectionIsPosition() -- gates dragSelectedWidthTo()'s on-canvas
+  // drag path (roll/cross-section remain click-to-select only, still panel-edited).
+  bool selectionIsWidth() const {
+    return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Width;
+  }
+
   // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
 
   void selectMesh(const std::string& placementId) {
@@ -852,6 +858,23 @@ public:
       dragMutated_ = true;
     }
     track_.paths[selection_.pathIndex].points[selection_.pointIndex].pos.y = std::round(y * 10.0) / 10.0;
+  }
+
+  // On-canvas width-handle drag: same drag lifecycle (beginDrag/endDrag/one-push-per-gesture,
+  // sharing dragging_/dragMutated_ with dragSelectedTo/dragSelectedElevationTo) but for a Width
+  // point's `width` field -- mirrors editor.js's `dragging === 'widthTop'` branch
+  // (js/editor.js:3481-3495). The caller (TopDownCanvas.cpp) computes the new width value itself:
+  // it needs the baked frame's position/h axis at the point's `t`, which EditorState -- deliberately
+  // THE-free -- has no access to (see EditorTrackDefinition.hpp's own header comment on why).
+  void dragSelectedWidthTo(double width) {
+    if (!dragging_ || !selectionInRange()) return;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::Width) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    point.width = std::max(1.0, width);
   }
 
   void endDrag() {

@@ -803,6 +803,25 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     const WorldPoint2D world = view.snapWorldXZ(view.screenToWorld(mouseLocal.x, mouseLocal.y));
     state.dragSelectedTo(world.x, world.z);
     mutated = true;
+  } else if (draggingGesture && state.selectionIsWidth() && !panDragActive) {
+    // On-canvas width-handle drag (mirrors editor.js's `dragging === 'widthTop'`,
+    // js/editor.js:3481-3495): distance of the mouse from the width point's centerline position,
+    // projected onto the frame's unrolled h axis -- either edge handle sits at halfW along h, so
+    // |distance|*2 = full width regardless of which handle was grabbed to start the drag.
+    const int pathIndex = state.selection().pathIndex;
+    const Path& path = state.track().paths[pathIndex];
+    const TrackPoint& point = path.points[state.selection().pointIndex];
+    if (baked != nullptr && pathIndex < static_cast<int>(baked->paths.size()) && !baked->paths[pathIndex].centerline.empty()) {
+      if (!state.dragging()) {
+        state.beginDrag();
+        view.freezeBounds(preDragBounds);
+      }
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+      const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
+      state.dragSelectedWidthTo(std::round(std::abs(dist) * 2.0 * 10.0) / 10.0);
+      mutated = true;
+    }
   } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
     state.endDrag();
     view.releaseBoundsFreeze();

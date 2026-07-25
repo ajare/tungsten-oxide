@@ -643,6 +643,8 @@ struct Gap1SmokeCheckResult {
   bool bakedRollApplied = false, bakedWidthApplied = false;
   bool deletingBelowFourPositionsRefused = false, deletingAuxPointsUnguarded = false;
   bool selectionIsPositionTrueForPosition = false, selectionIsPositionFalseForAux = false, selectionIsPositionFalseWhenInvalid = false;
+  bool selectionIsWidthTrueForWidth = false, selectionIsWidthFalseForPosition = false;
+  bool widthDragged = false, widthDragClampsToFloor = false, widthDragUndone = false, widthDragRefusedForPositionSelection = false;
 };
 
 Gap1SmokeCheckResult runGap1SmokeCheck() {
@@ -661,15 +663,42 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   const auto crossSectionIndex = state.addAuxPoint(0, editor::PointKind::CrossSection, 0.1);
   result.crossSectionAdded = crossSectionIndex.has_value();
   result.selectionIsPositionFalseWhenInvalid = (state.clearSelection(), !state.selectionIsPosition());
-  const auto& firstPosition = state.track().paths[0].points[0];
-  state.selectPositionAt(firstPosition.pos.x, firstPosition.pos.z, 1.0);
+  // Captured by value, not reference: state.undo()/redo() below replace track_ wholesale
+  // (replaceTrackKeepHistory's move-assignment), which would dangle a reference into the old one.
+  const double firstPositionX = state.track().paths[0].points[0].pos.x, firstPositionZ = state.track().paths[0].points[0].pos.z;
+  state.selectPositionAt(firstPositionX, firstPositionZ, 1.0);
   result.selectionIsPositionTrueForPosition = state.selectionIsPosition();
+  result.selectionIsWidthFalseForPosition = !state.selectionIsWidth();
 
   result.fieldsEdited = state.editAuxPoint(0, *rollIndex, [](editor::TrackPoint& p) { p.roll = 25.0; }) &&
                         state.track().paths[0].points[*rollIndex].roll == 25.0;
   result.fieldsEdited = result.fieldsEdited &&
                         state.editAuxPoint(0, *widthIndex, [](editor::TrackPoint& p) { p.width = 60.0; }) &&
                         state.track().paths[0].points[*widthIndex].width == 60.0;
+
+  // On-canvas width-handle drag (mirrors editor.js's `dragging === 'widthTop'`): EditorState's
+  // side of it only (dragSelectedWidthTo's screen-position -> width math lives in
+  // TopDownCanvas.cpp, ImGui-adjacent glue with no headless entry point -- same tradeoff already
+  // taken for gap 8's sanitize()/gap 13's nearestPathPlacement()).
+  state.selectPoint(0, *widthIndex);
+  result.selectionIsWidthTrueForWidth = state.selectionIsWidth();
+  state.beginDrag();
+  state.dragSelectedWidthTo(75.0);
+  result.widthDragged = state.track().paths[0].points[*widthIndex].width == 75.0;
+  state.dragSelectedWidthTo(-40.0);  // must clamp to the 1.0 floor, mirroring editAuxPoint's own clamp
+  result.widthDragClampsToFloor = state.track().paths[0].points[*widthIndex].width == 1.0;
+  state.endDrag();
+  result.widthDragUndone = state.undo() && state.track().paths[0].points[*widthIndex].width == 60.0;
+
+  // Dragging via dragSelectedWidthTo() while a POSITION point is selected must be a no-op --
+  // mirrors selectionIsPosition's own guard note: dragSelectedTo/dragSelectedWidthTo only ever
+  // touch the field their own point kind uses.
+  state.selectPositionAt(firstPositionX, firstPositionZ, 1.0);
+  const double widthBeforeMisdirectedDrag = state.track().paths[0].points[*widthIndex].width;
+  state.beginDrag();
+  state.dragSelectedWidthTo(999.0);
+  state.endDrag();
+  result.widthDragRefusedForPositionSelection = state.track().paths[0].points[*widthIndex].width == widthBeforeMisdirectedDrag;
 
   // Roll/width points near the same t as the added ones (0.1) should carry through to the bake --
   // exercises that this isn't just schema plumbing (a huge roll/width would be unmistakable in the
@@ -1557,6 +1586,12 @@ int main(int, char**) {
                gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH",
                gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
                gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
+  std::fprintf(stdout,
+               "Gap1 width-drag smoke check: selectionIsWidth=%s/%s widthDragged=%s clampsToFloor=%s undone=%s "
+               "refusedForPositionSelection=%s\n",
+               gap1Smoke.selectionIsWidthTrueForWidth ? "OK" : "MISMATCH", gap1Smoke.selectionIsWidthFalseForPosition ? "OK" : "MISMATCH",
+               gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH",
+               gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const Gap2SmokeCheckResult gap2Smoke = runGap2SmokeCheck();
@@ -2167,6 +2202,11 @@ int main(int, char**) {
     ImGui::BulletText("selectionIsPosition true for position / false for aux / false when invalid: %s / %s / %s",
                       gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
                       gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
+    ImGui::BulletText("width-drag: selectionIsWidth true/false / dragged / clamps to floor: %s / %s / %s / %s",
+                      gap1Smoke.selectionIsWidthTrueForWidth ? "OK" : "MISMATCH", gap1Smoke.selectionIsWidthFalseForPosition ? "OK" : "MISMATCH",
+                      gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH");
+    ImGui::BulletText("width-drag: undo restores / refused while a position point is selected: %s / %s",
+                      gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
     ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
                       gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
