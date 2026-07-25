@@ -20,9 +20,12 @@ const ImU32 kAxisColor = IM_COL32(255, 255, 255, 60);
 const ImU32 kProfileColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
-// Mirrors TopDownCanvas.cpp's kHoverRingColor: an outline ring drawn on top of whichever fill
-// already applies, so hover reads clearly whether or not the point is also selected.
-const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 220);
+// Mirrors TopDownCanvas.cpp's kSelectedOutlineColor: a crisp white "handle" border right at the
+// (already-larger) fill's edge -- unmistakable as selected regardless of hover state.
+const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
+// Mirrors TopDownCanvas.cpp's kHoverRingColor: a separate, softer ring further out from the fill,
+// so it never gets confused with the tighter selection border even when both apply.
+const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
 
 struct Layout {
   float w{1.0f}, h{1.0f};
@@ -178,7 +181,8 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
     const ImVec2 screen(canvasOrigin.x + screenX(layout, order), canvasOrigin.y + screenY(layout, points[order].second));
     const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
     drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : kPointColor);
-    if (isHovered) drawList->AddCircle(screen, radius + 2.5f, kHoverRingColor, 0, 2.0f);
+    if (isSelected) drawList->AddCircle(screen, radius, kSelectedOutlineColor, 0, 1.5f);
+    if (isHovered) drawList->AddCircle(screen, radius + 3.0f, kHoverRingColor, 0, 2.0f);
   }
 
   ImGui::EndChild();

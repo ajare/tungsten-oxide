@@ -23,10 +23,15 @@ const ImU32 kRoadColor = IM_COL32(60, 70, 82, 255);
 const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
-// Hover is drawn as an outline ring on top of whichever fill (normal/selected) already applies,
-// rather than its own fill color, so "hovered" and "hovered + selected" both read clearly without
-// a fourth distinct fill color to keep track of.
-const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 220);
+// Selected points get a crisp white "handle" border immediately at the fill edge, on top of the
+// larger red fill -- unmistakable at a glance and independent of hover, unlike relying on color/
+// size alone (easy to miss against the also-bright hover ring below).
+const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
+// Hover is drawn as a separate, larger, softer ring further out from the fill -- on top of
+// whichever fill (normal/selected) already applies, rather than its own fill color, so "hovered"
+// and "hovered + selected" both read clearly without a fourth distinct fill color to track, and
+// without being confusable with the tighter selection border above.
+const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
 const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
 const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
 const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
@@ -529,9 +534,12 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
       const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
       const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
       drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : kPositionPointColor);
-      // Hover is an outline ring on top of the fill, so it reads clearly whether or not the point
-      // is also selected, without needing a fourth distinct fill color.
-      if (isHovered) drawList->AddCircle(screen, radius + 2.5f, kHoverRingColor, 0, 2.0f);
+      // Selected: a crisp white border right at the (already-larger) fill's edge -- a "handle"
+      // look that reads as selected regardless of hover state or background.
+      if (isSelected) drawList->AddCircle(screen, radius, kSelectedOutlineColor, 0, 1.5f);
+      // Hovered: a separate, softer ring further out, so it never gets confused with the tighter
+      // selection border above even when both apply to the same point.
+      if (isHovered) drawList->AddCircle(screen, radius + 3.0f, kHoverRingColor, 0, 2.0f);
     }
   }
 }
