@@ -34,7 +34,9 @@
 // Open dialog -- almost entirely wiring.
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -68,6 +70,7 @@
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
 #include "USDExport.hpp"
+#include "MppModelExport.hpp"
 
 namespace {
 
@@ -1117,6 +1120,154 @@ Gap8SmokeCheckResult runGap8SmokeCheck() {
   return result;
 }
 
+// MppModel smoke check: since MppModelExport.cpp deliberately doesn't link mpp::ModelSerializer
+// (see MppModelExport.hpp), there's no real mpp::ModelSerializer::load() available here to
+// round-trip through. Instead this parses the emitted bytes with a small structural reader
+// written directly against MPPMODEL_EXPORT_SPEC.md's documented layout (independently of
+// MppModelExport.cpp's own writer code) and cross-checks every field against the source
+// tox::Track -- header magic/version/flags, all six directory entries, and every mesh's
+// name/primitive-type/primitive-count/material/vertex-count/stride/index-width/data-sizes.
+struct MppModelReadResult {
+  bool ok = false;
+  std::string error;
+  std::uint32_t versionMajor = 0, versionMinor = 0, flags = 0;
+  struct Mesh {
+    std::string name, material;
+    std::uint32_t primitiveType = 0, primitiveCount = 0;
+    std::uint32_t vertexCount = 0, vertexStride = 0, vertexDataSize = 0;
+    std::uint32_t indexWidth = 0, indexDataSize = 0;
+  };
+  std::vector<Mesh> meshes;
+};
+
+MppModelReadResult readMppModelStructurally(const std::string& bytes) {
+  MppModelReadResult result;
+  std::size_t pos = 0;
+  auto need = [&](std::size_t n) { return pos + n <= bytes.size(); };
+  auto u16 = [&]() { std::uint16_t v; std::memcpy(&v, bytes.data() + pos, 2); pos += 2; return v; };
+  auto u32 = [&]() { std::uint32_t v; std::memcpy(&v, bytes.data() + pos, 4); pos += 4; return v; };
+  auto str = [&]() {
+    const std::uint32_t len = u32();
+    std::string s = bytes.substr(pos, len);
+    pos += len;
+    return s;
+  };
+
+  if (!need(12) || bytes.compare(0, 4, "MPPM") != 0) { result.error = "bad header/magic"; return result; }
+  pos = 4;
+  result.versionMajor = u16();
+  result.versionMinor = u16();
+  result.flags = u32();
+
+  struct Entry { std::uint32_t type, start, end, count; };
+  Entry entries[6];
+  for (auto& e : entries) {
+    if (!need(16)) { result.error = "truncated directory"; return result; }
+    e.type = u32();
+    e.start = u32();
+    e.end = u32();
+    e.count = u32();
+  }
+  const Entry& vertexDir = entries[3];
+  const Entry& indexDir = entries[4];
+  const Entry& meshDir = entries[5];
+
+  pos = meshDir.start;
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> streamIds;  // (vertexStreamId, indexStreamId) per mesh
+  for (std::uint32_t i = 0; i < meshDir.count; ++i) {
+    MppModelReadResult::Mesh mesh;
+    mesh.name = str();
+    mesh.primitiveType = u32();
+    mesh.primitiveCount = u32();
+    mesh.material = str();
+    const std::uint32_t numVertexBuffers = u32();
+    if (numVertexBuffers != 1) { result.error = "expected exactly one vertex buffer per mesh"; return result; }
+    const std::uint32_t vertexStreamId = u32();
+    const std::uint32_t indexStreamId = u32();
+    streamIds.push_back({vertexStreamId, indexStreamId});
+    result.meshes.push_back(mesh);
+  }
+  if (pos != meshDir.end) { result.error = "mesh metadata section size mismatch"; return result; }
+
+  pos = vertexDir.start;
+  for (std::uint32_t i = 0; i < vertexDir.count; ++i) {
+    const std::uint32_t dataSize = u32();
+    const std::uint32_t vertexCount = u32();
+    const std::uint32_t stride = u32();
+    pos += dataSize;
+    if (i < result.meshes.size() && streamIds[i].first == i) {
+      result.meshes[i].vertexCount = vertexCount;
+      result.meshes[i].vertexStride = stride;
+      result.meshes[i].vertexDataSize = dataSize;
+    }
+  }
+  if (pos != vertexDir.end) { result.error = "vertex data section size mismatch"; return result; }
+
+  pos = indexDir.start;
+  for (std::uint32_t i = 0; i < indexDir.count; ++i) {
+    const std::uint32_t dataSize = u32();
+    const std::uint32_t indexWidth = u32();
+    pos += dataSize;
+    if (i < result.meshes.size() && streamIds[i].second == i) {
+      result.meshes[i].indexWidth = indexWidth;
+      result.meshes[i].indexDataSize = dataSize;
+    }
+  }
+  if (pos != indexDir.end) { result.error = "index data section size mismatch"; return result; }
+
+  result.ok = true;
+  return result;
+}
+
+struct MppModelSmokeCheckResult {
+  bool headerOk = false, meshCountMatches = false, fieldsMatch = false, byteSizesMatch = false, wideIndexChosenForLargeMesh = false;
+};
+
+MppModelSmokeCheckResult runMppModelSmokeCheck() {
+  MppModelSmokeCheckResult result;
+
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(buildStarterTrack()));
+  if (!baked) return result;
+
+  const editor::MppModelExportResult exported = editor::exportTrackToMppModel(*baked.track);
+  const MppModelReadResult read = readMppModelStructurally(exported.bytes);
+  if (!read.ok) return result;
+
+  result.headerOk = read.versionMajor == 1 && read.versionMinor == 1 && read.flags == 0x0001;
+  result.meshCountMatches = read.meshes.size() == baked.track->geometry.size() && read.meshes.size() == exported.meshCount;
+
+  bool fieldsMatch = result.meshCountMatches;
+  bool byteSizesMatch = true;
+  for (std::size_t i = 0; i < read.meshes.size() && fieldsMatch; ++i) {
+    const tox::GeometryBatch& batch = baked.track->geometry[i];
+    const auto& mesh = read.meshes[i];
+    if (mesh.name != batch.id || mesh.material != batch.materialKey) fieldsMatch = false;
+    if (mesh.primitiveType != 2 /* Triangles */ || mesh.primitiveCount != batch.indices.size() / 3) fieldsMatch = false;
+    if (mesh.vertexCount != batch.vertices.size() || mesh.vertexStride != 36) fieldsMatch = false;
+    if (mesh.vertexDataSize != mesh.vertexCount * 36) byteSizesMatch = false;
+    const std::uint32_t expectedIndexWidth = batch.vertices.size() > 65535 ? 32 : 16;
+    if (mesh.indexWidth != expectedIndexWidth) fieldsMatch = false;
+    if (mesh.indexDataSize != batch.indices.size() * (mesh.indexWidth / 8)) byteSizesMatch = false;
+  }
+  result.fieldsMatch = fieldsMatch;
+  result.byteSizesMatch = byteSizesMatch;
+
+  // Confirm the >65535-vertex branch actually selects 32-bit indices, not just the (much more
+  // common) 16-bit path every real track batch takes.
+  tox::GeometryBatch wideBatch;
+  wideBatch.id = "wide-test";
+  wideBatch.materialKey = "road";
+  wideBatch.vertices.resize(70000);
+  wideBatch.indices = {0, 1, 2};
+  tox::Track wideTrack;
+  wideTrack.geometry.push_back(wideBatch);
+  const editor::MppModelExportResult wideExported = editor::exportTrackToMppModel(wideTrack);
+  const MppModelReadResult wideRead = readMppModelStructurally(wideExported.bytes);
+  result.wideIndexChosenForLargeMesh = wideRead.ok && !wideRead.meshes.empty() && wideRead.meshes[0].indexWidth == 32;
+
+  return result;
+}
+
 editor::TrackDefinition buildOpenTestTrack(int pointCount) {
   editor::TrackDefinition track;
   track.name = "Gap11 Open Test";
@@ -1343,6 +1494,13 @@ int main(int, char**) {
                m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH", m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
   std::fflush(stdout);
 
+  const MppModelSmokeCheckResult mppModelSmoke = runMppModelSmokeCheck();
+  std::fprintf(stdout, "MppModel smoke check: header=%s meshCount=%s fields=%s byteSizes=%s wideIndex=%s\n",
+               mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
+               mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
+               mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   const M7bSmokeCheckResult m7bSmoke = runM7bSmokeCheck();
   std::fprintf(stdout, "M7b smoke check: imageSize=%s add=%s assign=%s tileResize=%s invalidClear=%s delete=%s\n",
                m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH", m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH",
@@ -1502,6 +1660,7 @@ int main(int, char**) {
   // data, so it lives here rather than in EditorState/undo history.
   editor::RandomTrackRanges randomRanges;
   std::string usdExportStatus;
+  std::string mppModelExportStatus;
   std::string fileIoStatus;
 
   auto rebake = [&]() {
@@ -1572,6 +1731,11 @@ int main(int, char**) {
                       m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
     ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
                       m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
+    ImGui::TextUnformatted("MppModel smoke check (MPPMODEL_EXPORT_SPEC.md, exercised directly):");
+    ImGui::BulletText("header / mesh count / fields match / byte sizes match / wide-index branch: %s / %s / %s / %s / %s",
+                      mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
+                      mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
+                      mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
     ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
                       m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
@@ -1910,6 +2074,33 @@ int main(int, char**) {
     if (!usdExportStatus.empty()) {
       ImGui::SameLine();
       ImGui::TextUnformatted(usdExportStatus.c_str());
+    }
+    // Export .mppmodel (MPPMODEL_EXPORT_SPEC.md), a from-scratch native writer of
+    // MassivePolyPusher's binary model format -- see MppModelExport.hpp for why this doesn't
+    // link mpp::ModelSerializer itself.
+    if (ImGui::Button("Export MppModel...")) {
+      if (bakedTrack != nullptr) {
+        const editor::FileDialogResult picked =
+            editor::showSaveFileDialog(L"Export MppModel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}},
+                                       toWide(sanitizeFilenameStem(editorState.track().name) + ".mppmodel"), L"mppmodel");
+        if (picked.ok) {
+          const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack);
+          std::ofstream out(picked.path, std::ios::binary);
+          if (out) {
+            out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
+            mppModelExportStatus =
+                "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))";
+          } else {
+            mppModelExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
+          }
+        }
+      } else {
+        mppModelExportStatus = "Nothing to export -- current track failed to bake";
+      }
+    }
+    if (!mppModelExportStatus.empty()) {
+      ImGui::SameLine();
+      ImGui::TextUnformatted(mppModelExportStatus.c_str());
     }
     ImGui::Separator();
     switch (editorState.mode()) {

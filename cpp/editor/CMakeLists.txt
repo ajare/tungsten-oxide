@@ -65,6 +65,7 @@ set(EDITOR_SOURCES
   src/TopDownCanvas.cpp
   src/ElevationView.cpp
   src/USDExport.cpp
+  src/MppModelExport.cpp
   src/RandomTrack.cpp
   src/TextureCache.cpp
   src/TexturePanel.cpp
