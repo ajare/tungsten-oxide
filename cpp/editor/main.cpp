@@ -45,6 +45,7 @@
 
 #include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
 #include "imgui.h"
+#include "imgui_internal.h"  // ImGui::DockBuilder* -- used once at startup to build the fixed layout
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
 
@@ -1452,6 +1453,10 @@ int main(int, char**) {
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // No imgui.ini: the dock layout built once below (menu bar / toolbar / left panel / top-down
+  // top-right / elevation bottom-right) is meant to be the SAME fixed arrangement every launch,
+  // not something that drifts based on whatever a prior session happened to leave docked where.
+  io.IniFilename = nullptr;
 
   ImGui::StyleColorsDark();
 
@@ -1696,7 +1701,341 @@ int main(int, char**) {
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) && editorState.redo()) rebake();
     }
 
-    ImGui::Begin("track_editor — status");
+    // --- Fixed layout: menu bar, toolbar, dockspace (left panel / top-down top-right / elevation
+    // bottom-right, EDITOR_CPP_PORT_PLAN.md-adjacent UI pass) -------------------------------
+    //
+    // File/Random/View menu actions below reuse exactly the same EditorState/TopDownView calls
+    // the old single "track_editor — status" mega-window made inline; only their container moved
+    // (menu item / toolbar button / Diagnostics panel), not their logic.
+    if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("New")) {
+          editorState.history().push(editorState.track());
+          editorState.replaceTrack(buildStarterTrack());
+          rebake();
+          fileIoStatus.clear();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Import JSON...")) {
+          const editor::FileDialogResult picked = editor::showOpenFileDialog(L"Import Track JSON", {{L"Track JSON (*.json)", L"*.json"}});
+          if (picked.ok) {
+            try {
+              editor::TrackDefinition imported = editor::fromFile(picked.path);
+              // Push undo of the prior track only on successful parse, mirroring importFile's
+              // pushUndo() placement in js/editor.js -- a failed import must never disturb history.
+              editorState.history().push(editorState.track());
+              editorState.replaceTrack(std::move(imported));
+              rebake();
+              fileIoStatus = "Loaded " + editor::pathToUtf8(picked.path);
+            } catch (const std::exception& error) {
+              fileIoStatus = std::string("Import failed: ") + error.what();
+            }
+          }
+        }
+        if (ImGui::MenuItem("Export JSON...")) {
+          const editor::FileDialogResult picked = editor::showSaveFileDialog(
+              L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}}, toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
+          if (picked.ok) {
+            // toFile() throws when the stream won't open (read-only target, locked file, removed
+            // drive) -- uncaught here it took the whole process down and the user's unsaved track
+            // with it (EDITOR_PARITY_FIXES.md finding 3). Import JSON already caught; this didn't.
+            try {
+              editor::toFile(editorState.track(), picked.path);
+              fileIoStatus = "Wrote " + editor::pathToUtf8(picked.path);
+            } catch (const std::exception& error) {
+              fileIoStatus = std::string("Export failed: ") + error.what();
+            }
+          }
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Place Test Mesh")) {
+          // Placed just outside the starter circle (radius ~1333m) so it's never accidentally on
+          // top of the track -- there's no asset library/drag-from-palette UI yet (M4 is
+          // placement, not authoring), so this is the only way to get a mesh region onto the
+          // canvas at all.
+          if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
+        }
+        // Import Mesh/Paste Mesh mirror editor.html's #importMeshBtn/#pasteMeshBtn
+        // (EDITOR_NATIVE_FILE_IO_PLAN.md M9); the right-click "Paste Mesh" in TopDownCanvas.cpp
+        // shares EditorState::importMeshFromJsonText with the menu item below.
+        if (ImGui::MenuItem("Import Mesh...")) {
+          const editor::FileDialogResult picked = editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
+          if (picked.ok) {
+            std::ifstream input(picked.path, std::ios::binary);
+            if (!input) {
+              // Previously fell through to importMeshFromJsonText with empty text, which reported
+              // the clipboard-flavoured "nothing to import (the clipboard is empty)" for a file
+              // that simply couldn't be opened (EDITOR_PARITY_FIXES.md finding 8).
+              fileIoStatus = "Mesh import failed: could not open " + editor::pathToUtf8(picked.path);
+            } else {
+              std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+              const editor::WorldPoint2D center = topDownView.center();
+              const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
+              if (error)
+                fileIoStatus = "Mesh import failed: " + *error;
+              else
+                rebake();
+            }
+          }
+        }
+        if (ImGui::MenuItem("Paste Mesh")) {
+          // Unlike Import Mesh (centred on the current view) and the right-click paste (centred
+          // on the click), the menu paste has no position to centre on -- mirrors
+          // importMeshFromClipboard's own `at = {x:0,z:0}` default when called without centreOn.
+          if (const auto text = editor::readClipboardText()) {
+            const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
+            if (error)
+              fileIoStatus = "Clipboard does not contain a mesh: " + *error;
+            else
+              rebake();
+          } else {
+            fileIoStatus = "Could not read the clipboard";
+          }
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Export USD...")) {
+          if (bakedTrack != nullptr) {
+            const editor::FileDialogResult picked = editor::showSaveFileDialog(
+                L"Export USD", {{L"USD ASCII (*.usda)", L"*.usda"}}, toWide(sanitizeFilenameStem(editorState.track().name) + ".usda"), L"usda");
+            if (picked.ok) {
+              const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
+              std::ofstream out(picked.path, std::ios::binary);
+              if (out) {
+                out << usd.text;
+                usdExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(usd.meshCount) + " mesh(es))";
+              } else {
+                usdExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
+              }
+            }
+          } else {
+            usdExportStatus = "Nothing to export -- current track failed to bake";
+          }
+        }
+        // Export .mppmodel (MPPMODEL_EXPORT_SPEC.md), a from-scratch native writer of
+        // MassivePolyPusher's binary model format -- see MppModelExport.hpp for why this doesn't
+        // link mpp::ModelSerializer itself.
+        if (ImGui::MenuItem("Export MppModel...")) {
+          if (bakedTrack != nullptr) {
+            const editor::FileDialogResult picked =
+                editor::showSaveFileDialog(L"Export MppModel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}},
+                                           toWide(sanitizeFilenameStem(editorState.track().name) + ".mppmodel"), L"mppmodel");
+            if (picked.ok) {
+              const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack);
+              std::ofstream out(picked.path, std::ios::binary);
+              if (out) {
+                out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
+                mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))";
+              } else {
+                mppModelExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
+              }
+            }
+          } else {
+            mppModelExportStatus = "Nothing to export -- current track failed to bake";
+          }
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Edit")) {
+        // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors editor.html's
+        // #undoBtn/#redoBtn: disabled while their respective stack is empty rather than always
+        // active.
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editorState.history().canUndo())) {
+          if (editorState.undo()) rebake();
+        }
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, editorState.history().canRedo())) {
+          if (editorState.redo()) rebake();
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("View")) {
+        // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9),
+        // mirrors editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid
+        // disables (but doesn't clear) the size and snap controls -- snapWorldXZ() itself
+        // re-checks showGrid, so there's no way to leave snapping silently active behind a
+        // hidden grid.
+        bool showGrid = topDownView.showGrid();
+        if (ImGui::MenuItem("Show Grid", "G", &showGrid)) topDownView.setShowGrid(showGrid);
+        if (ImGui::BeginMenu("Grid Size", showGrid)) {
+          const int gridSizeOptions[] = {8, 16, 32, 64};
+          for (int option : gridSizeOptions) {
+            const bool selected = static_cast<double>(option) == topDownView.gridSize();
+            if (ImGui::MenuItem(std::to_string(option).c_str(), nullptr, selected)) topDownView.setGridSize(static_cast<double>(option));
+          }
+          ImGui::EndMenu();
+        }
+        bool snapToGrid = topDownView.snapToGrid();
+        if (ImGui::MenuItem("Snap to Grid", nullptr, &snapToGrid, showGrid)) topDownView.setSnapToGrid(snapToGrid);
+        ImGui::Separator();
+        // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #renderModeSelect.
+        if (ImGui::BeginMenu("Render Mode")) {
+          const std::pair<const char*, editor::TopDownView::RenderMode> renderModes[] = {
+              {"Banked edges (lean tint)", editor::TopDownView::RenderMode::Banked},
+              {"Flat width (roll colour)", editor::TopDownView::RenderMode::Flat},
+              {"Flat with elevation colour", editor::TopDownView::RenderMode::Elevation},
+          };
+          for (const auto& [label, mode] : renderModes) {
+            if (ImGui::MenuItem(label, nullptr, topDownView.renderMode() == mode)) topDownView.setRenderMode(mode);
+          }
+          ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
+        // #pointFilters. Only Position currently has an observable effect -- roll/width/
+        // crossSection points have no on-canvas presence yet at all (gap 1), so those three
+        // checkboxes exist for UI parity but are otherwise inert until that on-canvas rendering
+        // lands.
+        if (ImGui::BeginMenu("Point Filters")) {
+          bool showPosition = topDownView.showPositionPoints();
+          if (ImGui::MenuItem("Position", nullptr, &showPosition)) topDownView.setShowPositionPoints(showPosition);
+          bool showRoll = topDownView.showRollPoints();
+          if (ImGui::MenuItem("Roll", nullptr, &showRoll)) topDownView.setShowRollPoints(showRoll);
+          bool showWidth = topDownView.showWidthPoints();
+          if (ImGui::MenuItem("Width", nullptr, &showWidth)) topDownView.setShowWidthPoints(showWidth);
+          bool showCrossSection = topDownView.showCrossSectionPoints();
+          if (ImGui::MenuItem("Cross-Section", nullptr, &showCrossSection)) topDownView.setShowCrossSectionPoints(showCrossSection);
+          ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
+        // #showPhysicsBtn/#hidePhysicsBtn.
+        bool showPhysicsPoints = topDownView.showPhysicsPoints();
+        if (ImGui::MenuItem("Show Physics Points", nullptr, &showPhysicsPoints)) topDownView.setShowPhysicsPoints(showPhysicsPoints);
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Random")) {
+        ImGui::TextUnformatted("Single-loop generator; see RandomTrack.hpp for scope.");
+        ImGui::SetNextItemWidth(160);
+        ImGui::InputInt("Seed", &randomSeed);
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt("Complexity", &randomComplexity, 1, 10);
+        if (ImGui::MenuItem("Generate New Random Track")) {
+          // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history,
+          // so the pre-generation state has to be pushed explicitly to stay undoable.
+          editorState.history().push(editorState.track());
+          editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed), randomRanges));
+          rebake();
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndMainMenuBar();
+    }
+
+    // Toolbar: a fixed strip pinned directly under the menu bar (not part of the dockspace, not
+    // movable/resizable) for the handful of controls used constantly regardless of which panel
+    // tab is focused -- track identity, direction, mode, and quick undo/redo. Everything else
+    // that used to live in the old single "track_editor — status" mega-window moved into the
+    // menu bar above or the Diagnostics panel below.
+    const float menuBarHeight = ImGui::GetFrameHeight();
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + menuBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+    ImGui::Begin("##Toolbar", nullptr,
+                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoSavedSettings);
+    // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer
+    // only resyncs from editorState.track().name when that value has actually changed since last
+    // frame (undo/redo/New/Import all go through setTrackName or replaceTrack, not live typing)
+    // -- otherwise a resync every frame would stomp in-progress keystrokes before they're
+    // committed.
+    {
+      static char nameBuf[256] = "";
+      static std::string lastSyncedName;
+      if (lastSyncedName != editorState.track().name) {
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", editorState.track().name.c_str());
+        lastSyncedName = editorState.track().name;
+      }
+      ImGui::SetNextItemWidth(220);
+      ImGui::InputText("Track Name", nameBuf, sizeof(nameBuf));
+      if (ImGui::IsItemDeactivatedAfterEdit() && editorState.setTrackName(nameBuf)) lastSyncedName = editorState.track().name;
+    }
+    // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn.
+    ImGui::SameLine();
+    if (ImGui::Button(editorState.track().start.reverse ? "Direction: Reversed" : "Direction: Forward")) {
+      editorState.toggleStartReverse();
+      rebake();
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Mode (E/C/R):");
+    ImGui::SameLine();
+    int modeIndex = static_cast<int>(editorState.mode());
+    const char* modeNames[] = {"Edit", "Create", "Rails"};
+    ImGui::SetNextItemWidth(100);
+    if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!editorState.history().canUndo());
+    if (ImGui::Button("Undo")) {
+      if (editorState.undo()) rebake();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!editorState.history().canRedo());
+    if (ImGui::Button("Redo")) {
+      if (editorState.redo()) rebake();
+    }
+    ImGui::EndDisabled();
+    // Mode-specific hint, and any pending file/export status -- consolidated into one status
+    // line rather than scattered SameLine()s after whichever button just ran, since those
+    // buttons now live in the File menu, not here.
+    switch (editorState.mode()) {
+      case editor::EditMode::Edit:
+        ImGui::TextUnformatted("Edit mode: click to select a point or mesh region. Drag to move; shift+drag a mesh to rotate. Delete/Backspace removes the selection.");
+        break;
+      case editor::EditMode::Create:
+        ImGui::TextUnformatted("Create mode: click to add points; click the first point to close, the last to finish open. Right-click cancels the draft.");
+        break;
+      case editor::EditMode::Rails:
+        ImGui::TextUnformatted("Rails mode: click near a mesh edge to toggle it as a rail (orange = flagged). A miss pans, same as right-drag elsewhere.");
+        break;
+    }
+    if (!fileIoStatus.empty()) ImGui::TextUnformatted(fileIoStatus.c_str());
+    if (!usdExportStatus.empty()) ImGui::TextUnformatted(usdExportStatus.c_str());
+    if (!mppModelExportStatus.empty()) ImGui::TextUnformatted(mppModelExportStatus.c_str());
+    const float toolbarHeight = ImGui::GetWindowSize().y;
+    ImGui::End();
+    ImGui::PopStyleVar();
+
+    // Dockspace host: fills the remaining viewport below the toolbar. The layout itself (left
+    // panel with every property/tool panel tabbed together, top-down view top-right, elevation
+    // profile bottom-right) is built once via DockBuilder on the first frame only, then never
+    // touched again -- io.IniFilename is null (see CreateContext above), so there's no saved
+    // layout to conflict with, and every future launch starts from this exact same arrangement.
+    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + menuBarHeight + toolbarHeight));
+    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - menuBarHeight - toolbarHeight));
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("##DockSpaceHost", nullptr,
+                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar(3);
+    const ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
+    static bool dockLayoutBuilt = false;
+    if (!dockLayoutBuilt) {
+      dockLayoutBuilt = true;
+      ImGui::DockBuilderRemoveNode(dockspaceId);
+      ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport->WorkSize);
+
+      ImGuiID leftId = 0, rightId = 0;
+      ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.24f, &leftId, &rightId);
+      ImGuiID topRightId = 0, bottomRightId = 0;
+      ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.7f, &topRightId, &bottomRightId);
+
+      for (const char* panel : {"Point Properties", "Zones", "Triggers", "Curves", "Textures", "Handling", "Random Ranges", "Diagnostics"})
+        ImGui::DockBuilderDockWindow(panel, leftId);
+      ImGui::DockBuilderDockWindow("Top-Down View", topRightId);
+      ImGui::DockBuilderDockWindow("Elevation Profile", bottomRightId);
+
+      ImGui::DockBuilderFinish(dockspaceId);
+    }
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+    ImGui::End();
+
+    ImGui::Begin("Diagnostics");
     ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
     ImGui::Separator();
     ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
@@ -1842,283 +2181,6 @@ int main(int, char**) {
                       gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH");
     ImGui::BulletText("redo enabled after undo / undo disabled once exhausted: %s / %s", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
                       gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
-    ImGui::Separator();
-    // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
-    // resyncs from editorState.track().name when that value has actually changed since last frame
-    // (undo/redo/New/Import all go through setTrackName or replaceTrack, not live typing) --
-    // otherwise a resync every frame would stomp in-progress keystrokes before they're committed.
-    {
-      static char nameBuf[256] = "";
-      static std::string lastSyncedName;
-      if (lastSyncedName != editorState.track().name) {
-        std::snprintf(nameBuf, sizeof(nameBuf), "%s", editorState.track().name.c_str());
-        lastSyncedName = editorState.track().name;
-      }
-      ImGui::SetNextItemWidth(220);
-      ImGui::InputText("Track Name", nameBuf, sizeof(nameBuf));
-      if (ImGui::IsItemDeactivatedAfterEdit() && editorState.setTrackName(nameBuf)) lastSyncedName = editorState.track().name;
-    }
-    // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn.
-    ImGui::SameLine();
-    if (ImGui::Button(editorState.track().start.reverse ? "Direction: Reversed" : "Direction: Forward")) {
-      editorState.toggleStartReverse();
-      rebake();
-    }
-    ImGui::Separator();
-    ImGui::TextUnformatted("Mode (E/C/R):");
-    ImGui::SameLine();
-    int modeIndex = static_cast<int>(editorState.mode());
-    const char* modeNames[] = {"Edit", "Create", "Rails"};
-    if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
-    // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9), mirrors
-    // editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid disables (but
-    // doesn't clear) the size and snap controls -- snapWorldXZ() itself re-checks showGrid, so
-    // there's no way to leave snapping silently active behind a hidden grid.
-    {
-      bool showGrid = topDownView.showGrid();
-      if (ImGui::Checkbox("Grid (G)", &showGrid)) topDownView.setShowGrid(showGrid);
-      ImGui::SameLine();
-      ImGui::BeginDisabled(!showGrid);
-      int gridSizeIndex = 2;
-      const int gridSizeOptions[] = {8, 16, 32, 64};
-      for (int i = 0; i < 4; ++i)
-        if (static_cast<double>(gridSizeOptions[i]) == topDownView.gridSize()) gridSizeIndex = i;
-      const char* gridSizeLabels[] = {"8", "16", "32", "64"};
-      ImGui::SetNextItemWidth(60);
-      if (ImGui::Combo("##gridSize", &gridSizeIndex, gridSizeLabels, 4))
-        topDownView.setGridSize(static_cast<double>(gridSizeOptions[gridSizeIndex]));
-      ImGui::SameLine();
-      bool snapToGrid = topDownView.snapToGrid();
-      if (ImGui::Checkbox("Snap", &snapToGrid)) topDownView.setSnapToGrid(snapToGrid);
-      ImGui::EndDisabled();
-    }
-    // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #renderModeSelect.
-    {
-      int renderModeIndex = static_cast<int>(topDownView.renderMode());
-      const char* renderModeLabels[] = {"Banked edges (lean tint)", "Flat width (roll colour)", "Flat with elevation colour"};
-      ImGui::SetNextItemWidth(200);
-      if (ImGui::Combo("Render Mode", &renderModeIndex, renderModeLabels, 3))
-        topDownView.setRenderMode(static_cast<editor::TopDownView::RenderMode>(renderModeIndex));
-    }
-    // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #pointFilters.
-    // Only Position currently has an observable effect -- roll/width/crossSection points have no
-    // on-canvas presence yet at all (gap 1), so those three checkboxes exist for UI parity but are
-    // otherwise inert until that on-canvas rendering lands.
-    {
-      bool showPosition = topDownView.showPositionPoints();
-      if (ImGui::Checkbox("Position##filter", &showPosition)) topDownView.setShowPositionPoints(showPosition);
-      ImGui::SameLine();
-      bool showRoll = topDownView.showRollPoints();
-      if (ImGui::Checkbox("Roll##filter", &showRoll)) topDownView.setShowRollPoints(showRoll);
-      ImGui::SameLine();
-      bool showWidth = topDownView.showWidthPoints();
-      if (ImGui::Checkbox("Width##filter", &showWidth)) topDownView.setShowWidthPoints(showWidth);
-      ImGui::SameLine();
-      bool showCrossSection = topDownView.showCrossSectionPoints();
-      if (ImGui::Checkbox("Cross-Section##filter", &showCrossSection)) topDownView.setShowCrossSectionPoints(showCrossSection);
-    }
-    // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
-    // #showPhysicsBtn/#hidePhysicsBtn -- each disabled while already in that state, matching JS's
-    // `.disabled = visible`/`.disabled = !visible`.
-    {
-      const bool showingPhysics = topDownView.showPhysicsPoints();
-      ImGui::BeginDisabled(showingPhysics);
-      if (ImGui::Button("Show Physics Pts")) topDownView.setShowPhysicsPoints(true);
-      ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::BeginDisabled(!showingPhysics);
-      if (ImGui::Button("Hide Physics Pts")) topDownView.setShowPhysicsPoints(false);
-      ImGui::EndDisabled();
-    }
-    // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors editor.html's
-    // #undoBtn/#redoBtn: disabled while their respective stack is empty rather than always active.
-    ImGui::BeginDisabled(!editorState.history().canUndo());
-    if (ImGui::Button("Undo (Ctrl+Z)")) {
-      if (editorState.undo()) rebake();
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!editorState.history().canRedo());
-    if (ImGui::Button("Redo (Ctrl+Y)")) {
-      if (editorState.redo()) rebake();
-    }
-    ImGui::EndDisabled();
-    ImGui::Separator();
-    // New/Export JSON/Import JSON mirror editor.html's #newBtn/#exportBtn/#importBtn row
-    // (EDITOR_NATIVE_FILE_IO_PLAN.md M8); Export USD (below) is the same row's #exportUsdBtn.
-    if (ImGui::Button("New")) {
-      editorState.history().push(editorState.track());
-      editorState.replaceTrack(buildStarterTrack());
-      rebake();
-      fileIoStatus.clear();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Export JSON...")) {
-      const editor::FileDialogResult picked =
-          editor::showSaveFileDialog(L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}},
-                                     toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
-      if (picked.ok) {
-        // toFile() throws when the stream won't open (read-only target, locked file, removed
-        // drive) -- uncaught here it took the whole process down and the user's unsaved track
-        // with it (EDITOR_PARITY_FIXES.md finding 3). Import JSON already caught; this didn't.
-        try {
-          editor::toFile(editorState.track(), picked.path);
-          fileIoStatus = "Wrote " + editor::pathToUtf8(picked.path);
-        } catch (const std::exception& error) {
-          fileIoStatus = std::string("Export failed: ") + error.what();
-        }
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Import JSON...")) {
-      const editor::FileDialogResult picked =
-          editor::showOpenFileDialog(L"Import Track JSON", {{L"Track JSON (*.json)", L"*.json"}});
-      if (picked.ok) {
-        try {
-          editor::TrackDefinition imported = editor::fromFile(picked.path);
-          // Push undo of the prior track only on successful parse, mirroring importFile's
-          // pushUndo() placement in js/editor.js -- a failed import must never disturb history.
-          editorState.history().push(editorState.track());
-          editorState.replaceTrack(std::move(imported));
-          rebake();
-          fileIoStatus = "Loaded " + editor::pathToUtf8(picked.path);
-        } catch (const std::exception& error) {
-          fileIoStatus = std::string("Import failed: ") + error.what();
-        }
-      }
-    }
-    if (!fileIoStatus.empty()) {
-      ImGui::SameLine();
-      ImGui::TextUnformatted(fileIoStatus.c_str());
-    }
-    if (ImGui::Button("Place Test Mesh")) {
-      // Placed just outside the starter circle (radius ~1333m) so it's never accidentally on top
-      // of the track -- there's no asset library/drag-from-palette UI yet (M4 is placement, not
-      // authoring), so this is the only way to get a mesh region onto the canvas at all.
-      if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
-    }
-    ImGui::SameLine();
-    // Import Mesh/Paste Mesh mirror editor.html's #importMeshBtn/#pasteMeshBtn
-    // (EDITOR_NATIVE_FILE_IO_PLAN.md M9); the right-click "Paste Mesh" in TopDownCanvas.cpp shares
-    // EditorState::importMeshFromJsonText with the toolbar button below.
-    if (ImGui::Button("Import Mesh...")) {
-      const editor::FileDialogResult picked =
-          editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
-      if (picked.ok) {
-        std::ifstream input(picked.path, std::ios::binary);
-        if (!input) {
-          // Previously fell through to importMeshFromJsonText with empty text, which reported the
-          // clipboard-flavoured "nothing to import (the clipboard is empty)" for a file that simply
-          // couldn't be opened (EDITOR_PARITY_FIXES.md finding 8).
-          fileIoStatus = "Mesh import failed: could not open " + editor::pathToUtf8(picked.path);
-        } else {
-          std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-          const editor::WorldPoint2D center = topDownView.center();
-          const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
-          if (error)
-            fileIoStatus = "Mesh import failed: " + *error;
-          else
-            rebake();
-        }
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Paste Mesh")) {
-      // Unlike Import Mesh (centred on the current view) and the right-click paste (centred on the
-      // click), the toolbar paste has no position to centre on -- mirrors
-      // importMeshFromClipboard's own `at = {x:0,z:0}` default when called without centreOn.
-      if (const auto text = editor::readClipboardText()) {
-        const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
-        if (error)
-          fileIoStatus = "Clipboard does not contain a mesh: " + *error;
-        else
-          rebake();
-      } else {
-        fileIoStatus = "Could not read the clipboard";
-      }
-    }
-    ImGui::Separator();
-    ImGui::TextUnformatted("Random track (single-loop generator; see RandomTrack.hpp for scope):");
-    ImGui::SetNextItemWidth(120);
-    ImGui::InputInt("Seed", &randomSeed);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120);
-    ImGui::SliderInt("Complexity", &randomComplexity, 1, 10);
-    if (ImGui::Button("New Random Track")) {
-      // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history, so
-      // the pre-generation state has to be pushed explicitly to stay undoable.
-      editorState.history().push(editorState.track());
-      editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed), randomRanges));
-      rebake();
-    }
-    ImGui::Separator();
-    if (ImGui::Button("Export USD...")) {
-      if (bakedTrack != nullptr) {
-        const editor::FileDialogResult picked =
-            editor::showSaveFileDialog(L"Export USD", {{L"USD ASCII (*.usda)", L"*.usda"}},
-                                       toWide(sanitizeFilenameStem(editorState.track().name) + ".usda"), L"usda");
-        if (picked.ok) {
-          const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
-          std::ofstream out(picked.path, std::ios::binary);
-          if (out) {
-            out << usd.text;
-            usdExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(usd.meshCount) + " mesh(es))";
-          } else {
-            usdExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
-          }
-        }
-      } else {
-        usdExportStatus = "Nothing to export -- current track failed to bake";
-      }
-    }
-    if (!usdExportStatus.empty()) {
-      ImGui::SameLine();
-      ImGui::TextUnformatted(usdExportStatus.c_str());
-    }
-    // Export .mppmodel (MPPMODEL_EXPORT_SPEC.md), a from-scratch native writer of
-    // MassivePolyPusher's binary model format -- see MppModelExport.hpp for why this doesn't
-    // link mpp::ModelSerializer itself.
-    if (ImGui::Button("Export MppModel...")) {
-      if (bakedTrack != nullptr) {
-        const editor::FileDialogResult picked =
-            editor::showSaveFileDialog(L"Export MppModel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}},
-                                       toWide(sanitizeFilenameStem(editorState.track().name) + ".mppmodel"), L"mppmodel");
-        if (picked.ok) {
-          const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack);
-          std::ofstream out(picked.path, std::ios::binary);
-          if (out) {
-            out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
-            mppModelExportStatus =
-                "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))";
-          } else {
-            mppModelExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
-          }
-        }
-      } else {
-        mppModelExportStatus = "Nothing to export -- current track failed to bake";
-      }
-    }
-    if (!mppModelExportStatus.empty()) {
-      ImGui::SameLine();
-      ImGui::TextUnformatted(mppModelExportStatus.c_str());
-    }
-    ImGui::Separator();
-    switch (editorState.mode()) {
-      case editor::EditMode::Edit:
-        ImGui::TextUnformatted("Edit mode: click to select a point or mesh region.");
-        ImGui::TextUnformatted("Drag to move; shift+drag a mesh to rotate it about its own origin.");
-        ImGui::TextUnformatted("Delete/Backspace removes whichever is selected.");
-        break;
-      case editor::EditMode::Create:
-        ImGui::TextUnformatted("Create mode: click to add points; click the first point to close, the last to finish open.");
-        ImGui::TextUnformatted("Right-click cancels the in-progress draft.");
-        break;
-      case editor::EditMode::Rails:
-        ImGui::TextUnformatted("Rails mode: click near a mesh edge to toggle it as a rail (orange = flagged).");
-        ImGui::TextUnformatted("A miss pans instead, same as Edit/Create mode's right-drag.");
-        break;
-    }
-    ImGui::TextUnformatted("Top-down view: right-drag to pan, scroll to zoom, Home to reset.");
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
