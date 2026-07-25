@@ -1117,6 +1117,102 @@ Gap8SmokeCheckResult runGap8SmokeCheck() {
   return result;
 }
 
+editor::TrackDefinition buildOpenTestTrack(int pointCount) {
+  editor::TrackDefinition track;
+  track.name = "Gap11 Open Test";
+  editor::Path path;
+  path.id = "open-path";
+  path.closed = false;
+  for (int i = 0; i < pointCount; ++i) {
+    editor::TrackPoint point;
+    point.kind = editor::PointKind::Position;
+    point.pos = tox::Vec3(static_cast<double>(i) * 100.0, 0.0, 0.0);
+    point.weight = 1.0;
+    path.points.push_back(point);
+  }
+  track.paths.push_back(std::move(path));
+  return track;
+}
+
+// Gap-11 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #11): segment selection,
+// deletion, splitting, and insert-point-on-segment, mirroring segSel/deleteSegment/
+// selectedOutgoingSegment/selectedIncomingSegment/insertNear. Deliberately does not exercise
+// segmentAtTop (click-to-select-a-segment) -- js/editor.js defines it but never calls it, so it's
+// not ported here either (see EditorState.hpp's comment on the port).
+struct Gap11SmokeCheckResult {
+  bool outgoingNulloptOnAuxSelection = false, outgoingNulloptAtOpenPathEnd = false, incomingNulloptAtOpenPathStart = false;
+  bool closedSegmentDeleteOpensPath = false, closedSegmentDeleteKeepsAllPoints = false;
+  bool openFirstSegmentShrinks = false, openFloorGuardHolds = false;
+  bool openMiddleSegmentSplits = false, openMiddleSplitGuardHolds = false;
+  bool disjointSeamGuardHolds = false;
+  bool insertOnSegmentAddsPoint = false, insertedPointBakes = false;
+};
+
+Gap11SmokeCheckResult runGap11SmokeCheck() {
+  Gap11SmokeCheckResult result;
+
+  // --- selectedOutgoingSegment/selectedIncomingSegment edge cases ---
+  {
+    editor::EditorState state(buildStarterTrack());  // closed, 12 position points
+    const auto rollIndex = state.addAuxPoint(0, editor::PointKind::Roll, 0.5);
+    result.outgoingNulloptOnAuxSelection = rollIndex.has_value() && !state.selectedOutgoingSegment().has_value();
+
+    editor::EditorState openState(buildOpenTestTrack(6));
+    openState.selectPoint(0, 5);  // last point of an open path
+    result.outgoingNulloptAtOpenPathEnd = !openState.selectedOutgoingSegment().has_value();
+    openState.selectPoint(0, 0);  // first point of an open path
+    result.incomingNulloptAtOpenPathStart = !openState.selectedIncomingSegment().has_value();
+  }
+
+  // --- closed path: deleting a segment opens the loop, keeping every point ---
+  {
+    editor::EditorState state(buildStarterTrack());
+    const std::size_t countBefore = state.track().paths[0].points.size();
+    state.selectPoint(0, 0);
+    const auto seg = state.selectedOutgoingSegment();
+    result.closedSegmentDeleteOpensPath =
+        seg.has_value() && state.deleteSegmentAt(seg->pathIndex, seg->i) && !state.track().paths[0].closed;
+    result.closedSegmentDeleteKeepsAllPoints = state.track().paths[0].points.size() == countBefore;
+  }
+
+  // --- open path: first/last segment shrinks; floor refuses below 4 ---
+  {
+    editor::EditorState state(buildOpenTestTrack(5));
+    result.openFirstSegmentShrinks = state.deleteSegmentAt(0, 0) && editor::EditorState::positionCount(state.track().paths[0]) == 4;
+    result.openFloorGuardHolds = !state.deleteSegmentAt(0, 0);  // exactly at the 4-point floor now
+  }
+
+  // --- open path: an interior segment splits into two paths ---
+  {
+    editor::EditorState state(buildOpenTestTrack(8));
+    result.openMiddleSegmentSplits = state.deleteSegmentAt(0, 3) && state.track().paths.size() == 2 &&
+                                      editor::EditorState::positionCount(state.track().paths[0]) == 4 &&
+                                      editor::EditorState::positionCount(state.track().paths[1]) == 4;
+
+    editor::EditorState guardState(buildOpenTestTrack(7));  // splitting at i=1 leaves a 2-point half
+    result.openMiddleSplitGuardHolds = !guardState.deleteSegmentAt(0, 1);
+  }
+
+  // --- disjoint seam guard ---
+  {
+    editor::EditorState state(buildStarterTrack());
+    result.disjointSeamGuardHolds = state.makeDisjoint(0, 3) && !state.deleteSegmentAt(0, 0);
+  }
+
+  // --- insert-point-on-segment ---
+  {
+    editor::EditorState state(buildOpenTestTrack(4));
+    const int before = editor::EditorState::positionCount(state.track().paths[0]);
+    const auto inserted = state.insertPositionOnSegment(0, 2, 150.0, 3.0, 25.0);
+    result.insertOnSegmentAddsPoint = inserted.has_value() && editor::EditorState::positionCount(state.track().paths[0]) == before + 1 &&
+                                       state.track().paths[0].points[*inserted].pos.x == 150.0;
+    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+    result.insertedPointBakes = static_cast<bool>(baked);
+  }
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1311,6 +1407,19 @@ int main(int, char**) {
                gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap11SmokeCheckResult gap11Smoke = runGap11SmokeCheck();
+  std::fprintf(stdout,
+               "Gap11 smoke check (segment select/delete/split, insert-on-segment): outgoingNulloptOnAux=%s "
+               "outgoingNulloptAtEnd=%s incomingNulloptAtStart=%s closedOpensPath=%s closedKeepsPoints=%s "
+               "openShrinks=%s openFloorGuard=%s openSplits=%s openSplitGuard=%s disjointGuard=%s insertAdds=%s insertBakes=%s\n",
+               gap11Smoke.outgoingNulloptOnAuxSelection ? "OK" : "MISMATCH", gap11Smoke.outgoingNulloptAtOpenPathEnd ? "OK" : "MISMATCH",
+               gap11Smoke.incomingNulloptAtOpenPathStart ? "OK" : "MISMATCH", gap11Smoke.closedSegmentDeleteOpensPath ? "OK" : "MISMATCH",
+               gap11Smoke.closedSegmentDeleteKeepsAllPoints ? "OK" : "MISMATCH", gap11Smoke.openFirstSegmentShrinks ? "OK" : "MISMATCH",
+               gap11Smoke.openFloorGuardHolds ? "OK" : "MISMATCH", gap11Smoke.openMiddleSegmentSplits ? "OK" : "MISMATCH",
+               gap11Smoke.openMiddleSplitGuardHolds ? "OK" : "MISMATCH", gap11Smoke.disjointSeamGuardHolds ? "OK" : "MISMATCH",
+               gap11Smoke.insertOnSegmentAddsPoint ? "OK" : "MISMATCH", gap11Smoke.insertedPointBakes ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   const Gap9SmokeCheckResult gap9Smoke = runGap9SmokeCheck();
   std::fprintf(stdout,
                "Gap9 smoke check (grid display / size / snap): noSnapByDefault=%s snapWhenEnabled=%s "
@@ -1488,6 +1597,19 @@ int main(int, char**) {
     ImGui::TextUnformatted("Gap8 smoke check (random ranges panel, exercised directly):");
     ImGui::BulletText("custom turn-count range respected / default ranges still bake: %s / %s",
                       gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap11 smoke check (segment select/delete/split, insert-on-segment, exercised directly):");
+    ImGui::BulletText("outgoing nullopt on aux selection / at open-path end / incoming nullopt at open-path start: %s / %s / %s",
+                      gap11Smoke.outgoingNulloptOnAuxSelection ? "OK" : "MISMATCH", gap11Smoke.outgoingNulloptAtOpenPathEnd ? "OK" : "MISMATCH",
+                      gap11Smoke.incomingNulloptAtOpenPathStart ? "OK" : "MISMATCH");
+    ImGui::BulletText("closed-path delete opens path / keeps all points: %s / %s", gap11Smoke.closedSegmentDeleteOpensPath ? "OK" : "MISMATCH",
+                      gap11Smoke.closedSegmentDeleteKeepsAllPoints ? "OK" : "MISMATCH");
+    ImGui::BulletText("open first-segment shrinks / floor guard holds: %s / %s", gap11Smoke.openFirstSegmentShrinks ? "OK" : "MISMATCH",
+                      gap11Smoke.openFloorGuardHolds ? "OK" : "MISMATCH");
+    ImGui::BulletText("open middle-segment splits / split guard holds / disjoint-seam guard holds: %s / %s / %s",
+                      gap11Smoke.openMiddleSegmentSplits ? "OK" : "MISMATCH", gap11Smoke.openMiddleSplitGuardHolds ? "OK" : "MISMATCH",
+                      gap11Smoke.disjointSeamGuardHolds ? "OK" : "MISMATCH");
+    ImGui::BulletText("insert-on-segment adds point / bakes: %s / %s", gap11Smoke.insertOnSegmentAddsPoint ? "OK" : "MISMATCH",
+                      gap11Smoke.insertedPointBakes ? "OK" : "MISMATCH");
     ImGui::TextUnformatted("Gap9 smoke check (grid display / size / snap, exercised directly):");
     ImGui::BulletText("no snap by default / snaps once shown+enabled / hidden grid disables snap: %s / %s / %s",
                       gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",

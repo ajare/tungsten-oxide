@@ -876,6 +876,170 @@ public:
     return true;
   }
 
+  // ---- Segment selection/deletion/splitting; insert-point-on-segment (EDITOR_PARITY_FIXES.md
+  // gap 11) ----
+  //
+  // `i` throughout is a POSITION-space index (0-based, counting only Position points on the
+  // path) identifying the segment running from position i to position i+1 (wrapping for a closed
+  // path) -- mirrors js/editor.js's segSel/{path,i} exactly, which is always derived this way
+  // (positionIndices(path)[i]), never a raw Path::points index.
+  //
+  // Deliberately does NOT port editor.js's own click-to-select-a-segment (`segmentAtTop`) --
+  // that function exists in JS but is never called from anywhere in js/editor.js itself (dead
+  // code); the shipped UI only ever derives a segment from the *currently selected control
+  // point* via selectedOutgoingSegment/selectedIncomingSegment below, so that's the only path
+  // ported here too.
+  struct SegmentRef {
+    int pathIndex, i;
+  };
+
+  static int positionCount(const Path& path) {
+    return static_cast<int>(std::count_if(path.points.begin(), path.points.end(), [](const TrackPoint& p) { return p.kind == PointKind::Position; }));
+  }
+
+  // The segment leaving the currently selected control point, or nullopt if nothing satisfies it
+  // (no selection, an aux point selected, or an open path's last point). Mirrors
+  // selectedOutgoingSegment() exactly, including that it returns null while a roll/width/
+  // crossSection point is selected -- this port keeps all point kinds in one `selection_` rather
+  // than JS's separate rollSel/widthSel/crossSectionSel variables, so that guard becomes "the
+  // selected point must be a Position point".
+  std::optional<SegmentRef> selectedOutgoingSegment() const {
+    if (!selectionInRange()) return std::nullopt;
+    const Path& path = track_.paths[selection_.pathIndex];
+    if (path.points[selection_.pointIndex].kind != PointKind::Position) return std::nullopt;
+    const int posIndex = rawIndexToPositionIndex(path, selection_.pointIndex);
+    if (posIndex < 0) return std::nullopt;
+    if (path.closed) return SegmentRef{selection_.pathIndex, posIndex};
+    if (posIndex < positionCount(path) - 1) return SegmentRef{selection_.pathIndex, posIndex};
+    return std::nullopt;
+  }
+
+  // The segment arriving at the currently selected control point. Mirrors
+  // selectedIncomingSegment() exactly.
+  std::optional<SegmentRef> selectedIncomingSegment() const {
+    if (!selectionInRange()) return std::nullopt;
+    const Path& path = track_.paths[selection_.pathIndex];
+    if (path.points[selection_.pointIndex].kind != PointKind::Position) return std::nullopt;
+    const int posIndex = rawIndexToPositionIndex(path, selection_.pointIndex);
+    if (posIndex < 0) return std::nullopt;
+    const int n = positionCount(path);
+    if (path.closed) return SegmentRef{selection_.pathIndex, (posIndex - 1 + n) % n};
+    if (posIndex > 0) return SegmentRef{selection_.pathIndex, posIndex - 1};
+    return std::nullopt;
+  }
+
+  // Deletes the segment running from position `i` to position `i+1` (wrapping if closed) on
+  // `pathIndex` -- mirrors deleteSegment(pi, i) exactly:
+  //  - closed path: opens it by rotating the point array so the cut becomes the new start/end
+  //    (no point removed -- opening a loop needs no duplicate endpoint, unlike makeDisjoint's
+  //    opened-closed case, which marks a *smoothing seam* at a point that stays shared).
+  //  - open path, first or last segment: shrinks by dropping that one endpoint (refused below the
+  //    4-point floor).
+  //  - open path, an interior segment: splits into two new open paths at the cut, with fresh
+  //    default roll/width/crossSection points (refused if either half would drop below 4 points)
+  //    -- same "authoring capability over pixel-perfect parity" tradeoff as makeDisjoint's split
+  //    (no proportional roll/width redistribution).
+  // Refuses (returns false, no history push) if the path carries a disjoint seam -- mirrors
+  // deleteSegment's pathHasDisjointSeam guard: reconnect it first, same as editor.html asks.
+  bool deleteSegmentAt(int pathIndex, int i) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
+    Path& path = track_.paths[pathIndex];
+    if (hasDisjointSeamOnPath(path.id)) return false;
+    std::vector<int> idxs;
+    for (int k = 0; k < static_cast<int>(path.points.size()); ++k)
+      if (path.points[k].kind == PointKind::Position) idxs.push_back(k);
+    const int n = static_cast<int>(idxs.size());
+    if (i < 0 || i >= n) return false;
+
+    const std::string startPointId = currentStartPointId();
+
+    if (path.closed) {
+      history_.push(track_);
+      const int cut = (i + 1) % n;
+      std::vector<TrackPoint> posObjs;
+      posObjs.reserve(n);
+      for (int k : idxs) posObjs.push_back(path.points[k]);
+      std::vector<TrackPoint> rotated;
+      rotated.reserve(n);
+      for (int k = cut; k < n; ++k) rotated.push_back(posObjs[k]);
+      for (int k = 0; k < cut; ++k) rotated.push_back(posObjs[k]);
+      for (int k = 0; k < n; ++k) path.points[idxs[k]] = rotated[k];
+      path.closed = false;
+    } else if (i == 0) {
+      if (n - 1 < 4) return false;
+      history_.push(track_);
+      path.points.erase(path.points.begin() + idxs[0]);
+    } else if (i == n - 2) {
+      if (n - 1 < 4) return false;
+      history_.push(track_);
+      path.points.erase(path.points.begin() + idxs[n - 1]);
+    } else {
+      std::vector<TrackPoint> posObjs;
+      posObjs.reserve(n);
+      for (int k : idxs) posObjs.push_back(path.points[k]);
+      std::vector<TrackPoint> left(posObjs.begin(), posObjs.begin() + i + 1);
+      std::vector<TrackPoint> right(posObjs.begin() + i + 1, posObjs.end());
+      if (static_cast<int>(left.size()) < 4 || static_cast<int>(right.size()) < 4) return false;
+      history_.push(track_);
+      std::set<std::string> usedPathIds;
+      for (const auto& p : track_.paths) usedPathIds.insert(p.id);
+      Path leftPath, rightPath;
+      leftPath.id = firstUnusedId("path", usedPathIds);
+      usedPathIds.insert(leftPath.id);
+      rightPath.id = firstUnusedId("path", usedPathIds);
+      leftPath.closed = false;
+      rightPath.closed = false;
+      leftPath.texture = path.texture;
+      rightPath.texture = path.texture;
+      leftPath.points = std::move(left);
+      appendDefaultAuxPoints(leftPath);
+      rightPath.points = std::move(right);
+      appendDefaultAuxPoints(rightPath);
+      track_.paths.erase(track_.paths.begin() + pathIndex);
+      track_.paths.insert(track_.paths.begin() + pathIndex, {leftPath, rightPath});
+    }
+
+    selection_ = {};
+    preserveStartPoint(startPointId);
+    pruneStaleReferences();
+    return true;
+  }
+
+  // Mirrors deleteSelectedSegment(which): derives the segment from the current selection via
+  // selectedOutgoingSegment()/selectedIncomingSegment() and deletes it. Returns false (silent
+  // no-op, no alert -- consistent with this editor's other disabled-button-instead-of-alert()
+  // panel affordances) if no such segment exists.
+  bool deleteSelectedSegment(bool outgoing) {
+    const std::optional<SegmentRef> seg = outgoing ? selectedOutgoingSegment() : selectedIncomingSegment();
+    if (!seg.has_value()) return false;
+    return deleteSegmentAt(seg->pathIndex, seg->i);
+  }
+
+  // Inserts a new Position point into `pathIndex` at position-space index `insertAtPositionIndex`
+  // (clamped to [0, positionCount]), mirroring insertNear's insertPositionAt/selectPosition --
+  // used by the "Position" context-menu item (EDITOR_PARITY_FIXES.md gap 13's deferred item,
+  // finished here since it needs this same segment-insertion machinery). Selects the new point
+  // and returns its raw Path::points index, or nullopt if pathIndex is invalid.
+  std::optional<int> insertPositionOnSegment(int pathIndex, int insertAtPositionIndex, double x, double y, double z) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
+    history_.push(track_);
+    Path& path = track_.paths[pathIndex];
+    std::vector<int> idxs;
+    for (int k = 0; k < static_cast<int>(path.points.size()); ++k)
+      if (path.points[k].kind == PointKind::Position) idxs.push_back(k);
+    const int n = static_cast<int>(idxs.size());
+    const int clampedAt = std::clamp(insertAtPositionIndex, 0, n);
+    const int rawAt = clampedAt < n ? idxs[clampedAt] : static_cast<int>(path.points.size());
+    TrackPoint point;
+    point.kind = PointKind::Position;
+    point.id = newPointId();
+    point.pos = tox::Vec3(x, y, z);
+    point.weight = 1.0;
+    path.points.insert(path.points.begin() + rawAt, point);
+    selectPoint(pathIndex, rawAt);
+    return rawAt;
+  }
+
   // ---- Roll/width/cross-section point editing (EDITOR_PARITY_FIXES.md gap 1) ----
   //
   // Scoped to add/edit-fields/delete via a properties panel (PropertiesPanel.hpp/.cpp), NOT the

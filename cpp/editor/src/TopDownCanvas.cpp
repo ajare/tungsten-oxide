@@ -644,6 +644,25 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         const std::optional<NearestPathPlacement> nearPlacement = nearestPathPlacement(baked, contextMenuWorld.x, contextMenuWorld.z);
         ImGui::TextDisabled("Add control point");
         ImGui::BeginDisabled(!nearPlacement.has_value());
+        // Position (EDITOR_PARITY_FIXES.md gap 11, finishing what gap 13 deferred): mirrors
+        // insertNear -- `t` (already a curve-parametric fraction, whether it came from the fine
+        // evaluator in JS or the baked centerline's discrete samples here) reconstructs the
+        // approximate segment index the same way insertNear's own `g = t * gMax` does. World X/Z
+        // are the exact click position (not the nearest sample's); elevation is the nearest
+        // baked frame's Y, standing in for JS's real curve-evaluated Y at that point.
+        if (ImGui::MenuItem("Position")) {
+          const Path& authoredPath = state.track().paths[nearPlacement->pathIndex];
+          const int n = EditorState::positionCount(authoredPath);
+          const double gMax = authoredPath.closed ? n : n - 1;
+          const double g = nearPlacement->t * gMax;
+          const int insertAt = authoredPath.closed ? (static_cast<int>(std::floor(g)) + 1) % (n + 1)
+                                                    : std::min(n, static_cast<int>(std::floor(g)) + 1);
+          if (state
+                  .insertPositionOnSegment(nearPlacement->pathIndex, insertAt, contextMenuWorld.x, nearPlacement->frame->pos.y,
+                                           contextMenuWorld.z)
+                  .has_value())
+            mutated = true;
+        }
         if (ImGui::MenuItem("Roll")) {
           const auto index = state.addAuxPoint(nearPlacement->pathIndex, PointKind::Roll, nearPlacement->t);
           if (index.has_value()) {

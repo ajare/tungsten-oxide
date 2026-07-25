@@ -463,7 +463,34 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    Create-mode click both snaps a new point and still closes the draft off the raw (unsnapped) hit
    test.
 10. **Render modes** (banked / flat / elevation), point-type filters, physics-sample overlay.
-11. **Segment selection, deletion and splitting; insert-point-on-segment.**
+11. ~~**Segment selection, deletion and splitting; insert-point-on-segment.**~~ **Implemented
+    (selection derived from the current point selection, not click-to-select; Position context-
+    menu item completed).** New `EditorState::deleteSegmentAt`/`deleteSelectedSegment`/
+    `selectedOutgoingSegment`/`selectedIncomingSegment`/`insertPositionOnSegment`, a direct port of
+    `deleteSegment`/`deleteSelectedSegment`/`selectedOutgoingSegment`/`selectedIncomingSegment`/
+    `insertNear`. `PropertiesPanel.cpp`'s Position Point fields gained "Delete Outgoing Segment"/
+    "Delete Incoming Segment" buttons, mirroring `#delSegmentBtn`/`#delPrevSegmentBtn` -- rendered
+    only when that direction's segment exists, same as JS's `if (outgoingSeg)`/`if (incomingSeg)`
+    guards. `TopDownCanvas.cpp`'s context menu (gap 13) gained the "Position" item it had
+    deliberately deferred, since it needs this same segment machinery -- it reuses gap 13's
+    `nearestPathPlacement()` helper (nearest baked centerline sample) to reconstruct an approximate
+    segment index from `t` the same way `insertNear`'s own `g = t * gMax` does, seeding the new
+    point's elevation from the nearest frame's Y (JS uses the real spline evaluator's Y there; same
+    baked-centerline-as-evaluator-substitute tradeoff as gaps 3/4/13). `deleteSegmentAt` ports all
+    three `deleteSegment` cases exactly: a closed path opens by rotating its point array at the cut
+    (no point removed or duplicated -- unlike `makeDisjoint`'s opened-closed case, which marks a
+    *smoothing seam* at a point that stays shared); an open path's first/last segment shrinks by
+    dropping that endpoint (refused below the 4-point floor); an open path's interior segment
+    splits into two new paths with fresh default roll/width/crossSection points (refused if either
+    half would drop below 4 points) -- same "authoring capability over pixel-perfect parity"
+    tradeoff as `makeDisjoint`'s split (no proportional roll/width redistribution). Also ports
+    `deleteSegment`'s `pathHasDisjointSeam` guard (reuses the existing `hasDisjointSeamOnPath`
+    helper). **Deliberately not ported: `segmentAtTop`** (click-to-select-a-segment) -- it's
+    defined in `js/editor.js` but never called from anywhere in that file (dead code); the shipped
+    JS UI only ever derives a segment from the *currently selected control point*, which is what's
+    ported here too. A "Gap11 smoke check" in `main.cpp` covers both nullopt edge cases (aux point
+    selected, open-path start/end), all three delete-segment cases and their guards (floor,
+    split-too-small, disjoint-seam), and that an inserted point lands at the right index and bakes.
 12. **Elevation view roll points** — the orange roll line and its draggable diamonds.
 13. ~~**Add-point context menu.**~~ **Implemented (Roll/Width/Cross-section, zone, trigger; not
     Position).** `TopDownCanvas.cpp`'s right-click popup (previously M9's minimal "Paste Mesh"

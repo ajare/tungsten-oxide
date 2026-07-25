@@ -48,6 +48,19 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
       if (state.reconnectDisjoint(seamIt->id)) mutated = true;
     }
   }
+
+  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11), mirrors editor.html's
+  // #delSegmentBtn/#delPrevSegmentBtn: rendered only when that direction's segment actually
+  // exists (an open path's last/first point has no outgoing/incoming segment), same as JS's
+  // `if (outgoingSeg)`/`if (incomingSeg)` guards around the button markup.
+  const auto outgoingSeg = state.selectedOutgoingSegment();
+  const auto incomingSeg = state.selectedIncomingSegment();
+  if (outgoingSeg.has_value() && ImGui::Button("Delete Outgoing Segment")) {
+    if (state.deleteSelectedSegment(true)) mutated = true;
+  }
+  if (incomingSeg.has_value() && ImGui::Button("Delete Incoming Segment")) {
+    if (state.deleteSelectedSegment(false)) mutated = true;
+  }
 }
 
 void drawRollFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, bool& mutated) {
