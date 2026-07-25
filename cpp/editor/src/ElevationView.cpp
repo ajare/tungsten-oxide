@@ -147,6 +147,7 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
 
   ImGui::InvisibleButton("elevationViewInput", canvasSize, ImGuiButtonFlags_MouseButtonLeft);
   const bool hovered = ImGui::IsItemHovered();
+  const bool itemActive = ImGui::IsItemActive();
   const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
 
   // The current selection only drives dragging here if it's a position point on THIS path --
@@ -165,7 +166,14 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
     if (hitIndex >= 0) state.selectPoint(pathIndex, hitIndex);
   }
 
-  if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && selectionOnThisPath) {
+  // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
+  // global drag gesture -- ImGui::IsMouseDragging() alone is true regardless of which window's
+  // widget is actually being dragged, so without this gate, dragging a point in the top-down
+  // view's own canvas (a separate InvisibleButton) would ALSO be seen as a drag here on every
+  // frame both windows draw, spuriously overwriting the selected point's Y with wherever the
+  // mouse happens to be over THIS view. Mirrors TopDownCanvas.cpp's same fix for the reverse
+  // direction (elevation drags spuriously moving X/Z in the top-down view).
+  if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && selectionOnThisPath) {
     if (!state.dragging()) state.beginDrag();
     state.dragSelectedElevationTo(worldYAt(layout, mouseLocal.y));
     mutated = true;

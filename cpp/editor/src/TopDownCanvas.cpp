@@ -574,7 +574,7 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
 // TopDownView::freezeBounds) so moving/rotating something doesn't fight the camera auto-fitting
 // around it.
 bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
-                         const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
+                         const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered, bool itemActive) {
   bool mutated = false;
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
@@ -620,7 +620,14 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     }
   }
 
-  const bool draggingGesture = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+  // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
+  // global drag gesture -- ImGui::IsMouseDragging() alone is true regardless of which window's
+  // widget is actually being dragged, so without this gate, dragging a point in ElevationView's
+  // own canvas (a separate InvisibleButton) would ALSO be seen as a drag here on every frame both
+  // windows draw, spuriously overwriting the selected point's X/Z with whatever world position the
+  // mouse happens to be over in THIS view. Mirrors the itemActive gating handleRailsModeInput
+  // already uses for right-click panning, just applied to the left-click point/mesh drag path too.
+  const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
   if (draggingGesture && state.selection().valid()) {
     if (!state.dragging()) {
       state.beginDrag();
@@ -713,6 +720,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   ImGui::InvisibleButton("topDownCanvasInput", canvasSize,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
   const bool hovered = ImGui::IsItemHovered();
+  const bool itemActive = ImGui::IsItemActive();
   const bool windowFocused = ImGui::IsWindowFocused();
   const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
 
@@ -727,7 +735,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   const double pickRadiusWorld = kPickRadiusPx / view.scale();
   switch (state.mode()) {
     case EditMode::Edit: {
-      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered);
+      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered, itemActive);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid())
