@@ -10,9 +10,16 @@
 // that's placeable), rendered and hit-tested via core's own baked tox::Track::meshRegions. M5
 // added Rails mode: click an edge to toggle it as a rail on the shared asset (core doesn't bake
 // unflagged edges, so this one path works from the authored mesh asset instead of a core bake).
-// M6 adds the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
+// M6 added the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
 // current path's baked Y profile plus draggable position-point elevation markers, collapsible.
+// M7a adds USD export (USDExport.hpp/.cpp, walking core's own baked renderer-neutral
+// tox::Track::geometry batches into .usda Mesh prims -- not a port of js/usd-export.js's from-
+// scratch surface derivation, see USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
+// a scoped port of editor.js's generateRandomTrack covering its closed-loop/no-mesh-sections
+// branch only -- see RandomTrack.hpp and EDITOR_CPP_PORT_PLAN.md for what's deferred). Texture
+// assets (M7b, needs an image-loading dependency and real texture files) remain out of scope.
 #include <cstdio>
+#include <fstream>
 #include <string>
 
 #include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
@@ -27,8 +34,10 @@
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 #include "ElevationView.hpp"
+#include "RandomTrack.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
+#include "USDExport.hpp"
 
 namespace {
 
@@ -306,6 +315,38 @@ M6SmokeCheckResult runM6SmokeCheck() {
   return result;
 }
 
+// M7a smoke check: generate a random track and confirm it bakes cleanly through core's real
+// loader (not just that generateRandomTrack ran without throwing), and export USD for the starter
+// track, checking basic structural properties of the output text.
+struct M7aSmokeCheckResult {
+  bool randomBakeOk = false;
+  std::size_t randomPathCount = 0, randomGeometryBatchCount = 0;
+  bool usdHeaderOk = false, usdHasMeshes = false;
+  std::size_t usdMeshCount = 0;
+};
+
+M7aSmokeCheckResult runM7aSmokeCheck() {
+  M7aSmokeCheckResult result;
+
+  const editor::TrackDefinition random = editor::generateRandomTrack(5, 12345u);
+  const tox::TrackLoadResult randomBaked = tox::Track::fromJson(editor::toJson(random));
+  result.randomBakeOk = static_cast<bool>(randomBaked);
+  if (randomBaked) {
+    result.randomPathCount = randomBaked.track->paths.size();
+    result.randomGeometryBatchCount = randomBaked.track->geometry.size();
+  }
+
+  const tox::TrackLoadResult starterBaked = tox::Track::fromJson(editor::toJson(buildStarterTrack()));
+  if (starterBaked) {
+    const editor::USDExportResult usd = editor::exportTrackToUSDA(*starterBaked.track);
+    result.usdHeaderOk = usd.text.rfind("#usda 1.0", 0) == 0 && usd.text.find("def Xform \"Track\"") != std::string::npos;
+    result.usdMeshCount = usd.meshCount;
+    result.usdHasMeshes = usd.meshCount > 0 && usd.text.find("def Mesh \"") != std::string::npos;
+  }
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -326,7 +367,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M6: elevation profile)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor (M7a: random tracks + USD export)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                         windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -393,6 +434,12 @@ int main(int, char**) {
                m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const M7aSmokeCheckResult m7aSmoke = runM7aSmokeCheck();
+  std::fprintf(stdout, "M7a smoke check: randomBake=%s (%zu paths, %zu geom batches) usdHeader=%s usdMeshes=%s (%zu meshes)\n",
+               m7aSmoke.randomBakeOk ? "OK" : "FAILED", m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount,
+               m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH", m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -401,6 +448,9 @@ int main(int, char**) {
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   editor::TopDownView topDownView;
   bool elevationVisible = true;
+  int randomSeed = 12345;
+  int randomComplexity = 5;
+  std::string usdExportStatus;
 
   auto rebake = [&]() {
     bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
@@ -464,6 +514,11 @@ int main(int, char**) {
     ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
     ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
                        m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("M7a smoke check (random-track bake + USD export, exercised directly):");
+    ImGui::BulletText("random track bakes: %s (%zu path(s), %zu geometry batch(es))", m7aSmoke.randomBakeOk ? "OK" : "FAILED",
+                       m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
+    ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
+                       m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
@@ -482,6 +537,39 @@ int main(int, char**) {
       // of the track -- there's no asset library/drag-from-palette UI yet (M4 is placement, not
       // authoring), so this is the only way to get a mesh region onto the canvas at all.
       if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
+    }
+    ImGui::Separator();
+    ImGui::TextUnformatted("Random track (single-loop generator; see RandomTrack.hpp for scope):");
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("Seed", &randomSeed);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120);
+    ImGui::SliderInt("Complexity", &randomComplexity, 1, 10);
+    if (ImGui::Button("New Random Track")) {
+      // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history, so
+      // the pre-generation state has to be pushed explicitly to stay undoable.
+      editorState.history().push(editorState.track());
+      editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed)));
+      rebake();
+    }
+    ImGui::Separator();
+    if (ImGui::Button("Export USD")) {
+      if (bakedTrack != nullptr) {
+        const editor::USDExportResult usd = editor::exportTrackToUSDA(*bakedTrack);
+        std::ofstream out("track_export.usda", std::ios::binary);
+        if (out) {
+          out << usd.text;
+          usdExportStatus = "Wrote track_export.usda (" + std::to_string(usd.meshCount) + " mesh(es))";
+        } else {
+          usdExportStatus = "Failed to open track_export.usda for writing";
+        }
+      } else {
+        usdExportStatus = "Nothing to export -- current track failed to bake";
+      }
+    }
+    if (!usdExportStatus.empty()) {
+      ImGui::SameLine();
+      ImGui::TextUnformatted(usdExportStatus.c_str());
     }
     ImGui::Separator();
     switch (editorState.mode()) {

@@ -1,6 +1,8 @@
 # Native ImGui Track Editor — Port Plan
 
-Status: **M6 complete.** `track_editor` builds under the combined `cpp/` configure, opens an
+Status: **M7a complete** (USD export + a scoped random-track generator; texture assets remain
+out of scope as M7b -- see the M7 milestone note below). `track_editor` builds under the combined
+`cpp/` configure, opens an
 SDL2/OpenGL window with a docking-enabled ImGui frame, round-trips an in-memory starter track
 through `editor::TrackDefinition`'s JSON (de)serialization and `tox::Track::fromJson` on startup
 (verified OK), and renders that track's baked road/centerline plus authored control points in a
@@ -21,9 +23,20 @@ adds the elevation profile side view: a second `ImDrawList` canvas showing the c
 baked Y profile plus draggable position-point elevation markers, collapsible via a "Show" checkbox.
 Its x-axis places points by authored order rather than editor.js's true spline-parametrized arc
 length -- a documented simplification, exact for every path this editor can currently produce.
-All six milestones' logic (M1/M3/M4/M5/M6) is verified via in-process smoke checks exercising the
-exact methods the UI calls (every check OK across all of them), plus screenshots confirming the UI
-renders without crashing. This document records the plan to port `editor.html`/`js/editor.js`
+M7a adds USD export and random-track generation. `USDExport.hpp/.cpp` is NOT a port of
+`js/usd-export.js`: that module re-derives road/shell surface geometry itself from scratch, because
+in the browser it's the only baked geometry available; here, core already bakes exactly this into
+`tox::Track::geometry` (renderer-neutral `GeometryBatch`es) for exactly this purpose, so the
+exporter just walks those batches into USD Mesh prims. `RandomTrack.hpp/.cpp` ports
+`generateRandomTrack`'s closed-loop branch (N-turn loop, calibrated driven length, rolling hills,
+curvature-based banking, boost zones) bit-for-bit including its `mulberry32` PRNG; the
+mesh-section/ramp/jump-platform branch (~180 more lines, an iterative spline-endpoint-blend solve)
+is deferred as future work, so every generated track today is the single-loop variant. Texture
+assets (M7b: thumbnail loading, needs an image-loading dependency and real texture files, neither
+of which exist in this checkout yet) remain unaddressed. All milestones' logic through M7a is
+verified via in-process smoke checks exercising the exact methods the UI calls (every check OK
+across all of them), plus screenshots confirming the UI renders without crashing. This document
+records the plan to port `editor.html`/`js/editor.js`
 (the browser-based 2D/elevation track editor, ~4,700 lines) to a native C++ application,
 `cpp/editor` (target `track_editor`), sitting alongside `cpp/core` and `cpp/willpower` per
 `cpp/CMakeLists.txt`.
@@ -86,8 +99,17 @@ baking; nothing in `core`'s public API changes because of this work.
   exists, so mesh placement has to land first.
 - **M5 — Rails mode.** Mesh-edge rail flagging, modal pickable-edges-only behavior.
 - **M6 — Elevation profile.** Second canvas view + editing, collapsible panel.
-- **M7 — Texture assets, random-track generation, USD export.** Texture thumbnail loading, the
-  random-track panel/localStorage-equivalent ranges, `usd-export.js` parity.
+- **M7a — Random-track generation + USD export.** `generateRandomTrack`'s closed-loop branch
+  (mesh-section/ramp branch deferred); USD export rebuilt to walk core's own baked
+  `tox::Track::geometry` batches rather than porting `usd-export.js`'s from-scratch surface
+  derivation.
+- **M7b — Texture assets (not started).** Thumbnail loading needs an image-loading dependency
+  (e.g. `stb_image`) and real texture files, neither present in this checkout; also needs a
+  texture-picker UI with nothing to assign textures to yet (no per-path texture binding UI exists).
+- **M7c — Full random-track generation (not started).** The mesh-section/ramp/jump-platform branch
+  of `generateRandomTrack`: an iterative spline-endpoint-blend solve to land each drop exactly,
+  generated platform mesh assets, launch ramps. ~180 lines of JS not yet ported; see
+  `RandomTrack.hpp`'s header comment for the exact boundary.
 
 Each milestone should build and be manually exercised (open the app, drive the feature) before moving
 to the next; this plan doc's Status line should be updated as milestones land.
