@@ -24,6 +24,15 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   changed |= ImGui::InputDouble("Weight", &weight, 0.0, 0.0, "%.2f", kCommitOnEnter);
   if (changed && state.setSelectedPositionFields(x, y, z, weight)) mutated = true;
 
+  // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #startBtn: disabled
+  // once this already is the start point, same as JS's `${isStart ? 'disabled' : ''}`.
+  const bool isStart = state.isStartPoint(sel.pathIndex, sel.pointIndex);
+  ImGui::BeginDisabled(isStart);
+  if (ImGui::Button(isStart ? "This is the start point" : "Set as start point")) {
+    if (state.setStartPoint()) mutated = true;
+  }
+  ImGui::EndDisabled();
+
   // Disjoint (EDITOR_PARITY_FIXES.md gap 5): mirrors editor.html's #disjointChk. Checking splits
   // this point into a hard, unsmoothed seam (EditorState::makeDisjoint); unchecking merges it back
   // (reconnectDisjoint). Silently no-ops when disallowed (open endpoint, or fewer than 4 position

@@ -404,7 +404,16 @@ scope, not defects — listed so the remaining distance is visible. Roughly by i
    opened result); `makeDisjoint` splitting an open path into two, confirming both `deleteCurrentPath`
    pruning a resulting dangling seam and the split bakes correctly; `joinPathEndpoints` closing a
    same-path loop and merging two separate paths into a junction that still bakes.
-6. **Direction toggle and start-point selection** (`#dirBtn`).
+6. ~~**Direction toggle and start-point selection**~~ **Implemented.** New
+   `EditorState::toggleStartReverse()`/`setStartPoint()` (`EditorState.hpp`) plus
+   `EditorState::isStartPoint()` for the disabled-state check. A "Direction: Forward/Reversed"
+   button next to the Track Name field in `main.cpp` mirrors `#dirBtn` (`clampStart()` then flip
+   `start.reverse`); `PropertiesPanel.cpp`'s Position Point fields gained a "Set as start
+   point"/"This is the start point" button mirroring `editor.html`'s `#startBtn`, disabled once the
+   selection already is the start point. A "Gap6 smoke check" in `main.cpp` covers toggle/undo/redo,
+   set-start-point/no-op-when-already-start/undo, and -- going beyond schema plumbing -- that
+   flipping `reverse` actually reverses the baked starting grid's forward direction
+   (`StartGrid::startingGridPoses`), not just a bool in the JSON.
 7. **Handling panel** — maxSpeed/accel/turnSpeed/weight. The schema fields round-trip; there is no
    UI.
 8. **Random ranges panel** — JS exposes twelve configurable bounds with persistence; `RandomTrack.cpp`

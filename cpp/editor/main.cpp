@@ -56,6 +56,7 @@
 #include "ElevationView.hpp"
 #include "FileDialog.hpp"
 #include "RandomTrack.hpp"
+#include "StartGrid.hpp"
 #include "TextureCache.hpp"
 #include "TexturePanel.hpp"
 #include "PropertiesPanel.hpp"
@@ -913,6 +914,57 @@ Gap5SmokeCheckResult runGap5SmokeCheck() {
   return result;
 }
 
+// Gap-6 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #6): direction toggle and
+// start-point selection, mirroring #dirBtn and the properties panel's #startBtn. Confirms
+// toggleStartReverse/setStartPoint reach undo/redo and, unlike a pure schema-plumbing check, that
+// the reversal actually flips which way the baked starting grid faces (StartGrid::startingGridPoses'
+// forward direction, not just track_.start.reverse in memory).
+struct Gap6SmokeCheckResult {
+  bool toggled = false, toggleUndone = false, toggleRedone = false;
+  bool startMoved = false, startMoveNoOpWhenAlreadyStart = false, startMoveUndone = false;
+  bool bakedGridReversed = false;
+};
+
+Gap6SmokeCheckResult runGap6SmokeCheck() {
+  Gap6SmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const bool originalReverse = state.track().start.reverse;
+  state.toggleStartReverse();
+  result.toggled = state.track().start.reverse != originalReverse;
+  result.toggleUndone = state.undo() && state.track().start.reverse == originalReverse;
+  result.toggleRedone = state.redo() && state.track().start.reverse != originalReverse;
+
+  // "Set as start point": select a different position point on the starter loop and set it start.
+  state.selectPoint(0, 4);
+  const editor::Start before = state.track().start;
+  result.startMoved = state.setStartPoint() && (state.track().start.path != before.path || state.track().start.point != before.point);
+  result.startMoveNoOpWhenAlreadyStart = !state.setStartPoint();  // already the start -- no-op
+  result.startMoveUndone = state.undo() && state.track().start.path == before.path && state.track().start.point == before.point;
+
+  // Bake the same track with start.reverse toggled and compare the first starting-grid slot's
+  // forward direction -- this is what actually changes for the driver, not just a bool in the JSON.
+  editor::TrackDefinition forwardDef = state.track();
+  forwardDef.start.reverse = false;
+  editor::TrackDefinition reverseDef = forwardDef;
+  reverseDef.start.reverse = true;
+  const tox::TrackLoadResult forwardBaked = tox::Track::fromJson(editor::toJson(forwardDef));
+  const tox::TrackLoadResult reverseBaked = tox::Track::fromJson(editor::toJson(reverseDef));
+  if (forwardBaked && reverseBaked) {
+    tox::Simulation forwardSim(*forwardBaked.track);
+    tox::Simulation reverseSim(*reverseBaked.track);
+    const std::vector<tox::Pose> forwardPoses = tox::StartGrid::startingGridPoses(forwardSim, *forwardBaked.track, 1);
+    const std::vector<tox::Pose> reversePoses = tox::StartGrid::startingGridPoses(reverseSim, *reverseBaked.track, 1);
+    if (!forwardPoses.empty() && !reversePoses.empty()) {
+      const double dot = forwardPoses[0].forward.x * reversePoses[0].forward.x + forwardPoses[0].forward.y * reversePoses[0].forward.y +
+                          forwardPoses[0].forward.z * reversePoses[0].forward.z;
+      result.bakedGridReversed = dot < 0.0;
+    }
+  }
+
+  return result;
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1086,6 +1138,16 @@ int main(int, char**) {
                gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const Gap6SmokeCheckResult gap6Smoke = runGap6SmokeCheck();
+  std::fprintf(stdout,
+               "Gap6 smoke check (direction toggle / start point): toggle=%s undo=%s redo=%s startMoved=%s "
+               "noOpAtStart=%s startUndone=%s bakedGridReversed=%s\n",
+               gap6Smoke.toggled ? "OK" : "MISMATCH", gap6Smoke.toggleUndone ? "OK" : "MISMATCH",
+               gap6Smoke.toggleRedone ? "OK" : "MISMATCH", gap6Smoke.startMoved ? "OK" : "MISMATCH",
+               gap6Smoke.startMoveNoOpWhenAlreadyStart ? "OK" : "MISMATCH", gap6Smoke.startMoveUndone ? "OK" : "MISMATCH",
+               gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   // The canvas needs a persistent EditorState (authored track + mode/selection/drag/undo-redo)
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
@@ -1226,6 +1288,12 @@ int main(int, char**) {
     ImGui::BulletText("join same-path closes / join cross-path junction / bakes: %s / %s / %s",
                       gap5Smoke.joinedSamePathCloses ? "OK" : "MISMATCH", gap5Smoke.joinedCrossPathCreatesJunction ? "OK" : "MISMATCH",
                       gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
+    ImGui::TextUnformatted("Gap6 smoke check (direction toggle / start point, exercised directly):");
+    ImGui::BulletText("toggle / undo / redo: %s / %s / %s", gap6Smoke.toggled ? "OK" : "MISMATCH",
+                      gap6Smoke.toggleUndone ? "OK" : "MISMATCH", gap6Smoke.toggleRedone ? "OK" : "MISMATCH");
+    ImGui::BulletText("set start point / no-op when already start / undo: %s / %s / %s", gap6Smoke.startMoved ? "OK" : "MISMATCH",
+                      gap6Smoke.startMoveNoOpWhenAlreadyStart ? "OK" : "MISMATCH", gap6Smoke.startMoveUndone ? "OK" : "MISMATCH");
+    ImGui::BulletText("baked starting-grid forward direction actually flips: %s", gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
     ImGui::Separator();
     // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer only
     // resyncs from editorState.track().name when that value has actually changed since last frame
@@ -1241,6 +1309,12 @@ int main(int, char**) {
       ImGui::SetNextItemWidth(220);
       ImGui::InputText("Track Name", nameBuf, sizeof(nameBuf));
       if (ImGui::IsItemDeactivatedAfterEdit() && editorState.setTrackName(nameBuf)) lastSyncedName = editorState.track().name;
+    }
+    // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn.
+    ImGui::SameLine();
+    if (ImGui::Button(editorState.track().start.reverse ? "Direction: Reversed" : "Direction: Forward")) {
+      editorState.toggleStartReverse();
+      rebake();
     }
     ImGui::Separator();
     ImGui::TextUnformatted("Mode (E/C/R):");

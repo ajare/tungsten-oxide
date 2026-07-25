@@ -955,6 +955,38 @@ public:
     return true;
   }
 
+  // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn handler:
+  // clampStart() first (start may be stale from a prior structural edit), then flip the flag.
+  void toggleStartReverse() {
+    clampStart();
+    history_.push(track_);
+    track_.start.reverse = !track_.start.reverse;
+  }
+
+  // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors the Selected Point panel's
+  // #startBtn: repoints track_.start at the current selection, keeping the existing reverse flag.
+  // No-ops when the selection isn't a Position point or is already the start point, same as JS
+  // disabling the button in that state.
+  bool setStartPoint() {
+    if (!selectionInRange()) return false;
+    const TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::Position) return false;
+    const int posIndex = rawIndexToPositionIndex(track_.paths[selection_.pathIndex], selection_.pointIndex);
+    if (track_.start.path == selection_.pathIndex && track_.start.point == posIndex) return false;
+    history_.push(track_);
+    track_.start.path = selection_.pathIndex;
+    track_.start.point = posIndex;
+    return true;
+  }
+
+  // Whether (pathIndex, pointIndex) -- a raw Path::points index, matching SelectedPoint -- is the
+  // current start point. Used by the properties panel to disable "Set as start point" once it
+  // already is, mirroring editor.html's isStart/#startBtn.
+  bool isStartPoint(int pathIndex, int pointIndex) const {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
+    return track_.start.path == pathIndex && track_.start.point == rawIndexToPositionIndex(track_.paths[pathIndex], pointIndex);
+  }
+
   // Create mode: click adds a point to the in-progress draft, unless the click lands on the
   // draft's first point (closes as a closed path) or last point (finishes as open) -- mirrors
   // createModeClick/finishCreateDraft. Returns true if the draft was just finished into a new
