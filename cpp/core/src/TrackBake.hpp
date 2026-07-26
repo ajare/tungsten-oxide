@@ -3,5 +3,5 @@
 #include <vector>
 #include "Track.hpp"
 namespace tox {
-bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& error);
+bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& error, bool detectSelfIntersections = true);
 }

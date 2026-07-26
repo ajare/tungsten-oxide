@@ -461,13 +461,13 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
 
 }  // namespace
 
-TrackLoadResult Track::fromJson(std::string_view text) {
+TrackLoadResult Track::fromJson(std::string_view text, bool detectSelfIntersections) {
   TrackLoadResult result;
   try {
     const json data = json::parse(text.begin(), text.end());
     Track track;
     track.definition = normalize(data, result.warnings);
-    if (!bakeTrack(track, result.warnings, result.error)) return result;
+    if (!bakeTrack(track, result.warnings, result.error, detectSelfIntersections)) return result;
     result.track = std::move(track);
   } catch (const std::exception& error) {
     result.error = error.what();
@@ -476,12 +476,12 @@ TrackLoadResult Track::fromJson(std::string_view text) {
   return result;
 }
 
-TrackLoadResult Track::fromFile(const std::filesystem::path& path) {
+TrackLoadResult Track::fromFile(const std::filesystem::path& path, bool detectSelfIntersections) {
   std::ifstream input(path, std::ios::binary);
   if (!input) return {std::nullopt, {}, "cannot open track file: " + path.string()};
   std::ostringstream buffer;
   buffer << input.rdbuf();
-  return fromJson(buffer.str());
+  return fromJson(buffer.str(), detectSelfIntersections);
 }
 
 }  // namespace tox

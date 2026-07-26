@@ -1774,6 +1774,11 @@ int main(int, char**) {
   editor::EditorState editorState(buildStarterTrack());
   tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
+  // Self-intersection crossing detection (EDITOR_PARITY_GAPS.md gap 1) is the one expensive
+  // (O(N^2)) part of a bake; cachedCrossings holds the last result computed with it ON, reused
+  // while a drag is in progress (see rebake() below) -- mirrors editor.js's own `if (!dragging)`
+  // guard around detectPathCrossings.
+  std::vector<tox::SelfIntersection> cachedCrossings = bakedResult.track.has_value() ? bakedResult.track->selfIntersections : std::vector<tox::SelfIntersection>{};
   editor::TopDownView topDownView;
   editor::TextureCache textureCache;
   bool elevationVisible = true;
@@ -1788,7 +1793,17 @@ int main(int, char**) {
   std::string fileIoStatus;
 
   auto rebake = [&]() {
-    bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
+    // Skip the expensive self-intersection detection pass while a point/mesh drag is in progress
+    // (this lambda gets called every frame of an active drag, since dragging mutates the track
+    // every frame) -- mirrors editor.js's `if (!dragging) crossingCache = ...` (js/editor.js:978,
+    // 999). Reuse the last good detection result instead, so markers stay visible (just briefly
+    // stale) mid-drag rather than flickering empty.
+    const bool detect = !editorState.dragging();
+    bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()), detect);
+    if (bakedResult.track.has_value()) {
+      if (detect) cachedCrossings = bakedResult.track->selfIntersections;
+      else bakedResult.track->selfIntersections = cachedCrossings;
+    }
     bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   };
 

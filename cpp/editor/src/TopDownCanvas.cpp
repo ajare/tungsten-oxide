@@ -12,6 +12,7 @@
 #include "imgui.h"
 
 #include "Clipboard.hpp"
+#include "TrackCore.hpp"
 
 namespace editor {
 namespace {
@@ -89,6 +90,18 @@ const ImU32 kPositionLabelColor = IM_COL32(191, 230, 247, 255);
 const ImU32 kPhysicsPointColor = IM_COL32(255, 156, 60, 255);
 const ImU32 kPhysicsSelectedColor = IM_COL32(255, 94, 168, 255);
 constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_PX
+
+// Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1), matching editor.js's
+// CROSSING_COLORS exactly (js/editor.js:812-819): grey/amber for the automatic decision, red/green
+// once a user override forces the opposite. kCrossingHaloColor is the dark contrast halo drawn
+// behind every marker so it stays visible over any ribbon/centerline color (js/editor.js:1119).
+enum class CrossingState { AutoCollapse, AutoKeep, ForcedCollapse, ForcedKeep };
+const ImU32 kCrossingAutoCollapseColor = IM_COL32(185, 194, 208, 255);   // #b9c2d0
+const ImU32 kCrossingAutoKeepColor = IM_COL32(255, 176, 32, 255);       // #ffb020
+const ImU32 kCrossingForcedCollapseColor = IM_COL32(255, 51, 85, 255);  // #ff3355
+const ImU32 kCrossingForcedKeepColor = IM_COL32(55, 209, 122, 255);     // #37d17a
+const ImU32 kCrossingHaloColor = IM_COL32(0, 0, 0, 153);
+constexpr float kCrossingHitRadiusPx = 11.0f;  // matches editor.js's CROSSING_HIT_RADIUS
 
 // Matches editor.js's ZONE_FILL/ZONE_STROKE (js/editor.js:4209-4210) minus the startGrid checker
 // pattern, which is cosmetic only -- a flat fill reads fine at editor zoom levels.
@@ -564,6 +577,71 @@ void drawPhysicsPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const T
       drawList->AddCircleFilled(screen, isSelected ? 5.0f : 2.2f, isSelected ? kPhysicsSelectedColor : kPhysicsPointColor);
       if (isSelected) drawList->AddCircle(screen, 5.0f, IM_COL32(255, 255, 255, 255), 0, 2.0f);
     }
+  }
+}
+
+// ---- Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1) ------------------------
+//
+// `baked->selfIntersections` is the core-side detection result (TrackBake.cpp's removeSelfLoops,
+// an unbounded full pairwise scan on the pre-collapse edges, gap 1's implementation note) --
+// already computed once per non-dragging bake by main.cpp's rebake(), not re-derived here. This
+// file only re-derives, per crossing, the effective forced/auto STATE from the current override
+// list -- mirrors editor.js's crossingState (js/editor.js:807-811) re-deriving it at draw time
+// too, so cycling an override never needs a re-detection pass.
+CrossingState crossingStateFor(const tox::SelfIntersection& crossing, const std::vector<SelfIntersectionOverride>& overrides) {
+  const auto it = std::find_if(overrides.begin(), overrides.end(), [&](const SelfIntersectionOverride& o) {
+    return o.side == crossing.side && ((o.a == crossing.a && o.b == crossing.b) || (o.a == crossing.b && o.b == crossing.a));
+  });
+  if (it != overrides.end()) return it->action == "collapse" ? CrossingState::ForcedCollapse : CrossingState::ForcedKeep;
+  return crossing.span <= tox::TrackCore::DEFAULT_SELF_INTERSECTION_SPAN ? CrossingState::AutoCollapse : CrossingState::AutoKeep;
+}
+
+ImU32 crossingColor(CrossingState state) {
+  switch (state) {
+    case CrossingState::AutoCollapse: return kCrossingAutoCollapseColor;
+    case CrossingState::AutoKeep: return kCrossingAutoKeepColor;
+    case CrossingState::ForcedCollapse: return kCrossingForcedCollapseColor;
+    case CrossingState::ForcedKeep: return kCrossingForcedKeepColor;
+  }
+  return kCrossingAutoCollapseColor;
+}
+
+bool crossingIsCollapsed(CrossingState state) { return state == CrossingState::AutoCollapse || state == CrossingState::ForcedCollapse; }
+
+// Nearest crossing marker to a LOCAL (canvas-relative) screen point, within kCrossingHitRadiusPx,
+// or nullptr -- mirrors crossingMarkerAtTop's linear search over the crossing cache
+// (js/editor.js:837-847). Returns a pointer into `baked->selfIntersections` (stable for the
+// lifetime of this frame's bake) rather than a copy, since the caller only needs side/a/b.
+const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopDownView& view, const ImVec2& mouseLocal) {
+  if (baked == nullptr) return nullptr;
+  const tox::SelfIntersection* best = nullptr;
+  float bestDistSq = kCrossingHitRadiusPx * kCrossingHitRadiusPx;
+  for (const auto& crossing : baked->selfIntersections) {
+    const ScreenPoint2D s = view.worldToScreen(crossing.point.x, crossing.point.z);
+    const float dx = mouseLocal.x - static_cast<float>(s.x), dy = mouseLocal.y - static_cast<float>(s.y);
+    const float distSq = dx * dx + dy * dy;
+    if (distSq <= bestDistSq) {
+      bestDistSq = distSq;
+      best = &crossing;
+    }
+  }
+  return best;
+}
+
+// One dot per detected crossing, colored by effective state; filled disc = collapsed, hollow ring
+// (with a small center pip) = kept -- mirrors editor.js's marker draw exactly (js/editor.js:1111-
+// 1128), including the dark contrast halo so markers stay visible over any ribbon/centerline color.
+void drawCrossings(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
+                   const std::vector<SelfIntersectionOverride>& overrides) {
+  for (const auto& crossing : baked.selfIntersections) {
+    const CrossingState state = crossingStateFor(crossing, overrides);
+    const bool collapsed = crossingIsCollapsed(state);
+    const ImU32 color = crossingColor(state);
+    const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(crossing.point.x, crossing.point.z));
+    drawList->AddCircleFilled(screen, 9.0f, kCrossingHaloColor);
+    if (collapsed) drawList->AddCircleFilled(screen, 6.5f, color);
+    drawList->AddCircle(screen, 6.5f, color, 0, 2.5f);
+    if (!collapsed) drawList->AddCircleFilled(screen, 1.6f, color);
   }
 }
 
@@ -1051,9 +1129,19 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx);
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     bool pathSelected = false;
+    // Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1): a click cycles the
+    // crossing's override instead of selecting/dragging anything, mirroring editor.js's mousedown
+    // handler checking crossingMarkerAtTop before nodeAtTop's position-point hit, and skipping this
+    // check entirely while shift is held (js/editor.js:3278-3281) since shift is reserved for the
+    // rubber-band gesture above.
+    const tox::SelfIntersection* crossingHit =
+        !ImGui::GetIO().KeyShift ? crossingAtLocal(baked, view, mouseLocal) : nullptr;
     if (auxHit.has_value()) {
       state.selectPoint(auxHit->pathIndex, auxHit->pointIndex);
       view.clearPhysicsSelection();
+    } else if (crossingHit != nullptr) {
+      state.cycleCrossingOverride(crossingHit->side, crossingHit->a, crossingHit->b);
+      mutated = true;
     } else if (view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
       view.clearPhysicsSelection();
     } else {
@@ -1766,6 +1854,11 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
+    // Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1), drawn right after the
+    // physics-point dots and before the start marker, matching js/editor.js's own draw order
+    // (js/editor.js:1106, between the physics dots at :1095 and the start marker at :1130) -- and
+    // before the authored point draw further below, so markers never occlude editable handles.
+    drawCrossings(drawList, canvasOrigin, view, *baked, state.track().selfIntersectionOverrides);
     // Start marker + direction arrow (EDITOR_PARITY_GAPS.md gap 7), drawn in the same place JS's
     // drawTop does relative to the rest of the ribbon/overlay draw (js/editor.js:1130, right after
     // the physics-point dots and before the selected-segment highlights). EditorState's own

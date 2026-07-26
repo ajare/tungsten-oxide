@@ -59,6 +59,22 @@ struct Trigger {
   double halfWidth{0.0}, height{0.0};
 };
 
+// A self-intersecting crossing found on one edge of one path (EDITOR_PARITY_GAPS.md gap 1),
+// mirroring editor.js's crossing records (detectPathCrossings, js/editor.js:823-835): every place
+// the edge's own polyline crosses itself, keyed by the two control points nearest its branches (a
+// stable identity across edits/resampling, matching TrackCore.crossingKey) rather than by segment
+// index (which shifts on every edit). `a`/`b` are stored order-insensitively sorted so a lookup
+// never needs to check both orderings. Whether this crossing was actually collapsed by the bake
+// (span <= the default window, or a matching SelfIntersectionOverrideDefinition) is NOT stored
+// here -- like JS's crossingState(), that is re-derived at draw/lookup time from `span` plus
+// TrackDefinition::selfIntersectionOverrides, so an override change never needs re-detection.
+struct SelfIntersection {
+  std::string side;  // "left" | "right"
+  std::string a, b;  // control-point ids, sorted (a <= b)
+  int span{0};
+  Vec3 point;  // world-space intersection, XZ-plane
+};
+
 struct Track {
   // Authored current-schema runtime subset retained alongside its compiled data.
   TrackDefinition definition;
@@ -70,11 +86,25 @@ struct Track {
   std::vector<Trigger> triggers;
   std::vector<MeshRegion> meshRegions;
   std::vector<GeometryBatch> geometry;
+  // Every self-intersection found across every path/side, from an UNBOUNDED full pairwise scan on
+  // the pre-collapse edges (EDITOR_PARITY_GAPS.md gap 1) -- unlike the bounded, iterative collapse
+  // pass that actually mutates the baked geometry, this finds every crossing regardless of span, so
+  // the editor can show/cycle markers for far ("auto-keep") crossings too. Populated only when
+  // `fromJson`/`fromFile` is called with `detectSelfIntersections` true (the default); left empty
+  // otherwise. Empty (not skipped) is indistinguishable from "genuinely no crossings" from this
+  // field alone -- callers that need to tell the difference (the editor, mid-drag) track that
+  // themselves rather than relying on this field's emptiness.
+  std::vector<SelfIntersection> selfIntersections;
 
   bool endpointConnected(const std::string& id, bool present) const;  // src/Track.cpp
 
-  static TrackLoadResult fromJson(std::string_view text);
-  static TrackLoadResult fromFile(const std::filesystem::path& path);
+  // `detectSelfIntersections` gates the extra O(N^2) full-pairwise-scan pass that populates
+  // `selfIntersections` above -- on by default (every load is a one-time cost everywhere except the
+  // editor's own live-preview rebake, which passes false while a drag is in progress and reuses its
+  // last good detection result instead, mirroring editor.js's own `if (!dragging)` guard around
+  // detectPathCrossings, EDITOR_PARITY_GAPS.md gap 1).
+  static TrackLoadResult fromJson(std::string_view text, bool detectSelfIntersections = true);
+  static TrackLoadResult fromFile(const std::filesystem::path& path, bool detectSelfIntersections = true);
 };
 
 struct TrackWarning {

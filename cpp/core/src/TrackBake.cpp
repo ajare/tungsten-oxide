@@ -222,7 +222,8 @@ bool segmentsCross(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
   return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
 }
 std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition& path, const char* side, bool wrapOpen,
-                                  const std::vector<SelfIntersectionOverrideDefinition>& overrides) {
+                                  const std::vector<SelfIntersectionOverrideDefinition>& overrides,
+                                  std::vector<SelfIntersection>* outCrossings) {
   const bool circular = path.closed || wrapOpen;
   const int n = static_cast<int>(points.size()), segmentCount = circular ? n : n - 1;
   if (segmentCount < 4) return points;
@@ -243,8 +244,29 @@ std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition
       if (oa > ob) std::swap(oa, ob);
       if (override.side == side && oa == a && ob == b) return override.action == "collapse";
     }
-    return span <= 100;
+    return span <= TrackCore::DEFAULT_SELF_INTERSECTION_SPAN;
   };
+  // Full, UNBOUNDED pairwise scan on the RAW (pre-collapse) points -- EDITOR_PARITY_GAPS.md gap 1:
+  // every self-intersection this edge has, regardless of span, so the editor can show/cycle markers
+  // for far ("auto-keep") crossings too, not just the near ones the bounded collapse pass below
+  // actually acts on. Mirrors js/track-core.js's findSelfIntersections, which is likewise a
+  // separate, unbounded scan from removeLocalSelfIntersectionLoops's own bounded one. Only run when
+  // the caller wants it (`outCrossings != nullptr`) -- this is the expensive O(segmentCount^2) half
+  // of this function; the editor skips it while a drag is in progress and reuses its last result
+  // (see Track::fromJson's `detectSelfIntersections` parameter).
+  if (outCrossings != nullptr) {
+    for (int i = 0; i < segmentCount; ++i)
+      for (int j = i + 2; j < segmentCount; ++j) {
+        if (circular && i == 0 && j == segmentCount - 1) continue;
+        if (!segmentsCross(points[i], points[next(i)], points[j], points[next(j)])) continue;
+        const int forward = j - i, backward = circular ? segmentCount - forward : 1000000000;
+        const int span = std::min(forward, backward);
+        std::string a = controlId(i), b = controlId(j);
+        if (a > b) std::swap(a, b);
+        Vec3 point = lineX(points[i], points[next(i)], points[j], points[next(j)]).value_or(points[next(i)]);
+        outCrossings->push_back(SelfIntersection{side, std::move(a), std::move(b), span, std::move(point)});
+      }
+  }
   const bool scanAll = std::any_of(overrides.begin(), overrides.end(), [&](const auto& override) {
     return override.side == side && override.action == "collapse";
   });
@@ -257,7 +279,9 @@ std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition
         if (circular && i == 0 && j == segmentCount - 1) continue;
         const int forward = j - i, backward = circular ? segmentCount - forward : 1000000000;
         const int span = std::min(forward, backward);
-        if ((!scanAll && span > 100) || !segmentsCross(points[i], points[next(i)], points[j], points[next(j)]) || !decision(i, j, span)) continue;
+        if ((!scanAll && span > TrackCore::DEFAULT_SELF_INTERSECTION_SPAN) || !segmentsCross(points[i], points[next(i)], points[j], points[next(j)]) ||
+            !decision(i, j, span))
+          continue;
         found = true;
         fi = i;
         fj = j;
@@ -499,12 +523,13 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
 }
 }  // namespace
 
-bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& error) {
+bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& error, bool detectSelfIntersections) {
   try {
     track.paths.clear();
     track.zones.clear();
     track.triggers.clear();
     track.geometry.clear();
+    track.selfIntersections.clear();
     track.connectedEndpointIds.clear();
     for (auto& c : track.definition.disjointSeams)
       if (!c.pointId.empty()) track.connectedEndpointIds.insert(c.pointId);
@@ -595,10 +620,15 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       if (!hasBranch) {
         const bool wrapsAtSeam = !definition.closed && parts.cp.front()->id == parts.cp.back()->id &&
                                  track.connectedEndpointIds.count(parts.cp.front()->id);
+        // Branch-connected paths (the `hasBranch` guard above) intentionally skip detection too,
+        // same as JS's `bp.hasBranchConnection ? [] : detectPathCrossings(...)` -- their authored
+        // geometry is deliberately left unaltered by self-intersection handling.
         bakedEdges[i].left = removeSelfLoops(std::move(bakedEdges[i].left), definition, "left", wrapsAtSeam,
-                                             track.definition.selfIntersectionOverrides);
+                                             track.definition.selfIntersectionOverrides,
+                                             detectSelfIntersections ? &track.selfIntersections : nullptr);
         bakedEdges[i].right = removeSelfLoops(std::move(bakedEdges[i].right), definition, "right", wrapsAtSeam,
-                                              track.definition.selfIntersectionOverrides);
+                                              track.definition.selfIntersectionOverrides,
+                                              detectSelfIntersections ? &track.selfIntersections : nullptr);
       }
       wallOffsets(track.paths[i].centerline, bakedEdges[i]);
       for (auto& frame : track.paths[i].centerline) low = std::min(low, frame.pos.y);

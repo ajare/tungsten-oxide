@@ -1578,6 +1578,31 @@ public:
     return true;
   }
 
+  // Cycles a self-intersection crossing's override: none -> keep -> collapse -> none
+  // (EDITOR_PARITY_GAPS.md gap 1), mirroring cycleCrossingOverride (js/editor.js:849-861) exactly,
+  // including the order-insensitive (a,b) == (b,a) match on both sides. Always pushes undo, same as
+  // JS's unconditional pushUndo() at the top of the function -- there's no guard here, every call
+  // legitimately changes something.
+  void cycleCrossingOverride(const std::string& side, const std::string& a, const std::string& b) {
+    history_.push(track_);
+    const auto it = std::find_if(track_.selfIntersectionOverrides.begin(), track_.selfIntersectionOverrides.end(),
+                                 [&](const SelfIntersectionOverride& o) {
+                                   return o.side == side && ((o.a == a && o.b == b) || (o.a == b && o.b == a));
+                                 });
+    if (it == track_.selfIntersectionOverrides.end()) {
+      SelfIntersectionOverride created;
+      created.side = side;
+      created.a = a;
+      created.b = b;
+      created.action = "keep";
+      track_.selfIntersectionOverrides.push_back(std::move(created));
+    } else if (it->action == "keep") {
+      it->action = "collapse";
+    } else {
+      track_.selfIntersectionOverrides.erase(it);
+    }
+  }
+
   // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn handler:
   // clampStart() first (start may be stale from a prior structural edit), then flip the flag.
   void toggleStartReverse() {

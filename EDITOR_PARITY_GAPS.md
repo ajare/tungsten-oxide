@@ -14,85 +14,70 @@ that list before starting anything, it is the reason several obvious-looking ite
 
 ---
 
-## 1. Self-intersection crossing markers & override cycling
+## 1. Self-intersection crossing markers & override cycling — ✅ Implemented
 
-**The largest gap.** A track that overlaps itself needs the author to say, per crossing, whether the
-inner loop is collapsed away or kept as real geometry. JS exposes this; C++ has no way to reach it.
+**Was the largest gap.** A track that overlaps itself needs the author to say, per crossing,
+whether the inner loop is collapsed away or kept as real geometry.
 
-### What JS does
+| Piece | JS | C++ |
+| --- | --- | --- |
+| `detectPathCrossings(controlPoints, closed, edges, wrapOpen)` | `js/editor.js:823` | **ported** |
+| `crossingState(cr)` — resolves override vs. default `span <= 100` rule | `js/editor.js:806` | **ported** |
+| `crossingOverrideFor(a, b, side)` | `js/editor.js:801` | **ported** |
+| `CROSSING_COLORS` | `js/editor.js:812` | **ported** |
+| `crossingMarkerAtTop(sx, sy)` — hit test, `CROSSING_HIT_RADIUS = 11` | `js/editor.js:837` | **ported** |
+| `cycleCrossingOverride(cr)` — `auto → keep → collapse → auto` | `js/editor.js:849` | **ported** |
+| Marker draw loop (filled disc = collapsed, hollow ring = kept) | `js/editor.js:1106-1130` | **ported** |
+| Mousedown dispatch (before `nodeAtTop`, skipped when shift held) | `js/editor.js:3278-3281` | **ported** |
 
-| Piece | Location |
-| --- | --- |
-| `detectPathCrossings(controlPoints, closed, edges, wrapOpen)` | `js/editor.js:823` |
-| `crossingState(cr)` — resolves override vs. default `span <= 100` rule | `js/editor.js:806` |
-| `crossingOverrideFor(a, b, side)` | `js/editor.js:801` |
-| `CROSSING_COLORS` | `js/editor.js:812` |
-| `crossingMarkerAtTop(sx, sy)` — hit test, `CROSSING_HIT_RADIUS = 11` | `js/editor.js:837` |
-| `cycleCrossingOverride(cr)` — `auto → keep → collapse → auto` | `js/editor.js:849` |
-| Marker draw loop (filled disc = collapsed, hollow ring = kept) | `js/editor.js:1106-1130` |
-| Mousedown dispatch (before `nodeAtTop`, skipped when shift held) | `js/editor.js:3278-3281` |
+### Implementation (done)
 
-Colour code: grey `#b9c2d0` auto-collapse, amber `#ffb020` auto-keep, red `#ff3355` forced-collapse,
-green `#37d17a` forced-keep. Crossings are cached in `crossingCache` and only recomputed when idle
-(`if (!dragging)`, `js/editor.js:978`) because detection is O(N²).
+**Core side.** `removeSelfLoops` (`cpp/core/src/TrackBake.cpp`) sat in an anonymous namespace and
+only ever found ONE crossing per pass (bounded to `span <= DEFAULT_SELF_INTERSECTION_SPAN` unless an
+override forces a farther one), which isn't enough to show every crossing including far ("auto-keep")
+ones. Rather than surfacing that bounded/iterative search directly, it now also runs a separate,
+**unbounded** full pairwise scan over the same pre-collapse `points` (mirroring `js/track-core.js`'s
+own `findSelfIntersections`, which is likewise a distinct, unbounded scan from
+`removeLocalSelfIntersectionLoops`'s bounded one) before its existing collapse loop begins, filling a
+new out-parameter:
 
-### What C++ has
+- `tox::SelfIntersection{side, a, b, span, point}` (`Track.hpp`) — exactly the shape this doc
+  originally sketched. Does **not** store forced/auto state: like JS's `crossingState()`, that's
+  re-derived at draw time from `span` plus `TrackDefinition::selfIntersectionOverrides`, so cycling
+  an override never needs re-detection.
+- `tox::Track::selfIntersections` — every crossing across every path/side, populated by `bakeTrack`
+  (`TrackBake.cpp`) into the new out-param on each `removeSelfLoops` call, skipped (matching JS's
+  `hasBranchConnection` skip) for branch-connected paths exactly as before.
+- The hardcoded `100` moved out of `TrackBake.cpp`'s anonymous namespace into a new public
+  `tox::TrackCore::DEFAULT_SELF_INTERSECTION_SPAN` (`TrackCore.hpp`), shared by the collapse pass's
+  own bound check, `decision()`'s default rule, and the editor's `crossingStateFor` (see below) — one
+  constant instead of two independently-hardcoded `100`s.
+- `Track::fromJson`/`fromFile`/`bakeTrack` gained a `detectSelfIntersections = true` default
+  parameter gating the (expensive, O(N²)) unbounded scan — on by default for every existing call site
+  (game, tests, parity harnesses: a one-time cost per load), off only for the editor's own live-preview
+  rebake while a drag is in progress (see below). This is additive to every prior signature via the
+  default argument, not a breaking change.
 
-`selfIntersectionOverrides` round-trips through JSON (`EditorTrackDefinition.cpp:329-334` read,
-`:527-529` write), is pruned when stale (`EditorState.hpp:1784-1787`), and is consumed at bake time.
-**There is no detection, no marker, and no way to create an override.**
+**Editor side**, `cpp/editor/src/TopDownCanvas.cpp`:
+- `drawCrossings(...)`, called right after `drawPhysicsPoints` and before `drawStartMarker` (matching
+  JS's own draw order — physics dots, then crossings, then the start marker), draws JS's disc-vs-ring
+  convention and four colours exactly, plus the dark contrast halo.
+- `crossingAtLocal(...)`, alongside `physicsPointAtWorld`, same nearest-within-radius idiom
+  (`kCrossingHitRadiusPx = 11`, matching `CROSSING_HIT_RADIUS`).
+- Dispatch in `handleEditModeInput`'s mousedown branch, checked after the roll/width/cross-section
+  handle hit-test (matching JS's priority order) but before the position-point hit test, and skipped
+  when shift is held (shift is reserved for the rubber-band gesture, gap 6).
 
-### Implementation
+`EditorState::cycleCrossingOverride(side, a, b)` — unconditional undo push, then insert
+`{side, a, b, "keep"}` / promote to `"collapse"` / erase, mirroring `js/editor.js:849-861` exactly,
+including the order-insensitive `(a,b) == (b,a)` match on both sides.
 
-The whole algorithm already exists in C++ — inside `removeSelfLoops`
-(`cpp/core/src/TrackBake.cpp:224-275`), which sits in an **anonymous namespace** and so is
-unreachable from the editor. It contains, in order:
-
-- `segmentsCross(a, b, c, d)` (`TrackBake.cpp:219`) — the crossing predicate.
-- `controlId(frameIndex)` (`:231`) — the exact equivalent of JS's `TrackCore.crossingKey`, mapping a
-  frame index back to the nearest control point's id.
-- `decision(i, j, span)` (`:238`) — override lookup with the `span <= 100` default. Note `100` is
-  hardcoded here where JS names it `TrackCore.DEFAULT_SELF_INTERSECTION_SPAN`.
-- `lineX(...)` — intersection point, which is the marker's world position.
-
-**Blocker to resolve first:** `tox::Path` (`cpp/core/include/Track.hpp`) retains only
-`{closed, endpointIds, anchors, centerline}` — the **collapsed** rails. Crossings are detected on
-*pre-collapse* edges, which are local to `bakeTrack` and discarded. The editor therefore cannot
-recover them from the baked output; detection must be surfaced from core.
-
-Suggested shape:
-
-1. In `cpp/core/include/Track.hpp` (or a new `TrackCrossings.hpp`), add:
-   ```cpp
-   struct SelfIntersection {
-     std::string side;      // "left" | "right"
-     std::string a, b;      // control-point ids, the stable key
-     int span{0};
-     Vec3 point;            // world-space intersection
-   };
-   ```
-   and either a free function `std::vector<SelfIntersection> findSelfIntersections(const Track&)`,
-   or (cheaper) a `std::vector<SelfIntersection> selfIntersections` field on `tox::Track` populated
-   during the bake pass that already runs the detection.
-
-   The second option is strongly preferred: `removeSelfLoops` already computes every field of
-   `SelfIntersection` as a side effect. Emitting them costs nothing, while a standalone function
-   would duplicate `split()`/`controlId()` and risk drifting from the collapse rule it must agree
-   with. Split the loop body so the detection half fills the vector and the mutation half consumes
-   it, and factor the hardcoded `100` into a named constant shared by both.
-
-2. Editor side, `cpp/editor/src/TopDownCanvas.cpp`:
-   - `drawCrossings(...)` after `drawPhysicsPoints` (`:1547`) and before the authored point draw, so
-     markers never occlude editable handles. Mirror JS's disc-vs-ring convention and the four
-     colours above.
-   - `crossingAtWorld(...)` alongside `physicsPointAtWorld` (`:463`), same `kPickRadiusPx` idiom.
-   - Dispatch in `handleEditModeInput` (`:878`) *before* the position-point hit test, matching JS's
-     ordering at `:3278`.
-3. `EditorState::cycleCrossingOverride(side, a, b)` — push undo, then insert `{side, a, b, "keep"}` /
-   promote to `"collapse"` / erase, mirroring `js/editor.js:849-861` exactly (note the
-   order-insensitive `(a,b) == (b,a)` match on both sides).
-
-Cache the detection result per bake, not per frame — JS's `!dragging` guard exists for a reason.
+**Caching**, `cpp/editor/main.cpp`: the unbounded scan only runs when `!editorState.dragging()`
+(mirroring JS's `if (!dragging)` guard around `detectPathCrossings`) — `rebake()`'s per-frame call
+during an active drag passes `detectSelfIntersections = false` and copies the last good result
+(`cachedCrossings`, updated only on a non-dragging bake) back onto the fresh `Track`, so markers stay
+visible (briefly stale) mid-drag instead of flickering empty, without paying the O(N²) cost every
+dragged frame.
 
 ---
 

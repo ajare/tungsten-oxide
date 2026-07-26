@@ -19,6 +19,12 @@ constexpr double DEFAULT_CROSS_SECTION_TIGHTNESS = 1.0;
 constexpr double DEFAULT_CROSS_SECTION_THICKNESS = 4.0;
 constexpr double DEFAULT_BOOST_FACTOR = 1.5;
 constexpr double DEFAULT_BOOST_DURATION = 2.0;
+// Default local window (in segments) for self-intersection collapse (EDITOR_PARITY_GAPS.md gap 1):
+// a crossing whose two branches are within this many segments of each other collapses by default;
+// farther ones are kept. Mirrors track-core.js's DEFAULT_SELF_INTERSECTION_SPAN. Public (not
+// TrackBake.cpp-local) because the editor re-derives the same auto-collapse/auto-keep state at
+// draw time (mirroring editor.js's crossingState) and must agree with what the bake actually did.
+constexpr int DEFAULT_SELF_INTERSECTION_SPAN = 100;
 
 // THREE.MathUtils.clamp — same formula r128 uses.
 double clamp(double v, double lo, double hi);
