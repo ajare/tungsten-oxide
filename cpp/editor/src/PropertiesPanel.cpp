@@ -1,15 +1,138 @@
 #include "PropertiesPanel.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <vector>
 
+#include "TrackCore.hpp"
 #include "imgui.h"
 
 namespace editor {
 namespace {
 
 constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
+const ImU32 kCrossSectionStrokeColor = IM_COL32(213, 140, 255, 255);
+const ImU32 kCrossSectionFillPositive = IM_COL32(213, 140, 255, 64);
+const ImU32 kCrossSectionFillNegative = IM_COL32(255, 140, 213, 64);
+const ImU32 kCrossSectionSlabFill = IM_COL32(120, 152, 184, 71);
+const ImU32 kCrossSectionSlabStroke = IM_COL32(164, 192, 220, 140);
+const ImU32 kCrossSectionChordColor = IM_COL32(111, 147, 168, 115);
+const ImU32 kCrossSectionEdgeColor = IM_COL32(213, 140, 255, 255);
+const ImU32 kCrossSectionTextColor = IM_COL32(205, 238, 255, 255);
+const ImU32 kCrossSectionLabelColor = IM_COL32(111, 147, 168, 255);
+
+// Road-surface width at a point's t, sampled (linearly interpolated) from the baked centerline --
+// mirrors editor.js's TrackCore.evalWidth() closely enough for a preview (exact spline evaluation
+// would need the authored width-point list, which PropertiesPanel doesn't otherwise touch).
+double widthAtT(const tox::Track* baked, int pathIndex, bool closed, double t) {
+  if (baked == nullptr || pathIndex < 0 || pathIndex >= static_cast<int>(baked->paths.size())) return tox::TrackCore::DEFAULT_WIDTH;
+  const auto& centerline = baked->paths[pathIndex].centerline;
+  const std::size_t n = centerline.size();
+  if (n == 0) return tox::TrackCore::DEFAULT_WIDTH;
+  if (n == 1) return centerline[0].width;
+  const double frac = std::clamp(t, 0.0, 1.0);
+  const double indexF = frac * static_cast<double>(closed ? n : n - 1);
+  auto index0 = static_cast<std::size_t>(std::floor(indexF));
+  const double fracIdx = indexF - static_cast<double>(index0);
+  std::size_t index1;
+  if (closed) {
+    index0 %= n;
+    index1 = (index0 + 1) % n;
+  } else {
+    index0 = std::min(index0, n - 1);
+    index1 = std::min(index0 + 1, n - 1);
+  }
+  return centerline[index0].width + (centerline[index1].width - centerline[index0].width) * fracIdx;
+}
+
+// On-canvas cross-section preview (editor.html's #crossSectionPreview / drawCrossSectionPreview,
+// js/editor.js:2032-2125): the same profile the game's ribbon mesh and USD exporter build, so this
+// always shows the surface that will actually be baked, not just an abstract curvature/tightness
+// readout. tox::TrackCore::crossSectionHeight is the exact function TrackBake.cpp uses.
+void drawCrossSectionPreview(double curvature, double tightness, double thickness, double width) {
+  constexpr float kPreviewHeight = 170.0f;
+  constexpr float kPad = 18.0f;
+  constexpr int kSteps = 48;
+
+  ImGui::BeginChild("CrossSectionPreview", ImVec2(0, kPreviewHeight), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImVec2 size = ImGui::GetContentRegionAvail();
+  size.x = std::max(1.0f, size.x);
+  size.y = std::max(1.0f, size.y);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(7, 16, 25, 255));
+
+  const double c = std::clamp(curvature, -1.0, 1.0);
+  const double k = std::clamp(tightness, 0.2, 4.0);
+  const double thick = std::max(0.0, thickness);
+  const double w = std::max(width, 0.0);
+  const auto heightAt = [&](double v) { return tox::TrackCore::crossSectionHeight(c, k, v, w); };
+
+  double hiY = 0.0, loY = 0.0;
+  for (int i = 0; i <= kSteps; ++i) {
+    const double y = heightAt(static_cast<double>(i) / kSteps);
+    hiY = std::max(hiY, y);
+    loY = std::min(loY, y);
+  }
+  loY -= thick;
+  const double midX = size.x / 2.0, midY = size.y / 2.0;
+  const double scale = std::min((size.x - 2.0 * kPad) / std::max(w, 1.0), (size.y - 2.0 * kPad) / std::max(hiY - loY, 1.0));
+  const double centreY = (hiY + loY) / 2.0;
+  const auto px = [&](double x) { return static_cast<float>(midX + x * scale); };
+  const auto py = [&](double y) { return static_cast<float>(midY - (y - centreY) * scale); };
+  const auto vx = [&](double v) { return px(-w / 2.0 + w * v); };
+  const auto surfacePoint = [&](int i, double offset) {
+    const double v = static_cast<double>(i) / kSteps;
+    return ImVec2(origin.x + vx(v), origin.y + py(heightAt(v) + offset));
+  };
+
+  // flat chord reference
+  const float chordY = origin.y + py(0.0);
+  drawList->AddLine(ImVec2(origin.x + kPad, chordY), ImVec2(origin.x + size.x - kPad, chordY), kCrossSectionChordColor, 1.0f);
+  drawList->AddText(ImVec2(origin.x + kPad, chordY - 14.0f), kCrossSectionLabelColor, "flat");
+
+  if (thick > 0.0) {
+    // Extruded slab: road surface on top, the same profile offset `thick` below it.
+    std::vector<ImVec2> poly;
+    poly.reserve(2 * (kSteps + 1));
+    for (int i = 0; i <= kSteps; ++i) poly.push_back(surfacePoint(i, 0.0));
+    for (int i = kSteps; i >= 0; --i) poly.push_back(surfacePoint(i, -thick));
+    drawList->AddConvexPolyFilled(poly.data(), static_cast<int>(poly.size()), kCrossSectionSlabFill);
+    drawList->AddPolyline(poly.data(), static_cast<int>(poly.size()), kCrossSectionSlabStroke, ImDrawFlags_Closed, 1.0f);
+  } else {
+    // Zero thickness is still a legal sheet -- show curvature as the area between the flat chord
+    // and the road surface.
+    std::vector<ImVec2> poly;
+    poly.reserve(kSteps + 3);
+    poly.push_back(ImVec2(origin.x + vx(0.0), chordY));
+    for (int i = 0; i <= kSteps; ++i) poly.push_back(surfacePoint(i, 0.0));
+    poly.push_back(ImVec2(origin.x + vx(1.0), chordY));
+    drawList->AddConvexPolyFilled(poly.data(), static_cast<int>(poly.size()), c >= 0.0 ? kCrossSectionFillPositive : kCrossSectionFillNegative);
+  }
+
+  // road surface curve, drawn last so it reads as the driving surface
+  std::vector<ImVec2> surface;
+  surface.reserve(kSteps + 1);
+  for (int i = 0; i <= kSteps; ++i) surface.push_back(surfacePoint(i, 0.0));
+  drawList->AddPolyline(surface.data(), static_cast<int>(surface.size()), kCrossSectionStrokeColor, ImDrawFlags_None, 2.5f);
+
+  // edge markers and centre marker
+  for (const double v : {0.0, 0.5, 1.0}) {
+    const ImVec2 p(origin.x + vx(v), origin.y + py(heightAt(v)));
+    drawList->AddCircleFilled(p, v == 0.5 ? 4.0f : 3.0f, v == 0.5 ? IM_COL32(255, 255, 255, 255) : kCrossSectionEdgeColor);
+  }
+
+  char left[64], right[64];
+  std::snprintf(left, sizeof(left), "curvature %.2f * tightness %.2f", c, k);
+  std::snprintf(right, sizeof(right), "width %.1f * thick %.1f", w, thick);
+  drawList->AddText(ImVec2(origin.x + kPad, origin.y + size.y - 22.0f), kCrossSectionTextColor, left);
+  const ImVec2 rightSize = ImGui::CalcTextSize(right);
+  drawList->AddText(ImVec2(origin.x + size.x - kPad - rightSize.x, origin.y + size.y - 22.0f), kCrossSectionTextColor, right);
+
+  ImGui::EndChild();
+}
 
 void drawPositionFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, bool& mutated) {
   double x = point.pos.x, y = point.pos.y, z = point.pos.z, weight = point.weight;
@@ -94,7 +217,8 @@ void drawWidthFields(EditorState& state, const SelectedPoint& sel, const TrackPo
     });
 }
 
-void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, bool& mutated) {
+void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, const tox::Track* baked, bool pathClosed,
+                             bool& mutated) {
   double tPercent = point.t * 100.0, curvature = point.curvature, tightness = point.tightness, thickness = point.thickness;
   bool changed = false;
   ImGui::TextUnformatted("Cross-Section Point");
@@ -113,6 +237,9 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
       p.tightness = tightness;
       p.thickness = thickness;
     });
+
+  const double width = widthAtT(baked, sel.pathIndex, pathClosed, tPercent / 100.0);
+  drawCrossSectionPreview(curvature, tightness, thickness, width);
 }
 
 // Read-only physics-sample info (EDITOR_PARITY_FIXES.md gap 10), mirroring renderProps()'s
@@ -174,7 +301,7 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
         drawWidthFields(state, sel, point, mutated);
         break;
       case PointKind::CrossSection:
-        drawCrossSectionFields(state, sel, point, mutated);
+        drawCrossSectionFields(state, sel, point, baked, state.track().paths[sel.pathIndex].closed, mutated);
         break;
     }
     if (ImGui::Button("Delete Point")) {
