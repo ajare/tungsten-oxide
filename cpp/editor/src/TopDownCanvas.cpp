@@ -261,9 +261,12 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
 // track-core.js:471-472), open paths sample N points spanning [0, gMax] inclusive of both ends.
 // `hX/hZ` is the UNROLLED horizontal axis (roll/width/cross-section handles are drawn along this,
 // not the banked `edgeRight`, matching js/editor.js's own frame.h usage in its roll/width/
-// cross-section rendering); `width`/`roll` (radians) are the frame's own baked values.
+// cross-section rendering); `width`/`roll` (radians) are the frame's own baked values. `tangentX/
+// tangentZ` is the raw (un-normalized-in-XZ) driven-direction tangent, added for the start-marker
+// arrow (EDITOR_PARITY_GAPS.md gap 7) -- the only current consumer, so it's fine if its magnitude
+// isn't unit length; the arrow only ever uses atan2 on it.
 struct WorldFrame2D {
-  double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0}, hX{1.0}, hZ{0.0}, width{1.0}, roll{0.0};
+  double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0}, hX{1.0}, hZ{0.0}, width{1.0}, roll{0.0}, tangentX{0.0}, tangentZ{1.0};
 };
 
 WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
@@ -271,7 +274,9 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
   if (n == 0) return {};
   if (n == 1) {
     const tox::Frame& only = centerline[0];
-    return {only.pos.x, only.pos.z, only.edgeRight.x, only.edgeRight.z, only.h.x, only.h.z, only.width, only.roll};
+    return {only.pos.x,       only.pos.z,       only.edgeRight.x, only.edgeRight.z,
+            only.h.x,         only.h.z,         only.width,       only.roll,
+            only.tangent.x,   only.tangent.z};
   }
   const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
   const double indexF = frac * static_cast<double>(closed ? n : n - 1);
@@ -294,7 +299,48 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
           a.h.x + (b.h.x - a.h.x) * t,
           a.h.z + (b.h.z - a.h.z) * t,
           a.width + (b.width - a.width) * t,
-          a.roll + (b.roll - a.roll) * t};
+          a.roll + (b.roll - a.roll) * t,
+          a.tangent.x + (b.tangent.x - a.tangent.x) * t,
+          a.tangent.z + (b.tangent.z - a.tangent.z) * t};
+}
+
+const ImU32 kStartMarkerColor = IM_COL32(141, 255, 157, 255);  // matches editor.js's '#8dff9d'
+constexpr float kStartMarkerArrowLength = 22.0f;
+constexpr float kStartMarkerHeadLength = 8.0f;
+constexpr float kStartMarkerHeadSpreadRad = 0.4f;
+
+// Green arrow at the track's start point, along the driven direction (flipped when track.start.
+// reverse is set), with a "START" label -- mirrors js/editor.js's drawTop start-marker block
+// (js/editor.js:1130-1148, EDITOR_PARITY_GAPS.md gap 7). JS derives the start frame from the
+// authored evaluator (startFrame()); this samples the baked centerline via sampleCenterlineAtG
+// instead, like every other on-canvas frame lookup in this file -- an accepted approximation at
+// editor zoom (see this file's header comment above WorldFrame2D).
+void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked, const Start& start) {
+  if (start.path < 0 || start.path >= static_cast<int>(baked.paths.size())) return;
+  const tox::Path& path = baked.paths[start.path];
+  if (path.centerline.empty()) return;
+  const int n = static_cast<int>(path.centerline.size());
+  const double gMax = path.closed ? n : n - 1;
+  const WorldFrame2D f = sampleCenterlineAtG(path.centerline, path.closed, static_cast<double>(start.point), gMax);
+
+  double dirX = f.tangentX, dirZ = f.tangentZ;
+  if (start.reverse) {
+    dirX = -dirX;
+    dirZ = -dirZ;
+  }
+  // Screen-space heading: atan2(x, z) matches worldToScreen's x/z -> screen x/y mapping, same
+  // convention JS uses for this same arrow (js/editor.js:1136).
+  const double angle = std::atan2(dirX, dirZ);
+  const ImVec2 p0 = toAbsolute(canvasOrigin, view.worldToScreen(f.x, f.z));
+  const ImVec2 tip(p0.x + static_cast<float>(std::sin(angle)) * kStartMarkerArrowLength, p0.y + static_cast<float>(std::cos(angle)) * kStartMarkerArrowLength);
+  drawList->AddLine(p0, tip, kStartMarkerColor, 2.5f);
+  const double headAngle = std::atan2(tip.x - p0.x, tip.y - p0.y);
+  const ImVec2 left(tip.x - static_cast<float>(std::sin(headAngle - kStartMarkerHeadSpreadRad)) * kStartMarkerHeadLength,
+                    tip.y - static_cast<float>(std::cos(headAngle - kStartMarkerHeadSpreadRad)) * kStartMarkerHeadLength);
+  const ImVec2 right(tip.x - static_cast<float>(std::sin(headAngle + kStartMarkerHeadSpreadRad)) * kStartMarkerHeadLength,
+                     tip.y - static_cast<float>(std::cos(headAngle + kStartMarkerHeadSpreadRad)) * kStartMarkerHeadLength);
+  drawList->AddTriangleFilled(tip, left, right, kStartMarkerColor);
+  drawList->AddText(ImVec2(p0.x + 10.0f, p0.y - 10.0f), kStartMarkerColor, "START");
 }
 
 // Along-curve component of an aux-point drag (new functionality, no JS precedent -- js/editor.js's
@@ -1545,6 +1591,13 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
+    // Start marker + direction arrow (EDITOR_PARITY_GAPS.md gap 7), drawn in the same place JS's
+    // drawTop does relative to the rest of the ribbon/overlay draw (js/editor.js:1130, right after
+    // the physics-point dots and before the selected-segment highlights). EditorState's own
+    // mutators already call its private clampStart() after every structural edit, so track().start
+    // is valid here without needing to re-clamp (drawStartMarker itself defensively bounds-checks
+    // the path index and clamps `point`'s corresponding g via sampleCenterlineAtG regardless).
+    drawStartMarker(drawList, canvasOrigin, view, *baked, state.track().start);
   }
   drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   if (view.showPositionPoints()) {
