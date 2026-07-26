@@ -431,23 +431,39 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
 
   // There's no on-canvas handle to click for these (see this file's header comment), so once a
   // roll/width/crossSection point is deselected -- by clicking a position point, say -- there'd
-  // otherwise be no way back to it at all. A flat clickable list is the minimum viable substitute.
+  // otherwise be no way back to it at all. A clickable table is the minimum viable substitute.
   if (hasPath) {
     ImGui::Separator();
     ImGui::TextUnformatted("Existing roll / width / cross-section points on this path:");
     const auto& points = state.track().paths[currentPathIndex].points;
-    for (int i = 0; i < static_cast<int>(points.size()); ++i) {
-      const TrackPoint& p = points[i];
-      if (p.kind == PointKind::Position) continue;
-      const bool isSelected = selectionValid && sel.pathIndex == currentPathIndex && sel.pointIndex == i;
-      char label[64];
-      if (p.kind == PointKind::Roll)
-        std::snprintf(label, sizeof(label), "Roll  t=%.1f%%  roll=%.1f##aux%d", p.t * 100.0, p.roll, i);
-      else if (p.kind == PointKind::Width)
-        std::snprintf(label, sizeof(label), "Width t=%.1f%%  width=%.1f##aux%d", p.t * 100.0, p.width, i);
-      else
-        std::snprintf(label, sizeof(label), "XSec  t=%.1f%%  curv=%.2f##aux%d", p.t * 100.0, p.curvature, i);
-      if (ImGui::Selectable(label, isSelected)) state.selectPoint(currentPathIndex, i);
+    constexpr ImGuiTableFlags kAuxTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
+    if (ImGui::BeginTable("auxPointsTable", 3, kAuxTableFlags)) {
+      ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+      ImGui::TableSetupColumn("t (%)", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+      ImGui::TableSetupColumn("Value");
+      ImGui::TableHeadersRow();
+      for (int i = 0; i < static_cast<int>(points.size()); ++i) {
+        const TrackPoint& p = points[i];
+        if (p.kind == PointKind::Position) continue;
+        const bool isSelected = selectionValid && sel.pathIndex == currentPathIndex && sel.pointIndex == i;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        char rowId[16];
+        std::snprintf(rowId, sizeof(rowId), "##aux%d", i);
+        if (ImGui::Selectable(rowId, isSelected, ImGuiSelectableFlags_SpanAllColumns)) state.selectPoint(currentPathIndex, i);
+        ImGui::SameLine();
+        ImGui::TextUnformatted(p.kind == PointKind::Roll ? "Roll" : p.kind == PointKind::Width ? "Width" : "XSec");
+        ImGui::TableNextColumn();
+        ImGui::Text("%.1f", p.t * 100.0);
+        ImGui::TableNextColumn();
+        if (p.kind == PointKind::Roll)
+          ImGui::Text("roll=%.1f", p.roll);
+        else if (p.kind == PointKind::Width)
+          ImGui::Text("width=%.1f", p.width);
+        else
+          ImGui::Text("curv=%.2f tight=%.1f thick=%.1f", p.curvature, p.tightness, p.thickness);
+      }
+      ImGui::EndTable();
     }
   }
 

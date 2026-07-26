@@ -154,12 +154,33 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
 
   ImGui::Separator();
   ImGui::TextUnformatted("Existing triggers:");
-  for (const auto& t : state.track().triggers) {
-    const bool isSelected = selectedId.has_value() && *selectedId == t.id;
-    char label[112];
-    std::snprintf(label, sizeof(label), "%s  %s%s  host=%s##triggerlist", t.id.c_str(), t.type == "checkpoint" ? "Checkpoint" : "Dummy",
-                  t.role == "finish" ? " (Finish)" : "", t.host.kind.c_str());
-    if (ImGui::Selectable(label, isSelected)) state.selectTrigger(t.id);
+  constexpr ImGuiTableFlags kTriggersTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
+  if (ImGui::BeginTable("triggersTable", 5, kTriggersTableFlags)) {
+    ImGui::TableSetupColumn("ID");
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+    ImGui::TableSetupColumn("Host", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableSetupColumn("Width", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableSetupColumn("Height", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableHeadersRow();
+    for (const auto& t : state.track().triggers) {
+      const bool isSelected = selectedId.has_value() && *selectedId == t.id;
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      char rowId[80];
+      std::snprintf(rowId, sizeof(rowId), "##trigger-%s", t.id.c_str());
+      if (ImGui::Selectable(rowId, isSelected, ImGuiSelectableFlags_SpanAllColumns)) state.selectTrigger(t.id);
+      ImGui::SameLine();
+      ImGui::TextUnformatted(t.id.c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%s%s", t.type == "checkpoint" ? "Checkpoint" : "Dummy", t.role == "finish" ? " (Finish)" : "");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(t.host.kind.c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f", t.width);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f", t.height);
+    }
+    ImGui::EndTable();
   }
 
   return mutated;

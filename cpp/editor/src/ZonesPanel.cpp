@@ -108,12 +108,33 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
 
   ImGui::Separator();
   ImGui::TextUnformatted("Existing zones:");
-  for (const auto& z : state.track().zones) {
-    const bool isSelected = selectedId.has_value() && *selectedId == z.id;
-    char label[96];
-    std::snprintf(label, sizeof(label), "%s  %s  host=%s##zonelist", z.id.c_str(), z.effect == "startGrid" ? "Start Grid" : "Boost",
-                 z.host.kind.c_str());
-    if (ImGui::Selectable(label, isSelected)) state.selectZone(z.id);
+  constexpr ImGuiTableFlags kZonesTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
+  if (ImGui::BeginTable("zonesTable", 5, kZonesTableFlags)) {
+    ImGui::TableSetupColumn("ID");
+    ImGui::TableSetupColumn("Effect", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+    ImGui::TableSetupColumn("Host", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableSetupColumn("Width", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableSetupColumn("Length", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableHeadersRow();
+    for (const auto& z : state.track().zones) {
+      const bool isSelected = selectedId.has_value() && *selectedId == z.id;
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      char rowId[80];
+      std::snprintf(rowId, sizeof(rowId), "##zone-%s", z.id.c_str());
+      if (ImGui::Selectable(rowId, isSelected, ImGuiSelectableFlags_SpanAllColumns)) state.selectZone(z.id);
+      ImGui::SameLine();
+      ImGui::TextUnformatted(z.id.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(z.effect == "startGrid" ? "Start Grid" : "Boost");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(z.host.kind.c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f", z.width);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f", z.length);
+    }
+    ImGui::EndTable();
   }
 
   return mutated;

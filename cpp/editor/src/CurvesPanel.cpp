@@ -105,9 +105,25 @@ bool DrawCurvesPanel(EditorState& state) {
   ImGui::Separator();
   ImGui::TextUnformatted("Junctions (read-only; created by Join):");
   if (state.junctions().empty()) ImGui::TextUnformatted("(none)");
-  for (const auto& j : state.junctions()) {
-    ImGui::BulletText("%s: point %s, %s of %s -> %s", j.id.c_str(), j.pointId.c_str(), j.sourceEnd.c_str(), j.sourcePathId.c_str(),
-                      j.targetPathId.c_str());
+  constexpr ImGuiTableFlags kListTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
+  if (!state.junctions().empty() && ImGui::BeginTable("junctionsTable", 4, kListTableFlags)) {
+    ImGui::TableSetupColumn("ID");
+    ImGui::TableSetupColumn("Point");
+    ImGui::TableSetupColumn("Source");
+    ImGui::TableSetupColumn("Target");
+    ImGui::TableHeadersRow();
+    for (const auto& j : state.junctions()) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(j.id.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(j.pointId.c_str());
+      ImGui::TableNextColumn();
+      ImGui::Text("%s of %s", j.sourceEnd.c_str(), j.sourcePathId.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(j.targetPathId.c_str());
+    }
+    ImGui::EndTable();
   }
 
   ImGui::Separator();
@@ -117,15 +133,33 @@ bool DrawCurvesPanel(EditorState& state) {
   // the very vector this range-based for is iterating (state.disjointSeams()), which would
   // invalidate the loop's iterator.
   std::string pendingReconnectId;
-  for (const auto& s : state.disjointSeams()) {
-    if (s.kind == "opened-closed")
-      ImGui::BulletText("%s: opened-closed on %s (point %s)", s.id.c_str(), s.pathId.c_str(), s.pointId.c_str());
-    else
-      ImGui::BulletText("%s: split-open %s / %s (point %s)", s.id.c_str(), s.leftPathId.c_str(), s.rightPathId.c_str(), s.pointId.c_str());
-    ImGui::SameLine();
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "Reconnect##%s", s.id.c_str());
-    if (ImGui::Button(buf)) pendingReconnectId = s.id;
+  if (!state.disjointSeams().empty() && ImGui::BeginTable("disjointSeamsTable", 5, kListTableFlags)) {
+    ImGui::TableSetupColumn("ID");
+    ImGui::TableSetupColumn("Kind");
+    ImGui::TableSetupColumn("Point");
+    ImGui::TableSetupColumn("Path(s)");
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+    ImGui::TableHeadersRow();
+    for (const auto& s : state.disjointSeams()) {
+      const bool openedClosed = s.kind == "opened-closed";
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(s.id.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(openedClosed ? "opened-closed" : "split-open");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(s.pointId.c_str());
+      ImGui::TableNextColumn();
+      if (openedClosed)
+        ImGui::TextUnformatted(s.pathId.c_str());
+      else
+        ImGui::Text("%s / %s", s.leftPathId.c_str(), s.rightPathId.c_str());
+      ImGui::TableNextColumn();
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "Reconnect##%s", s.id.c_str());
+      if (ImGui::Button(buf)) pendingReconnectId = s.id;
+    }
+    ImGui::EndTable();
   }
   if (!pendingReconnectId.empty() && state.reconnectDisjoint(pendingReconnectId)) mutated = true;
 
