@@ -7,6 +7,8 @@
 #   core/       the track-physics engine ported from js/track-physics.js,
 #               parity-tested against the JS oracle — see core/CMakeLists.txt.
 #   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
+#   launcher/   Windows host for a Willpower application DLL — see
+#               launcher/CMakeLists.txt.
 #   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
 #
@@ -31,6 +33,7 @@ enable_testing()
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)
+add_subdirectory(launcher)
 add_subdirectory(editor)
 
 foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)
