@@ -211,23 +211,34 @@ now also has an Elevation field — this is the second, on-canvas way to reach t
 
 ---
 
-## 5. Elevation view: right-click to insert a position point
+## 5. Elevation view: right-click to insert a position point — ✅ Implemented
 
 `insertPositionAtSide(sx, sy)` (`js/editor.js:2806-2826`, wired at `:3557`) inserts a new position
 control point at the clicked arc position, taking X/Z from the curve there and **Y from the click
-height**. C++'s elevation view only selects and drags existing points.
+height**. C++'s elevation view previously only selected and dragged existing points.
 
-### Implementation
+### Implementation (done)
 
-`ElevationView.cpp` currently declares its `InvisibleButton` with `ImGuiButtonFlags_MouseButtonLeft`
-only (`:173`) — add `| ImGuiButtonFlags_MouseButtonRight` first, or the click never arrives.
+`cpp/editor/src/ElevationView.cpp`:
 
-Reuse `EditorState::insertPositionOnSegment(...)`, which the top-down context menu already calls
-(`TopDownCanvas.cpp:1424`). Deriving the insertion index from the clicked x is the same
-`g = t * gMax; insertAt = floor(g) + 1` arithmetic used there and in JS's `:2817-2819`.
-
-Guarded in JS by `pointFilters.position` and by the click being inside the plot gutter
-(`x >= padX && x <= w - padX`) — worth keeping both.
+- `InvisibleButton`'s flags gained `| ImGuiButtonFlags_MouseButtonRight` (was left-only).
+- New `xAxisFraction(layout, screenXPx)` — the inverse of `screenX`'s own frac computation, clamped
+  to `[0, 1]`. Since this view's x-axis is authored ORDER rather than true arc length (see
+  `ElevationView.hpp`'s header comment), "fraction across the axis" doubles as this file's stand-in
+  for JS's `sampleAtArc`'s arc-length fraction — consistent with the approximation every other
+  handle in this view already uses.
+- New `sampleCenterlinePosAtG(centerline, closed, g, gMax)` — the position-only counterpart of
+  `TopDownCanvas.cpp`'s `sampleCenterlineAtG`, duplicated locally rather than shared (each file
+  keeps its own small approximate evaluator, matching this codebase's existing per-file pattern).
+- On right-click: `g = xAxisFraction(...) * gMax`, X/Z from `sampleCenterlinePosAtG(...)`, Y from
+  `worldYAt(...)`, `insertAt` from the same `floor(g) + 1` (wrapped for closed paths) arithmetic
+  `TopDownCanvas.cpp`'s context menu and JS's `:2817-2819` both use, then
+  `EditorState::insertPositionOnSegment(...)` — the exact same mutator the top-down context menu's
+  "Position" item already calls.
+- Guarded by both of JS's conditions: `showPositionPoints` (new parameter, threaded from
+  `main.cpp`'s `topDownView.showPositionPoints()` — this view previously had no way to see the
+  top-down point-filter checkboxes at all) and the click landing inside the plot gutter
+  (`mouseLocal.x` within `[kPadX, layout.w - kPadX]`).
 
 ---
 
@@ -324,8 +335,11 @@ reordered independently of their spline placement". That assumption is still tru
 fidelity work rather than a correctness bug — but it is what makes the JS profile line up with the
 curve underneath it.
 
-The point-filter gap is a real inconsistency: `DrawElevationView` doesn't receive a `TopDownView`, so
-it cannot see the filters that the toolbar checkboxes and the top-down canvas both honour.
+The point-filter gap is a real inconsistency: `DrawElevationView` didn't receive a `TopDownView`, so
+it couldn't see the filters that the toolbar checkboxes and the top-down canvas both honour.
+Partially addressed by gap 5's implementation, which threads a `showPositionPoints` bool through
+(gating right-click-to-insert only) — the height-handle rendering/hit-testing itself still ignores
+the filter, so this item isn't fully closed.
 
 ---
 

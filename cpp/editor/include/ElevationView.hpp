@@ -20,8 +20,11 @@ namespace editor {
 
 // `baked` may be null; the point markers still render so mid-edit state (e.g. a bake failure)
 // doesn't blank the panel. `pathIndex` selects which path's profile to show (typically the
-// current selection's path, or 0). Returns true if the track was mutated this frame (an elevation
-// drag), so the caller knows to re-bake the live preview.
-bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathIndex);
+// current selection's path, or 0). `showPositionPoints` mirrors the top-down view's own Position
+// point-filter checkbox (TopDownView::showPositionPoints) -- gates right-click-to-insert the same
+// way JS's `pointFilters.position` does (js/editor.js:3557), so hiding position handles in one
+// view hides the ability to add them in both. Returns true if the track was mutated this frame
+// (an elevation drag, or a right-click insert), so the caller knows to re-bake the live preview.
+bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathIndex, bool showPositionPoints);
 
 }  // namespace editor

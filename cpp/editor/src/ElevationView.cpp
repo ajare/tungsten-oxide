@@ -51,6 +51,43 @@ float screenX(const Layout& layout, int orderIndex) {
 
 double worldYAt(const Layout& layout, float screenYPx) { return layout.minY + ((layout.h - kPadY) - screenYPx) / layout.yScale; }
 
+// Fraction across the plotted x-axis (0 at the left position handle, 1 at the right one), clamped
+// to [0, 1] -- the inverse of screenX's own frac computation. Used for right-click-to-insert
+// (EDITOR_PARITY_GAPS.md gap 5): this view's x-axis is authored ORDER, not true arc length (see
+// ElevationView.hpp's header comment), so "fraction across the axis" doubles as this file's stand-
+// in for JS's sampleAtArc's arc-length fraction -- consistent with the same approximation already
+// used to place every other handle in this view.
+double xAxisFraction(const Layout& layout, float screenXPx) {
+  const float denom = layout.w - 2.0f * kPadX;
+  if (denom <= 0.0f) return 0.0;
+  return std::clamp(static_cast<double>((screenXPx - kPadX) / denom), 0.0, 1.0);
+}
+
+// Interpolated centerline position at path parameter `g` in [0, gMax] -- the position-only
+// counterpart of TopDownCanvas.cpp's sampleCenterlineAtG (duplicated rather than shared: each
+// file's sampler is a private implementation detail of its own approximate-but-good-enough-at-
+// editor-zoom conventions, per this codebase's existing pattern of small per-file mini-evaluators).
+tox::Vec3 sampleCenterlinePosAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
+  const std::size_t n = centerline.size();
+  if (n == 0) return tox::Vec3(0.0, 0.0, 0.0);
+  if (n == 1) return centerline[0].pos;
+  const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
+  const double indexF = frac * static_cast<double>(closed ? n : n - 1);
+  auto index0 = static_cast<std::size_t>(std::floor(indexF));
+  const double t = indexF - static_cast<double>(index0);
+  std::size_t index1;
+  if (closed) {
+    index0 %= n;
+    index1 = (index0 + 1) % n;
+  } else {
+    index0 = std::min(index0, n - 1);
+    index1 = std::min(index0 + 1, n - 1);
+  }
+  const tox::Vec3& a = centerline[index0].pos;
+  const tox::Vec3& b = centerline[index1].pos;
+  return tox::Vec3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+}
+
 // Collects (rawPointIndex, y) for every Position-kind point in the path, in authored order --
 // see ElevationView.hpp's header comment on why order stands in for true arc-length placement.
 std::vector<std::pair<int, double>> collectPositionPoints(const Path& path) {
@@ -162,7 +199,7 @@ void drawMeshElevationLine(ImDrawList* drawList, const ImVec2& canvasOrigin, con
 
 }  // namespace
 
-bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathIndex) {
+bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathIndex, bool showPositionPoints) {
   bool mutated = false;
 
   ImGui::BeginChild("ElevationView", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -201,7 +238,7 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   static std::optional<Layout> frozenLayout;
   const Layout& layout = frozenLayout.has_value() ? *frozenLayout : liveLayout;
 
-  ImGui::InvisibleButton("elevationViewInput", canvasSize, ImGuiButtonFlags_MouseButtonLeft);
+  ImGui::InvisibleButton("elevationViewInput", canvasSize, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
   const bool hovered = ImGui::IsItemHovered();
   const bool itemActive = ImGui::IsItemActive();
   const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
@@ -236,6 +273,26 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
       meshElevDragArmed = false;
       const int hitIndex = nearestPointIndex(points, layout, mouseLocal);
       if (hitIndex >= 0) state.selectPoint(pathIndex, hitIndex);
+    }
+  }
+
+  // Right-click to insert a new position control point (EDITOR_PARITY_GAPS.md gap 5), mirroring
+  // insertPositionAtSide (js/editor.js:2806-2826, wired at :3557): X/Z come from the baked
+  // centerline at the clicked arc position, Y comes from the click's height. Gated on
+  // showPositionPoints and the click landing inside the plot gutter, same as JS's
+  // `pointFilters.position && x >= elevGeom.padX && x <= elevGeom.w - elevGeom.padX`.
+  if (showPositionPoints && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mouseLocal.x >= kPadX &&
+      mouseLocal.x <= layout.w - kPadX && baked != nullptr && pathIndex < static_cast<int>(baked->paths.size())) {
+    const tox::Path& bakedPath = baked->paths[pathIndex];
+    if (!bakedPath.centerline.empty()) {
+      const int n = EditorState::positionCount(path);
+      const double gMax = path.closed ? n : n - 1;
+      const double g = xAxisFraction(layout, mouseLocal.x) * gMax;
+      const tox::Vec3 pos = sampleCenterlinePosAtG(bakedPath.centerline, path.closed, g, gMax);
+      const int insertAt =
+          path.closed ? (static_cast<int>(std::floor(g)) + 1) % (n + 1) : std::min(n, static_cast<int>(std::floor(g)) + 1);
+      const double y = worldYAt(layout, mouseLocal.y);
+      if (state.insertPositionOnSegment(pathIndex, insertAt, pos.x, y, pos.z).has_value()) mutated = true;
     }
   }
 

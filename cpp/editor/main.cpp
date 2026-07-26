@@ -2378,7 +2378,7 @@ int main(int, char**) {
       // otherwise EditorState::currentPathIndex()'s own fallback (the curve-selector dropdown's
       // choice, or path 0 -- EDITOR_PARITY_FIXES.md gap 5).
       const int elevationPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
-      if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex)) rebake();
+      if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex, topDownView.showPositionPoints())) rebake();
     }
     ImGui::End();
 
