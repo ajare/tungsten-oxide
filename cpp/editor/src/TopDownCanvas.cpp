@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <numbers>
 #include <optional>
@@ -75,6 +76,13 @@ const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
 const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
+// Disjoint-seam node ring + X cross (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's own
+// '#ffcc44' styling (js/editor.js:1188-1197) -- unlike ElevationView.cpp's own disjoint styling,
+// which is ring-only, this view also draws the X cross, matching drawTop specifically.
+const ImU32 kDisjointColor = IM_COL32(255, 204, 68, 255);
+// Position-point index/elevation label (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's
+// '#bfe6f7' (js/editor.js:1199).
+const ImU32 kPositionLabelColor = IM_COL32(191, 230, 247, 255);
 
 // Matches editor.js's physics-sample dot colors (js/editor.js:1095: '#ff9c3c' idle, '#ff5ea8'
 // selected).
@@ -140,6 +148,18 @@ ImU32 elevationFillColor(double y, double minY, double maxY) {
   const int r = static_cast<int>(std::lround(40.0 + (220.0 - 40.0) * t));
   const int g = static_cast<int>(std::lround(210.0 + (55.0 - 210.0) * t));
   return IM_COL32(r, g, 55, 255);
+}
+
+// Position-point node fill (EDITOR_PARITY_GAPS.md gap 8): blue (low) -> teal -> warm (high),
+// ported 1:1 from js/editor.js's heightColor (js/editor.js:755-762) -- the same function
+// ElevationView.cpp ports independently for its own node fill, per this codebase's established
+// per-file duplication of small color helpers.
+ImU32 heightColor(double y) {
+  const double t = std::clamp(y / 8.0, -1.0, 1.0);
+  const int r = static_cast<int>(std::lround(60.0 + 150.0 * std::max(0.0, t)));
+  const int g = static_cast<int>(std::lround(150.0 + 60.0 * (1.0 - std::abs(t))));
+  const int b = static_cast<int>(std::lround(180.0 - 120.0 * std::max(0.0, t) + 40.0 * std::max(0.0, -t)));
+  return IM_COL32(r, g, b, 255);
 }
 
 // Configurable top-down reference grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
@@ -835,12 +855,15 @@ std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, cons
 
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
                                 const SelectedPoint& selection, const std::optional<SelectedPoint>& hovered,
-                                const std::optional<EditorState::OpenEndpointRef>& weldTarget) {
+                                const std::optional<EditorState::OpenEndpointRef>& weldTarget,
+                                const std::vector<Connection>& disjointSeams) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
-    const auto& points = track.paths[pi].points;
-    // First/last raw indices among this path's Position points -- needed to tell whether a given
-    // point is the specific endpoint weldTarget refers to (a position-space concept, see
-    // EditorState::OpenEndpointRef), not just any point.
+    const Path& path = track.paths[pi];
+    const auto& points = path.points;
+    // First/last raw indices among this path's Position points -- needed both for the weld-target
+    // check below (a position-space concept, see EditorState::OpenEndpointRef) and for `isEndpoint`
+    // (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's own `i === 0 || i === cps.length - 1`
+    // computed over the same control-point-only sequence (js/editor.js:1178).
     int firstPosRaw = -1, lastPosRaw = -1;
     for (int i = 0; i < static_cast<int>(points.size()); ++i) {
       if (points[i].kind != PointKind::Position) continue;
@@ -853,18 +876,49 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
       const bool isHovered = hovered.has_value() && hovered->pathIndex == pi && hovered->pointIndex == i;
       const bool isWeldTarget =
           weldTarget.has_value() && weldTarget->pathIndex == pi && i == (weldTarget->atEnd ? lastPosRaw : firstPosRaw);
+      const bool isEndpoint = !path.closed && (i == firstPosRaw || i == lastPosRaw);
+      const bool isDisjoint = std::find_if(disjointSeams.begin(), disjointSeams.end(),
+                                           [&](const Connection& s) { return s.pointId == points[i].id; }) != disjointSeams.end();
       const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
       const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
-      drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : kPositionPointColor);
+      // Square = open-path endpoint (join-eligible), circle otherwise -- matches editor.js's
+      // ctx.rect vs ctx.arc branch (js/editor.js:1184-1185).
+      if (isEndpoint) {
+        drawList->AddRectFilled(ImVec2(screen.x - radius, screen.y - radius), ImVec2(screen.x + radius, screen.y + radius),
+                                isSelected ? kSelectedPointColor : heightColor(points[i].pos.y));
+      } else {
+        drawList->AddCircleFilled(screen, radius, isSelected ? kSelectedPointColor : heightColor(points[i].pos.y));
+      }
       // Selected: a crisp white border right at the (already-larger) fill's edge -- a "handle"
-      // look that reads as selected regardless of hover state or background.
-      if (isSelected) drawList->AddCircle(screen, radius, kSelectedOutlineColor, 0, 1.5f);
+      // look that reads as selected regardless of hover state or background. Disjoint seams get a
+      // thicker amber stroke instead when not selected, matching editor.js's stroke choice
+      // (js/editor.js:1189-1190).
+      const ImU32 strokeColor = isSelected ? kSelectedOutlineColor : (isDisjoint ? kDisjointColor : IM_COL32(0, 0, 0, 153));
+      if (isEndpoint) {
+        drawList->AddRect(ImVec2(screen.x - radius, screen.y - radius), ImVec2(screen.x + radius, screen.y + radius), strokeColor, 0.0f, 0,
+                          isSelected || isDisjoint ? 3.0f : 1.5f);
+      } else {
+        drawList->AddCircle(screen, radius, strokeColor, 0, isSelected || isDisjoint ? 3.0f : 1.5f);
+      }
       // Hovered: a separate, softer ring further out, so it never gets confused with the tighter
       // selection border above even when both apply to the same point.
       if (isHovered) drawList->AddCircle(screen, radius + 3.0f, kHoverRingColor, 0, 2.0f);
       // Drag-to-weld target: a wider green ring still, so it's unmistakable even though the
       // dragged point itself is what's under the cursor, not this one.
       if (isWeldTarget) drawList->AddCircle(screen, radius + 6.0f, kWeldTargetColor, 0, kWeldTargetRingThickness);
+      // Disjoint X cross, on top of everything else -- matches editor.js's separate cross stroke
+      // pass (js/editor.js:1192-1198), sized off the same radius+4 offset.
+      if (isDisjoint) {
+        drawList->AddLine(ImVec2(screen.x - radius - 4.0f, screen.y - radius - 4.0f), ImVec2(screen.x + radius + 4.0f, screen.y + radius + 4.0f),
+                          kDisjointColor, 2.0f);
+        drawList->AddLine(ImVec2(screen.x + radius + 4.0f, screen.y - radius - 4.0f), ImVec2(screen.x - radius - 4.0f, screen.y + radius + 4.0f),
+                          kDisjointColor, 2.0f);
+      }
+      // Index + elevation label, matching editor.js's `${pi}.${i} (y${p.pos[1].toFixed(0)})`
+      // (js/editor.js:1199-1200).
+      char label[32];
+      std::snprintf(label, sizeof(label), "%d.%d (y%d)", pi, i, static_cast<int>(std::lround(points[i].pos.y)));
+      drawList->AddText(ImVec2(screen.x + 9.0f, screen.y - 5.0f), kPositionLabelColor, label);
     }
   }
 }
@@ -1734,7 +1788,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     // point nodes so the nodes render on top, same as JS's ordering.
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor);
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor);
-    drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget);
+    drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget, state.disjointSeams());
     drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag);
   }
   // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1), drawn after position points

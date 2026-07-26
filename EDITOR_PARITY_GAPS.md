@@ -327,23 +327,38 @@ on-canvas frame lookup already in this file.
 
 ---
 
-## 8. Top-down control-point styling
+## 8. Top-down control-point styling — ✅ Implemented
 
-JS encodes four things in each node (`js/editor.js:1166-1200`) that C++ drops — it draws uniform
-yellow circles (`kPositionPointColor`, `TopDownCanvas.cpp:45`, used at `:803`) and makes **no
-`AddText` calls on the canvas at all**.
+JS encoded four things in each node (`js/editor.js:1166-1200`) that C++ previously dropped — it drew
+uniform yellow circles and made no `AddText` calls on the canvas at all.
 
 | Encoding | JS | C++ |
 | --- | --- | --- |
-| **Square** node = open-path endpoint (join-eligible) | `ctx.rect` when `isEndpoint`, `:1183` | always a circle |
-| Fill = `heightColor(y)`, elevation-coded | `:1186` | flat yellow |
-| Amber `#ffcc44` ring **+ X cross** = disjoint seam point | `:1188-1197` | nothing |
-| Text label `pi.i (y123)` | `:1199` | nothing |
+| **Square** node = open-path endpoint (join-eligible) | `ctx.rect` when `isEndpoint`, `:1183` | **ported** |
+| Fill = `heightColor(y)`, elevation-coded | `:1186` | **ported** |
+| Amber `#ffcc44` ring **+ X cross** = disjoint seam point | `:1188-1197` | **ported** |
+| Text label `pi.i (y123)` | `:1199` | **ported** |
 
-C++ already ports `rollColor`/`elevationColor` (`TopDownCanvas.cpp:121-128`) for the ribbon, so the
-elevation-coded fill is a near-free addition; `heightColor` is the remaining one to port.
-Endpoint-square and seam detection both have C++ equivalents in `EditorState`
-(`hitTestOpenEndpoint`, `disjointSeams()`), so this is mostly draw-side work.
+### Implementation (done)
+
+`cpp/editor/src/TopDownCanvas.cpp`'s `drawAuthoredPositionPoints(...)`:
+
+- `heightColor(...)` ported 1:1 from JS (a second, file-local copy alongside `rollFillColor`/
+  `elevationFillColor` — matches ElevationView.cpp's own independent copy of the same function, per
+  this codebase's established per-file duplication of small color helpers) and used as the node fill
+  in place of the old flat `kPositionPointColor`.
+- `isEndpoint` reuses the already-computed `firstPosRaw`/`lastPosRaw` raw indices (previously only
+  used for the weld-target check) to match JS's `i === 0 || i === cps.length - 1` on an open path;
+  `AddRectFilled`/`AddRect` draw the square in place of `AddCircleFilled`/`AddCircle` for that case,
+  fill/stroke logic otherwise identical to the circle branch.
+- `isDisjoint` looks up `state.disjointSeams()` (now threaded into the function, new parameter) by
+  matching `Connection::pointId` against the point's id, mirroring `seamForPoint(p)`. When true and
+  not selected, the stroke becomes the amber `kDisjointColor` at 3px (matching JS's stroke choice),
+  and a separate amber X cross is drawn on top via two `AddLine` calls sized off `radius + 4`,
+  matching JS's separate cross stroke pass exactly.
+- The index/elevation label (`"pi.i (yNN)"`) is drawn via `AddText` at `screen + (9, -5)`, offset to
+  approximate JS's canvas-space `(s.x + 9, s.y + 3)` baseline-anchored text under ImGui's
+  top-left-anchored `AddText`.
 
 ---
 
@@ -423,5 +438,4 @@ work**, it is why several obvious-looking features aren't listed above.
   preview.** All present.
 - **"Open Game ↗" link, `persistEditorTrack` localStorage.** Browser-preview plumbing with no native
   equivalent.
-- **`heightColor`-coded elevation nodes, hover rings, zoom-to-selection, D/Z/X hotkeys.** The last
-  three are C++ *additions* with no JS counterpart.
+- **Hover rings, zoom-to-selection, D/Z/X hotkeys.** C++ *additions* with no JS counterpart.
