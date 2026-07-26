@@ -2,6 +2,8 @@
 #
 #   willpower/  the Willpower geometry/math libraries (Willpower.Common,
 #               Willpower.Geometry, ...) — see willpower/CMakeLists.txt.
+#   willpower/willpower.application/  Willpower's application/resource-system
+#               library — see willpower/willpower.application/CMakeLists.txt.
 #   core/       the track-physics engine ported from js/track-physics.js,
 #               parity-tested against the JS oracle — see core/CMakeLists.txt.
 #   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
@@ -31,7 +33,7 @@ add_subdirectory(core)
 add_subdirectory(app)
 add_subdirectory(editor)
 
-foreach(_willpower_target Willpower.Common Willpower.Geometry)
+foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)
   if (TARGET ${_willpower_target})
     add_dependencies(core ${_willpower_target})
     if (TARGET parity)

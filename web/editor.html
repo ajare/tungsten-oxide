@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Track Editor</title>
+<style>
+  :root { --panel: #10202e; --line: #244358; --accent: #4fd6ff; --text: #cdeeff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #061119; color: var(--text);
+    font-family: system-ui, sans-serif; font-size: 13px; overflow: hidden; }
+  /* The elevation row's height is a variable so collapsing it is a single class
+     on #app: the top-down row is 1fr and simply absorbs whatever it gives up. */
+  #app { --elev-h: 225px;
+    display: grid; grid-template-columns: 1fr 240px; grid-template-rows: auto 1fr var(--elev-h);
+    grid-template-areas: "top top" "canvas props" "elev props"; height: 100vh; gap: 1px; }
+  #app.elevCollapsed { --elev-h: 30px; }
+  #topbar { grid-area: top; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #topbar .toolbarBreak { flex-basis: 100%; height: 0; }
+  #topbar button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 5px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  #topbar button:hover { background: #1f4c6b; }
+  button:disabled, select:disabled, input:disabled { opacity: 0.42; cursor: not-allowed !important; filter: grayscale(0.55); }
+  #topbar button:disabled, #topbar button:disabled:hover { background: #102536; color: #6f93a8; border-color: #244358; }
+  #topbar .spacer { flex: 1; }
+  #topbar input[type=text], #topbar input[type=number] { background: #0a1a26; color: var(--accent); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 8px; font: inherit; }
+  #topbar input[type=text] { width: 180px; }
+  #topbar input[type=number] { width: 70px; }
+  #topbar select { background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 5px; padding: 6px 8px; font: inherit; cursor: pointer; }
+  #pointFilters { display: flex; gap: 8px; align-items: center; color: #9fc6dc; }
+  #pointFilters label { display: flex; gap: 3px; align-items: center; cursor: pointer; }
+  #pointFilters input { accent-color: var(--accent); }
+  #canvasWrap { grid-area: canvas; position: relative; background: #08141d; }
+  #elevWrap { grid-area: elev; position: relative; background: #071019; border-top: 1px solid var(--line); }
+  /* A grid item's default min-height:auto floors it at its content's intrinsic
+     size. An in-flow <canvas> with height:100% has no definite parent height to
+     resolve against, so it falls back to its BITMAP size -- which fitCanvas()
+     sets to rect.height * devicePixelRatio. On a HiDPI display that floor is
+     taller than the box, so the 1fr row could not shrink to hand the elevation
+     row more height: the grid overflowed 100vh and, body being overflow:hidden,
+     the elevation panel was pushed off the bottom of the viewport instead of
+     growing. Taking these two canvases out of flow removes them from intrinsic
+     sizing entirely, so the rows size purely from grid-template-rows. Scoped to
+     these two ids on purpose -- #crossSectionPreview in the props panel is a
+     normal in-flow canvas and must stay one. */
+  #canvasWrap, #elevWrap { min-height: 0; min-width: 0; overflow: hidden; }
+  #topCanvas, #elevCanvas { position: absolute; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #props { grid-area: props; background: var(--panel); border-left: 1px solid var(--line);
+    padding: 12px; overflow-y: auto; }
+  #props h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #7fb8d8; }
+  #props label { display: flex; justify-content: space-between; align-items: center;
+    margin: 6px 0; gap: 8px; }
+  #props input[type=number], #props select { width: 130px; background: #0a1a26; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  #props .hint { color: #6f93a8; line-height: 1.5; margin-top: 10px; font-size: 12px; }
+  #props .none { color: #6f93a8; font-style: italic; }
+  .badge { position: absolute; top: 8px; left: 10px; color: #6f93a8; pointer-events: none; }
+  /* Keep the instruction text clear of the collapse button in the corner. */
+  #elevWrap .badge { top: 4px; right: 44px; }
+  #elevToggle { position: absolute; top: 4px; right: 8px; z-index: 5;
+    width: 22px; height: 22px; padding: 0; line-height: 1; text-align: center;
+    background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 4px; font: inherit; cursor: pointer; }
+  #elevToggle:hover { background: #1f4c6b; }
+  /* Collapsed: nothing but a title bar and the button to bring it back. */
+  #elevCollapsedLabel { display: none; position: absolute; top: 50%; left: 10px;
+    transform: translateY(-50%); color: #6f93a8; pointer-events: none; }
+  #app.elevCollapsed #elevCanvas, #app.elevCollapsed #elevWrap .badge { display: none; }
+  #app.elevCollapsed #elevCollapsedLabel { display: block; }
+  #addPointMenu { position: fixed; display: none; z-index: 20; background: #10202e;
+    border: 1px solid #2c6a9e; border-radius: 6px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.55);
+    flex-direction: column; gap: 3px; min-width: 120px; user-select: none; }
+  #addPointMenu .menuLabel { color: #7fb8d8; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; padding: 3px 6px; }
+  #addPointMenu button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer; text-align: left; }
+  #addPointMenu button:hover { background: #1f4c6b; }
+  #addPointMenu button[data-type="roll"] { border-color: #ffaa3c; }
+  #addPointMenu button[data-type="width"] { border-color: #b6ff3c; }
+  #addPointMenu button[data-type="crossSection"] { border-color: #d58cff; }
+  #addPointMenu button[data-action="pasteMesh"] { border-color: #8a6ad0; }
+  #addPointMenu #pasteMeshSection { border-top: 1px solid #24506e; margin-top: 3px; padding-top: 3px; }
+  #topCanvas { touch-action: none; }
+  #topZoomControl {
+    position: absolute; right: 14px; bottom: 14px; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 8px 6px; background: rgba(16,32,46,0.82);
+    border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4); color: var(--text);
+    user-select: none;
+  }
+  #topZoomControl .zoomLabel { color: var(--accent); font-size: 11px; line-height: 1; }
+  #topZoomSlider {
+    width: 24px; height: 230px; margin: 0;
+    writing-mode: vertical-rl; direction: rtl; accent-color: var(--accent);
+  }
+  #topHomeBtn {
+    width: 28px; height: 28px; padding: 0; margin-top: 2px;
+    display: flex; align-items: center; justify-content: center;
+    background: #16344a; color: var(--text); border: 1px solid #2c6a9e;
+    border-radius: 5px; font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  #topHomeBtn:hover { background: #1f4c6b; }
+  #texturePanel {
+    position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
+    width: 360px; max-height: calc(100vh - 90px); overflow: auto;
+    background: #10202e; border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.55); padding: 10px;
+  }
+  #texturePanel .panelHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #texturePanel .panelHead strong { color: var(--accent); }
+  #texturePanel .panelHead .spacer { flex: 1; }
+  #texturePanel button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  #texturePanel button:hover { background: #1f4c6b; }
+  #texturePanel .asset { border-top: 1px solid #244358; padding-top: 9px; margin-top: 9px; }
+  #texturePanel .assetTitle { display: flex; gap: 8px; align-items: center; }
+  #texturePanel .assetTitle .name { color: #fff; font-weight: 600; overflow-wrap: anywhere; }
+  #texturePanel .assetMeta, #texturePanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; }
+  #texturePanel label { display: inline-flex; align-items: center; gap: 4px; margin: 6px 8px 6px 0; color: #b8d8e8; }
+  #texturePanel input[type=number] { width: 72px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #texturePanel .tiles { display: grid; grid-template-columns: repeat(auto-fill, 48px); gap: 6px; margin-top: 6px; }
+  #texturePanel .tile { width: 48px; height: 48px; border: 2px solid #244358; border-radius: 4px; background-repeat: no-repeat; background-color: #061119; cursor: pointer; image-rendering: pixelated; }
+  #texturePanel .tile:hover { border-color: var(--accent); }
+  #texturePanel .tile.selected { border-color: #ffdd00; box-shadow: 0 0 8px rgba(255,221,0,0.75); }
+  #randomGroup { display: inline-flex; align-items: center; gap: 5px; }
+  #randomGroup label { color: #b8d8e8; display: inline-flex; align-items: center; gap: 3px; }
+  #randomGroup input[type=range] { width: 84px; vertical-align: middle; accent-color: var(--accent); }
+  #randomGroup input[type=number] { width: 88px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #randomComplexityVal { min-width: 14px; text-align: right; color: var(--accent); }
+  #randomPanel {
+    position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
+    width: 300px; max-height: calc(100vh - 90px); overflow: auto;
+    background: #10202e; border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.55); padding: 10px;
+  }
+  #randomPanel .panelHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #randomPanel .panelHead strong { color: var(--accent); }
+  #randomPanel .panelHead .spacer { flex: 1; }
+  #randomPanel button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  #randomPanel button:hover { background: #1f4c6b; }
+  #randomPanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
+  #randomPanel .rrRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; color: #b8d8e8; }
+  #randomPanel .rrRow .pair { display: inline-flex; align-items: center; gap: 5px; }
+  #randomPanel input[type=number] { width: 68px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #handlingPanel {
+    position: fixed; right: 260px; top: 58px; z-index: 18; display: none;
+    width: 300px; max-height: calc(100vh - 90px); overflow: auto;
+    background: #10202e; border: 1px solid #2c6a9e; border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.55); padding: 10px;
+  }
+  #handlingPanel .panelHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #handlingPanel .panelHead strong { color: var(--accent); }
+  #handlingPanel .panelHead .spacer { flex: 1; }
+  #handlingPanel button { background: #16344a; color: var(--text); border: 1px solid #2c6a9e; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  #handlingPanel button:hover { background: #1f4c6b; }
+  #handlingPanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
+  #handlingPanel .rrRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; color: #b8d8e8; }
+  #handlingPanel input[type=number] { width: 84px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <input id="nameInput" type="text" title="Track name">
+    <button id="dirBtn">Direction: &#8635;</button>
+    <span class="spacer" aria-hidden="true"></span>
+    <button id="newBtn">New</button>
+    <span id="randomGroup">
+      <button id="randomBtn" title="Generate a random track at the chosen complexity (new seed each click)">Random</button>
+      <label title="Track complexity: turns, banking and hills scale together">Cx
+        <input id="randomComplexity" type="range" min="1" max="10" step="1" value="5" aria-label="Random track complexity">
+        <span id="randomComplexityVal">5</span></label>
+      <label title="Random seed. Type a seed and press Enter to reproduce a track.">Seed
+        <input id="randomSeed" type="number" min="0" max="999999" step="1" aria-label="Random seed"></label>
+      <button id="randomRangesBtn" title="Configure the random generator's ranges">Ranges&hellip;</button>
+    </span>
+    <button id="importBtn">Import JSON</button>
+    <button id="importMeshBtn" title="Import a geometry-js mesh JSON as a drivable region">Import Mesh</button>
+    <button id="pasteMeshBtn" title="Paste a geometry-js mesh JSON from the clipboard, placed at the origin">Paste Mesh</button>
+    <button id="texturesBtn" title="Load texture atlases and assign texture tiles to curves">Textures</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="exportUsdBtn" title="Export the current curves and mesh regions as an ASCII USD scene">Export USD</button>
+    <button id="handlingBtn" title="Configure this track's ship handling (saved in the track JSON)">Handling&hellip;</button>
+    <span class="spacer" aria-hidden="true"></span>
+    <button id="undoBtn" disabled title="Undo (Ctrl+Z)">&#8630; Undo</button>
+    <button id="redoBtn" disabled title="Redo (Ctrl+Y / Ctrl+Shift+Z)">&#8631; Redo</button>
+    <span class="spacer" aria-hidden="true"></span>
+    <label>Mode
+      <select id="editModeSelect" title="Edit (E) / Create (C) / Rails (R)"><option value="edit">Edit</option><option value="create">Create</option><option value="rails">Rails</option></select>
+    </label>
+    <label>Curve
+      <select id="curveSelect" title="Current curve"></select>
+    </label>
+    <button id="deleteCurveBtn" title="Delete selected curve">Delete Curve</button>
+    <button id="joinBtn" disabled>Connect</button>
+    <span class="toolbarBreak" aria-hidden="true"></span>
+    <select id="renderModeSelect" title="Top-down rendering mode">
+      <option value="banked">Banked edges (lean tint)</option>
+      <option value="flat">Flat width (roll colour)</option>
+      <option value="elevation">Flat with elevation colour</option>
+    </select>
+    <div id="pointFilters" title="Show/hide editable control point overlays">
+      <label><input id="showPositionChk" type="checkbox" checked> Position</label>
+      <label style="color:#ffaa3c"><input id="showRollChk" type="checkbox" checked> Roll</label>
+      <label style="color:#b6ff3c"><input id="showWidthChk" type="checkbox" checked> Width</label>
+      <label style="color:#d58cff"><input id="showCrossSectionChk" type="checkbox" checked> Cross-section</label>
+    </div>
+    <button id="showPhysicsBtn" title="Generate and show the 400 baked frames physics rides on, as selectable dots">Show Physics Pts</button>
+    <button id="hidePhysicsBtn" title="Hide the physics sample points" disabled>Hide Physics Pts</button>
+    <span class="spacer" aria-hidden="true"></span>
+    <label title="Show or hide the top-down grid (G)"><input id="showGridChk" type="checkbox" checked> Grid</label>
+    <label title="Top-down grid size">
+      <select id="gridSizeSelect" aria-label="Grid size">
+        <option value="8">8</option>
+        <option value="16">16</option>
+        <option value="32" selected>32</option>
+        <option value="64">64</option>
+      </select>
+    </label>
+    <label title="Snap position control points to the visible top-down grid"><input id="snapGridChk" type="checkbox"> Snap</label>
+    <span class="spacer"></span>
+    <a id="openGameLink" href="track.html" target="_blank" style="color:var(--accent)">Open Game &#8599;</a>
+    <input id="fileInput" type="file" accept="application/json,.json" hidden>
+    <input id="meshFileInput" type="file" accept="application/json,.json" hidden>
+    <input id="textureFileInput" type="file" accept="image/*" hidden>
+  </div>
+
+  <div id="texturePanel">
+    <div class="panelHead">
+      <strong>Textures</strong>
+      <span class="spacer"></span>
+      <button id="browseTextureBtn">Browse&hellip;</button>
+      <button id="closeTexturePanelBtn" title="Close">&times;</button>
+    </div>
+    <div class="hint">Select a texture image. The selected filename is stored as its load path; image data is not embedded in the track JSON.</div>
+    <div class="hint">Click a thumbnail to assign it to the current curve. Textures render in the game preview, not on the editor canvas.</div>
+    <button id="clearCurveTextureBtn" style="margin-top:8px">Clear current curve texture</button>
+    <div id="textureAssetList"></div>
+  </div>
+
+  <div id="randomPanel">
+    <div class="panelHead">
+      <strong>Random ranges</strong>
+      <span class="spacer"></span>
+      <button id="randomRangesResetBtn" title="Restore built-in defaults">Reset</button>
+      <button id="closeRandomPanelBtn" title="Close">&times;</button>
+    </div>
+    <div class="hint">Bounds the random generator. The complexity slider scales within these; defaults match the 8&ndash;9&nbsp;km big-world regime. Saved for next time.</div>
+    <div class="rrRow"><span>Length</span><span class="pair"><input id="rrLengthMin" type="number" step="100">&ndash;<input id="rrLengthMax" type="number" step="100"></span></div>
+    <div class="rrRow"><span>Turns</span><span class="pair"><input id="rrTurnsMin" type="number" step="1">&ndash;<input id="rrTurnsMax" type="number" step="1"></span></div>
+    <div class="rrRow"><span>Max banking&deg;</span><input id="rrMaxBanking" type="number" step="1"></div>
+    <div class="rrRow"><span>Max hill height</span><input id="rrMaxHill" type="number" step="10"></div>
+    <div class="rrRow"><span>Width</span><span class="pair"><input id="rrWidthMin" type="number" step="1">&ndash;<input id="rrWidthMax" type="number" step="1"></span></div>
+    <div class="rrRow"><span>Max cross-section dish</span><input id="rrMaxCurvature" type="number" step="0.05" title="Maximum inward dish; curvature is sampled in [-this, 0]"></div>
+    <div class="rrRow"><span>Mesh chance %</span><span class="pair"><input id="rrMeshChanceMin" type="number" min="0" max="100" step="1">&ndash;<input id="rrMeshChanceMax" type="number" min="0" max="100" step="1"></span></div>
+    <div class="rrRow"><span>Sequence chance %</span><input id="rrSequenceChance" type="number" min="0" max="100" step="1"></div>
+    <div class="rrRow"><span>Max mesh sections</span><input id="rrMaxMeshSections" type="number" min="0" max="5" step="1"></div>
+    <div class="rrRow"><span>Mesh section length</span><span class="pair"><input id="rrMeshLengthMin" type="number" step="10">&ndash;<input id="rrMeshLengthMax" type="number" step="10"></span></div>
+    <div class="rrRow"><span>Section end drop</span><span class="pair"><input id="rrEndDropMin" type="number" step="1">&ndash;<input id="rrEndDropMax" type="number" step="1"></span></div>
+    <div class="rrRow"><span>Boost pads</span><span class="pair"><input id="rrBoostMin" type="number" min="0" step="1">&ndash;<input id="rrBoostMax" type="number" min="0" step="1"></span></div>
+  </div>
+
+  <div id="handlingPanel">
+    <div class="panelHead">
+      <strong>Ship handling</strong>
+      <span class="spacer"></span>
+      <button id="handlingResetBtn" title="Restore default handling">Reset</button>
+      <button id="closeHandlingPanelBtn" title="Close">&times;</button>
+    </div>
+    <div class="hint">Saved in this track's JSON and used by the game. Brake, friction and reverse are fixed and not configurable. A track with no handling section drives with these defaults.</div>
+    <div class="rrRow"><span>Top speed (m/s)</span><input id="hMaxSpeed" type="number" step="5"></div>
+    <div class="rrRow"><span>Acceleration (m/s&sup2;)</span><input id="hAccel" type="number" step="5"></div>
+    <div class="rrRow"><span>Turn speed (&deg;/s)</span><input id="hTurnSpeed" type="number" step="5"></div>
+    <div class="rrRow"><span>Weight (kg)</span><input id="hWeight" type="number" step="50" title="1000 = neutral; heavier bounces less on impact, lighter bounces more"></div>
+  </div>
+
+  <div id="canvasWrap">
+    <canvas id="topCanvas"></canvas>
+    <div class="badge" id="topBadge">Top-down (X / Z) &mdash; left-click a control point to select/drag, left-drag empty space to pan, right-click empty space to add &middot; Delete to remove &middot; shift-click an open path's endpoint (square) to pick it for Join &middot; drag a roll/width point's line-end handle (white circle) to change it &middot; <span style="color:#b98cff">mesh regions: click to select, drag to move; switch to Rails mode to click edges (solid = wall, dashed = ledge)</span></div>
+    <div id="topZoomControl" title="Top-down zoom">
+      <div class="zoomLabel">+</div>
+      <input id="topZoomSlider" type="range" min="-100" max="250" value="0" step="1" autocomplete="off" aria-label="Top-down zoom">
+      <div class="zoomLabel">&minus;</div>
+      <button id="topHomeBtn" type="button" title="Reset zoom and view to origin" aria-label="Reset view">&#8962;</button>
+    </div>
+  </div>
+
+  <div id="elevWrap">
+    <canvas id="elevCanvas"></canvas>
+    <span id="elevCollapsedLabel">Elevation (Y)</span>
+    <button id="elevToggle" type="button" aria-controls="elevWrap" aria-expanded="true">&#9662;</button>
+    <div class="badge">Elevation (Y) &mdash; circles: drag up/down to sculpt hills &nbsp;&middot;&nbsp; <span style="color:#ffaa3c">roll line</span> (above = right, below = left): its diamonds are a separate set of control points &mdash; click empty space to add one, drag to move, Delete to remove</div>
+  </div>
+
+  <div id="props">
+    <h3>Selected Point</h3>
+    <div id="propBody"><div class="none">No point selected.</div></div>
+    <div class="hint" id="metaHint"></div>
+  </div>
+</div>
+
+<div id="addPointMenu">
+  <div class="menuLabel">Add control point</div>
+  <button data-type="position">Position</button>
+  <button data-type="roll" style="color:#ffaa3c">Roll</button>
+  <button data-type="width" style="color:#b6ff3c">Width</button>
+  <button data-type="crossSection" style="color:#d58cff">Cross-section</button>
+  <div id="pasteMeshSection" style="display:none; flex-direction:column; gap:3px">
+    <div class="menuLabel">Add mesh</div>
+    <button data-action="pasteMesh" style="color:#c0a0ff">From clipboard</button>
+  </div>
+  <div id="addZoneSection" style="border-top:1px solid #24506e; margin-top:3px; padding-top:3px; display:flex; flex-direction:column; gap:3px">
+    <div class="menuLabel">Add zone</div>
+    <button data-action="addZone" data-effect="velocityChange" style="color:#ffb060">Boost</button>
+    <button data-action="addZone" data-effect="startGrid" style="color:#cfd6dd">Start grid</button>
+  </div>
+  <div id="addTriggerSection" style="border-top:1px solid #24506e; margin-top:3px; padding-top:3px; display:flex; flex-direction:column; gap:3px">
+    <div class="menuLabel">Add trigger</div>
+    <button data-action="addTrigger" data-trigger-type="dummy" style="color:#ff8ec2">Dummy</button>
+    <button data-action="addTrigger" data-trigger-type="checkpoint" style="color:#7fe7ff">Checkpoint</button>
+  </div>
+</div>
+
+<!-- track-core.js stays a classic script: it is dependency-free and sets
+     window.TrackCore before the deferred module below runs. -->
+<script src="track-core.js"></script>
+<script type="importmap">
+{ "imports": { "@willpower/geometry": "../ext/geoemetry-js/src/index.js" } }
+</script>
+<script type="module" src="js/editor.js"></script>
+</body>
+</html>

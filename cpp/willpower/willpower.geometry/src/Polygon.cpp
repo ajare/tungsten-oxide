@@ -22,7 +22,6 @@ namespace WP_NAMESPACE
 	{
 
 		using namespace std;
-		using namespace utils;
 
 		void Polygon::Triangulation::copyFrom(Triangulation const& other)
 		{

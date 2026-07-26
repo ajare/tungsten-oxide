@@ -8,7 +8,6 @@ namespace WP_NAMESPACE
 {
 
 	using namespace std;
-	using namespace utils;
 
 	// Singleton instantiation
 	WillpowerWalker* StackWalkerInstance::mInstance = nullptr;

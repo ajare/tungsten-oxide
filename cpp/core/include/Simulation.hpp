@@ -1,5 +1,5 @@
 // Simulation.hpp — declarations for the physics step, transliterated line-for-line
-// from js/track-physics.js (Simulation.stepPhysics + its helpers). Bodies live in
+// from web/js/track-physics.js (Simulation.stepPhysics + its helpers). Bodies live in
 // src/Simulation.cpp.
 //
 // Includes spline-corridor and mesh-region ownership, collision, transitions,
@@ -68,7 +68,7 @@ class Simulation {
 public:
   explicit Simulation(const Track& track);
 
-  // Game-only observation hooks (mirror of js/track-physics.js's injected
+  // Game-only observation hooks (mirror of web/js/track-physics.js's injected
   // `opts.onTriggerFired`/`opts.now`). Both default to no-ops so existing
   // headless callers are unaffected; a GameSession sets these to surface
   // gameplay events and a deterministic session clock. `now()` feeds the

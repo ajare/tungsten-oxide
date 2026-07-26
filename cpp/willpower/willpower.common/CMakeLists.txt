@@ -26,6 +26,7 @@ set(WILLPOWER_COMMON_HEADERS
   include/willpower/common/Exceptions.h
   include/willpower/common/ExtendedAccelerationGrid.h
   include/willpower/common/ExtentsCalculator.h
+  include/willpower/common/FileSystem.h
   include/willpower/common/Globals.h
   include/willpower/common/IndexedTriangleBatchRenderable.h
   include/willpower/common/LineHit.h
@@ -37,13 +38,17 @@ set(WILLPOWER_COMMON_HEADERS
   include/willpower/common/SplinePath.h
   include/willpower/common/StackWalker.h
   include/willpower/common/StringUtils.h
+  include/willpower/common/StructuredData.h
   include/willpower/common/Timer.h
+  include/willpower/common/tinyxml2.h
   include/willpower/common/TriangleBatchRenderable.h
   include/willpower/common/Triangulation.h
   include/willpower/common/TriangleIntersection.h
   include/willpower/common/TriangleStripBatchRenderable.h
   include/willpower/common/Vector2.h
-  include/willpower/common/WillpowerWalker.h)
+  include/willpower/common/WillpowerWalker.h
+  include/willpower/common/XmlReader.h
+  include/willpower/common/XmlExceptions.h)
 
 set(WILLPOWER_COMMON_SOURCES
   src/AccelerationGrid.cpp
@@ -60,6 +65,7 @@ set(WILLPOWER_COMMON_SOURCES
   src/CubicBSplineLooping.cpp
   src/DateTime.cpp
   src/ExtentsCalculator.cpp
+  src/FileSystem.cpp
   src/IndexedTriangleBatchRenderable.cpp
   src/LineHit.cpp
   src/Logger.cpp
@@ -69,13 +75,16 @@ set(WILLPOWER_COMMON_SOURCES
   src/SplinePath.cpp
   src/StackWalker.cpp
   src/StringUtils.cpp
+  src/StructuredData.cpp
   src/DynamicAccelerationGrid.cpp
   src/Timer.cpp
+  src/tinyxml2.cpp
   src/TriangleBatchRenderable.cpp
   src/Triangulation.cpp
   src/TriangleStripBatchRenderable.cpp
   src/Vector2.cpp
-  src/WillpowerWalker.cpp)
+  src/WillpowerWalker.cpp
+  src/XmlReader.cpp)
 
 add_library(Willpower.Common ${WILLPOWER_LIB_TYPE} ${WILLPOWER_COMMON_SOURCES} ${WILLPOWER_COMMON_HEADERS})
 add_library(Willpower::Common ALIAS Willpower.Common)

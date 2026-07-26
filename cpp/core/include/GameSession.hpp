@@ -2,7 +2,7 @@
 // (NATIVE_GAME_RUNTIME_PLAN.md §2.3/§2.4/§2.5/§2.6). Owns a compiled Track and
 // its Simulation, a fixed ship roster, a deterministic session clock, and the
 // gameplay events fired since the last step. Mirrors the frame/substep
-// orchestration in js/track-game.js's updateShip/animate (lines 1092-1134,
+// orchestration in web/js/track-game.js's updateShip/animate (lines 1092-1134,
 // 1466-1475) and the event surface fireTrigger's onTriggerFired hook exposes.
 //
 // No renderer, DOM, image, audio, or platform-input dependency: platform code
@@ -17,7 +17,7 @@
 namespace tox {
 
 // One frame's worth of a single ship's input, sampled by the host once per
-// rendered frame per ship (mirror of js/track-game.js's IDLE_INTENT shape).
+// rendered frame per ship (mirror of web/js/track-game.js's IDLE_INTENT shape).
 struct ControlIntent {
   double throttle{0.0};
   double brake{0.0};

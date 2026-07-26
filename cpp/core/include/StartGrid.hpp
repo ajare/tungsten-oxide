@@ -1,5 +1,5 @@
-// StartGrid.hpp — pure racing-grid layout (mirror of js/ship-grid.js) plus the
-// authored-start settling pass from js/track-game.js's startingGridPoses
+// StartGrid.hpp — pure racing-grid layout (mirror of web/js/ship-grid.js) plus the
+// authored-start settling pass from web/js/track-game.js's startingGridPoses
 // (lines 938-989). Longitudinal offsets are positive distances behind the
 // authored start in the driven direction; lateral offsets are negative on the
 // driver's left and positive on the right.

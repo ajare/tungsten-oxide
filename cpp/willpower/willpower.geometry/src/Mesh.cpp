@@ -23,7 +23,6 @@ namespace WP_NAMESPACE
 	{
 
 		using namespace std;
-		using namespace utils;
 
 		Mesh::Mesh()
 			: Mesh(nullptr, nullptr, nullptr, nullptr, nullptr)

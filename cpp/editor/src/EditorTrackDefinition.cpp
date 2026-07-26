@@ -1,7 +1,7 @@
 // EditorTrackDefinition.cpp — schema-10 JSON <-> editor::TrackDefinition, independent of
 // cpp/core's tox::Track loader (see EditorTrackDefinition.hpp for why). JSON field names and
 // defaults are kept in lockstep with cpp/core/src/TrackLoader.cpp's normalize() and
-// track-core.js's parseTrack/serializeTrack — those two are the source of truth for what schema
+// web/track-core.js's parseTrack/serializeTrack — those two are the source of truth for what schema
 // 10 looks like; diverge from them only where noted (the mid-edit tolerance described above).
 #include "EditorTrackDefinition.hpp"
 
@@ -391,7 +391,7 @@ json meshAssetToJson(const MeshAsset& asset) {
   json edges = json::array();
   for (const auto& e : asset.edges) {
     // Re-merge the structured `rail` field back into the preserved attribute bag, matching
-    // js/track-mesh.js's setRailEdge: present (true) when railed, omitted entirely when not.
+    // web/js/track-mesh.js's setRailEdge: present (true) when railed, omitted entirely when not.
     json attributes = parseAttributes(e.attributesJson);
     if (e.rail)
       attributes["rail"] = true;
@@ -494,8 +494,8 @@ std::string toJson(const TrackDefinition& track) {
   json paths = json::array();
   for (const auto& path : track.paths) paths.push_back(pathToJson(path));
 
-  // Only assets a placement still references are written out, mirroring track-core.js's
-  // referencedMeshAssets (track-core.js:1277-1283) -- see EDITOR_PARITY_FIXES.md finding 5.
+  // Only assets a placement still references are written out, mirroring web/track-core.js's
+  // referencedMeshAssets (web/track-core.js:1277-1283) -- see EDITOR_PARITY_FIXES.md finding 5.
   // Otherwise an imported-then-deleted mesh accumulates in the file forever.
   json meshAssets = json::object();
   {
@@ -528,10 +528,10 @@ std::string toJson(const TrackDefinition& track) {
   for (const auto& o : track.selfIntersectionOverrides)
     selfIntersectionOverrides.push_back(json{{"side", o.side}, {"a", o.a}, {"b", o.b}, {"action", o.action}});
 
-  // "samples" is intentionally omitted: serializeTrack never writes it either (track-core.js:1721-
+  // "samples" is intentionally omitted: serializeTrack never writes it either (web/track-core.js:1721-
   // 1741), even though parseTrack reads one back if present -- see EDITOR_PARITY_FIXES.md finding
   // 10. Matching that (rather than "fixing" it here) keeps a track this editor round-trips
-  // byte-identical to one round-tripped through js/editor.js; `TrackDefinition::samples` is kept
+  // byte-identical to one round-tripped through web/js/editor.js; `TrackDefinition::samples` is kept
   // in memory only so a load-time value still feeds a live preview bake within this session.
   // Falls back at serialize time only, matching serializeTrack's `track.name || 'Untitled Track'`
   // -- an empty in-memory name (mid-edit, e.g. the track-name field cleared but not yet retyped) is

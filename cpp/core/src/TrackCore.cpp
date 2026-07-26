@@ -1,5 +1,5 @@
 // TrackCore.cpp — bodies of the stateless shared math declared in
-// include/TrackCore.hpp (transliterated 1:1 from track-core.js).
+// include/TrackCore.hpp (transliterated 1:1 from web/track-core.js).
 #include "TrackCore.hpp"
 #include <algorithm>
 #include <cmath>

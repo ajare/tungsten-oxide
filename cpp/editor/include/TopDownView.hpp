@@ -1,8 +1,8 @@
 // TopDownView.hpp — camera/view state for the top-down 2D canvas
-// (EDITOR_CPP_PORT_PLAN.md M2), mirroring js/editor.js's view/topZoom/topPan model exactly:
+// (EDITOR_CPP_PORT_PLAN.md M2), mirroring web/js/editor.js's view/topZoom/topPan model exactly:
 // an auto-fit-to-track-bounds scale times a user zoom multiplier, plus a screen-pixel pan offset
 // measured from the auto-fit center. See editor.js's computeView/worldToScreen/screenToWorld/
-// zoomTopAt (js/editor.js:700-745, :4533-4541).
+// zoomTopAt (web/js/editor.js:700-745, :4533-4541).
 #pragma once
 
 #include <algorithm>
@@ -156,7 +156,7 @@ class TopDownView {
   // Only `showPositionPoints` currently has an observable effect: roll/width/crossSection points
   // have no on-canvas presence at all yet in this editor (EDITOR_PARITY_FIXES.md gap 1 -- they're
   // panel-only), so hiding/showing them here is a no-op until that on-canvas rendering exists.
-  // The fields and accessors still exist so the toolbar checkboxes match editor.html's four,
+  // The fields and accessors still exist so the toolbar checkboxes match web/editor.html's four,
   // rather than silently dropping three of them.
   bool showPositionPoints() const { return showPositionPoints_; }
   void setShowPositionPoints(bool show) { showPositionPoints_ = show; }

@@ -58,10 +58,10 @@ CTest entries:
 - `random_geometry_parity` — five seeded random schema-10 JSON tracks independently baked into
   renderer-neutral geometry by JavaScript and C++.
 
-Run `npm run parity` from the repository root for JS self-replay followed by all
-C++ parity layers. Trace regeneration is deliberate: `npm run gen-traces`. The random geometry
-corpus is regenerated separately with `npm run gen-random-mesh-fixtures`; see
-`test/fixtures/random-track-mesh/README.md`.
+Run `npm run parity` from `web/` for JS self-replay followed by all C++ parity layers. Trace
+regeneration is deliberate: `npm run gen-traces`. The random geometry corpus is regenerated
+separately with `npm run gen-random-mesh-fixtures`; see
+`web/test/fixtures/random-track-mesh/README.md`.
 
 ## Native runtime host
 

@@ -1,4 +1,4 @@
-// EditorHistory.hpp — whole-track deep-copy undo/redo, mirroring js/editor.js's
+// EditorHistory.hpp — whole-track deep-copy undo/redo, mirroring web/js/editor.js's
 // undoStack/redoStack (MAX_HISTORY-capped, a fresh edit clears redo). editor::TrackDefinition is
 // plain data (no live handles like editor.js's meshCache), so a deep copy is just a struct copy.
 #pragma once

@@ -1,5 +1,5 @@
 // EditorState.hpp — mode/selection/drag/create-draft state for point editing
-// (EDITOR_CPP_PORT_PLAN.md M3), mirroring js/editor.js's editMode/selectedPointId/dragging/
+// (EDITOR_CPP_PORT_PLAN.md M3), mirroring web/js/editor.js's editMode/selectedPointId/dragging/
 // createDraft globals and setEditMode/nodeAtTop/deleteSelected/createModeClick functions. M4 adds
 // mesh placement select/drag/rotate/delete, mirroring selectedMeshId/meshDragOffset/meshRotateStart
 // and the drag branches in editor.js's topCanvas mousedown handler.
@@ -54,7 +54,7 @@ struct SelectedRail {
 
 class EditorState {
 public:
-  // backfillPointIds() mirrors js/editor.js's ensureTrackIds(), called after every track
+  // backfillPointIds() mirrors web/js/editor.js's ensureTrackIds(), called after every track
   // construction/replacement there (initial load, New, Random, Import). Without it here, a track
   // built in memory rather than loaded from JSON (main.cpp's buildStarterTrack(), New,
   // generateRandomTrack()) has no point ids at all, which silently defeats both the id-collision
@@ -76,7 +76,7 @@ public:
 
   // ---- Curve management (EDITOR_PARITY_FIXES.md gap 5) ----
   //
-  // "Current curve": mirrors js/editor.js's `sel.path`, which the curve-selector dropdown sets
+  // "Current curve": mirrors web/js/editor.js's `sel.path`, which the curve-selector dropdown sets
   // directly and a control-point click overrides (selectPositionAt/selectPoint always win while a
   // point is selected; the dropdown only matters once nothing is). explicitCurrentPathIndex_ holds
   // the dropdown's own choice, clamped to the track's current path count.
@@ -150,7 +150,7 @@ public:
     if (!hit) return false;
     selection_ = *hit;
     // Points/mesh regions/zones/triggers share one selection (props panel), mirrors
-    // clearMeshSelection() also clearing selectedZoneId/selectedTriggerId in js/editor.js.
+    // clearMeshSelection() also clearing selectedZoneId/selectedTriggerId in web/js/editor.js.
     selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
@@ -221,7 +221,7 @@ public:
   //
   // Scoped like gap 1: full add/edit-fields/delete via a dedicated panel (ZonesPanel.hpp/.cpp),
   // plus on-canvas rendering and click-to-select (reusing core's own baked tox::Zone records --
-  // see TopDownCanvas.cpp's zoneOutlineWorld/zoneAtWorld), but NOT js/editor.js's on-canvas drag
+  // see TopDownCanvas.cpp's zoneOutlineWorld/zoneAtWorld), but NOT web/js/editor.js's on-canvas drag
   // (`dragging === 'zoneTop'`), which continuously re-projects the mouse onto the nearest path via
   // TrackCore.makeEvaluator -- there is no equivalent spline evaluator exposed to cpp/editor (core
   // keeps its own Evaluator private to TrackBake.cpp), so reproducing that exactly would mean
@@ -341,7 +341,7 @@ public:
   }
 
   // Mutates the trigger by id via `mutate`, pushing one undo step first and re-clamping afterward.
-  // Also mirrors setTriggerRole's finish-uniqueness invariant (js/editor.js:2318-2323): if `mutate`
+  // Also mirrors setTriggerRole's finish-uniqueness invariant (web/js/editor.js:2318-2323): if `mutate`
   // leaves this trigger's role as "finish", any other checkpoint currently marked finish is demoted
   // to "intermediate" so at most one finish ever exists (harmless to re-run when nothing changed).
   template <typename Mutate>
@@ -374,8 +374,8 @@ public:
   // On-canvas trigger center-handle drag (new functionality -- previously host.t was panel-edited
   // only, via editTrigger's "T (%)" field): same drag lifecycle (beginDrag/endDrag/one-push-per-
   // gesture, sharing dragging_/dragMutated_ with the aux-point drag mutators above) but for a
-  // path-hosted Trigger's host.t. Mirrors js/editor.js's `dragging === 'triggerTop'` path-host
-  // branch (js/editor.js:3511-3525) EXCEPT it keeps the trigger on its CURRENT host path via
+  // path-hosted Trigger's host.t. Mirrors web/js/editor.js's `dragging === 'triggerTop'` path-host
+  // branch (web/js/editor.js:3511-3525) EXCEPT it keeps the trigger on its CURRENT host path via
   // tangent-projection (like dragSelectedAuxTTo; the caller computes the new t the same way) rather
   // than JS's re-host-onto-nearest-path-under-the-cursor behavior -- there's no live spline
   // evaluator here to redo that search from an arbitrary world point. No-op (returns false) for a
@@ -475,7 +475,7 @@ public:
   }
 
   // ---- Drag-to-weld an open path's endpoint onto another open endpoint (new functionality, no
-  // JS precedent -- js/editor.js's shift+drag "joinDrag" is a separate, non-moving gesture; this
+  // JS precedent -- web/js/editor.js's shift+drag "joinDrag" is a separate, non-moving gesture; this
   // is a plain-drag variant that also relocates the point). Both helpers below feed the top-down
   // canvas's per-frame drag handling: selectedOpenEndpointEnd() answers "is the point currently
   // being dragged actually an open path's start/end", hitTestOpenEndpoint() finds a weld target
@@ -531,7 +531,7 @@ public:
   // path by appending (atEnd=true) or prepending (atEnd=false) a new position point at
   // (worldX, worldZ), inheriting the dragged endpoint's own current Y -- there's no on-curve
   // sample to inherit from beyond the curve's own end (mirrors extendCurveFromDrag,
-  // js/editor.js:2862-2880). Delegates to insertPositionOnSegment, which already pushes undo and
+  // web/js/editor.js:2862-2880). Delegates to insertPositionOnSegment, which already pushes undo and
   // selects the new point.
   std::optional<int> extendOpenPathFromEndpoint(int pathIndex, bool atEnd, double worldX, double worldZ) {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
@@ -712,7 +712,7 @@ public:
     return false;
   }
 
-  // ---- Split Point (new functionality -- no direct JS UI equivalent; js/editor.js's
+  // ---- Split Point (new functionality -- no direct JS UI equivalent; web/js/editor.js's
   // splitTargetPathAt is the closest reference implementation, but it's only ever called
   // internally from performJoin() when joining onto an interior point, never exposed as its own
   // button) ----
@@ -849,7 +849,7 @@ public:
   // Parses `text` (a file's contents or the clipboard) as a mesh export and imports it via
   // importMeshAsset if it parses -- the shared path behind both the toolbar's Import/Paste Mesh
   // buttons and the top-down canvas's right-click "Paste Mesh" (EDITOR_NATIVE_FILE_IO_PLAN.md M9,
-  // mirrors importMeshFile/pasteMeshFromClipboard sharing js/editor.js's parseMeshJSON). Returns
+  // mirrors importMeshFile/pasteMeshFromClipboard sharing web/js/editor.js's parseMeshJSON). Returns
   // the parse error, or nullopt on success.
   std::optional<std::string> importMeshFromJsonText(const std::string& text, const std::string& name, double centerWorldX,
                                                     double centerWorldZ) {
@@ -895,7 +895,7 @@ public:
 
   // Shift+drag rotate: `startAngleDeg` is the mouse's angle-from-placement-origin at drag start
   // (atan2(dz, dx) in degrees, matching TrackMesh's localToWorld convention -- see
-  // js/track-mesh.js's placementTrig). The offset between that and the placement's rotation at
+  // web/js/track-mesh.js's placementTrig). The offset between that and the placement's rotation at
   // mousedown is preserved for the whole gesture, so the shape doesn't jump to face the cursor the
   // instant the drag begins (CLAUDE.md's editor-conventions note on this exact interaction).
   void beginMeshRotate(double startAngleDeg) {
@@ -1034,7 +1034,7 @@ public:
 
   // Mutates the mesh placement by id via `mutate`, pushing one undo step first -- mirrors editZone.
   // X/Z/elevation/rotation are all free-form number fields in JS (no clamp on any of them, see
-  // js/editor.js:2221-2222's plain `meshPlacement[inp.dataset.mesh] = val`), so unlike editZone
+  // web/js/editor.js:2221-2222's plain `meshPlacement[inp.dataset.mesh] = val`), so unlike editZone
   // there's nothing to re-clamp afterward.
   template <typename Mutate>
   bool editMeshPlacement(const std::string& id, Mutate&& mutate) {
@@ -1047,7 +1047,7 @@ public:
 
   // Rail height lives on the shared MeshAsset, not the placement -- setting it here affects every
   // placement of that asset at once (same sharing toggleRailEdge already relies on). Mirrors
-  // js/editor.js:2222's `asset.railHeight = Math.max(0, val)`.
+  // web/js/editor.js:2222's `asset.railHeight = Math.max(0, val)`.
   bool setMeshAssetRailHeight(const std::string& assetId, double height) {
     const auto it = track_.meshAssets.find(assetId);
     if (it == track_.meshAssets.end()) return false;
@@ -1095,7 +1095,7 @@ public:
   // same drag lifecycle and shared dragging_/dragMutated_ state as dragSelectedElevationTo, but a
   // mesh placement has no `selection_` (mesh/point selection are mutually exclusive -- see
   // selectMesh/selectPoint), so this reads mutableSelectedMeshPlacement() instead. Mirrors
-  // js/editor.js's `dragging === 'meshElev'` branch (js/editor.js:3416-3419), including the same
+  // web/js/editor.js's `dragging === 'meshElev'` branch (web/js/editor.js:3416-3419), including the same
   // round-to-0.1 precision.
   void dragSelectedMeshElevationTo(double y) {
     MeshPlacement* placement = mutableSelectedMeshPlacement();
@@ -1110,7 +1110,7 @@ public:
   // On-canvas width-handle drag: same drag lifecycle (beginDrag/endDrag/one-push-per-gesture,
   // sharing dragging_/dragMutated_ with dragSelectedTo/dragSelectedElevationTo) but for a Width
   // point's `width` field -- mirrors editor.js's `dragging === 'widthTop'` branch
-  // (js/editor.js:3481-3495). The caller (TopDownCanvas.cpp) computes the new width value itself:
+  // (web/js/editor.js:3481-3495). The caller (TopDownCanvas.cpp) computes the new width value itself:
   // it needs the baked frame's position/h axis at the point's `t`, which EditorState -- deliberately
   // THE-free -- has no access to (see EditorTrackDefinition.hpp's own header comment on why).
   void dragSelectedWidthTo(double width) {
@@ -1125,7 +1125,7 @@ public:
   }
 
   // On-canvas roll-handle drag: same drag lifecycle as dragSelectedWidthTo(), for a Roll point's
-  // `roll` field -- mirrors editor.js's `dragging === 'rollTop'` branch (js/editor.js:3453-3467).
+  // `roll` field -- mirrors editor.js's `dragging === 'rollTop'` branch (web/js/editor.js:3453-3467).
   // The caller computes the roll value itself from the baked frame (position/h axis/width at the
   // point's `t`), same THE-free split as dragSelectedWidthTo().
   void dragSelectedRollTo(double rollDegrees) {
@@ -1141,7 +1141,7 @@ public:
 
   // Cross-section-handle drag counterpart to dragSelectedWidthTo()/dragSelectedRollTo(): same
   // drag lifecycle, for a CrossSection point's `curvature` field -- mirrors editor.js's
-  // `dragging === 'crossSectionTop'` branch (js/editor.js:3468-3480). Previously click-to-select
+  // `dragging === 'crossSectionTop'` branch (web/js/editor.js:3468-3480). Previously click-to-select
   // only (panel-edited); this ports the same on-canvas value drag the other two aux kinds already
   // had.
   void dragSelectedCurvatureTo(double curvature) {
@@ -1196,7 +1196,7 @@ public:
   // Mirrors deleteSelected() for a position point (refuses to drop a path below 4, since a track
   // path needs that many to bake) generalized to also delete a selected roll/width/crossSection
   // point (EDITOR_PARITY_FIXES.md gap 1), which JS handles separately (the rollSel/widthSel/
-  // crossSectionSel branches of renderProps()'s Delete buttons, js/editor.js:2383/2416/2449) with
+  // crossSectionSel branches of renderProps()'s Delete buttons, web/js/editor.js:2383/2416/2449) with
   // no minimum-count guard at all -- a path can have zero roll/width/crossSection points; core's
   // baker treats that as flat/default-width/uncurved. No shared/disjoint-id guard -- this editor
   // doesn't alias points by id yet (see EditorTrackDefinition.hpp). Preserves track_.start across
@@ -1225,11 +1225,11 @@ public:
   //
   // `i` throughout is a POSITION-space index (0-based, counting only Position points on the
   // path) identifying the segment running from position i to position i+1 (wrapping for a closed
-  // path) -- mirrors js/editor.js's segSel/{path,i} exactly, which is always derived this way
+  // path) -- mirrors web/js/editor.js's segSel/{path,i} exactly, which is always derived this way
   // (positionIndices(path)[i]), never a raw Path::points index.
   //
   // Deliberately does NOT port editor.js's own click-to-select-a-segment (`segmentAtTop`) --
-  // that function exists in JS but is never called from anywhere in js/editor.js itself (dead
+  // that function exists in JS but is never called from anywhere in web/js/editor.js itself (dead
   // code); the shipped UI only ever derives a segment from the *currently selected control
   // point* via selectedOutgoingSegment/selectedIncomingSegment below, so that's the only path
   // ported here too.
@@ -1284,7 +1284,7 @@ public:
   //    -- same "authoring capability over pixel-perfect parity" tradeoff as makeDisjoint's split
   //    (no proportional roll/width redistribution).
   // Refuses (returns false, no history push) if the path carries a disjoint seam -- mirrors
-  // deleteSegment's pathHasDisjointSeam guard: reconnect it first, same as editor.html asks.
+  // deleteSegment's pathHasDisjointSeam guard: reconnect it first, same as web/editor.html asks.
   bool deleteSegmentAt(int pathIndex, int i) {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
     Path& path = track_.paths[pathIndex];
@@ -1387,7 +1387,7 @@ public:
   // ---- Roll/width/cross-section point editing (EDITOR_PARITY_FIXES.md gap 1) ----
   //
   // Scoped to add/edit-fields/delete via a properties panel (PropertiesPanel.hpp/.cpp), NOT the
-  // draggable-handle-on-canvas interaction js/editor.js's top-down and elevation views offer
+  // draggable-handle-on-canvas interaction web/js/editor.js's top-down and elevation views offer
   // (rollHandleAtTop/widthHandleAtTop/crossSectionHandleAtTop/rollHandleAtElev) -- that needs
   // deriving a screen-space handle position from an arbitrary t along the baked centerline, which
   // is materially more work than the schema-authoring capability itself. This still makes
@@ -1402,7 +1402,7 @@ public:
 
   // Appends a new roll/width/crossSection point to `pathIndex` at parameter `t`, using the schema
   // defaults every TrackPoint already carries (roll 0, width 36, curvature 0/tightness 1/thickness
-  // 4 -- js/editor.js's insertRollPointAtWorld/insertWidthPoint/insertCrossSectionPoint instead
+  // 4 -- web/js/editor.js's insertRollPointAtWorld/insertWidthPoint/insertCrossSectionPoint instead
   // interpolate the curve's *current* value at that t so a fresh point doesn't visibly kink the
   // curve; this editor doesn't, so a newly added point may need its value adjusted immediately).
   // Selects the new point and returns its raw index, or nullopt if pathIndex is invalid or `kind`
@@ -1457,7 +1457,7 @@ public:
 
   // Reason a Type-combo conversion of the selected point to `newKind` would be refused, or nullptr
   // if it's allowed -- mirrors convertSelectedPoint's three alert()-guarded early returns
-  // (js/editor.js:1557-1573) as data instead of a modal, for a disabled combo entry + tooltip (this
+  // (web/js/editor.js:1557-1573) as data instead of a modal, for a disabled combo entry + tooltip (this
   // editor's established alert() substitute, e.g. MeshPanel.cpp's rail-height tooltip).
   const char* convertBlockedReason(PointKind newKind) const {
     if (!selectionInRange()) return "No point selected.";
@@ -1482,7 +1482,7 @@ public:
     return nullptr;
   }
 
-  // Converts the selected point to `newKind`, mirroring convertSelectedPoint (js/editor.js:1540-
+  // Converts the selected point to `newKind`, mirroring convertSelectedPoint (web/js/editor.js:1540-
   // 1613): removes the current point, then seeds the freshly created point of the new kind by
   // evaluating the *existing* points of that kind at the same t (the current point's own t, or its
   // position-space index/N for a Position point). curKind != newKind always (guarded by
@@ -1562,9 +1562,9 @@ public:
     return true;
   }
 
-  // Track name (EDITOR_PARITY_FIXES.md gap 2). js/editor.js's #nameInput commits every keystroke
+  // Track name (EDITOR_PARITY_FIXES.md gap 2). web/js/editor.js's #nameInput commits every keystroke
   // live, collapsing a whole typing session into one undo step (nameHistoryArmed,
-  // js/editor.js:3637-3644); this instead commits once when the caller's text field is deactivated
+  // web/js/editor.js:3637-3644); this instead commits once when the caller's text field is deactivated
   // after an edit (ImGui::IsItemDeactivatedAfterEdit), the same single-commit-per-session outcome
   // without needing focus/blur state threaded in from the caller -- consistent with every other
   // typed-field setter in this file (setSelectedPositionFields, editAuxPoint), which all commit
@@ -1579,7 +1579,7 @@ public:
   }
 
   // Cycles a self-intersection crossing's override: none -> keep -> collapse -> none
-  // (EDITOR_PARITY_GAPS.md gap 1), mirroring cycleCrossingOverride (js/editor.js:849-861) exactly,
+  // (EDITOR_PARITY_GAPS.md gap 1), mirroring cycleCrossingOverride (web/js/editor.js:849-861) exactly,
   // including the order-insensitive (a,b) == (b,a) match on both sides. Always pushes undo, same as
   // JS's unconditional pushUndo() at the top of the function -- there's no guard here, every call
   // legitimately changes something.
@@ -1603,7 +1603,7 @@ public:
     }
   }
 
-  // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn handler:
+  // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors web/editor.html's #dirBtn handler:
   // clampStart() first (start may be stale from a prior structural edit), then flip the flag.
   void toggleStartReverse() {
     clampStart();
@@ -1629,7 +1629,7 @@ public:
 
   // Whether (pathIndex, pointIndex) -- a raw Path::points index, matching SelectedPoint -- is the
   // current start point. Used by the properties panel to disable "Set as start point" once it
-  // already is, mirroring editor.html's isStart/#startBtn.
+  // already is, mirroring web/editor.html's isStart/#startBtn.
   bool isStartPoint(int pathIndex, int pointIndex) const {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
     return track_.start.path == pathIndex && track_.start.point == rawIndexToPositionIndex(track_.paths[pathIndex], pointIndex);
@@ -1690,7 +1690,7 @@ private:
     return count;
   }
 
-  // Pure port of track-core.js's evalScalarSpline (js/track-core.js:332-371): non-uniform Catmull-
+  // Pure port of web/track-core.js's evalScalarSpline (web/web/track-core.js:332-371): non-uniform Catmull-
   // Rom/Hermite interpolation over a (t, value) point set, circular for closed paths and clamped at
   // the ends for open ones -- the same per-attribute spline TrackCore.evalRoll/evalWidth/
   // evalCrossSection* wrap, independent of the rational position spline core's own baker uses. Used
@@ -1825,7 +1825,7 @@ private:
   // track_.start.point is a POSITION-only index (matches core's TrackDefinition.hpp/StartGrid.cpp:
   // clamped against positionCount, not points.size()) -- unlike SelectedPoint::pointIndex, which is
   // a raw index into Path::points (mixed position/roll/width/crossSection). These two convert
-  // between them; mirrors js/editor.js's positionIndices()/parts().controlPoints indexing split.
+  // between them; mirrors web/js/editor.js's positionIndices()/parts().controlPoints indexing split.
   static int positionIndexToRaw(const Path& path, int positionIndex) {
     int seen = -1;
     for (int i = 0; i < static_cast<int>(path.points.size()); ++i) {
@@ -1883,7 +1883,7 @@ private:
   }
 
   // Scans for the first unused "<prefix><N>" id starting at N=1, collision-proof by construction
-  // (mirrors js/editor.js's newId/newMeshPlacementId -- see EDITOR_PARITY_FIXES.md finding 1,
+  // (mirrors web/js/editor.js's newId/newMeshPlacementId -- see EDITOR_PARITY_FIXES.md finding 1,
   // which replaced an ever-incrementing-but-never-seeded counter that collided with ids already
   // present in a loaded track). `reserved` lets a caller mint several ids in one call before any of
   // them exist on track_ yet (see finishCreateDraft).
@@ -1908,7 +1908,7 @@ private:
     return firstUnusedId("p", used);
   }
 
-  // "m" prefix (not "mesh") mirrors js/editor.js's newMeshPlacementId exactly
+  // "m" prefix (not "mesh") mirrors web/js/editor.js's newMeshPlacementId exactly
   // (EDITOR_PARITY_FIXES.md finding 11).
   std::string newMeshPlacementId() const {
     std::set<std::string> used;
@@ -1916,14 +1916,14 @@ private:
     return firstUnusedId("m", used);
   }
 
-  // "z" prefix mirrors js/editor.js's newId('z') for zones.
+  // "z" prefix mirrors web/js/editor.js's newId('z') for zones.
   std::string newZoneId() const {
     std::set<std::string> used;
     for (const auto& zone : track_.zones) used.insert(zone.id);
     return firstUnusedId("z", used);
   }
 
-  // "tr" prefix mirrors js/editor.js's newId('tr') for triggers.
+  // "tr" prefix mirrors web/js/editor.js's newId('tr') for triggers.
   std::string newTriggerId() const {
     std::set<std::string> used;
     for (const auto& trigger : track_.triggers) used.insert(trigger.id);
@@ -1931,7 +1931,7 @@ private:
   }
 
   // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix), mirroring
-  // js/editor.js's newId('j')/newId('seam') -- each still scans only its own collection, since the
+  // web/js/editor.js's newId('j')/newId('seam') -- each still scans only its own collection, since the
   // two record kinds never share an id namespace in JS either.
   std::string newConnectionId(const std::string& prefix) const {
     std::set<std::string> used;
@@ -2129,7 +2129,7 @@ private:
     path.closed = closed;
     // Points minted in this same loop aren't in track_ yet, so newPointId's scan can't see them --
     // `reserved` tracks ids minted so far this call so two points in one draft can never collide
-    // with each other, only with what's already on the track (mirrors js/editor.js's newId, which
+    // with each other, only with what's already on the track (mirrors web/js/editor.js's newId, which
     // has the same problem solved by a single shared, ever-advancing counter -- see
     // EDITOR_PARITY_FIXES.md finding 1).
     std::set<std::string> reserved;

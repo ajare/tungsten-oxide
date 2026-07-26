@@ -1,5 +1,5 @@
 // RandomRangesPanel.hpp — configurable bounds for the random-track generator
-// (EDITOR_PARITY_FIXES.md gap 8), mirroring js/editor.js's #randomPanel. `RandomTrack.hpp`'s
+// (EDITOR_PARITY_FIXES.md gap 8), mirroring web/js/editor.js's #randomPanel. `RandomTrack.hpp`'s
 // generateRandomTrack already accepted a RandomTrackRanges parameter (M7a/M7c); this is the UI to
 // edit one, which main.cpp previously never exposed (always passing the `{}` default).
 //

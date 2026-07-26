@@ -31,7 +31,7 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
       int roleIndex = isFinish ? 1 : 0;
       const char* roleNames[] = {"Intermediate", "Finish"};
       // A trigger already marked Finish can't be demoted here -- another checkpoint must be
-      // promoted to Finish first, mirroring setTriggerRole's alert-and-revert (js/editor.js:2313-2317).
+      // promoted to Finish first, mirroring setTriggerRole's alert-and-revert (web/js/editor.js:2313-2317).
       ImGui::BeginDisabled(isFinish);
       ImGui::SetNextItemWidth(140);
       roleChanged = ImGui::Combo("Role", &roleIndex, roleNames, 2);

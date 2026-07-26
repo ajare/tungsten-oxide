@@ -1,5 +1,5 @@
 // FileDialog.hpp — native Open/Save dialogs (EDITOR_NATIVE_FILE_IO_PLAN.md M8), backing the
-// editor's Save/Export/Import buttons. editor.html leans on browser primitives (<input type=file>,
+// editor's Save/Export/Import buttons. web/editor.html leans on browser primitives (<input type=file>,
 // Blob/URL.createObjectURL) that have no native equivalent; this wraps the modern COM
 // IFileOpenDialog/IFileSaveDialog (Vista+) picked over the legacy GetOpenFileNameW/
 // GetSaveFileNameW pair for nicer dialog chrome and Explorer integration (see the plan's "Open

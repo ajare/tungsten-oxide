@@ -96,7 +96,7 @@ bool DrawMeshPanel(EditorState& state) {
   }
 
   // Rail height is per-ASSET, not per-placement -- applies to every placement of this asset, same
-  // as js/editor.js's title="Applies to every placement of this asset" (js/editor.js:2198).
+  // as web/js/editor.js's title="Applies to every placement of this asset" (web/js/editor.js:2198).
   double railHeight = asset != nullptr ? asset->railHeight : 6.0;
   ImGui::SetNextItemWidth(120);
   bool railChanged = ImGui::InputDouble("Rail Height", &railHeight, 0.0, 0.0, "%.1f", kCommitOnEnter);

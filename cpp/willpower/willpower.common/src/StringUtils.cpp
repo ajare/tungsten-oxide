@@ -12,192 +12,164 @@
 
 #include "willpower/common/StringUtils.h"
 
-namespace utils
-{
+using namespace std;
 
-	using namespace std;
+namespace WP_NAMESPACE {
 
-	void StringUtils::trim(string& str, bool left, bool right, char const* delims)
-	{
-		if (right)
-		{
-			str.erase(str.find_last_not_of(delims) + 1); // trim right
-		}
-		if (left)
-		{
-			str.erase(0, str.find_first_not_of(delims)); // trim left
-		}
-	}
+    void StringUtils::trim(string& str, bool left, bool right, char const* delims) {
+      if (right) {
+        str.erase(str.find_last_not_of(delims) + 1);  // trim right
+      }
+      if (left) {
+        str.erase(0, str.find_first_not_of(delims));  // trim left
+      }
+    }
 
-	string StringUtils::trim(string const& str, bool left, bool right, char const* delims)
-	{
-		string ret = str;
-			
-		trim(ret, left, right, delims);
-		return ret;
-	}
+    string StringUtils::trim(string const& str, bool left, bool right, char const* delims) {
+      string ret = str;
 
-	vector<string> StringUtils::split(string const& str, string const& delims, unsigned int maxSplits)
-	{
-		vector<string> ret;
-		ret.reserve(maxSplits ? maxSplits + 1 : 10); // 10 is guessed capacity
+      trim(ret, left, right, delims);
+      return ret;
+    }
 
-		unsigned int numSplits = 0;
-		size_t start = 0, pos;
+    vector<string> StringUtils::split(string const& str, string const& delims, unsigned int maxSplits) {
+      vector<string> ret;
+      ret.reserve(maxSplits ? maxSplits + 1 : 10);  // 10 is guessed capacity
 
-		do
-		{
-			pos = str.find_first_of(delims, start);
-			if (pos == start)
-			{
-				// Do nothing
-				start = pos + 1;
-			}
-			else if (pos == string::npos || (maxSplits && numSplits == maxSplits))
-			{
-				// Copy the rest of the string
-				ret.push_back(str.substr(start));
-				break;
-			}
-			else
-			{
-				// Copy up to delimiter
-				ret.push_back(str.substr(start, pos - start));
-				start = pos + 1;
-			}
+      unsigned int numSplits = 0;
+      size_t start = 0, pos;
 
-			// parse up to next real data
-			start = str.find_first_not_of(delims, start);
-			++numSplits;
+      do {
+        pos = str.find_first_of(delims, start);
+        if (pos == start) {
+          // Do nothing
+          start = pos + 1;
+        } else if (pos == string::npos || (maxSplits && numSplits == maxSplits)) {
+          // Copy the rest of the string
+          ret.push_back(str.substr(start));
+          break;
+        } else {
+          // Copy up to delimiter
+          ret.push_back(str.substr(start, pos - start));
+          start = pos + 1;
+        }
 
-		} while (pos != string::npos);
+        // parse up to next real data
+        start = str.find_first_not_of(delims, start);
+        ++numSplits;
 
-		return ret;
-	}
+      } while (pos != string::npos);
 
-	void StringUtils::toLower(string& str)
-	{
-		transform(str.begin(), str.end(), str.begin(), [](char c) {return static_cast<char>(std::tolower(c)); });
-	}
+      return ret;
+    }
 
-	string StringUtils::toLower(string const& str)
-	{
-		string ret = str;
+    void StringUtils::toLower(string& str) {
+      transform(str.begin(), str.end(), str.begin(), [](char c) { return static_cast<char>(std::tolower(c)); });
+    }
 
-		toLower(ret);
-		return ret;
-	}
+    string StringUtils::toLower(string const& str) {
+      string ret = str;
 
-	void StringUtils::toUpper(string& str)
-	{
-		transform(str.begin(), str.end(), str.begin(), [](char c) {return static_cast<char>(std::toupper(c)); });
-	}
+      toLower(ret);
+      return ret;
+    }
 
-	string StringUtils::toUpper(string const& str)
-	{
-		string ret = str;
+    void StringUtils::toUpper(string& str) {
+      transform(str.begin(), str.end(), str.begin(), [](char c) { return static_cast<char>(std::toupper(c)); });
+    }
 
-		toUpper(ret);
-		return ret;
-	}
+    string StringUtils::toUpper(string const& str) {
+      string ret = str;
 
-	bool StringUtils::startsWith(string const& str, string const& pattern, bool caseSensitive)
-	{
-		size_t thisLen = str.length();
-		size_t patternLen = pattern.length();
-			
-		if (thisLen < patternLen || patternLen == 0)
-		{
-			return false;
-		}
+      toUpper(ret);
+      return ret;
+    }
 
-		const string startOfThis = str.substr(0, patternLen);
-		return caseSensitive ? startOfThis == pattern : toLower(startOfThis) == toLower(pattern);
-	}
+    bool StringUtils::startsWith(string const& str, string const& pattern, bool caseSensitive) {
+      size_t thisLen = str.length();
+      size_t patternLen = pattern.length();
 
-	bool StringUtils::endsWith(string const& str, string const& pattern, bool caseSensitive)
-	{
-		size_t thisLen = str.length();
-		size_t patternLen = pattern.length();
+      if (thisLen < patternLen || patternLen == 0) {
+        return false;
+      }
 
-		if (thisLen < patternLen || patternLen == 0)
-		{
-			return false;
-		}
+      const string startOfThis = str.substr(0, patternLen);
+      return caseSensitive ? startOfThis == pattern : toLower(startOfThis) == toLower(pattern);
+    }
 
-		const string endOfThis = str.substr(thisLen - patternLen, patternLen);
-		return caseSensitive ? endOfThis == pattern : toLower(endOfThis) == toLower(pattern);
-	}
+    bool StringUtils::endsWith(string const& str, string const& pattern, bool caseSensitive) {
+      size_t thisLen = str.length();
+      size_t patternLen = pattern.length();
 
-	bool StringUtils::contains(string const& str, string const& pattern, bool caseSensitive)
-	{
-		string fixedPattern = pattern;
+      if (thisLen < patternLen || patternLen == 0) {
+        return false;
+      }
 
-		regex re = caseSensitive 
-			? regex(fixedPattern)
-			: regex(fixedPattern, regex_constants::icase);
+      const string endOfThis = str.substr(thisLen - patternLen, patternLen);
+      return caseSensitive ? endOfThis == pattern : toLower(endOfThis) == toLower(pattern);
+    }
 
-		return regex_search(str, re);
-	}
+    bool StringUtils::contains(string const& str, string const& pattern, bool caseSensitive) {
+      string fixedPattern = pattern;
 
-	bool StringUtils::isNumber(string const& str)
-	{
-		istringstream istr(str);
-			
-		float test;
-		istr >> test;
+      regex re = caseSensitive
+                     ? regex(fixedPattern)
+                     : regex(fixedPattern, regex_constants::icase);
 
-		return !istr.fail() && istr.eof();
-	}
+      return regex_search(str, re);
+    }
 
-	void StringUtils::replaceAll(string& str, string const& toFind, string const& replacement)
-	{
-		// Get the first occurrence
-		size_t pos = str.find(toFind);
+    bool StringUtils::isNumber(string const& str) {
+      istringstream istr(str);
 
-		// Repeat till end is reached
-		while (pos != std::string::npos)
-		{
-			str.replace(pos, toFind.size(), replacement);
-			int offset = (int)replacement.size() - (int)toFind.size();
-			pos = str.find(toFind, pos + offset);
-		}
-	}
+      float test;
+      istr >> test;
 
-	float StringUtils::parseFloat(string const& value)
-	{
-		istringstream str(value);
+      return !istr.fail() && istr.eof();
+    }
 
-		float ret = 0;
-		str >> ret;
+    void StringUtils::replaceAll(string& str, string const& toFind, string const& replacement) {
+      // Get the first occurrence
+      size_t pos = str.find(toFind);
 
-		return ret;
-	}
+      // Repeat till end is reached
+      while (pos != std::string::npos) {
+        str.replace(pos, toFind.size(), replacement);
+        int offset = (int)replacement.size() - (int)toFind.size();
+        pos = str.find(toFind, pos + offset);
+      }
+    }
 
-	int StringUtils::parseInt(string const& value)
-	{
-		istringstream str(value);
+    float StringUtils::parseFloat(string const& value) {
+      istringstream str(value);
 
-		int ret = 0;
-		str >> ret;
+      float ret = 0;
+      str >> ret;
 
-		return ret;
-	}
+      return ret;
+    }
 
-	unsigned int StringUtils::parseUInt(string const& value)
-	{
-		istringstream str(value);
+    int StringUtils::parseInt(string const& value) {
+      istringstream str(value);
 
-		unsigned int ret = 0;
-		str >> ret;
+      int ret = 0;
+      str >> ret;
 
-		return ret;
-	}
+      return ret;
+    }
 
-	bool StringUtils::parseBool(string const& value)
-	{
-		string tl = toLower(value);
-		return tl == "true" || tl == "yes" || value == "1";
-	}
+    unsigned int StringUtils::parseUInt(string const& value) {
+      istringstream str(value);
 
-} // utils
+      unsigned int ret = 0;
+      str >> ret;
+
+      return ret;
+    }
+
+    bool StringUtils::parseBool(string const& value) {
+      string tl = toLower(value);
+      return tl == "true" || tl == "yes" || value == "1";
+    }
+
+}  // namespace WP_NAMESPACE

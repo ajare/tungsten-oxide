@@ -1,5 +1,5 @@
 // Simulation.cpp — bodies of the physics step + helpers declared in
-// include/Simulation.hpp, transliterated line-for-line from js/track-physics.js.
+// include/Simulation.hpp, transliterated line-for-line from web/js/track-physics.js.
 // See the header for the native runtime scope.
 #include "Simulation.hpp"
 #include <algorithm>

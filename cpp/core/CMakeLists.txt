@@ -100,9 +100,12 @@ if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
 endif()
 
 enable_testing()
-set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/traces)
-set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/mesh)
-set(RANDOM_GEOMETRY_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../test/fixtures/random-track-mesh)
+# test/ (the committed physics/geometry golden corpus, shared with the JS test suite) lives under
+# web/ alongside the rest of the JS/HTML implementation -- cpp/ itself stays at the repo root, so
+# this is one level deeper than before the move (see CLAUDE.md's "What this is").
+set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/traces)
+set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/fixtures/mesh)
+set(RANDOM_GEOMETRY_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/fixtures/random-track-mesh)
 set(RAW_TRACE_DIR ${TRACE_DIR}/raw)
 add_test(NAME parity
   COMMAND parity

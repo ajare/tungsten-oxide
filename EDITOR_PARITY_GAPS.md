@@ -1,11 +1,11 @@
-# Editor parity gaps: `js/editor.js` → `cpp/editor`
+# Editor parity gaps: `web/js/editor.js` → `cpp/editor`
 
-A feature-by-feature audit of the browser editor (`editor.html` + `js/editor.js`, 4696 lines)
+A feature-by-feature audit of the browser editor (`web/editor.html` + `web/js/editor.js`, 4696 lines)
 against the native C++/ImGui editor (`cpp/editor/`, ~8000 lines excluding vendored ImGui), listing
 everything the JS editor does that the C++ one does not, with implementation notes.
 
-Audit method: every control in `editor.html`, every function definition and every
-`addEventListener` target in `js/editor.js`, cross-checked against the C++ menus, panels, canvas
+Audit method: every control in `web/editor.html`, every function definition and every
+`addEventListener` target in `web/js/editor.js`, cross-checked against the C++ menus, panels, canvas
 draw/input paths, and `EditorState`'s public API.
 
 Ordered by how much each gap blocks authoring work. Gaps 1–5 block work; 6–10 cost fidelity and
@@ -21,14 +21,14 @@ whether the inner loop is collapsed away or kept as real geometry.
 
 | Piece | JS | C++ |
 | --- | --- | --- |
-| `detectPathCrossings(controlPoints, closed, edges, wrapOpen)` | `js/editor.js:823` | **ported** |
-| `crossingState(cr)` — resolves override vs. default `span <= 100` rule | `js/editor.js:806` | **ported** |
-| `crossingOverrideFor(a, b, side)` | `js/editor.js:801` | **ported** |
-| `CROSSING_COLORS` | `js/editor.js:812` | **ported** |
-| `crossingMarkerAtTop(sx, sy)` — hit test, `CROSSING_HIT_RADIUS = 11` | `js/editor.js:837` | **ported** |
-| `cycleCrossingOverride(cr)` — `auto → keep → collapse → auto` | `js/editor.js:849` | **ported** |
-| Marker draw loop (filled disc = collapsed, hollow ring = kept) | `js/editor.js:1106-1130` | **ported** |
-| Mousedown dispatch (before `nodeAtTop`, skipped when shift held) | `js/editor.js:3278-3281` | **ported** |
+| `detectPathCrossings(controlPoints, closed, edges, wrapOpen)` | `web/js/editor.js:823` | **ported** |
+| `crossingState(cr)` — resolves override vs. default `span <= 100` rule | `web/js/editor.js:806` | **ported** |
+| `crossingOverrideFor(a, b, side)` | `web/js/editor.js:801` | **ported** |
+| `CROSSING_COLORS` | `web/js/editor.js:812` | **ported** |
+| `crossingMarkerAtTop(sx, sy)` — hit test, `CROSSING_HIT_RADIUS = 11` | `web/js/editor.js:837` | **ported** |
+| `cycleCrossingOverride(cr)` — `auto → keep → collapse → auto` | `web/js/editor.js:849` | **ported** |
+| Marker draw loop (filled disc = collapsed, hollow ring = kept) | `web/js/editor.js:1106-1130` | **ported** |
+| Mousedown dispatch (before `nodeAtTop`, skipped when shift held) | `web/js/editor.js:3278-3281` | **ported** |
 
 ### Implementation (done)
 
@@ -36,7 +36,7 @@ whether the inner loop is collapsed away or kept as real geometry.
 only ever found ONE crossing per pass (bounded to `span <= DEFAULT_SELF_INTERSECTION_SPAN` unless an
 override forces a farther one), which isn't enough to show every crossing including far ("auto-keep")
 ones. Rather than surfacing that bounded/iterative search directly, it now also runs a separate,
-**unbounded** full pairwise scan over the same pre-collapse `points` (mirroring `js/track-core.js`'s
+**unbounded** full pairwise scan over the same pre-collapse `points` (mirroring `web/track-core.js`'s
 own `findSelfIntersections`, which is likewise a distinct, unbounded scan from
 `removeLocalSelfIntersectionLoops`'s bounded one) before its existing collapse loop begins, filling a
 new out-parameter:
@@ -69,7 +69,7 @@ new out-parameter:
   when shift is held (shift is reserved for the rubber-band gesture, gap 6).
 
 `EditorState::cycleCrossingOverride(side, a, b)` — unconditional undo push, then insert
-`{side, a, b, "keep"}` / promote to `"collapse"` / erase, mirroring `js/editor.js:849-861` exactly,
+`{side, a, b, "keep"}` / promote to `"collapse"` / erase, mirroring `web/js/editor.js:849-861` exactly,
 including the order-insensitive `(a,b) == (b,a)` match on both sides.
 
 **Caching**, `cpp/editor/main.cpp`: the unbounded scan only runs when `!editorState.dragging()`
@@ -87,7 +87,7 @@ Convert a selected control point between `position` / `roll` / `width` / `crossS
 new value by evaluating the points' splines of the target kind at the removed point's `t` so nothing
 jumps.
 
-- JS: `convertSelectedPoint(newType)` at `js/editor.js:1540-1612`; the dropdown is built by
+- JS: `convertSelectedPoint(newType)` at `web/js/editor.js:1540-1612`; the dropdown is built by
   `typeSelectRow`/`wireTypeSelect` inside `renderProps` (`:2135-2143`).
 
 ### Implementation (done)
@@ -109,7 +109,7 @@ jumps.
   point's removal doesn't touch Roll/Width/CrossSection lists, and vice versa). `convertSelectedPoint`
   therefore evaluates directly against the path's current points of the target kind, with no
   remaining-points recomputation step.
-- A pure port of `track-core.js`'s `evalScalarSpline` (the non-uniform Catmull-Rom/Hermite spline
+- A pure port of `web/track-core.js`'s `evalScalarSpline` (the non-uniform Catmull-Rom/Hermite spline
   `TrackCore.evalRoll`/`evalWidth`/`evalCrossSection*` all wrap — a separate, simpler per-attribute
   spline, unrelated to the rational position spline core's baker uses) lives as a private static
   helper on `EditorState`, used only here.
@@ -136,7 +136,7 @@ jumps.
 
 A selected mesh region previously had no panel at all in C++.
 
-| Field | JS (`renderProps`, `js/editor.js:2192-2199`) | C++ |
+| Field | JS (`renderProps`, `web/js/editor.js:2192-2199`) | C++ |
 | --- | --- | --- |
 | X, Z | number inputs, step 0.5 | canvas drag, **and now the panel** |
 | **Elevation** | number input **and** the elevation-view drag (gap 4) | **panel field added; the elevation-view drag (gap 4) is still open** |
@@ -173,11 +173,11 @@ The railed-edge count hint reads `asset->edges` directly (`std::count_if` on `Me
 Was the only way to set a mesh region's elevation in JS, pairing naturally with gap 3 (whose panel
 now also has an Elevation field — this is the second, on-canvas way to reach the same value).
 
-- Draw: `js/editor.js:1479-1489` — a full-width horizontal line at the placement's elevation,
+- Draw: `web/js/editor.js:1479-1489` — a full-width horizontal line at the placement's elevation,
   labelled `<asset>  y <elevation>`, brightened while dragging.
 - Drag: `dragging === 'meshElev'`, picked on vertical proximity alone (`MESH_ELEV_PICK_PX`,
-  `js/editor.js:3562-3571`), applied at `:3416`.
-- The plotted Y range is expanded to include the placement's elevation (`js/editor.js:1410-1415`) so
+  `web/js/editor.js:3562-3571`), applied at `:3416`.
+- The plotted Y range is expanded to include the placement's elevation (`web/js/editor.js:1410-1415`) so
   the line stays on-panel even when the region sits far above or below the curve.
 
 ### Implementation (done)
@@ -197,7 +197,7 @@ now also has an Elevation field — this is the second, on-canvas way to reach t
 - A new static `meshElevDragArmed` (parallel to the existing `frozenLayout` static) is set on
   mousedown when the click lands on the line, checked *before* the position-point hit test so it
   takes priority — mirroring JS's mousedown handler checking mesh-elevation proximity first
-  (`js/editor.js:3560-3576`), ahead of roll/position hit tests.
+  (`web/js/editor.js:3560-3576`), ahead of roll/position hit tests.
 - `EditorState::dragSelectedMeshElevationTo(y)` — new mutator sharing the existing
   `dragging_`/`dragMutated_` gesture lifecycle with `dragSelectedElevationTo`, operating on
   `mutableSelectedMeshPlacement()` instead of `selection_` (mesh/point selection are mutually
@@ -209,7 +209,7 @@ now also has an Elevation field — this is the second, on-canvas way to reach t
 
 ## 5. Elevation view: right-click to insert a position point — ✅ Implemented
 
-`insertPositionAtSide(sx, sy)` (`js/editor.js:2806-2826`, wired at `:3557`) inserts a new position
+`insertPositionAtSide(sx, sy)` (`web/js/editor.js:2806-2826`, wired at `:3557`) inserts a new position
 control point at the clicked arc position, taking X/Z from the curve there and **Y from the click
 height**. C++'s elevation view previously only selected and dragged existing points.
 
@@ -242,7 +242,7 @@ height**. C++'s elevation view previously only selected and dragged existing poi
 
 JS shift-drags an open curve's endpoint with a live rubber-band line — yellow `#ffd23c` while
 free, green `#31d66b` and snapped to the node when over a valid drop target
-(`js/editor.js:1207-1220`). On release:
+(`web/js/editor.js:1207-1220`). On release:
 
 - over a target → `joinSel = [from, target]` then `performJoin()` (`:3536-3538`);
 - in empty space, past `JOIN_DRAG_MIN_PX` → **`extendCurveFromDrag(from, screenPos)`** (`:2862-2880`),
@@ -291,7 +291,7 @@ INTERIOR point of a different path, which splits the target path there) — the 
 
 ## 7. Start marker & direction arrow — ✅ Implemented
 
-`js/editor.js:1130-1148` draws a green `#8dff9d` arrow from the start control point along the
+`web/js/editor.js:1130-1148` draws a green `#8dff9d` arrow from the start control point along the
 (direction-toggle-aware) tangent, with a `START` text label.
 
 C++ previously drew **nothing**. The data was all present — `track.start`
@@ -311,21 +311,21 @@ starts or which way it runs, which made the direction toggle effectively unverif
   (`ImDrawList::AddTriangleFilled`) + `AddText("START")`, using the same screen-space heading
   convention JS uses (`atan2(dirX, dirZ)`).
 - Called from `DrawTopDownCanvas` right after `drawPhysicsPoints`, matching JS's draw order
-  (`js/editor.js:1130`, right after the physics-point dots).
+  (`web/js/editor.js:1130`, right after the physics-point dots).
 - Bounds safety: `drawStartMarker` checks `start.path` against `baked.paths.size()` itself; `g` is
   clamped by `sampleCenterlineAtG` regardless of `start.point`'s value, so no separate
   `EditorState::clampStart()` call is needed (that method is private; `EditorState`'s own mutators
   already call it after every structural edit, so `track().start` is valid by draw time).
 
 As anticipated: JS computes the start frame analytically via the authored evaluator (`startFrame()`,
-`js/editor.js:652`), while this samples the baked centerline instead — consistent with every other
+`web/js/editor.js:652`), while this samples the baked centerline instead — consistent with every other
 on-canvas frame lookup already in this file.
 
 ---
 
 ## 8. Top-down control-point styling — ✅ Implemented
 
-JS encoded four things in each node (`js/editor.js:1166-1200`) that C++ previously dropped — it drew
+JS encoded four things in each node (`web/js/editor.js:1166-1200`) that C++ previously dropped — it drew
 uniform yellow circles and made no `AddText` calls on the canvas at all.
 
 | Encoding | JS | C++ |
@@ -401,7 +401,7 @@ uniform yellow circles and made no `AddText` calls on the canvas at all.
 
 ## 10. Track statistics readout
 
-JS's `#metaHint` (`updateMeta`, `js/editor.js:2526-2546`) shows path count, unique position-point
+JS's `#metaHint` (`updateMeta`, `web/js/editor.js:2526-2546`) shows path count, unique position-point
 count, and disjoint-seam / junction counts. C++'s "Diagnostics" panel (`main.cpp:2195`) is
 development smoke-test output, not track statistics.
 
@@ -416,8 +416,8 @@ half is genuinely not needed**: C++ calls `pruneStaleReferences()` after every s
 Checked and found to be present, equivalent, or deliberately absent — **read this before starting
 work**, it is why several obvious-looking features aren't listed above.
 
-- **Roll line / diamonds in the elevation view.** `editor.html:295`'s badge advertises this, but the
-  badge is stale: `rollHandleAtElev` returns `null` unconditionally (`js/editor.js:2721-2723`) and
+- **Roll line / diamonds in the elevation view.** `web/editor.html:295`'s badge advertises this, but the
+  badge is stale: `rollHandleAtElev` returns `null` unconditionally (`web/js/editor.js:2721-2723`) and
   `drawElev` states *"Roll is intentionally not drawn in the side view; edit roll control points from
   the top-down view"* (`:1504-1506`). C++ matches actual JS behaviour. Don't implement this.
 - **Create mode.** Full parity: `createModeClick` / `finishCreateDraft` / `cancelCreateDraft`, the

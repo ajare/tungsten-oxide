@@ -119,8 +119,8 @@ const ImU32 kCrossSectionEdgeColor = IM_COL32(213, 140, 255, 255);
 const ImU32 kCrossSectionTextColor = IM_COL32(205, 238, 255, 255);
 const ImU32 kCrossSectionLabelColor = IM_COL32(111, 147, 168, 255);
 
-// On-canvas cross-section preview (editor.html's #crossSectionPreview / drawCrossSectionPreview,
-// js/editor.js:2032-2125): the same profile the game's ribbon mesh and USD exporter build, so this
+// On-canvas cross-section preview (web/editor.html's #crossSectionPreview / drawCrossSectionPreview,
+// web/js/editor.js:2032-2125): the same profile the game's ribbon mesh and USD exporter build, so this
 // always shows the surface that will actually be baked, not just an abstract curvature/tightness
 // readout. tox::TrackCore::crossSectionHeight is the exact function TrackBake.cpp uses.
 void drawCrossSectionPreview(double curvature, double tightness, double thickness, double width) {
@@ -224,7 +224,7 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed && state.setSelectedPositionFields(x, y, z, weight)) mutated = true;
 
-  // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #startBtn: disabled
+  // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors web/editor.html's #startBtn: disabled
   // once this already is the start point, same as JS's `${isStart ? 'disabled' : ''}`.
   const bool isStart = state.isStartPoint(sel.pathIndex, sel.pointIndex);
   ImGui::BeginDisabled(isStart);
@@ -233,7 +233,7 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   }
   ImGui::EndDisabled();
 
-  // Disjoint (EDITOR_PARITY_FIXES.md gap 5): mirrors editor.html's #disjointChk. Checking splits
+  // Disjoint (EDITOR_PARITY_FIXES.md gap 5): mirrors web/editor.html's #disjointChk. Checking splits
   // this point into a hard, unsmoothed seam (EditorState::makeDisjoint); unchecking merges it back
   // (reconnectDisjoint). Silently no-ops when disallowed (open endpoint, or fewer than 4 position
   // points on either side) rather than JS's alert() -- there's no modal dialog plumbing here yet.

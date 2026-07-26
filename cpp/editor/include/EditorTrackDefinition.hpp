@@ -1,7 +1,7 @@
 // EditorTrackDefinition.hpp — the editor's own authoring-side mirror of
 // cpp/core/include/TrackDefinition.hpp (EDITOR_CPP_PORT_PLAN.md M1).
 //
-// Audited field-for-field against track-core.js's parseTrack/serializeTrack (the JS authoring
+// Audited field-for-field against web/track-core.js's parseTrack/serializeTrack (the JS authoring
 // source of truth): every field core's TrackDefinition.hpp already carries is exactly what the
 // schema-10 authoring format needs, so this mirror adds no editor-only fields yet. If a future
 // milestone needs authoring-only bookkeeping that never round-trips through the schema (e.g. a
@@ -144,7 +144,7 @@ struct Trigger {
 // disjoint seams ("opened-closed" | "split-open", created by splitting a shared point back into a
 // hard, unsmoothed corner). sourcePathId/sourceEnd/targetPathId/targetEnd are junction-only fields;
 // pathId (opened-closed) / leftPathId+rightPathId (split-open) are disjoint-seam-only fields --
-// mirrors js/editor.js's seam records exactly (EDITOR_PARITY_FIXES.md gap 5), which is why this
+// mirrors web/js/editor.js's seam records exactly (EDITOR_PARITY_FIXES.md gap 5), which is why this
 // carries both field sets rather than a variant: JS's own objects are equally loose duck-typed
 // records keyed by `kind`.
 struct Connection {
@@ -182,9 +182,9 @@ struct TrackDefinition {
   Start start;
 };
 
-// Backfills missing position-point ids in place, mirroring track-core.js's parseTrack id
-// assignment (track-core.js:1665-1678) and, for state that doesn't come from JSON at all, its
-// ensureTrackIds() (called after every track construction/replacement in js/editor.js: initial
+// Backfills missing position-point ids in place, mirroring web/track-core.js's parseTrack id
+// assignment (web/track-core.js:1665-1678) and, for state that doesn't come from JSON at all, its
+// ensureTrackIds() (called after every track construction/replacement in web/js/editor.js: initial
 // load, New, Random, Import). Without this, points have no stable identity at all -- every id
 // round-trips as "", not merely "unassigned" -- which is also what let freshly-minted ids collide
 // with ids already on the track (EDITOR_PARITY_FIXES.md findings 1, 2, 4). Existing non-empty ids
@@ -217,7 +217,7 @@ struct MeshAssetParseResult {
 // Parses a standalone geometry-js mesh export (the "mesh" field of one track.meshAssets[id]
 // entry, or a bare {vertices,edges,polygons} document straight from the ext/geoemetry-js editor's
 // "Copy JSON" button) for mesh import/paste (EDITOR_NATIVE_FILE_IO_PLAN.md M9). Mirrors
-// js/editor.js's parseMeshJSON: never throws, reports why parsing failed instead. The returned
+// web/js/editor.js's parseMeshJSON: never throws, reports why parsing failed instead. The returned
 // asset's `id`/`name` are unset -- callers assign a fresh id when registering it (see
 // EditorState::importMeshAsset).
 MeshAssetParseResult parseMeshAssetJson(const std::string& text);

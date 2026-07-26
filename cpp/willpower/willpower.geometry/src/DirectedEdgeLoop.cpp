@@ -20,7 +20,6 @@ namespace WP_NAMESPACE
 	{
 
 		using namespace std;
-		using namespace utils;
 
 		DirectedEdgeLoop::DirectedEdgeLoop(Winding winding, IndexVector const& edgeData)
 			: mwMesh(nullptr)

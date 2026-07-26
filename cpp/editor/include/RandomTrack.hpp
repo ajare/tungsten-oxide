@@ -1,5 +1,5 @@
 // RandomTrack.hpp — deterministic random-track generation (EDITOR_CPP_PORT_PLAN.md M7a/M7c),
-// ported from js/editor.js's generateRandomTrack.
+// ported from web/js/editor.js's generateRandomTrack.
 //
 // M7a ported the closed-loop generator (N-turn loop, calibrated driven length, rolling hills,
 // curvature-based banking, boost zones) -- the code path editor.js itself takes when no mesh

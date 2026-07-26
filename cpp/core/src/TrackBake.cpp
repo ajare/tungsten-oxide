@@ -1,6 +1,6 @@
 // TrackBake.cpp — current-schema authored spline paths to world-space physics
 // frames and graphics-API-agnostic triangle batches. The operation order mirrors
-// track-core.js, js/track-bake.js and js/track-render-geometry.js for parity.
+// web/track-core.js, web/js/track-bake.js and web/js/track-render-geometry.js for parity.
 #include "TrackBake.hpp"
 #include "Simulation.hpp"
 #include "TrackCore.hpp"
@@ -249,7 +249,7 @@ std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition
   // Full, UNBOUNDED pairwise scan on the RAW (pre-collapse) points -- EDITOR_PARITY_GAPS.md gap 1:
   // every self-intersection this edge has, regardless of span, so the editor can show/cycle markers
   // for far ("auto-keep") crossings too, not just the near ones the bounded collapse pass below
-  // actually acts on. Mirrors js/track-core.js's findSelfIntersections, which is likewise a
+  // actually acts on. Mirrors web/web/track-core.js's findSelfIntersections, which is likewise a
   // separate, unbounded scan from removeLocalSelfIntersectionLoops's own bounded one. Only run when
   // the caller wants it (`outCrossings != nullptr`) -- this is the expensive O(segmentCount^2) half
   // of this function; the editor skips it while a drag is in progress and reuses its last result

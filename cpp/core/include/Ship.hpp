@@ -1,6 +1,6 @@
 // Ship.hpp — the stateful physics struct (Ship) with the full state a golden
 // trace serializes: every createPhysicsState() field plus the per-ship detection
-// bookkeeping. Field names match js/track-physics.js and test/parity/state.js so
+// bookkeeping. Field names match web/js/track-physics.js and test/parity/state.js so
 // the transliteration reads 1:1 and the harness can compare field-for-field.
 #pragma once
 #include <map>

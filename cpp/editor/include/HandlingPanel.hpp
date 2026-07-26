@@ -1,5 +1,5 @@
 // HandlingPanel.hpp — ship handling fields (EDITOR_PARITY_FIXES.md gap 7), mirroring
-// js/editor.js's #handlingPanel: maxSpeed/accel/turnSpeed/weight, plus a Reset-to-default button.
+// web/js/editor.js's #handlingPanel: maxSpeed/accel/turnSpeed/weight, plus a Reset-to-default button.
 #pragma once
 
 #include "EditorState.hpp"

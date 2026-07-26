@@ -73,9 +73,5 @@ function(willpower_link_debug_release target)
 endfunction()
 
 add_subdirectory(willpower.common)
-
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/willpower.serialization/CMakeLists.txt")
-  add_subdirectory(willpower.serialization)
-endif()
-
+add_subdirectory(willpower.application)
 add_subdirectory(willpower.geometry)

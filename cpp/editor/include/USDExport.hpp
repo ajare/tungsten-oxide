@@ -1,5 +1,5 @@
 // USDExport.hpp — ASCII USD (.usda) export (EDITOR_CPP_PORT_PLAN.md M7a), a from-scratch native
-// counterpart to js/usd-export.js.
+// counterpart to web/js/usd-export.js.
 //
 // Deliberately NOT a port of usd-export.js's implementation: that module re-derives road/shell
 // surface geometry itself, straight from TrackCore's centerline/edge/cross-section math (adaptive

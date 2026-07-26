@@ -1,5 +1,5 @@
 // StartGrid.cpp — bodies for include/StartGrid.hpp, transliterated from
-// js/ship-grid.js and the grid/settle portion of js/track-game.js.
+// web/js/ship-grid.js and the grid/settle portion of web/js/track-game.js.
 #include "StartGrid.hpp"
 
 #include <algorithm>

@@ -13,7 +13,7 @@
 // M6 added the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
 // current path's baked Y profile plus draggable position-point elevation markers, collapsible.
 // M7a adds USD export (USDExport.hpp/.cpp, walking core's own baked renderer-neutral
-// tox::Track::geometry batches into .usda Mesh prims -- not a port of js/usd-export.js's from-
+// tox::Track::geometry batches into .usda Mesh prims -- not a port of web/js/usd-export.js's from-
 // scratch surface derivation, see USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
 // initially scoped to editor.js's closed-loop/no-mesh-sections branch only). M7b adds texture
 // assets: TextureCache.hpp/.cpp decodes PNGs with the vendored stb_image and uploads GL textures
@@ -24,7 +24,7 @@
 // endpoint-blend solve (via probe bakes through core, not a reimplemented spline evaluator -- see
 // RandomTrack.hpp) to land each drop exactly. M8 (EDITOR_NATIVE_FILE_IO_PLAN.md) adds New/Export
 // JSON/Export USD/Import JSON, backed by FileDialog.hpp/.cpp's modern IFileOpenDialog/
-// IFileSaveDialog wrappers -- the first native replacement for editor.html's browser file-picker
+// IFileSaveDialog wrappers -- the first native replacement for web/editor.html's browser file-picker
 // primitives. M9 adds mesh asset import: EditorTrackDefinition.hpp's parseMeshAssetJson (reusing
 // its existing file-local normalizeMeshAsset -- no new from-scratch parser needed after all) plus
 // EditorState::importMeshAsset/importMeshFromJsonText back the toolbar's Import/Paste Mesh buttons
@@ -78,7 +78,7 @@
 
 namespace {
 
-// Mirrors js/editor.js's #exportBtn default filename: `(track.name || 'track').replace(/[^\w.-]+/g,
+// Mirrors web/js/editor.js's #exportBtn default filename: `(track.name || 'track').replace(/[^\w.-]+/g,
 // '_')`. \w is ASCII word chars only, so runs of anything else collapse to a single underscore.
 std::string sanitizeFilenameStem(const std::string& name) {
   const std::string base = name.empty() ? "track" : name;
@@ -101,7 +101,7 @@ std::string sanitizeFilenameStem(const std::string& name) {
 // non-ASCII track name in the Save dialog's default filename (EDITOR_PARITY_FIXES.md finding 7).
 std::wstring toWide(const std::string& text) { return editor::utf8ToWide(text); }
 
-// A flat 8km circle, mirroring track-core.js's STARTER_TRACK exactly (same 12 control points,
+// A flat 8km circle, mirroring web/track-core.js's STARTER_TRACK exactly (same 12 control points,
 // same calibrated radius, same roll/width/crossSection defaults, same finish + 3 intermediate
 // checkpoints) -- there is no "new track" UI yet, so this is the only in-memory content M1 has to
 // exercise the authoring model against.
@@ -212,7 +212,7 @@ SmokeCheckResult runSmokeCheck() {
   const editor::TrackDefinition reparsed = editor::fromJson(json1);
   const std::string json2 = editor::toJson(reparsed);
   // Not json1 == json2: buildStarterTrack() constructs points with no id at all (mirroring
-  // track-core.js's own STARTER_TRACK literal, which is likewise id-less until parseTrack backfills
+  // web/track-core.js's own STARTER_TRACK literal, which is likewise id-less until parseTrack backfills
   // it -- EDITOR_PARITY_FIXES.md finding 2), so json1's ids are legitimately empty and json2's are
   // legitimately p1..p12. That first parse is where backfilling happens, same as in JS; it is not
   // supposed to be a fixed point. The real idempotence claim -- toJson . fromJson . toJson stops
@@ -458,7 +458,8 @@ M7cSmokeCheckResult runM7cSmokeCheck() {
 }
 
 // M7b smoke check: register a texture asset against one of the repo's real checked-in images
-// (assets/test-1.png), assign it to the starter path, resize its tile grid, and confirm the
+// (assets/test-1.png, stored as "../assets/test-1.png" -- see TextureCache.cpp's get()), assign it
+// to the starter path, resize its tile grid, and confirm the
 // invalid-assignment guard clears the binding when the resize drops it out of range -- exercises
 // EditorState's texture methods directly, the same ones TexturePanel.cpp's UI calls.
 struct M7bSmokeCheckResult {
@@ -475,7 +476,7 @@ M7bSmokeCheckResult runM7bSmokeCheck() {
   result.imageSizeReadOk = !assetsDir.empty() && editor::readImageSize(assetsDir / "test-1.png", width, height) && width > 0 && height > 0;
 
   editor::EditorState state(buildStarterTrack());
-  const std::string assetId = state.addTextureAsset("test-1.png", "assets/test-1.png", std::max(width, 1), std::max(height, 1));
+  const std::string assetId = state.addTextureAsset("test-1.png", "../assets/test-1.png", std::max(width, 1), std::max(height, 1));
   result.assetAdded = state.track().textureAssets.count(assetId) == 1;
 
   result.assigned = state.assignPathTexture(0, assetId, 0) && state.track().paths[0].texture.has_value() &&
@@ -847,7 +848,7 @@ struct Gap4SmokeCheckResult {
 Gap4SmokeCheckResult runGap4SmokeCheck() {
   Gap4SmokeCheckResult result;
 
-  // buildStarterTrack() already seeds four checkpoint triggers (mirroring track-core.js's
+  // buildStarterTrack() already seeds four checkpoint triggers (mirroring web/track-core.js's
   // STARTER_TRACK, one of them "finish"), so every check below must match by id, never by index.
   editor::EditorState state(buildStarterTrack());
   const auto triggerId = state.addPathTrigger(0, "checkpoint", 0.25);
@@ -1125,7 +1126,7 @@ Gap9SmokeCheckResult runGap9SmokeCheck() {
 }
 
 // Gap-14 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #14): undo/redo disabled state,
-// mirroring editor.html's #undoBtn/#redoBtn -- disabled while their stack is empty rather than
+// mirroring web/editor.html's #undoBtn/#redoBtn -- disabled while their stack is empty rather than
 // always active. Exercises EditorHistory::canUndo/canRedo directly through the same mutation/undo/
 // redo calls the UI's BeginDisabled guards now read.
 struct Gap14SmokeCheckResult {
@@ -1356,7 +1357,7 @@ editor::TrackDefinition buildOpenTestTrack(int pointCount) {
 // Gap-11 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #11): segment selection,
 // deletion, splitting, and insert-point-on-segment, mirroring segSel/deleteSegment/
 // selectedOutgoingSegment/selectedIncomingSegment/insertNear. Deliberately does not exercise
-// segmentAtTop (click-to-select-a-segment) -- js/editor.js defines it but never calls it, so it's
+// segmentAtTop (click-to-select-a-segment) -- web/js/editor.js defines it but never calls it, so it's
 // not ported here either (see EditorState.hpp's comment on the port).
 struct Gap11SmokeCheckResult {
   bool outgoingNulloptOnAuxSelection = false, outgoingNulloptAtOpenPathEnd = false, incomingNulloptAtOpenPathStart = false;
@@ -1437,7 +1438,7 @@ Gap11SmokeCheckResult runGap11SmokeCheck() {
 // state, no ImGui needed -- same reasoning as gap 9's snapWorldXZ check); the render-mode fill
 // color formulas (rollFillColor/elevationFillColor) and physicsPointAtWorld/
 // drawPhysicsSampleInfo are ImGui-adjacent glue with no headless entry point, verified by
-// inspection against js/editor.js's rollColor/elevationColor/physicsPointAtTop -- same tradeoff
+// inspection against web/js/editor.js's rollColor/elevationColor/physicsPointAtTop -- same tradeoff
 // already taken for gap 8's sanitize() and gap 13's nearestPathPlacement().
 struct Gap10SmokeCheckResult {
   bool defaultRenderModeIsBanked = false, renderModeRoundTrips = false;
@@ -1795,7 +1796,7 @@ int main(int, char**) {
   auto rebake = [&]() {
     // Skip the expensive self-intersection detection pass while a point/mesh drag is in progress
     // (this lambda gets called every frame of an active drag, since dragging mutates the track
-    // every frame) -- mirrors editor.js's `if (!dragging) crossingCache = ...` (js/editor.js:978,
+    // every frame) -- mirrors editor.js's `if (!dragging) crossingCache = ...` (web/js/editor.js:978,
     // 999). Reuse the last good detection result instead, so markers stay visible (just briefly
     // stale) mid-drag rather than flickering empty.
     const bool detect = !editorState.dragging();
@@ -1865,7 +1866,7 @@ int main(int, char**) {
             try {
               editor::TrackDefinition imported = editor::fromFile(picked.path);
               // Push undo of the prior track only on successful parse, mirroring importFile's
-              // pushUndo() placement in js/editor.js -- a failed import must never disturb history.
+              // pushUndo() placement in web/js/editor.js -- a failed import must never disturb history.
               editorState.history().push(editorState.track());
               editorState.replaceTrack(std::move(imported));
               rebake();
@@ -1898,7 +1899,7 @@ int main(int, char**) {
           // canvas at all.
           if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
         }
-        // Import Mesh/Paste Mesh mirror editor.html's #importMeshBtn/#pasteMeshBtn
+        // Import Mesh/Paste Mesh mirror web/editor.html's #importMeshBtn/#pasteMeshBtn
         // (EDITOR_NATIVE_FILE_IO_PLAN.md M9); the right-click "Paste Mesh" in TopDownCanvas.cpp
         // shares EditorState::importMeshFromJsonText with the menu item below.
         if (ImGui::MenuItem("Import Mesh...")) {
@@ -1979,7 +1980,7 @@ int main(int, char**) {
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("Edit")) {
-        // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors editor.html's
+        // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors web/editor.html's
         // #undoBtn/#redoBtn: disabled while their respective stack is empty rather than always
         // active.
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editorState.history().canUndo())) {
@@ -2000,7 +2001,7 @@ int main(int, char**) {
         if (ImGui::MenuItem("Zoom to Selection", "X")) editor::FocusOnSelection(topDownView, editorState, bakedTrack);
         ImGui::Separator();
         // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9),
-        // mirrors editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid
+        // mirrors web/editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid
         // disables (but doesn't clear) the size and snap controls -- snapWorldXZ() itself
         // re-checks showGrid, so there's no way to leave snapping silently active behind a
         // hidden grid.
@@ -2017,7 +2018,7 @@ int main(int, char**) {
         bool snapToGrid = topDownView.snapToGrid();
         if (ImGui::MenuItem("Snap to Grid", nullptr, &snapToGrid, showGrid)) topDownView.setSnapToGrid(snapToGrid);
         ImGui::Separator();
-        // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's #renderModeSelect.
+        // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's #renderModeSelect.
         if (ImGui::BeginMenu("Render Mode")) {
           const std::pair<const char*, editor::TopDownView::RenderMode> renderModes[] = {
               {"Banked edges (lean tint)", editor::TopDownView::RenderMode::Banked},
@@ -2030,7 +2031,7 @@ int main(int, char**) {
           ImGui::EndMenu();
         }
         ImGui::Separator();
-        // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
+        // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's
         // #pointFilters. Only Position currently has an observable effect -- roll/width/
         // crossSection points have no on-canvas presence yet at all (gap 1), so those three
         // checkboxes exist for UI parity but are otherwise inert until that on-canvas rendering
@@ -2047,7 +2048,7 @@ int main(int, char**) {
           ImGui::EndMenu();
         }
         ImGui::Separator();
-        // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors editor.html's
+        // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's
         // #showPhysicsBtn/#hidePhysicsBtn.
         bool showPhysicsPoints = topDownView.showPhysicsPoints();
         if (ImGui::MenuItem("Show Physics Points", nullptr, &showPhysicsPoints)) topDownView.setShowPhysicsPoints(showPhysicsPoints);

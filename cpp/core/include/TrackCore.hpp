@@ -9,7 +9,7 @@
 namespace tox {
 namespace TrackCore {
 
-// --- schema/geometry constants owned by track-core.js ---
+// --- schema/geometry constants owned by web/track-core.js ---
 constexpr int TRACK_SCHEMA_VERSION = 10;
 constexpr int N_DEFAULT = 400;
 constexpr double COLLISION_WALL_MARGIN = 1.8;
@@ -21,7 +21,7 @@ constexpr double DEFAULT_BOOST_FACTOR = 1.5;
 constexpr double DEFAULT_BOOST_DURATION = 2.0;
 // Default local window (in segments) for self-intersection collapse (EDITOR_PARITY_GAPS.md gap 1):
 // a crossing whose two branches are within this many segments of each other collapses by default;
-// farther ones are kept. Mirrors track-core.js's DEFAULT_SELF_INTERSECTION_SPAN. Public (not
+// farther ones are kept. Mirrors web/track-core.js's DEFAULT_SELF_INTERSECTION_SPAN. Public (not
 // TrackBake.cpp-local) because the editor re-derives the same auto-collapse/auto-keep state at
 // draw time (mirroring editor.js's crossingState) and must agree with what the bake actually did.
 constexpr int DEFAULT_SELF_INTERSECTION_SPAN = 100;
@@ -29,7 +29,7 @@ constexpr int DEFAULT_SELF_INTERSECTION_SPAN = 100;
 // THREE.MathUtils.clamp — same formula r128 uses.
 double clamp(double v, double lo, double hi);
 
-// clampSignedUnit / clampTightness (track-core.js). Inputs here are already
+// clampSignedUnit / clampTightness (web/track-core.js). Inputs here are already
 // finite doubles from the baked trace, so the "non-finite -> fallback" branch is
 // preserved only for faithfulness.
 double clampSignedUnit(double n);
@@ -42,7 +42,7 @@ double crossSectionHeightDerivative(double curvature, double tightness, double v
 
 // Is the ship's evaluator parameter gShip within a path zone's [gLo, gHi] window?
 // For a closed path the window may straddle the wrap, so gShip is shifted by whole
-// cycles into the window's neighbourhood before the range test (track-core.js).
+// cycles into the window's neighbourhood before the range test (web/track-core.js).
 bool zoneAlongContains(double gShip, double gLo, double gHi, double gMax, bool closed);
 
 }  // namespace TrackCore

@@ -39,7 +39,11 @@ int loadBundledTextureAssets(EditorState& state) {
     if (!entry.is_string()) continue;
     const std::string filename = entry.get<std::string>();
     if (filename.empty()) continue;
-    const std::string relativePath = (std::filesystem::path("assets") / "track" / filename).generic_string();
+    // "../assets/track/..." (not "assets/track/..."): stored TextureAsset.path is relative to
+    // web/, matching editor.js's BUNDLED_TEXTURE_ROOT (assets/ is a sibling of web/, one level up
+    // -- see CLAUDE.md's "What this is" and TextureCache.cpp's get()) -- so a track authored in
+    // either editor references the same bundled texture with the same on-disk path string.
+    const std::string relativePath = (std::filesystem::path("..") / "assets" / "track" / filename).generic_string();
     if (existingPaths.count(relativePath)) continue;
     int width = 0, height = 0;
     if (!readImageSize(assetsDir / "track" / filename, width, height)) continue;
@@ -58,7 +62,7 @@ bool DrawTexturePanel(EditorState& state, TextureCache& textures, int currentPat
     if (loadBundledTextureAssets(state) > 0) mutated = true;
   }
   ImGui::SameLine();
-  // Mirrors editor.html's #browseTextureBtn (EDITOR_NATIVE_FILE_IO_PLAN.md M10) -- M7b already
+  // Mirrors web/editor.html's #browseTextureBtn (EDITOR_NATIVE_FILE_IO_PLAN.md M10) -- M7b already
   // built readImageSize/addTextureAsset, so this is almost entirely wiring. Unlike editor.js's
   // texturePreviewUrls bookkeeping for files outside assets/track/, TextureCache reads by path
   // lazily on demand, so whatever the dialog returns is stored as TextureAsset.path directly.

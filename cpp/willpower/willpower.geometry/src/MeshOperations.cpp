@@ -20,7 +20,6 @@ namespace WP_NAMESPACE
 	namespace geometry
 	{
 		using namespace std;
-		using namespace utils;
 
 		ExtrudeVertexOptions MeshOperations::DefaultExtrudeVertexOptions = ExtrudeVertexOptions();
 		BridgeEdgesOptions MeshOperations::DefaultBridgeOptions = BridgeEdgesOptions();

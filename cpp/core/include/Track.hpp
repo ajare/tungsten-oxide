@@ -60,7 +60,7 @@ struct Trigger {
 };
 
 // A self-intersecting crossing found on one edge of one path (EDITOR_PARITY_GAPS.md gap 1),
-// mirroring editor.js's crossing records (detectPathCrossings, js/editor.js:823-835): every place
+// mirroring editor.js's crossing records (detectPathCrossings, web/js/editor.js:823-835): every place
 // the edge's own polyline crosses itself, keyed by the two control points nearest its branches (a
 // stable identity across edits/resampling, matching TrackCore.crossingKey) rather than by segment
 // index (which shifts on every edit). `a`/`b` are stored order-insensitively sorted so a lookup

@@ -58,17 +58,21 @@ const LoadedTexture& TextureCache::get(const std::string& path) {
   const auto existing = cache_.find(path);
   if (existing != cache_.end()) return existing->second;
 
-  // Bundled texture assets are stored as "assets/track/..." (portable, matching editor.js), which
-  // only resolves against the current working directory when the editor happens to be launched
-  // from the repo root. findAssetsDir() already walks up from the CWD to locate the checked-in
-  // assets/ directory for reading manifest.json (see TexturePanel.cpp); reuse that here so a
-  // relative asset path resolves the same way regardless of where track_editor.exe was launched
-  // from (e.g. cpp/build/editor/Release). Browse...-picked textures are stored as absolute paths
-  // and pass through untouched.
+  // Bundled texture assets are stored as "../assets/track/..." (portable, matching editor.js'
+  // BUNDLED_TEXTURE_ROOT), which only resolves against the current working directory when the
+  // editor happens to be launched from web/ -- the directory web/editor.html/track.html live in and
+  // that path is relative to (assets/ is a sibling of web/, one level up; see CLAUDE.md's "What
+  // this is"). findAssetsDir() already walks up from the CWD to locate the checked-in assets/
+  // directory for reading manifest.json (see TexturePanel.cpp); reuse that here, resolving against
+  // its *parent's* "web" subdirectory (assetsDir.parent_path() is the repo root, so .../web is the
+  // same directory a stored "../assets/..." path is relative to) rather than the repo root itself,
+  // so a relative asset path resolves the same way regardless of where track_editor.exe was
+  // launched from (e.g. cpp/build/editor/Release). Browse...-picked textures are stored as absolute
+  // paths and pass through untouched.
   std::filesystem::path resolved(path);
   if (resolved.is_relative()) {
     const std::filesystem::path assetsDir = findAssetsDir();
-    if (!assetsDir.empty()) resolved = assetsDir.parent_path() / resolved;
+    if (!assetsDir.empty()) resolved = (assetsDir.parent_path() / "web" / resolved).lexically_normal();
   }
 
   LoadedTexture tex;
