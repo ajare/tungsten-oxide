@@ -1453,6 +1453,115 @@ public:
     return true;
   }
 
+  // ---- Point type conversion (EDITOR_PARITY_GAPS.md gap 2) ----
+
+  // Reason a Type-combo conversion of the selected point to `newKind` would be refused, or nullptr
+  // if it's allowed -- mirrors convertSelectedPoint's three alert()-guarded early returns
+  // (js/editor.js:1557-1573) as data instead of a modal, for a disabled combo entry + tooltip (this
+  // editor's established alert() substitute, e.g. MeshPanel.cpp's rail-height tooltip).
+  const char* convertBlockedReason(PointKind newKind) const {
+    if (!selectionInRange()) return "No point selected.";
+    const Path& path = track_.paths[selection_.pathIndex];
+    const TrackPoint& point = path.points[selection_.pointIndex];
+    if (point.kind == newKind) return "Already this type.";
+    if (point.kind == PointKind::Position) {
+      if (sharedPositionOccurrences(point.id) > 1) return "Reconnect this shared/disjoint point before converting it.";
+      if (positionCount(path) <= 4) return "A track path needs at least 4 position control points.";
+      return nullptr;
+    }
+    const int count =
+        static_cast<int>(std::count_if(path.points.begin(), path.points.end(), [&](const TrackPoint& p) { return p.kind == point.kind; }));
+    if (count <= 2) {
+      switch (point.kind) {
+        case PointKind::Roll: return "A path needs at least 2 roll points.";
+        case PointKind::Width: return "A path needs at least 2 width points.";
+        case PointKind::CrossSection: return "A path needs at least 2 cross-section points.";
+        default: break;
+      }
+    }
+    return nullptr;
+  }
+
+  // Converts the selected point to `newKind`, mirroring convertSelectedPoint (js/editor.js:1540-
+  // 1613): removes the current point, then seeds the freshly created point of the new kind by
+  // evaluating the *existing* points of that kind at the same t (the current point's own t, or its
+  // position-space index/N for a Position point). curKind != newKind always (guarded by
+  // convertBlockedReason above), so removing curObj never changes the list being evaluated -- there
+  // is no JS-style "recompute remaining points first" step needed here.
+  //
+  // `positionXYZ` supplies the world position for a conversion TO Position -- ignored for every
+  // other target kind. The caller (PropertiesPanel.cpp, which has the baked tox::Track this class
+  // deliberately keeps out of EditorState/EditorTrackDefinition.hpp) computes it by sampling the
+  // baked centerline at g = t * gMax, the same approximation TopDownCanvas.cpp's own "Position"
+  // context-menu item already uses in place of JS's authored-spline evalTrack -- exact here, not
+  // just approximate, since only Roll/Width/CrossSection points can convert TO Position, and none
+  // of those affect the baked centerline's X/Y/Z, only the ribbon's cross-section.
+  //
+  // Refuses (returns false, no history push) exactly when convertBlockedReason(newKind) is non-null.
+  bool convertSelectedPoint(PointKind newKind, const tox::Vec3& positionXYZ) {
+    if (convertBlockedReason(newKind) != nullptr) return false;
+    Path& path = track_.paths[selection_.pathIndex];
+    const TrackPoint curObj = path.points[selection_.pointIndex];  // copy: erase() below invalidates any reference
+
+    double t;
+    if (curObj.kind == PointKind::Position) {
+      const int n = positionCount(path);
+      const int idx = rawIndexToPositionIndex(path, selection_.pointIndex);
+      t = path.closed ? static_cast<double>(idx) / n : static_cast<double>(idx) / static_cast<double>(std::max(1, n - 1));
+    } else {
+      t = curObj.t;
+    }
+
+    history_.push(track_);
+    path.points.erase(path.points.begin() + selection_.pointIndex);
+
+    TrackPoint created;
+    created.kind = newKind;
+    int newRawIndex;
+    if (newKind == PointKind::Position) {
+      created.id = newPointId();
+      created.pos = positionXYZ;
+      created.weight = 1.0;
+      const int n = positionCount(path);
+      const int insertIdx = std::clamp(static_cast<int>(std::lround(t * static_cast<double>(path.closed ? n : std::max(1, n - 1)))), 0, n);
+      const int rawAt = insertIdx < n ? positionIndexToRaw(path, insertIdx) : static_cast<int>(path.points.size());
+      path.points.insert(path.points.begin() + rawAt, created);
+      newRawIndex = rawAt;
+    } else {
+      created.t = t;
+      if (newKind == PointKind::Roll) {
+        std::vector<std::pair<double, double>> samples;
+        for (const auto& p : path.points)
+          if (p.kind == PointKind::Roll) samples.emplace_back(p.t, p.roll);
+        created.roll = samples.empty() ? TrackPoint{}.roll : std::round(evalScalarSpline(samples, path.closed, t) * 10.0) / 10.0;
+      } else if (newKind == PointKind::Width) {
+        std::vector<std::pair<double, double>> samples;
+        for (const auto& p : path.points)
+          if (p.kind == PointKind::Width) samples.emplace_back(p.t, p.width);
+        const double width = samples.empty() ? TrackPoint{}.width : std::max(1.0, evalScalarSpline(samples, path.closed, t));
+        created.width = std::round(width * 10.0) / 10.0;
+      } else {  // CrossSection
+        std::vector<std::pair<double, double>> curvSamples, tightSamples, thickSamples;
+        for (const auto& p : path.points) {
+          if (p.kind != PointKind::CrossSection) continue;
+          curvSamples.emplace_back(p.t, p.curvature);
+          tightSamples.emplace_back(p.t, p.tightness);
+          thickSamples.emplace_back(p.t, p.thickness);
+        }
+        const double curvature = curvSamples.empty() ? TrackPoint{}.curvature : std::clamp(evalScalarSpline(curvSamples, path.closed, t), -1.0, 1.0);
+        const double tightness = tightSamples.empty() ? TrackPoint{}.tightness : std::clamp(evalScalarSpline(tightSamples, path.closed, t), 0.2, 4.0);
+        const double thickness = thickSamples.empty() ? TrackPoint{}.thickness : std::max(0.0, evalScalarSpline(thickSamples, path.closed, t));
+        created.curvature = std::round(curvature * 100.0) / 100.0;
+        created.tightness = std::round(tightness * 10.0) / 10.0;
+        created.thickness = std::round(thickness * 10.0) / 10.0;
+      }
+      path.points.push_back(created);
+      newRawIndex = static_cast<int>(path.points.size()) - 1;
+    }
+    selectPoint(selection_.pathIndex, newRawIndex);
+    return true;
+  }
+
   // Track name (EDITOR_PARITY_FIXES.md gap 2). js/editor.js's #nameInput commits every keystroke
   // live, collapsing a whole typing session into one undo step (nameHistoryArmed,
   // js/editor.js:3637-3644); this instead commits once when the caller's text field is deactivated
@@ -1545,6 +1654,68 @@ public:
   void cancelCreateDraft() { createDraft_.clear(); }
 
 private:
+  // Mirrors countPointOccurrences(point) > 1: a Position point shared across paths (a junction) or
+  // aliased by a disjoint seam has the same id appear more than once. Used only by
+  // convertBlockedReason's shared/disjoint guard.
+  int sharedPositionOccurrences(const std::string& pointId) const {
+    int count = 0;
+    for (const auto& p : track_.paths)
+      for (const auto& pt : p.points)
+        if (pt.kind == PointKind::Position && pt.id == pointId) ++count;
+    return count;
+  }
+
+  // Pure port of track-core.js's evalScalarSpline (js/track-core.js:332-371): non-uniform Catmull-
+  // Rom/Hermite interpolation over a (t, value) point set, circular for closed paths and clamped at
+  // the ends for open ones -- the same per-attribute spline TrackCore.evalRoll/evalWidth/
+  // evalCrossSection* wrap, independent of the rational position spline core's own baker uses. Used
+  // only by convertSelectedPoint (EDITOR_PARITY_GAPS.md gap 2) to seed a freshly converted
+  // roll/width/crossSection point from its neighbours. `points` must be non-empty (every caller
+  // checks first) and sorted by t (matches every caller, which builds it directly from path.points
+  // in authored order -- schema load already enforces aux points sorted by t).
+  static double evalScalarSpline(const std::vector<std::pair<double, double>>& points, bool closed, double tQuery) {
+    const int m = static_cast<int>(points.size());
+    if (m == 1) return points[0].second;
+    double t = tQuery;
+    if (closed) {
+      t = std::fmod(std::fmod(t, 1.0) + 1.0, 1.0);
+    } else {
+      t = std::clamp(t, points.front().first, points.back().first);
+    }
+
+    const auto idxT = [&](int i) -> std::pair<double, double> {
+      if (closed) {
+        const int k = ((i % m) + m) % m;
+        const int cyc = (i - k) / m;
+        return {points[k].first + cyc, points[k].second};
+      }
+      const int k = std::clamp(i, 0, m - 1);
+      return {points[k].first, points[k].second};
+    };
+
+    int i = closed ? m - 1 : m - 2;
+    for (int k = 0; k < m - 1; ++k) {
+      if (t >= points[k].first && t < points[k + 1].first) {
+        i = k;
+        break;
+      }
+    }
+
+    const auto p1 = idxT(i), p2 = idxT(i + 1);
+    double tt = t;
+    if (tt < p1.first) tt += 1.0;
+    const double dt = (p2.first - p1.first) != 0.0 ? (p2.first - p1.first) : 1e-6;
+    const double u = (tt - p1.first) / dt;
+
+    const auto p0 = idxT(i - 1), p3 = idxT(i + 2);
+    const double m1 = ((p2.second - p0.second) / ((p2.first - p0.first) != 0.0 ? (p2.first - p0.first) : 1e-6)) * dt;
+    const double m2 = ((p3.second - p1.second) / ((p3.first - p1.first) != 0.0 ? (p3.first - p1.first) : 1e-6)) * dt;
+
+    const double u2 = u * u, u3 = u2 * u;
+    const double h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+    return h00 * p1.second + h10 * m1 + h01 * p2.second + h11 * m2;
+  }
+
   void replaceTrackKeepHistory(TrackDefinition replacement) {
     track_ = std::move(replacement);
     backfillPointIds(track_);  // see the constructor's comment on why this must never be skipped

@@ -96,43 +96,54 @@ Cache the detection result per bake, not per frame — JS's `!dragging` guard ex
 
 ---
 
-## 2. Point type conversion ("Type" dropdown)
+## 2. Point type conversion ("Type" dropdown) — ✅ Implemented
 
 Convert a selected control point between `position` / `roll` / `width` / `crossSection`, taking its
-new value by evaluating the *remaining* points' splines at the removed point's `t` so nothing jumps.
+new value by evaluating the points' splines of the target kind at the removed point's `t` so nothing
+jumps.
 
 - JS: `convertSelectedPoint(newType)` at `js/editor.js:1540-1612`; the dropdown is built by
   `typeSelectRow`/`wireTypeSelect` inside `renderProps` (`:2135-2143`).
-- C++: nothing.
 
-### Implementation
+### Implementation (done)
 
-Add `EditorState::convertSelectedPoint(PointKind newKind)` and a `Type` combo at the top of
-`DrawPropertiesPanel` (`cpp/editor/src/PropertiesPanel.cpp:287`).
+`EditorState::convertBlockedReason(PointKind)`/`convertSelectedPoint(PointKind, positionXYZ)`
+(`cpp/editor/include/EditorState.hpp`) plus a `Type` combo at the top of `DrawPropertiesPanel`
+(`cpp/editor/src/PropertiesPanel.cpp`), shown for every selected point kind, matching where JS's
+`typeSelectRow` appears in each of its four props branches.
 
-Port the guards verbatim — they are what keeps the track bakeable:
-
-| Condition | JS line | Behaviour |
-| --- | --- | --- |
-| Shared/disjoint position point (`countPointOccurrences > 1`) | `:1559` | refuse |
-| `position` and `controlPoints.length <= 4` | `:1562` | refuse |
-| `roll`/`width`/`crossSection` and that kind has `<= 2` points | `:1565-1573` | refuse |
-
-C++ already has the pieces: `positionCount()` (`EditorState.hpp:1184`), the same 4-point floor in
-`deleteSelectedPoint` (`:1156`), `addAuxPoint(pathIndex, kind, t)` (`:1354`), and
-`insertPositionOnSegment(...)`. JS surfaces refusals via `alert()`; prefer a disabled combo entry
-with a tooltip giving the reason (the editor has no modal path, and `BeginDisabled` + `SetTooltip`
-is the established idiom here).
-
-Order of operations matters: JS removes the old point **first**, then re-splits (`remaining`,
-`:1576`) so the interpolation reads the neighbours *without* the point being converted. Converting to
-`position` also needs the insertion index derived from `t`
-(`Math.round(t * (closed ? n : n-1))`, `:1587`), not an append.
-
-The 4 → `position` case needs an evaluator to get the new XYZ. C++ has no authored-spline evaluator
-in the editor, but `sampleCenterlineAtG` (`TopDownCanvas.cpp:269`) samples the baked centerline and
-is what the context-menu "Position" item already uses for the same purpose
-(`TopDownCanvas.cpp:1424-1432`) — reuse that, and accept the same documented approximation.
+- `convertBlockedReason` ports the three guards verbatim: shared/disjoint Position point
+  (`sharedPositionOccurrences(id) > 1`, the id-occurrence-across-paths equivalent of
+  `countPointOccurrences`), a Position path at the 4-point floor, and an aux kind at its own
+  2-point floor. Returns a reason string (or `nullptr` if allowed) instead of JS's `alert()`; the
+  combo disables the entry (`BeginDisabled`) and shows the reason as a tooltip on hover, the
+  established idiom here (mirrors `MeshPanel.cpp`'s rail-height tooltip).
+- Realized that JS's "remove first, then evaluate against `remaining`" ordering never actually
+  changes anything the evaluation reads: the guard above already forces `curKind != newKind`, so
+  removing the point being converted can never affect the target kind's own point list (a Position
+  point's removal doesn't touch Roll/Width/CrossSection lists, and vice versa). `convertSelectedPoint`
+  therefore evaluates directly against the path's current points of the target kind, with no
+  remaining-points recomputation step.
+- A pure port of `track-core.js`'s `evalScalarSpline` (the non-uniform Catmull-Rom/Hermite spline
+  `TrackCore.evalRoll`/`evalWidth`/`evalCrossSection*` all wrap — a separate, simpler per-attribute
+  spline, unrelated to the rational position spline core's baker uses) lives as a private static
+  helper on `EditorState`, used only here.
+- Converting **to** `position` needs the new XYZ. As anticipated, no authored-spline evaluator
+  exists in the editor, so `PropertiesPanel.cpp` samples the baked centerline instead (a new
+  file-local `sampleCenterlinePositionAtG`, the same per-file-duplicated-evaluator pattern
+  `TopDownCanvas.cpp`'s `sampleCenterlineAtG` and `ElevationView.cpp`'s `sampleCenterlinePosAtG`
+  already establish) at `g = t * gMax`, mirroring the context-menu "Position" item's own use of the
+  same approximation. Turns out to be exact here rather than merely approximate: only
+  Roll/Width/CrossSection points can convert *to* Position, and none of those affect the baked
+  centerline's X/Y/Z, only the ribbon's cross-section — so sampling the current bake (computed with
+  the about-to-be-removed point still present) is unaffected by its removal.
+- The insertion index for a Position conversion is `round(t * (closed ? n : n-1))`, clamped to
+  `[0, n]`, matching JS exactly; `positionIndexToRaw` (already used by `currentStartPointId`) maps
+  that position-space index back to a raw `Path::points` index.
+- `PropertiesPanel.cpp`'s `DrawPropertiesPanel` returns immediately after a conversion mutates the
+  track, rather than falling into the (now-stale, since `path.points` was just erased-from/inserted-
+  into) per-kind field-drawing switch below it — the next frame redraws the newly-converted point's
+  fields fresh instead.
 
 ---
 

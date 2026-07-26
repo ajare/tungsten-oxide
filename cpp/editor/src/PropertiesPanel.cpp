@@ -35,6 +35,80 @@ double widthAtT(const tox::Track* baked, int pathIndex, bool closed, double t) {
 namespace {
 
 constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
+
+// Position-only sample of the baked centerline at path parameter g in [0, gMax] (EDITOR_PARITY_
+// GAPS.md gap 2's "convert to Position" case) -- duplicated locally rather than shared, matching
+// this file's/this codebase's existing per-file small-evaluator convention (TopDownCanvas.cpp's
+// own sampleCenterlineAtG, ElevationView.cpp's sampleCenterlinePosAtG).
+tox::Vec3 sampleCenterlinePositionAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
+  const std::size_t n = centerline.size();
+  if (n == 0) return tox::Vec3(0.0, 0.0, 0.0);
+  if (n == 1) return centerline[0].pos;
+  const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
+  const double indexF = frac * static_cast<double>(closed ? n : n - 1);
+  auto index0 = static_cast<std::size_t>(std::floor(indexF));
+  const double t = indexF - static_cast<double>(index0);
+  std::size_t index1;
+  if (closed) {
+    index0 %= n;
+    index1 = (index0 + 1) % n;
+  } else {
+    index0 = std::min(index0, n - 1);
+    index1 = std::min(index0 + 1, n - 1);
+  }
+  const tox::Vec3& a = centerline[index0].pos;
+  const tox::Vec3& b = centerline[index1].pos;
+  return tox::Vec3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+}
+
+// The selected point's own t along the path domain -- a Roll/Width/CrossSection point's stored t
+// directly, or a Position point's position-space index/N, matching convertSelectedPoint's own t
+// computation (EditorState.hpp) so the sampled XYZ below lines up with the value it seeds.
+double selectedPointT(const Path& path, const TrackPoint& point, int rawIndex) {
+  if (point.kind != PointKind::Position) return point.t;
+  int idx = 0;
+  for (int k = 0; k < rawIndex; ++k)
+    if (path.points[k].kind == PointKind::Position) ++idx;
+  const int n = EditorState::positionCount(path);
+  return path.closed ? static_cast<double>(idx) / n : static_cast<double>(idx) / static_cast<double>(std::max(1, n - 1));
+}
+
+// Type dropdown (EDITOR_PARITY_GAPS.md gap 2), mirrors renderProps()'s typeSelectRow/wireTypeSelect
+// -- shown atop every point-kind's own field set, same placement JS uses in each of its four props
+// branches. Disabled entries carry a tooltip explaining the refusal (EditorState::convertBlockedReason),
+// this editor's established alert() substitute (see MeshPanel.cpp's rail-height tooltip).
+void drawTypeSelect(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, const Path& path, const tox::Track* baked,
+                    bool& mutated) {
+  static constexpr const char* kLabels[] = {"Position", "Roll", "Width", "Cross-section"};
+  static constexpr PointKind kKinds[] = {PointKind::Position, PointKind::Roll, PointKind::Width, PointKind::CrossSection};
+  int currentIndex = 0;
+  for (int i = 0; i < 4; ++i)
+    if (kKinds[i] == point.kind) currentIndex = i;
+
+  ImGui::SetNextItemWidth(160);
+  if (ImGui::BeginCombo("Type", kLabels[currentIndex])) {
+    for (int i = 0; i < 4; ++i) {
+      const PointKind kind = kKinds[i];
+      const char* reason = state.convertBlockedReason(kind);
+      ImGui::BeginDisabled(reason != nullptr);
+      const bool selected = ImGui::Selectable(kLabels[i], kind == point.kind);
+      ImGui::EndDisabled();
+      if (reason != nullptr && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", reason);
+      if (selected && reason == nullptr) {
+        tox::Vec3 positionXYZ(0.0, 0.0, 0.0);
+        if (kind == PointKind::Position && baked != nullptr && sel.pathIndex < static_cast<int>(baked->paths.size())) {
+          const tox::Path& bakedPath = baked->paths[sel.pathIndex];
+          const double t = selectedPointT(path, point, sel.pointIndex);
+          const int n = EditorState::positionCount(path);
+          const double gMax = path.closed ? n : n - 1;
+          positionXYZ = sampleCenterlinePositionAtG(bakedPath.centerline, path.closed, t * gMax, gMax);
+        }
+        if (state.convertSelectedPoint(kind, positionXYZ)) mutated = true;
+      }
+    }
+    ImGui::EndCombo();
+  }
+}
 const ImU32 kCrossSectionStrokeColor = IM_COL32(213, 140, 255, 255);
 const ImU32 kCrossSectionFillPositive = IM_COL32(213, 140, 255, 64);
 const ImU32 kCrossSectionFillNegative = IM_COL32(255, 140, 213, 64);
@@ -293,7 +367,14 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
                               sel.pointIndex < static_cast<int>(state.track().paths[sel.pathIndex].points.size());
 
   if (selectionValid) {
-    const TrackPoint& point = state.track().paths[sel.pathIndex].points[sel.pointIndex];
+    const Path& selPath = state.track().paths[sel.pathIndex];
+    const TrackPoint& point = selPath.points[sel.pointIndex];
+    drawTypeSelect(state, sel, point, selPath, baked, mutated);
+    // A conversion just erased/inserted into path.points, invalidating `point`/`selPath` above (and
+    // shifting `sel`'s own indices, which state.selection() now reflects instead) -- bail out and
+    // let the next frame redraw the (now different) selected point's fields fresh, rather than
+    // reading through the dangling references below.
+    if (mutated) return true;
     switch (point.kind) {
       case PointKind::Position:
         drawPositionFields(state, sel, point, mutated);
