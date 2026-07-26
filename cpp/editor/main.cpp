@@ -69,6 +69,7 @@
 #include "TrackPropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
+#include "MeshPanel.hpp"
 #include "CurvesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
@@ -2160,6 +2161,11 @@ int main(int, char**) {
     if (ImGui::CollapsingHeader("Point Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::PushID("PointProperties");
       if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Mesh Region")) {
+      ImGui::PushID("MeshRegion");
+      if (editor::DrawMeshPanel(editorState)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Zones")) {

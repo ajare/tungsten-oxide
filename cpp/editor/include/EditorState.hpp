@@ -1016,6 +1016,30 @@ public:
     return true;
   }
 
+  // Mutates the mesh placement by id via `mutate`, pushing one undo step first -- mirrors editZone.
+  // X/Z/elevation/rotation are all free-form number fields in JS (no clamp on any of them, see
+  // js/editor.js:2221-2222's plain `meshPlacement[inp.dataset.mesh] = val`), so unlike editZone
+  // there's nothing to re-clamp afterward.
+  template <typename Mutate>
+  bool editMeshPlacement(const std::string& id, Mutate&& mutate) {
+    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(), [&](const MeshPlacement& m) { return m.id == id; });
+    if (it == track_.meshes.end()) return false;
+    history_.push(track_);
+    mutate(*it);
+    return true;
+  }
+
+  // Rail height lives on the shared MeshAsset, not the placement -- setting it here affects every
+  // placement of that asset at once (same sharing toggleRailEdge already relies on). Mirrors
+  // js/editor.js:2222's `asset.railHeight = Math.max(0, val)`.
+  bool setMeshAssetRailHeight(const std::string& assetId, double height) {
+    const auto it = track_.meshAssets.find(assetId);
+    if (it == track_.meshAssets.end()) return false;
+    history_.push(track_);
+    it->second.railHeight = std::max(0.0, height);
+    return true;
+  }
+
   // Wholesale replacement, e.g. loading a file: clears interaction state that no longer refers to
   // anything meaningful in the new track (mirrors setEditMode's own resets). Does NOT touch
   // history -- callers that want the old state to remain undoable should push() it first.

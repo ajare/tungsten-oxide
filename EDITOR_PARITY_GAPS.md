@@ -136,31 +136,39 @@ is what the context-menu "Position" item already uses for the same purpose
 
 ---
 
-## 3. Mesh region property editor
+## 3. Mesh region property editor — ✅ Implemented
 
-A selected mesh region has no panel at all in C++.
+A selected mesh region previously had no panel at all in C++.
 
 | Field | JS (`renderProps`, `js/editor.js:2192-2199`) | C++ |
 | --- | --- | --- |
-| X, Z | number inputs, step 0.5 | canvas drag only |
-| **Elevation** | number input **and** the elevation-view drag (gap 4) | **unreachable** |
-| Rotation° | number input, step 5 | shift+drag on canvas only |
-| **Rail height** | number input, per-**asset** (affects every placement) | **unreachable** |
-| Rail count hint | `N of M edges railed` | — |
-| Delete | `#delMeshBtn` | Delete key only |
+| X, Z | number inputs, step 0.5 | canvas drag, **and now the panel** |
+| **Elevation** | number input **and** the elevation-view drag (gap 4) | **panel field added; the elevation-view drag (gap 4) is still open** |
+| Rotation° | number input, step 5 | shift+drag on canvas, **and now the panel** |
+| **Rail height** | number input, per-**asset** (affects every placement) | **panel field added** |
+| Rail count hint | `N of M edges railed` | **added** |
+| Delete | `#delMeshBtn` | Delete key, **and now the panel** |
 
-`EditorState` has `findMeshPlacement()` (`:109`) and `deleteSelectedMesh()` (`:1008`) but **no
-setter for elevation, rotation, or rail height**, so those three need adding alongside the panel.
+### Implementation (done)
 
-### Implementation
+New `cpp/editor/src/MeshPanel.cpp` + `include/MeshPanel.hpp` (registered in `CMakeLists.txt` and
+`main.cpp`'s `#include` list), added as a `CollapsingHeader("Mesh Region")` in `main.cpp`'s `Panels`
+window right after "Point Properties" and before "Zones". Follows `ZonesPanel.cpp`'s exact pattern:
+`InputDouble` with `kCommitOnEnter` + `IsItemDeactivatedAfterEdit()`, committed through a
+read-modify-write mutator that pushes undo once.
 
-New `cpp/editor/src/MeshPanel.cpp` + `include/MeshPanel.hpp`, registered as a `CollapsingHeader` in
-`main.cpp`'s `Panels` window (`:2154-2195`) — put it after "Point Properties". Follow `ZonesPanel.cpp`
-exactly: `InputDouble` with `kCommitOnEnter`, read-modify-commit through an `editX()` mutator that
-pushes undo once.
+`EditorState` gained two mutators alongside the panel (it previously had `findMeshPlacement()` and
+`deleteSelectedMesh()` but no setters at all):
 
-Rail height lives on the **asset**, not the placement (`track().meshAssets`, `EditorState.hpp:918`) —
-label it as applying to every placement, as JS does via its `title` attribute.
+- `editMeshPlacement(id, mutate)` — X/Z/elevation/rotation, unclamped like JS's own plain
+  `meshPlacement[inp.dataset.mesh] = val` assignment.
+- `setMeshAssetRailHeight(assetId, height)` — rail height lives on the **asset**
+  (`track().meshAssets`), not the placement, so this affects every placement of that asset at once
+  (mirrors `toggleRailEdge`'s existing asset-level sharing); clamped to `>= 0` like JS's
+  `Math.max(0, val)`. The panel labels the field with a tooltip noting this, same as JS's `title`
+  attribute.
+
+The railed-edge count hint reads `asset->edges` directly (`std::count_if` on `MeshEdge::rail`).
 
 ---
 
