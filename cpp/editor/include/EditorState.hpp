@@ -1075,6 +1075,22 @@ public:
     track_.paths[selection_.pathIndex].points[selection_.pointIndex].pos.y = std::round(y * 10.0) / 10.0;
   }
 
+  // Elevation-view drag for the SELECTED MESH REGION's elevation (EDITOR_PARITY_GAPS.md gap 4):
+  // same drag lifecycle and shared dragging_/dragMutated_ state as dragSelectedElevationTo, but a
+  // mesh placement has no `selection_` (mesh/point selection are mutually exclusive -- see
+  // selectMesh/selectPoint), so this reads mutableSelectedMeshPlacement() instead. Mirrors
+  // js/editor.js's `dragging === 'meshElev'` branch (js/editor.js:3416-3419), including the same
+  // round-to-0.1 precision.
+  void dragSelectedMeshElevationTo(double y) {
+    MeshPlacement* placement = mutableSelectedMeshPlacement();
+    if (!dragging_ || placement == nullptr) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    placement->elevation = std::round(y * 10.0) / 10.0;
+  }
+
   // On-canvas width-handle drag: same drag lifecycle (beginDrag/endDrag/one-push-per-gesture,
   // sharing dragging_/dragMutated_ with dragSelectedTo/dragSelectedElevationTo) but for a Width
   // point's `width` field -- mirrors editor.js's `dragging === 'widthTop'` branch

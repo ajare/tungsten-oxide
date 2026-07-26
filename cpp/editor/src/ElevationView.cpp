@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,11 @@ const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
 // Mirrors TopDownCanvas.cpp's kHoverRingColor: a separate, softer ring further out from the fill,
 // so it never gets confused with the tighter selection border even when both apply.
 const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
+// Selected mesh region's elevation line (EDITOR_PARITY_GAPS.md gap 4): matches editor.js's
+// '#b98cff' idle / '#f0e4ff' dragging (js/editor.js:1483-1484), 2px idle / 3px dragging.
+const ImU32 kMeshElevLineColor = IM_COL32(185, 140, 255, 255);
+const ImU32 kMeshElevLineDraggingColor = IM_COL32(240, 228, 255, 255);
+constexpr float kMeshElevPickPx = 6.0f;  // matches editor.js's MESH_ELEV_PICK_PX
 
 struct Layout {
   float w{1.0f}, h{1.0f};
@@ -61,14 +67,20 @@ struct YRange {
 // Raw (unpadded) extent of the profile's points, degenerating to [-1, 1] when there's nothing to
 // show. Split out from computeLayout() so a drag gesture can combine this frame's raw extent with
 // the extent frozen at drag-start (see DrawElevationView) without re-deriving the flat-profile
-// padding twice.
-YRange rawYRange(const std::vector<std::pair<int, double>>& points) {
+// padding twice. `extraY`, when present, is folded into the range too -- used to keep the selected
+// mesh region's elevation line on-panel even when it sits well above or below this curve (mirrors
+// js/editor.js:1410-1415's `if (selectedMeshPlacement) { minY = Math.min(minY, ...); ... }`).
+YRange rawYRange(const std::vector<std::pair<int, double>>& points, std::optional<double> extraY = std::nullopt) {
   double minY = 1e300, maxY = -1e300;
   for (const auto& [index, y] : points) {
     minY = std::min(minY, y);
     maxY = std::max(maxY, y);
   }
-  if (points.empty() || minY > maxY) return {-1.0, 1.0};
+  if (extraY.has_value()) {
+    minY = std::min(minY, *extraY);
+    maxY = std::max(maxY, *extraY);
+  }
+  if (minY > maxY) return {-1.0, 1.0};
   return {minY, maxY};
 }
 
@@ -91,8 +103,8 @@ Layout layoutFromRange(double minY, double maxY, bool closed, int positionCount,
   return layout;
 }
 
-Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool closed, float w, float h) {
-  const YRange range = rawYRange(points);
+Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool closed, float w, float h, std::optional<double> extraY = std::nullopt) {
+  const YRange range = rawYRange(points, extraY);
   return layoutFromRange(range.minY, range.maxY, closed, static_cast<int>(points.size()), w, h);
 }
 
@@ -135,6 +147,19 @@ void drawBakedProfile(ImDrawList* drawList, const ImVec2& canvasOrigin, const La
   drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), kProfileColor, ImDrawFlags_None, 2.0f);
 }
 
+// Full-width horizontal line at the selected mesh region's elevation, with an "<asset>  y <elev>"
+// label -- mirrors editor.js's selected-mesh elevation line (js/editor.js:1479-1489). A mesh
+// placement has no path parameter, so unlike a position point's marker this always spans the
+// panel's full width rather than sitting at one x position.
+void drawMeshElevationLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& layout, const MeshPlacement& placement, bool dragging) {
+  const float y = canvasOrigin.y + screenY(layout, placement.elevation);
+  const ImU32 color = dragging ? kMeshElevLineDraggingColor : kMeshElevLineColor;
+  drawList->AddLine(ImVec2(canvasOrigin.x + kPadX, y), ImVec2(canvasOrigin.x + layout.w - kPadX, y), color, dragging ? 3.0f : 2.0f);
+  char label[80];
+  std::snprintf(label, sizeof(label), "%s  y %.1f", placement.assetId.c_str(), placement.elevation);
+  drawList->AddText(ImVec2(canvasOrigin.x + kPadX + 4.0f, y - 14.0f), color, label);
+}
+
 }  // namespace
 
 bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathIndex) {
@@ -157,7 +182,13 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
 
   const Path& path = state.track().paths[pathIndex];
   const std::vector<std::pair<int, double>> points = collectPositionPoints(path);
-  const Layout liveLayout = computeLayout(points, path.closed, canvasSize.x, canvasSize.y);
+  // Selected mesh region (EDITOR_PARITY_GAPS.md gap 4), if any -- its elevation line is drawn/
+  // draggable in this panel regardless of which path is currently shown, mirroring editor.js's
+  // selectedPlacement() (a mesh has no path parameter of its own).
+  const MeshPlacement* meshPlacement = state.selectedMeshId().has_value() ? state.findMeshPlacement(*state.selectedMeshId()) : nullptr;
+  std::optional<double> meshElevationForRange;
+  if (meshPlacement != nullptr) meshElevationForRange = meshPlacement->elevation;
+  const Layout liveLayout = computeLayout(points, path.closed, canvasSize.x, canvasSize.y, meshElevationForRange);
   // Mirrors TopDownView::freezeBounds: the dragged point's own y-value feeds back into the range
   // (and therefore yScale) every frame, so recomputing the layout from scratch each frame runs
   // away -- growing the y-span SHRINKS yScale, which INCREASES world-units-per-pixel, so the
@@ -186,9 +217,26 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   // always agree on which point is "under the cursor".
   const int hoveredRawIndex = hovered ? nearestPointIndex(points, layout, mouseLocal) : -1;
 
+  // Selected mesh region's elevation line: grabbed on vertical proximity alone, matching
+  // editor.js's `if (Math.abs(y - my) <= MESH_ELEV_PICK_PX)` (js/editor.js:3566) -- no x-range
+  // restriction, since the line spans the panel's full width.
+  const bool meshElevLineHovered =
+      hovered && meshPlacement != nullptr && std::abs(mouseLocal.y - screenY(layout, meshPlacement->elevation)) <= kMeshElevPickPx;
+  // Persists across frames for the life of one drag gesture, mirroring frozenLayout's own
+  // static-local lifetime just above. Set on the mousedown that starts a gesture (mirrors JS
+  // checking mesh-elevation proximity FIRST in its mousedown handler, before roll/position hit
+  // tests, js/editor.js:3560-3576), so a click landing on the line always grabs it rather than
+  // falling through to point selection.
+  static bool meshElevDragArmed = false;
+
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    const int hitIndex = nearestPointIndex(points, layout, mouseLocal);
-    if (hitIndex >= 0) state.selectPoint(pathIndex, hitIndex);
+    if (meshElevLineHovered) {
+      meshElevDragArmed = true;
+    } else {
+      meshElevDragArmed = false;
+      const int hitIndex = nearestPointIndex(points, layout, mouseLocal);
+      if (hitIndex >= 0) state.selectPoint(pathIndex, hitIndex);
+    }
   }
 
   // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
@@ -198,7 +246,15 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   // frame both windows draw, spuriously overwriting the selected point's Y with wherever the
   // mouse happens to be over THIS view. Mirrors TopDownCanvas.cpp's same fix for the reverse
   // direction (elevation drags spuriously moving X/Z in the top-down view).
-  if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && selectionOnThisPath) {
+  const bool meshElevDragging = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && meshElevDragArmed && meshPlacement != nullptr;
+  if (meshElevDragging) {
+    if (!state.dragging()) {
+      state.beginDrag();
+      frozenLayout = liveLayout;
+    }
+    state.dragSelectedMeshElevationTo(worldYAt(layout, mouseLocal.y));
+    mutated = true;
+  } else if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && selectionOnThisPath) {
     if (!state.dragging()) {
       state.beginDrag();
       frozenLayout = liveLayout;
@@ -216,10 +272,12 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
     // did is harmless.
     if (state.dragging()) state.endDrag();
     frozenLayout.reset();
+    meshElevDragArmed = false;
   }
 
   drawAxis(drawList, canvasOrigin, layout);
   if (baked != nullptr && pathIndex < static_cast<int>(baked->paths.size())) drawBakedProfile(drawList, canvasOrigin, layout, baked->paths[pathIndex]);
+  if (meshPlacement != nullptr) drawMeshElevationLine(drawList, canvasOrigin, layout, *meshPlacement, meshElevDragging);
   for (int order = 0; order < static_cast<int>(points.size()); ++order) {
     const bool isSelected = selectionOnThisPath && selection.pointIndex == points[order].first;
     const bool isHovered = points[order].first == hoveredRawIndex;

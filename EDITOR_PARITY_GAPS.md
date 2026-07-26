@@ -172,9 +172,10 @@ The railed-edge count hint reads `asset->edges` directly (`std::count_if` on `Me
 
 ---
 
-## 4. Elevation view: draggable mesh elevation line
+## 4. Elevation view: draggable mesh elevation line — ✅ Implemented
 
-The only way to set a mesh region's elevation in JS, which makes this and gap 3 a natural pair.
+Was the only way to set a mesh region's elevation in JS, pairing naturally with gap 3 (whose panel
+now also has an Elevation field — this is the second, on-canvas way to reach the same value).
 
 - Draw: `js/editor.js:1479-1489` — a full-width horizontal line at the placement's elevation,
   labelled `<asset>  y <elevation>`, brightened while dragging.
@@ -183,18 +184,30 @@ The only way to set a mesh region's elevation in JS, which makes this and gap 3 
 - The plotted Y range is expanded to include the placement's elevation (`js/editor.js:1410-1415`) so
   the line stays on-panel even when the region sits far above or below the curve.
 
-### Implementation
+### Implementation (done)
 
-In `cpp/editor/src/ElevationView.cpp`:
+`cpp/editor/src/ElevationView.cpp`:
 
-- Extend `rawYRange()` (`:57`) to fold in `state.findMeshPlacement(*state.selectedMeshId())->elevation`
-  when a mesh is selected — this mirrors JS's `:1410` and matters for the same reason.
-- Draw the line + label after `drawBakedProfile` (`:185`).
-- Add a hit test before the existing position-point test in the mousedown block (`:194`), and a drag
-  branch alongside the existing one (`:201`).
-
-The `frozenLayout` mechanism (`:160-172`) already handles drag-time scale stability and should wrap
-this drag too — same runaway-sensitivity failure mode otherwise.
+- `rawYRange()`/`computeLayout()` gained an optional `extraY` parameter, folded into the min/max
+  before `layoutFromRange()`'s padding is applied — mirrors JS's `:1410-1415`. `DrawElevationView`
+  passes the selected mesh placement's elevation, when one is selected, so both the live and
+  drag-frozen layouts include it automatically (the freeze just copies whichever layout was live at
+  drag-start).
+- New `drawMeshElevationLine(...)` draws the full-width line + `"<assetId>  y <elev>"` label,
+  called right after `drawBakedProfile`, brightened (`kMeshElevLineDraggingColor`, matching JS's
+  `#f0e4ff`) while actively dragging.
+- Hit test: `meshElevLineHovered` checks vertical proximity only (`kMeshElevPickPx = 6.0f`, matching
+  JS's `MESH_ELEV_PICK_PX`), no x-range restriction, since the line spans the full panel width.
+- A new static `meshElevDragArmed` (parallel to the existing `frozenLayout` static) is set on
+  mousedown when the click lands on the line, checked *before* the position-point hit test so it
+  takes priority — mirroring JS's mousedown handler checking mesh-elevation proximity first
+  (`js/editor.js:3560-3576`), ahead of roll/position hit tests.
+- `EditorState::dragSelectedMeshElevationTo(y)` — new mutator sharing the existing
+  `dragging_`/`dragMutated_` gesture lifecycle with `dragSelectedElevationTo`, operating on
+  `mutableSelectedMeshPlacement()` instead of `selection_` (mesh/point selection are mutually
+  exclusive, so there's no ambiguity about which one a drag applies to). Rounds to 0.1 like JS.
+- The existing `frozenLayout` drag-sensitivity-freeze mechanism covers this drag too (same
+  runaway-acceleration failure mode as a position-point elevation drag otherwise).
 
 ---
 
