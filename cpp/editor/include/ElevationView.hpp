@@ -2,15 +2,12 @@
 // ImDrawList canvas alongside the top-down view: x is position along the current path, y is world
 // elevation. Mirrors js/editor.js's elevCanvas/drawElev/dragging === 'elev'.
 //
-// Simplification vs editor.js: the x-axis there places each authored point at its true
-// spline-parametrized arc-length position (evaluated against the baked curve). This view instead
-// spaces position points evenly by their authored ORDER within the path. Order and true parameter
-// position agree for any path that hasn't had points reordered independently of their spline
-// placement (true for every path this editor can currently produce -- Create mode appends in
-// click order, and nothing here can reorder points out of sequence), so this is a faithful
-// simplification for what the editor can build today, not a permanent shortcut; a later milestone
-// can switch to true arc-length placement (matching the baked centerline profile drawn alongside
-// it) without changing the interaction model.
+// The x-axis is true cumulative XZ arc length along the baked centerline (EDITOR_PARITY_GAPS.md
+// gap 9), matching js/editor.js's own arc-length axis (js/editor.js:1433-1451) -- each control
+// point's screen x comes from measuring the baked curve, not its authored order, so the profile
+// line and the point handles plotted on it line up exactly even after reordering or uneven
+// spacing. Falls back to plain order-based spacing only when there's no baked centerline yet to
+// measure (mid-edit bake failure), matching this file's existing "baked may be null" tolerance.
 #pragma once
 
 #include "EditorState.hpp"

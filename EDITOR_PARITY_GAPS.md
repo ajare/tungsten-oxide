@@ -347,30 +347,44 @@ Endpoint-square and seam detection both have C++ equivalents in `EditorState`
 
 ---
 
-## 9. Elevation view fidelity
+## 9. Elevation view fidelity — ✅ Implemented
 
 | Feature | JS | C++ |
 | --- | --- | --- |
-| Y axis with `niceAxisStep` ticks + labels | `drawElevYAxis` `:1360`, `niceAxisStep` `:1342` | min/max text only |
-| Labelled dashed zero line | `:1464-1477` | none |
-| X axis = true cumulative XZ **arc length** | `:1441-1451` | authored **order** index |
-| Closed-loop echo node (`0↺`, faded) | `:1510-1526` | none |
-| Per-node index labels | `:1525-1526` | none |
-| `heightColor` node fill | `:1520` | flat colour |
-| Disjoint amber ring | `:1521-1523` | none |
-| Respects the Position point filter | `:1508`, `handleAtElev:2694` | ignored entirely |
+| Y axis with `niceAxisStep` ticks + labels | `drawElevYAxis` `:1360`, `niceAxisStep` `:1342` | **ported** |
+| Labelled dashed zero line | `:1464-1477` | **ported** |
+| X axis = true cumulative XZ **arc length** | `:1441-1451` | **ported** |
+| Closed-loop echo node (`0↺`, faded) | `:1510-1526` | **ported** |
+| Per-node index labels | `:1525-1526` | **ported** |
+| `heightColor` node fill | `:1520` | **ported** |
+| Disjoint amber ring | `:1521-1523` | **ported** |
+| Respects the Position point filter | `:1508`, `handleAtElev:2694` | **ported** |
 
-The arc-length x-axis is the substantive one: `ElevationView.hpp:5-13` documents the order-based
-spacing as a deliberate, reversible simplification that holds "for any path that hasn't had points
-reordered independently of their spline placement". That assumption is still true today, so this is
-fidelity work rather than a correctness bug — but it is what makes the JS profile line up with the
-curve underneath it.
+### Implementation (done)
 
-The point-filter gap is a real inconsistency: `DrawElevationView` didn't receive a `TopDownView`, so
-it couldn't see the filters that the toolbar checkboxes and the top-down canvas both honour.
-Partially addressed by gap 5's implementation, which threads a `showPositionPoints` bool through
-(gating right-click-to-insert only) — the height-handle rendering/hit-testing itself still ignores
-the filter, so this item isn't fully closed.
+`cpp/editor/src/ElevationView.cpp`:
+
+- New `ArcProfile`/`buildArcProfile(...)` measures cumulative XZ arc length along the baked
+  centerline each frame (closed paths get one extra trailing entry for the wrap back to frame 0).
+  `xFracForPositionIndex(...)` and its inverse `gAtArcFraction(...)` replace the old order-based
+  `screenX`/`xAxisFraction` pair everywhere — plotted points, the baked profile line, hover/click
+  hit-testing (`nearestPointIndex`), and right-click-to-insert (gap 5) all now agree on true
+  arc-length placement instead of authored order. Falls back to plain order-based spacing when no
+  baked centerline is available yet, matching this file's existing "baked may be null" tolerance.
+  `ElevationView.hpp`'s header comment, which documented the order-based simplification, is updated
+  to describe the arc-length axis instead.
+- `niceAxisStep(...)` ported 1:1 from JS; `drawYAxis(...)` replaces `drawAxis(...)`, drawing a full
+  gridline + label per tick plus a dashed, distinctly-labelled zero line (`addDashedHLine`), mirroring
+  `drawElevYAxis` and its zero-line block.
+- `heightColor(...)` ported 1:1 from JS's own function (already used for the top-down ribbon;
+  now also used for this view's node fill).
+- Node draw loop now iterates `slots = closed ? n + 1 : n` (the extra slot is the closed-loop echo
+  of point 0, ~45% alpha, labelled `0↺`), draws a per-node index label under each handle, and a
+  thicker amber stroke (no cross, matching JS's ring-only disjoint styling in this view specifically)
+  when the point is a disjoint seam (`state.disjointSeams()`).
+- Both the height-handle rendering and hit-testing are now gated on `showPositionPoints`, closing
+  the point-filter inconsistency gap 5's implementation left partially open (that one only gated
+  right-click-to-insert).
 
 ---
 
