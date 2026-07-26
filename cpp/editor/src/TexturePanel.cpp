@@ -125,13 +125,17 @@ bool DrawTexturePanel(EditorState& state, TextureCache& textures, int currentPat
 
     int tileWidth = asset.tileWidth;
     ImGui::SetNextItemWidth(100);
-    if (ImGui::InputInt("Tile W", &tileWidth, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    bool tileWidthChanged = ImGui::InputInt("Tile W", &tileWidth, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+    tileWidthChanged |= ImGui::IsItemDeactivatedAfterEdit();
+    if (tileWidthChanged) {
       if (state.setTextureTileSize(assetId, true, tileWidth)) mutated = true;
     }
     ImGui::SameLine();
     int tileHeight = asset.tileHeight;
     ImGui::SetNextItemWidth(100);
-    if (ImGui::InputInt("Tile H", &tileHeight, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    bool tileHeightChanged = ImGui::InputInt("Tile H", &tileHeight, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+    tileHeightChanged |= ImGui::IsItemDeactivatedAfterEdit();
+    if (tileHeightChanged) {
       if (state.setTextureTileSize(assetId, false, tileHeight)) mutated = true;
     }
 

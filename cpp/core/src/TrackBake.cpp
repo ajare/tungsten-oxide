@@ -823,11 +823,16 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         Evaluator evaluator(track.definition.paths[pi]);
         double gMax = evaluator.closed ? evaluator.n : evaluator.n - 1;
         Frame frameAtTrigger = frame(evaluator.eval(t.host.t * gMax));
+        // Lateral offset from the centerline (mirrors ZoneHostDefinition::lateral's own
+        // edgeRight-offset + cross-section-aware lift, above): vv=0.5 (dead center) when
+        // lateral=0, same as the previous hardcoded `.5`.
+        const double vv = frameAtTrigger.width > 0.0 ? (t.host.lateral + frameAtTrigger.width / 2.0) / frameAtTrigger.width : 0.5;
         double lift = TrackCore::crossSectionHeight(frameAtTrigger.crossSectionCurvature,
-                                                    frameAtTrigger.crossSectionTightness, .5,
+                                                    frameAtTrigger.crossSectionTightness, vv,
                                                     frameAtTrigger.width);
         double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
-        trigger.center = frameAtTrigger.pos.clone().addScaledVector(frameAtTrigger.normal, lift);
+        trigger.center =
+            frameAtTrigger.pos.clone().addScaledVector(frameAtTrigger.edgeRight, t.host.lateral).addScaledVector(frameAtTrigger.normal, lift);
         trigger.fwd = frameAtTrigger.tangent.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.edgeRight, sine).normalize();
         trigger.right = frameAtTrigger.edgeRight.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.tangent, -sine).normalize();
         trigger.up = frameAtTrigger.normal;

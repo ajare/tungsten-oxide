@@ -126,13 +126,17 @@ struct Zone {
 struct TriggerHost {
   std::string kind{"path"};
   std::string pathId, meshId;
-  double t{0.5}, x{0.0}, z{0.0};
+  double t{0.5}, lateral{0.0}, x{0.0}, z{0.0};
 };
 
 struct Trigger {
   std::string id;
   std::string type{"dummy"}, role, direction{"both"};
   double width{40.0}, height{12.0}, rotation{0.0};
+  // When true (new functionality, no JS equivalent), `width` is kept in sync with the host path's
+  // baked road width at `host.t` instead of being manually authored -- see TriggersPanel.cpp's
+  // auto-width handling. Ignored for a mesh-hosted trigger (no path/t to sample).
+  bool autoWidth{false};
   TriggerHost host;
 };
 

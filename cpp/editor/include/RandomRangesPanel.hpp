@@ -10,12 +10,16 @@
 // same session-only tradeoff, gap 9).
 #pragma once
 
+#include "EditorState.hpp"
 #include "RandomTrack.hpp"
 
 namespace editor {
 
-// Draws every field pair plus a Reset-to-default button; sanitizes (clamps + fixes ordering,
-// mirroring sanitizeRandomRanges) on every edit. Returns true if `ranges` changed.
-bool DrawRandomRangesPanel(RandomTrackRanges& ranges);
+// Draws the seed/complexity/Generate controls (formerly the menu bar's "Random" menu) at the top,
+// then every range field pair plus a Reset-to-default button; sanitizes (clamps + fixes ordering,
+// mirroring sanitizeRandomRanges) on every range edit. Returns true if a new random track was
+// generated (caller should rebake) -- range edits alone don't need it, since ranges are a session
+// preference, not track data.
+bool DrawRandomRangesPanel(EditorState& state, RandomTrackRanges& ranges, int& seed, int& complexity);
 
 }  // namespace editor

@@ -159,6 +159,20 @@ public:
 
   void clearSelection() { selection_ = {}; }
 
+  // Deselects whichever of the four mutually-exclusive selection kinds (point/mesh-region/zone/
+  // trigger) is currently active -- the 'D' hotkey / Edit menu's "Deselect" (new functionality, no
+  // JS equivalent). "Curve" (currentPathIndex()) isn't one of these: unlike the other four it's
+  // never "nothing" -- it always resolves to some path (explicitCurrentPathIndex_, defaulting to
+  // 0) -- so there's nothing to clear there; it simply stops being driven by a point selection
+  // once one no longer exists, per currentPathIndex()'s own "selection wins while a point is
+  // selected" precedence.
+  void deselectAll() {
+    selection_ = {};
+    selectedMeshId_.reset();
+    selectedZoneId_.reset();
+    selectedTriggerId_.reset();
+  }
+
   // Read-only counterpart to selectPositionAt: the nearest Position point within
   // `pickRadiusWorld` of (worldX, worldZ), or nullopt, without mutating selection_ -- used to
   // render a hover highlight distinct from the actual click-driven selection (see
@@ -169,15 +183,14 @@ public:
 
   // Whether the current selection is in range AND a Position point specifically -- used to guard
   // on-canvas X/Z dragging (TopDownCanvas.cpp) from also firing when a roll/width/cross-section
-  // handle is selected (EDITOR_PARITY_FIXES.md gap 1's on-canvas handles are click-to-select
-  // only, no on-canvas drag; dragSelectedTo() itself has no kind guard, since every OTHER caller
+  // handle is selected (dragSelectedTo() itself has no kind guard, since every OTHER caller
   // already only ever selects a Position point before dragging).
   bool selectionIsPosition() const {
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Position;
   }
 
   // Width-drag counterpart to selectionIsPosition() -- gates dragSelectedWidthTo()'s on-canvas
-  // drag path (cross-section remains click-to-select only, still panel-edited).
+  // drag path.
   bool selectionIsWidth() const {
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Width;
   }
@@ -186,6 +199,11 @@ public:
   // dragSelectedRollTo()'s on-canvas drag path.
   bool selectionIsRoll() const {
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::Roll;
+  }
+
+  // Cross-section-drag counterpart -- gates dragSelectedCurvatureTo()'s on-canvas drag path.
+  bool selectionIsCrossSection() const {
+    return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::CrossSection;
   }
 
   // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
@@ -306,7 +324,16 @@ public:
     trigger.host.kind = "path";
     trigger.host.pathId = track_.paths[pathIndex].id;
     trigger.host.t = std::clamp(t, 0.0, 1.0);
-    if (trigger.type == "checkpoint") trigger.role = "intermediate";
+    if (trigger.type == "checkpoint") {
+      trigger.role = "intermediate";
+      // A checkpoint gates the FULL track width dead-center, unrotated -- new functionality, no
+      // JS equivalent (a checkpoint's rotation/lateral/width there are the same free-form fields
+      // a dummy trigger gets). Explicit rather than relying on already-zero-valued defaults, so
+      // this stays correct if those defaults ever change.
+      trigger.rotation = 0.0;
+      trigger.host.lateral = 0.0;
+      trigger.autoWidth = true;
+    }
     track_.triggers.push_back(std::move(trigger));
     const std::string triggerId = track_.triggers.back().id;
     selectTrigger(triggerId);
@@ -335,7 +362,34 @@ public:
     } else {
       it->role.clear();
     }
-    if (it->host.kind == "path") it->host.t = std::clamp(it->host.t, 0.0, 1.0);
+    if (it->host.kind == "path") {
+      it->host.t = std::clamp(it->host.t, 0.0, 1.0);
+    } else {
+      it->autoWidth = false;    // meaningless without a host path/t to sample a road width from
+      it->host.lateral = 0.0;  // meaningless without a host path centerline to offset from
+    }
+    return true;
+  }
+
+  // On-canvas trigger center-handle drag (new functionality -- previously host.t was panel-edited
+  // only, via editTrigger's "T (%)" field): same drag lifecycle (beginDrag/endDrag/one-push-per-
+  // gesture, sharing dragging_/dragMutated_ with the aux-point drag mutators above) but for a
+  // path-hosted Trigger's host.t. Mirrors js/editor.js's `dragging === 'triggerTop'` path-host
+  // branch (js/editor.js:3511-3525) EXCEPT it keeps the trigger on its CURRENT host path via
+  // tangent-projection (like dragSelectedAuxTTo; the caller computes the new t the same way) rather
+  // than JS's re-host-onto-nearest-path-under-the-cursor behavior -- there's no live spline
+  // evaluator here to redo that search from an arbitrary world point. No-op (returns false) for a
+  // mesh-hosted trigger, since host.t is meaningless there.
+  bool dragSelectedTriggerTTo(double t) {
+    if (!dragging_ || !selectedTriggerId_.has_value()) return false;
+    const auto it = std::find_if(track_.triggers.begin(), track_.triggers.end(),
+                                 [&](const Trigger& trigger) { return trigger.id == *selectedTriggerId_; });
+    if (it == track_.triggers.end() || it->host.kind != "path") return false;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    it->host.t = std::clamp(t, 0.0, 1.0);
     return true;
   }
 
@@ -418,6 +472,59 @@ public:
     track_.junctions.push_back(std::move(junction));
     selection_ = {};
     return true;
+  }
+
+  // ---- Drag-to-weld an open path's endpoint onto another open endpoint (new functionality, no
+  // JS precedent -- js/editor.js's shift+drag "joinDrag" is a separate, non-moving gesture; this
+  // is a plain-drag variant that also relocates the point). Both helpers below feed the top-down
+  // canvas's per-frame drag handling: selectedOpenEndpointEnd() answers "is the point currently
+  // being dragged actually an open path's start/end", hitTestOpenEndpoint() finds a weld target
+  // near it, and joinPathEndpoints() (above) performs the actual weld on release. ----
+
+  struct OpenEndpointRef {
+    int pathIndex;
+    bool atEnd;  // false = path's first Position point, true = last -- same convention as joinPathEndpoints
+  };
+
+  // nullopt unless the current selection is a Position point sitting at the first or last
+  // Position index of an OPEN path (a closed path or an interior point can't be welded).
+  std::optional<bool> selectedOpenEndpointEnd() const {
+    if (!selectionInRange()) return std::nullopt;
+    const Path& path = track_.paths[selection_.pathIndex];
+    if (path.closed) return std::nullopt;
+    if (path.points[selection_.pointIndex].kind != PointKind::Position) return std::nullopt;
+    const int posIndex = rawIndexToPositionIndex(path, selection_.pointIndex);
+    if (posIndex < 0) return std::nullopt;
+    if (posIndex == 0) return false;
+    if (posIndex == positionCount(path) - 1) return true;
+    return std::nullopt;
+  }
+
+  // Nearest-wins search over every OTHER open path's two endpoints (excluding the specific
+  // (excludePathIndex, excludeAtEnd) endpoint being dragged -- but NOT excluding that path's other
+  // endpoint, since dragging one end onto the other end of the SAME open path is exactly how a
+  // curve closes itself) within pickRadiusWorld of a world point. Pure proximity, independent of
+  // pickRadiusWorld's own screen-derived convention elsewhere in this file (kPickRadiusPx / scale).
+  std::optional<OpenEndpointRef> hitTestOpenEndpoint(double worldX, double worldZ, double pickRadiusWorld, int excludePathIndex,
+                                                     bool excludeAtEnd) const {
+    std::optional<OpenEndpointRef> best;
+    double bestDistSq = pickRadiusWorld * pickRadiusWorld;
+    for (int p = 0; p < static_cast<int>(track_.paths.size()); ++p) {
+      const Path& path = track_.paths[p];
+      if (path.closed) continue;
+      for (const bool atEnd : {false, true}) {
+        if (p == excludePathIndex && atEnd == excludeAtEnd) continue;
+        const TrackPoint* point = atEnd ? lastPosition(path) : firstPosition(path);
+        if (point == nullptr) continue;
+        const double dx = point->pos.x - worldX, dz = point->pos.z - worldZ;
+        const double distSq = dx * dx + dz * dz;
+        if (distSq <= bestDistSq) {
+          bestDistSq = distSq;
+          best = OpenEndpointRef{p, atEnd};
+        }
+      }
+    }
+    return best;
   }
 
   // ---- Disjoint / reconnect (EDITOR_PARITY_FIXES.md gap 5) ----
@@ -587,6 +694,84 @@ public:
     }
 
     return false;
+  }
+
+  // ---- Split Point (new functionality -- no direct JS UI equivalent; js/editor.js's
+  // splitTargetPathAt is the closest reference implementation, but it's only ever called
+  // internally from performJoin() when joining onto an interior point, never exposed as its own
+  // button) ----
+  //
+  // Structurally the same rotate-and-duplicate (closed path) / erase-and-insert-two-paths (open
+  // path) operation as makeDisjoint() above, but a PERMANENT split rather than a smoothing seam:
+  // no Connection is recorded in track_.disjointSeams (there's nothing for reconnectDisjoint() to
+  // undo), and the newly-created coincident point gets a fresh newPointId() rather than sharing
+  // the original point's id -- the two ends are independent points from the moment of the split,
+  // not two ends of one annotated seam. Refuses (returns false, no history push) at an open path's
+  // first/last position (nothing to split off there); no minimum-points-per-side floor otherwise,
+  // since (unlike makeDisjoint) there's no smoothing continuity to preserve at the cut.
+  bool splitSelectedPoint() {
+    if (!selectionInRange()) return false;
+    const Path& path = track_.paths[selection_.pathIndex];
+    if (path.points[selection_.pointIndex].kind != PointKind::Position) return false;
+    const int positionIndex = rawIndexToPositionIndex(path, selection_.pointIndex);
+    if (positionIndex < 0) return false;
+    const int count = positionCount(path);
+    if (!path.closed && (positionIndex == 0 || positionIndex == count - 1)) return false;
+
+    const int pathIndex = selection_.pathIndex;
+    const std::string startPointId = currentStartPointId();
+    history_.push(track_);
+
+    Path& mutablePath = track_.paths[pathIndex];
+    std::vector<TrackPoint> positions;
+    for (const auto& p : mutablePath.points)
+      if (p.kind == PointKind::Position) positions.push_back(p);
+
+    if (mutablePath.closed) {
+      std::rotate(positions.begin(), positions.begin() + positionIndex, positions.end());
+      TrackPoint duplicate = positions.front();
+      duplicate.id = newPointId();
+      positions.push_back(duplicate);
+      Path rebuilt;
+      rebuilt.id = mutablePath.id;
+      rebuilt.closed = false;
+      rebuilt.points = std::move(positions);
+      rebuilt.texture = mutablePath.texture;
+      appendDefaultAuxPoints(rebuilt);
+      mutablePath = std::move(rebuilt);
+      selection_ = {pathIndex, 0};
+    } else {
+      std::set<std::string> usedPathIds;
+      for (const auto& p : track_.paths) usedPathIds.insert(p.id);
+      const std::string leftId = firstUnusedId("path", usedPathIds);
+      usedPathIds.insert(leftId);
+      const std::string rightId = firstUnusedId("path", usedPathIds);
+
+      Path leftPath;
+      leftPath.id = leftId;
+      leftPath.closed = false;
+      leftPath.points.assign(positions.begin(), positions.begin() + positionIndex + 1);
+      leftPath.texture = mutablePath.texture;
+      appendDefaultAuxPoints(leftPath);
+
+      Path rightPath;
+      rightPath.id = rightId;
+      rightPath.closed = false;
+      TrackPoint duplicate = positions[positionIndex];
+      duplicate.id = newPointId();
+      rightPath.points.push_back(duplicate);
+      rightPath.points.insert(rightPath.points.end(), positions.begin() + positionIndex + 1, positions.end());
+      rightPath.texture = mutablePath.texture;
+      appendDefaultAuxPoints(rightPath);
+
+      track_.paths.erase(track_.paths.begin() + pathIndex);
+      track_.paths.insert(track_.paths.begin() + pathIndex, {leftPath, rightPath});
+      selection_ = {pathIndex + 1, 0};
+    }
+
+    preserveStartPoint(startPointId);
+    pruneStaleReferences();
+    return true;
   }
 
   // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
@@ -898,6 +1083,41 @@ public:
     point.roll = std::clamp(rollDegrees, -180.0, 180.0);
   }
 
+  // Cross-section-handle drag counterpart to dragSelectedWidthTo()/dragSelectedRollTo(): same
+  // drag lifecycle, for a CrossSection point's `curvature` field -- mirrors editor.js's
+  // `dragging === 'crossSectionTop'` branch (js/editor.js:3468-3480). Previously click-to-select
+  // only (panel-edited); this ports the same on-canvas value drag the other two aux kinds already
+  // had.
+  void dragSelectedCurvatureTo(double curvature) {
+    if (!dragging_ || !selectionInRange()) return;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::CrossSection) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    point.curvature = std::clamp(curvature, -1.0, 1.0);
+  }
+
+  // t-axis counterpart to dragSelectedWidthTo/dragSelectedRollTo/dragSelectedCurvatureTo: lets an
+  // on-canvas drag of a Roll/Width/CrossSection point ALSO move it along the curve, not just
+  // change its value -- new functionality with no JS precedent (the browser editor never lets a
+  // canvas drag rewrite `t`; see TopDownCanvas.cpp's tangentAtG for how the along-curve component
+  // is derived). Shares the same beginDrag/endDrag/one-push-per-gesture lifecycle (dragMutated_)
+  // as the value-drag methods above, so a single drag gesture that moves both perpendicular
+  // (value) and tangential (t) still pushes exactly one undo step, whichever of the two mutators
+  // happens to fire first each gesture.
+  void dragSelectedAuxTTo(double t) {
+    if (!dragging_ || !selectionInRange()) return;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind == PointKind::Position) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    point.t = std::clamp(t, 0.0, 1.0);
+  }
+
   void endDrag() {
     dragging_ = false;
     dragMutated_ = false;
@@ -907,7 +1127,14 @@ public:
   // which point they hit rather than needing a world-space radius search.
   void selectPoint(int pathIndex, int pointIndex) {
     selection_ = {pathIndex, pointIndex};
+    // Mirrors selectPositionAt's own clearing of the other three selection kinds -- a point,
+    // mesh region, zone, and trigger share one "the selected object" slot (only one of the four
+    // is ever selected at a time), so picking one clears the other three. This one had been
+    // missing the zone/trigger reset (only mesh was cleared), so clicking a roll/width/cross-
+    // section handle while a zone or trigger was selected left both "selected" simultaneously.
     selectedMeshId_.reset();
+    selectedZoneId_.reset();
+    selectedTriggerId_.reset();
   }
 
   // Mirrors deleteSelected() for a position point (refuses to drop a path below 4, since a track

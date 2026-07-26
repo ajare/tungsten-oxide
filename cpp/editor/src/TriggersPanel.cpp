@@ -1,8 +1,11 @@
 #include "TriggersPanel.hpp"
 
+#include <cmath>
 #include <cstdio>
 
 #include "imgui.h"
+
+#include "PropertiesPanel.hpp"
 
 namespace editor {
 namespace {
@@ -11,7 +14,7 @@ constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsT
 
 }  // namespace
 
-bool DrawTriggersPanel(EditorState& state, int currentPathIndex) {
+bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Track* baked) {
   bool mutated = false;
   const auto& selectedId = state.selectedTriggerId();
   const Trigger* trigger = selectedId.has_value() ? state.findTrigger(*selectedId) : nullptr;
@@ -36,14 +39,48 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex) {
       if (roleChanged) role = roleIndex == 1 ? "finish" : "intermediate";
     }
 
+    const bool isPath = trigger->host.kind == "path";
+    int hostPathIndex = -1;
+    if (isPath) {
+      const auto& paths = state.track().paths;
+      for (int i = 0; i < static_cast<int>(paths.size()); ++i)
+        if (paths[i].id == trigger->host.pathId) {
+          hostPathIndex = i;
+          break;
+        }
+    }
+
     double width = trigger->width, height = trigger->height, rotation = trigger->rotation;
     bool changed = roleChanged;
+
+    // Auto Width (new functionality, no JS equivalent): keeps the trigger's gate width matched to
+    // the host path's own baked road width at its host t, recomputed every frame from `baked`
+    // rather than a one-time snap -- so it stays in sync whenever a Width control point elsewhere
+    // on the track changes and the caller rebakes. Meaningless for a mesh-hosted trigger (no path/
+    // t to sample), so the checkbox is disabled and never persisted true there.
+    bool autoWidth = isPath && trigger->autoWidth;
+    ImGui::BeginDisabled(!isPath);
+    if (ImGui::Checkbox("Auto Width (match track)", &autoWidth)) changed = true;
+    ImGui::EndDisabled();
+    if (autoWidth && hostPathIndex >= 0) {
+      const double resolvedWidth = widthAtT(baked, hostPathIndex, state.track().paths[hostPathIndex].closed, trigger->host.t);
+      if (std::abs(resolvedWidth - width) > 1e-6) changed = true;
+      width = resolvedWidth;
+    }
+
     ImGui::SetNextItemWidth(120);
+    ImGui::BeginDisabled(autoWidth);
     changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::EndDisabled();
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("Height", &height, 0.0, 0.0, "%.1f", kCommitOnEnter);
-    ImGui::SetNextItemWidth(120);
-    changed |= ImGui::InputDouble("Rotation (deg)", &rotation, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(200);
+    {
+      constexpr double kRotationMin = -180.0, kRotationMax = 180.0;
+      changed |= ImGui::SliderScalar("Rotation (deg)", ImGuiDataType_Double, &rotation, &kRotationMin, &kRotationMax, "%.1f");
+    }
 
     int dirIndex = trigger->direction == "forward" ? 1 : (trigger->direction == "backward" ? 2 : 0);
     const char* dirNames[] = {"both", "forward", "backward"};
@@ -51,18 +88,23 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex) {
     const bool dirChanged = ImGui::Combo("Direction", &dirIndex, dirNames, 3);
     changed |= dirChanged;
 
-    double t = trigger->host.t * 100.0, hostX = trigger->host.x, hostZ = trigger->host.z;
-    const bool isPath = trigger->host.kind == "path";
+    double t = trigger->host.t * 100.0, lateral = trigger->host.lateral, hostX = trigger->host.x, hostZ = trigger->host.z;
     if (isPath) {
       ImGui::Text("Host path: %s", trigger->host.pathId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Position (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(120);
+      changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
     } else {
       ImGui::Text("Host mesh: %s", trigger->host.meshId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
     if (changed) {
@@ -70,10 +112,12 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex) {
         target.width = width;
         target.height = height;
         target.rotation = rotation;
+        target.autoWidth = autoWidth;
         target.direction = dirNames[dirIndex];
         if (isCheckpoint) target.role = role;
         if (target.host.kind == "path") {
           target.host.t = t / 100.0;
+          target.host.lateral = lateral;
         } else {
           target.host.x = hostX;
           target.host.z = hostZ;

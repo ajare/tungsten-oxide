@@ -71,6 +71,7 @@ set(EDITOR_SOURCES
   src/TexturePanel.cpp
   src/FileDialog.cpp
   src/Clipboard.cpp
+  src/TrackPropertiesPanel.cpp
   src/PropertiesPanel.cpp
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp

@@ -74,6 +74,32 @@ class TopDownView {
     panX_ = panY_ = 0.0;
   }
 
+  // Pans+zooms so `target` is centered and framed in the viewport (new functionality -- js/
+  // editor.js has no equivalent; only Home's reset-to-defaults exists). `wholeBounds` MUST be the
+  // same whole-track bounds computeView()/zoomAt() are fed every frame: panX_/panY_ and the zoom
+  // slider's 0-point are both defined relative to THAT bounds' own auto-fit center/scale, not an
+  // absolute world origin, so focusing has to work within that same frame of reference (mirrors
+  // zoomAt()'s identical requirement). A degenerate (zero-area) target -- a single selected point
+  // -- is floored to kMinFocusSpan so it zooms in a lot without going to infinity.
+  void focusOn(const TrackBounds2D& target, const TrackBounds2D& wholeBounds) {
+    const double wholeSpanX = (wholeBounds.maxX - wholeBounds.minX) != 0.0 ? (wholeBounds.maxX - wholeBounds.minX) : 1.0;
+    const double wholeSpanZ = (wholeBounds.maxZ - wholeBounds.minZ) != 0.0 ? (wholeBounds.maxZ - wholeBounds.minZ) : 1.0;
+    const double baseScale = std::min((width_ - 2.0 * kMargin) / wholeSpanX, (height_ - 2.0 * kMargin) / wholeSpanZ);
+
+    constexpr double kMinFocusSpan = 20.0;
+    const double targetSpanX = std::max(target.maxX - target.minX, kMinFocusSpan);
+    const double targetSpanZ = std::max(target.maxZ - target.minZ, kMinFocusSpan);
+    const double desiredScale = std::min((width_ - 2.0 * kMargin) / targetSpanX, (height_ - 2.0 * kMargin) / targetSpanZ);
+
+    zoomSlider_ = std::clamp(50.0 * std::log2(desiredScale / baseScale), kZoomSliderMin, kZoomSliderMax);
+    const double scale = baseScale * zoomMultiplier();
+
+    const double wholeCx = (wholeBounds.minX + wholeBounds.maxX) / 2.0, wholeCz = (wholeBounds.minZ + wholeBounds.maxZ) / 2.0;
+    const double targetCx = (target.minX + target.maxX) / 2.0, targetCz = (target.minZ + target.maxZ) / 2.0;
+    panX_ = (wholeCx - targetCx) * scale;
+    panY_ = (wholeCz - targetCz) * scale;
+  }
+
   double zoomMultiplier() const { return std::pow(2.0, zoomSlider_ / 50.0); }
   double scale() const { return scale_; }
 

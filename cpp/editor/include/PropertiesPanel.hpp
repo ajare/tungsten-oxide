@@ -11,6 +11,12 @@
 
 namespace editor {
 
+// Road-surface width at a point's t, sampled (linearly interpolated) from the baked centerline --
+// mirrors editor.js's TrackCore.evalWidth() closely enough for a preview (exact spline evaluation
+// would need the authored width-point list, which callers don't otherwise touch). Shared with
+// TriggersPanel.cpp (auto-width) as well as PropertiesPanel.cpp's own cross-section preview.
+double widthAtT(const tox::Track* baked, int pathIndex, bool closed, double t);
+
 // `currentPathIndex` is where a freshly Added roll/width/crossSection point lands -- mirrors
 // currentCurve()'s role elsewhere (TexturePanel.cpp, main.cpp): the selected point's path, or the
 // first path if nothing's selected. `view`/`baked` back the read-only physics-sample info section

@@ -10,22 +10,7 @@
 #include "imgui.h"
 
 namespace editor {
-namespace {
 
-constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
-const ImU32 kCrossSectionStrokeColor = IM_COL32(213, 140, 255, 255);
-const ImU32 kCrossSectionFillPositive = IM_COL32(213, 140, 255, 64);
-const ImU32 kCrossSectionFillNegative = IM_COL32(255, 140, 213, 64);
-const ImU32 kCrossSectionSlabFill = IM_COL32(120, 152, 184, 71);
-const ImU32 kCrossSectionSlabStroke = IM_COL32(164, 192, 220, 140);
-const ImU32 kCrossSectionChordColor = IM_COL32(111, 147, 168, 115);
-const ImU32 kCrossSectionEdgeColor = IM_COL32(213, 140, 255, 255);
-const ImU32 kCrossSectionTextColor = IM_COL32(205, 238, 255, 255);
-const ImU32 kCrossSectionLabelColor = IM_COL32(111, 147, 168, 255);
-
-// Road-surface width at a point's t, sampled (linearly interpolated) from the baked centerline --
-// mirrors editor.js's TrackCore.evalWidth() closely enough for a preview (exact spline evaluation
-// would need the authored width-point list, which PropertiesPanel doesn't otherwise touch).
 double widthAtT(const tox::Track* baked, int pathIndex, bool closed, double t) {
   if (baked == nullptr || pathIndex < 0 || pathIndex >= static_cast<int>(baked->paths.size())) return tox::TrackCore::DEFAULT_WIDTH;
   const auto& centerline = baked->paths[pathIndex].centerline;
@@ -46,6 +31,19 @@ double widthAtT(const tox::Track* baked, int pathIndex, bool closed, double t) {
   }
   return centerline[index0].width + (centerline[index1].width - centerline[index0].width) * fracIdx;
 }
+
+namespace {
+
+constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
+const ImU32 kCrossSectionStrokeColor = IM_COL32(213, 140, 255, 255);
+const ImU32 kCrossSectionFillPositive = IM_COL32(213, 140, 255, 64);
+const ImU32 kCrossSectionFillNegative = IM_COL32(255, 140, 213, 64);
+const ImU32 kCrossSectionSlabFill = IM_COL32(120, 152, 184, 71);
+const ImU32 kCrossSectionSlabStroke = IM_COL32(164, 192, 220, 140);
+const ImU32 kCrossSectionChordColor = IM_COL32(111, 147, 168, 115);
+const ImU32 kCrossSectionEdgeColor = IM_COL32(213, 140, 255, 255);
+const ImU32 kCrossSectionTextColor = IM_COL32(205, 238, 255, 255);
+const ImU32 kCrossSectionLabelColor = IM_COL32(111, 147, 168, 255);
 
 // On-canvas cross-section preview (editor.html's #crossSectionPreview / drawCrossSectionPreview,
 // js/editor.js:2032-2125): the same profile the game's ribbon mesh and USD exporter build, so this
@@ -140,12 +138,16 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   ImGui::TextUnformatted("Position Point");
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("X", &x, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Y (elevation)", &y, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Z", &z, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Weight", &weight, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed && state.setSelectedPositionFields(x, y, z, weight)) mutated = true;
 
   // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #startBtn: disabled
@@ -173,18 +175,8 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
     }
   }
 
-  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11), mirrors editor.html's
-  // #delSegmentBtn/#delPrevSegmentBtn: rendered only when that direction's segment actually
-  // exists (an open path's last/first point has no outgoing/incoming segment), same as JS's
-  // `if (outgoingSeg)`/`if (incomingSeg)` guards around the button markup.
-  const auto outgoingSeg = state.selectedOutgoingSegment();
-  const auto incomingSeg = state.selectedIncomingSegment();
-  if (outgoingSeg.has_value() && ImGui::Button("Delete Outgoing Segment")) {
-    if (state.deleteSelectedSegment(true)) mutated = true;
-  }
-  if (incomingSeg.has_value() && ImGui::Button("Delete Incoming Segment")) {
-    if (state.deleteSelectedSegment(false)) mutated = true;
-  }
+  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11) now lives in the Curves panel
+  // (curve-topology edits grouped with Delete Curve/Join), not here.
 }
 
 void drawRollFields(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, bool& mutated) {
@@ -193,8 +185,10 @@ void drawRollFields(EditorState& state, const SelectedPoint& sel, const TrackPoi
   ImGui::TextUnformatted("Roll Point");
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("T (%)", &tPercent, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Roll (deg)", &rollDeg, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed)
     mutated |= state.editAuxPoint(sel.pathIndex, sel.pointIndex, [&](TrackPoint& p) {
       p.t = tPercent / 100.0;
@@ -208,8 +202,10 @@ void drawWidthFields(EditorState& state, const SelectedPoint& sel, const TrackPo
   ImGui::TextUnformatted("Width Point");
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("T (%)", &tPercent, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed)
     mutated |= state.editAuxPoint(sel.pathIndex, sel.pointIndex, [&](TrackPoint& p) {
       p.t = tPercent / 100.0;
@@ -224,12 +220,20 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
   ImGui::TextUnformatted("Cross-Section Point");
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("T (%)", &tPercent, 0.0, 0.0, "%.1f", kCommitOnEnter);
-  ImGui::SetNextItemWidth(120);
-  changed |= ImGui::InputDouble("Curvature", &curvature, 0.0, 0.0, "%.2f", kCommitOnEnter);
-  ImGui::SetNextItemWidth(120);
-  changed |= ImGui::InputDouble("Tightness", &tightness, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SetNextItemWidth(200);
+  {
+    constexpr double kCurvatureMin = -1.0, kCurvatureMax = 1.0;
+    changed |= ImGui::SliderScalar("Curvature", ImGuiDataType_Double, &curvature, &kCurvatureMin, &kCurvatureMax, "%.2f");
+  }
+  ImGui::SetNextItemWidth(200);
+  {
+    constexpr double kTightnessMin = 0.2, kTightnessMax = 4.0;
+    changed |= ImGui::SliderScalar("Tightness", ImGuiDataType_Double, &tightness, &kTightnessMin, &kTightnessMax, "%.2f");
+  }
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Thickness", &thickness, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed)
     mutated |= state.editAuxPoint(sel.pathIndex, sel.pointIndex, [&](TrackPoint& p) {
       p.t = tPercent / 100.0;
@@ -306,6 +310,18 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
     }
     if (ImGui::Button("Delete Point")) {
       if (state.deleteSelectedPoint()) mutated = true;
+    }
+    // Split Point (new functionality, Position points only -- see EditorState::splitSelectedPoint's
+    // comment): splits the curve at this point, creating a new coincident point at the new open
+    // end. Only rendered for a Position selection (mirrors the pattern above, where each point
+    // kind gets its own field set) and silently refused by the call itself at an open path's
+    // first/last point (nothing to split off there), rather than disabling the button -- there's
+    // no cheap way to know that from here without duplicating splitSelectedPoint's own guard.
+    if (point.kind == PointKind::Position) {
+      ImGui::SameLine();
+      if (ImGui::Button("Split Point")) {
+        if (state.splitSelectedPoint()) mutated = true;
+      }
     }
   } else {
     ImGui::TextUnformatted("No point selected.");

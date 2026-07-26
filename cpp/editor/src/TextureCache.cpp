@@ -58,9 +58,22 @@ const LoadedTexture& TextureCache::get(const std::string& path) {
   const auto existing = cache_.find(path);
   if (existing != cache_.end()) return existing->second;
 
+  // Bundled texture assets are stored as "assets/track/..." (portable, matching editor.js), which
+  // only resolves against the current working directory when the editor happens to be launched
+  // from the repo root. findAssetsDir() already walks up from the CWD to locate the checked-in
+  // assets/ directory for reading manifest.json (see TexturePanel.cpp); reuse that here so a
+  // relative asset path resolves the same way regardless of where track_editor.exe was launched
+  // from (e.g. cpp/build/editor/Release). Browse...-picked textures are stored as absolute paths
+  // and pass through untouched.
+  std::filesystem::path resolved(path);
+  if (resolved.is_relative()) {
+    const std::filesystem::path assetsDir = findAssetsDir();
+    if (!assetsDir.empty()) resolved = assetsDir.parent_path() / resolved;
+  }
+
   LoadedTexture tex;
   int width = 0, height = 0, comp = 0;
-  unsigned char* pixels = stbi_load(path.c_str(), &width, &height, &comp, 4);
+  unsigned char* pixels = stbi_load(pathToUtf8(resolved).c_str(), &width, &height, &comp, 4);
   if (pixels != nullptr) {
     GLuint id = 0;
     glGenTextures(1, &id);

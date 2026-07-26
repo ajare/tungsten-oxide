@@ -35,6 +35,29 @@ bool DrawCurvesPanel(EditorState& state) {
   }
   ImGui::EndDisabled();
 
+  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11), mirrors editor.html's
+  // #delSegmentBtn/#delPrevSegmentBtn: only shown for a selected Position point, and only the
+  // button whose direction actually has a segment (an open path's last/first point has no
+  // outgoing/incoming segment respectively) -- same as JS's `if (outgoingSeg)`/`if (incomingSeg)`
+  // guards. Grouped here with Delete Curve/Join as a curve-topology edit, rather than in the
+  // point's own Properties fields. Labelled with the same red/green the two segments are
+  // highlighted with on the top-down canvas (see TopDownCanvas.cpp's kOutgoingSegmentColor/
+  // kIncomingSegmentColor, matching js/editor.js's drawSegmentHighlight colors).
+  if (state.selection().valid()) {
+    const auto outgoingSeg = state.selectedOutgoingSegment();
+    const auto incomingSeg = state.selectedIncomingSegment();
+    if (outgoingSeg.has_value() || incomingSeg.has_value()) {
+      ImGui::Separator();
+      ImGui::TextUnformatted("Selected point's segments:");
+      if (outgoingSeg.has_value() && ImGui::Button("Delete Outgoing Segment (red)")) {
+        if (state.deleteSelectedSegment(true)) mutated = true;
+      }
+      if (incomingSeg.has_value() && ImGui::Button("Delete Incoming Segment (green)")) {
+        if (state.deleteSelectedSegment(false)) mutated = true;
+      }
+    }
+  }
+
   ImGui::Separator();
   ImGui::TextUnformatted("Connect two open curve endpoints:");
   // Only open paths are connectable -- closed paths have no endpoints (mirrors performJoin's

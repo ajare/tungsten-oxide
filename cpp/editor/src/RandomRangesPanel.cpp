@@ -51,9 +51,11 @@ bool doubleRow(const char* label, double& lo, double& hi, const char* fmt = "%.1
   bool changed = false;
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble((std::string("Min##") + label).c_str(), &lo, 0.0, 0.0, fmt, kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SameLine();
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble((std::string("Max##") + label).c_str(), &hi, 0.0, 0.0, fmt, kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   return changed;
 }
 
@@ -69,8 +71,25 @@ bool intRow(const char* label, int& lo, int& hi) {
 
 }  // namespace
 
-bool DrawRandomRangesPanel(RandomTrackRanges& ranges) {
+bool DrawRandomRangesPanel(EditorState& state, RandomTrackRanges& ranges, int& seed, int& complexity) {
   bool changed = false;
+
+  // Formerly the menu bar's "Random" menu -- moved here so the generator controls sit directly
+  // above the ranges they use.
+  ImGui::TextUnformatted("Single-loop generator; see RandomTrack.hpp for scope.");
+  ImGui::SetNextItemWidth(160);
+  ImGui::InputInt("Seed", &seed);
+  ImGui::SetNextItemWidth(160);
+  ImGui::SliderInt("Complexity", &complexity, 1, 10);
+  bool generated = false;
+  if (ImGui::Button("Generate New Random Track")) {
+    // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history, so the
+    // pre-generation state has to be pushed explicitly to stay undoable.
+    state.history().push(state.track());
+    state.replaceTrack(generateRandomTrack(complexity, static_cast<std::uint32_t>(seed), ranges));
+    generated = true;
+  }
+  ImGui::Separator();
 
   ImGui::TextUnformatted("Length (m)");
   changed |= doubleRow("length", ranges.lengthMin, ranges.lengthMax);
@@ -78,18 +97,22 @@ bool DrawRandomRangesPanel(RandomTrackRanges& ranges) {
   changed |= intRow("turns", ranges.turnsMin, ranges.turnsMax);
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble("Max Banking (deg)", &ranges.maxBanking, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble("Max Hill (m)", &ranges.maxHill, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::TextUnformatted("Width");
   changed |= doubleRow("width", ranges.widthMin, ranges.widthMax);
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble("Max Curvature", &ranges.maxCurvature, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
 
   ImGui::Separator();
   ImGui::TextUnformatted("Mesh Chance (%)");
   changed |= doubleRow("meshChance", ranges.meshChanceMin, ranges.meshChanceMax);
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputDouble("Sequence Chance (%)", &ranges.sequenceChance, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
   ImGui::SetNextItemWidth(90);
   changed |= ImGui::InputInt("Max Mesh Sections", &ranges.maxMeshSections);
   ImGui::TextUnformatted("Mesh Length (m)");
@@ -107,7 +130,7 @@ bool DrawRandomRangesPanel(RandomTrackRanges& ranges) {
     changed = true;
   }
 
-  return changed;
+  return generated;
 }
 
 }  // namespace editor

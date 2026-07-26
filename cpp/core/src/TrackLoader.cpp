@@ -409,6 +409,7 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
         trigger.host.pathId = stringOr(host, "pathId");
         if (trigger.host.pathId.empty() || !usedPathIds.count(trigger.host.pathId)) continue;
         trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+        trigger.host.lateral = numberOr(host, "lateral", 0.0);
       }
       out.triggers.push_back(std::move(trigger));
     }

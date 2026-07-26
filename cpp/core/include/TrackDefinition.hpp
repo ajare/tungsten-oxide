@@ -103,7 +103,7 @@ struct ZoneDefinition {
 struct TriggerHostDefinition {
   std::string kind{"path"};
   std::string pathId, meshId;
-  double t{0.5}, x{0.0}, z{0.0};
+  double t{0.5}, lateral{0.0}, x{0.0}, z{0.0};
 };
 
 struct TriggerDefinition {

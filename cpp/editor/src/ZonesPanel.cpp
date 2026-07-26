@@ -24,15 +24,19 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
     bool changed = false;
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("Length", &length, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
 
     double factor = zone->factor, duration = zone->duration;
     if (zone->effect == "velocityChange") {
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Boost x maxSpeed", &factor, 0.0, 0.0, "%.2f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Duration (s)", &duration, 0.0, 0.0, "%.2f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
     double t = zone->host.t * 100.0, lateral = zone->host.lateral;
@@ -42,16 +46,21 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
       ImGui::Text("Host path: %s", zone->host.pathId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("T (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
     } else {
       ImGui::Text("Host mesh: %s", zone->host.meshId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Rotation (deg)", &rotation, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
     if (changed) {

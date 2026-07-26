@@ -58,6 +58,7 @@
 #include "Track.hpp"
 #include "ElevationView.hpp"
 #include "FileDialog.hpp"
+#include "fontawesome/IconsFontAwesome5.h"
 #include "RandomTrack.hpp"
 #include "StartGrid.hpp"
 #include "TextureCache.hpp"
@@ -65,6 +66,7 @@
 #include "HandlingPanel.hpp"
 #include "RandomRangesPanel.hpp"
 #include "PropertiesPanel.hpp"
+#include "TrackPropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
 #include "CurvesPanel.hpp"
@@ -1468,6 +1470,22 @@ Gap10SmokeCheckResult runGap10SmokeCheck() {
 
 }  // namespace
 
+// Locates cpp/editor/resources/<filename> by walking up from the current working directory --
+// mirrors TextureCache.hpp's findAssetsDir() for the same reason: the editor's build output
+// directory (e.g. cpp/build/editor/Release) is nested several levels under the repo root, so a
+// path relative to the CWD only resolves when the editor happens to be launched from there.
+std::filesystem::path findEditorResourceFile(const std::string& filename) {
+  std::filesystem::path dir = std::filesystem::current_path();
+  for (int depth = 0; depth < 8; ++depth) {
+    std::error_code ec;
+    const std::filesystem::path candidate = dir / "cpp" / "editor" / "resources" / filename;
+    if (std::filesystem::exists(candidate, ec)) return candidate;
+    if (!dir.has_parent_path() || dir.parent_path() == dir) break;
+    dir = dir.parent_path();
+  }
+  return {};
+}
+
 int main(int, char**) {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -1524,6 +1542,28 @@ int main(int, char**) {
 
   ImGui::StyleColorsDark();
 
+  // FontAwesome icons (Undo/Redo on the toolbar, more later): merged into the default font atlas
+  // rather than loaded standalone, so ICON_FA_* glyphs can sit inline in ordinary button/text
+  // labels at the default font's baseline/line height (the standard ImFontConfig::MergeMode
+  // icon-font recipe -- see cpp/editor/include/fontawesome/README-VENDORED.md). Missing the font
+  // file (e.g. a stripped-down checkout) just falls back to the default font with no icons, rather
+  // than failing to start.
+  io.Fonts->AddFontDefault();
+  const std::filesystem::path iconFontPath = findEditorResourceFile(FONT_ICON_FILE_NAME_FAS);
+  if (!iconFontPath.empty()) {
+    constexpr float kBaseFontSize = 13.0f;
+    constexpr float kIconFontSize = kBaseFontSize * 2.0f / 3.0f;  // FontAwesome's own sizing recipe
+    static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+    ImFontConfig iconConfig;
+    iconConfig.MergeMode = true;
+    iconConfig.PixelSnapH = true;
+    iconConfig.GlyphMinAdvanceX = kIconFontSize;
+    io.Fonts->AddFontFromFileTTF(editor::pathToUtf8(iconFontPath).c_str(), kIconFontSize, &iconConfig, iconRanges);
+  }
+  // No manual io.Fonts->Build() here: this vendored ImGui's OpenGL3/SDL2 backends use the newer
+  // texture-management path (ImGuiBackendFlags_RendererHasTextures, set by ImGui_ImplOpenGL3_Init
+  // below), which builds/uploads the atlas lazily on first use -- calling Build() before that flag
+  // is set logs an imgui-error every frame.
   ImGui_ImplSDL2_InitForOpenGL(window, glContext);
   ImGui_ImplOpenGL3_Init(glslVersion);
 
@@ -1774,7 +1814,16 @@ int main(int, char**) {
       if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
       if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
       if (ImGui::IsKeyPressed(ImGuiKey_G)) topDownView.setShowGrid(!topDownView.showGrid());
+      // Deselect (new functionality, no JS equivalent): clears whichever of point/mesh-region/
+      // zone/trigger is currently selected -- mirrored by the Edit menu's "Deselect" item below.
+      if (ImGui::IsKeyPressed(ImGuiKey_D)) editorState.deselectAll();
       const bool ctrl = io.KeyCtrl;
+      // Home / zoom-to-selection (new functionality, no JS equivalent): plain 'z'/'x', not
+      // Ctrl-modified, so Ctrl+Z for Undo just below still works. Mirrored by the View menu
+      // entries and (for zoom-to-selection) the top-down canvas's own "Object" button -- all three
+      // go through the same TopDownView::resetView()/editor::FocusOnSelection() calls.
+      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) topDownView.resetView();
+      if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_X)) editor::FocusOnSelection(topDownView, editorState, bakedTrack);
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) && editorState.undo()) rebake();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) && editorState.redo()) rebake();
     }
@@ -1923,9 +1972,17 @@ int main(int, char**) {
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, editorState.history().canRedo())) {
           if (editorState.redo()) rebake();
         }
+        ImGui::Separator();
+        // Deselect (new functionality, no JS equivalent): mirrors the 'D' hotkey above.
+        if (ImGui::MenuItem("Deselect", "D")) editorState.deselectAll();
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("View")) {
+        // Home / zoom-to-selection (new functionality, no JS equivalent): mirror the 'z'/'x'
+        // hotkeys above; zoom-to-selection is also on the top-down canvas's own "Object" button.
+        if (ImGui::MenuItem("Home", "Z")) topDownView.resetView();
+        if (ImGui::MenuItem("Zoom to Selection", "X")) editor::FocusOnSelection(topDownView, editorState, bakedTrack);
+        ImGui::Separator();
         // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9),
         // mirrors editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid
         // disables (but doesn't clear) the size and snap controls -- snapWorldXZ() itself
@@ -1980,61 +2037,26 @@ int main(int, char**) {
         if (ImGui::MenuItem("Show Physics Points", nullptr, &showPhysicsPoints)) topDownView.setShowPhysicsPoints(showPhysicsPoints);
         ImGui::EndMenu();
       }
-      if (ImGui::BeginMenu("Random")) {
-        ImGui::TextUnformatted("Single-loop generator; see RandomTrack.hpp for scope.");
-        ImGui::SetNextItemWidth(160);
-        ImGui::InputInt("Seed", &randomSeed);
-        ImGui::SetNextItemWidth(160);
-        ImGui::SliderInt("Complexity", &randomComplexity, 1, 10);
-        if (ImGui::MenuItem("Generate New Random Track")) {
-          // Mirrors applyRandomTrack()'s pushUndo(): replaceTrack() alone doesn't touch history,
-          // so the pre-generation state has to be pushed explicitly to stay undoable.
-          editorState.history().push(editorState.track());
-          editorState.replaceTrack(editor::generateRandomTrack(randomComplexity, static_cast<std::uint32_t>(randomSeed), randomRanges));
-          rebake();
-        }
-        ImGui::EndMenu();
-      }
       ImGui::EndMainMenuBar();
     }
 
     // Toolbar: a fixed strip pinned directly under the menu bar (not part of the dockspace, not
     // movable/resizable) for the handful of controls used constantly regardless of which panel
-    // tab is focused -- track identity, direction, mode, and quick undo/redo. Everything else
-    // that used to live in the old single "track_editor — status" mega-window moved into the
-    // menu bar above or the Diagnostics panel below.
-    const float menuBarHeight = ImGui::GetFrameHeight();
+    // tab is focused -- mode and quick undo/redo. Everything else that used to live in the old
+    // single "track_editor — status" mega-window moved into the menu bar above, the Panels window's
+    // sections (Track name/direction now in "Track Properties", first in the list), or the
+    // Diagnostics panel.
     ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + menuBarHeight));
+    // mainViewport->WorkPos.y already excludes the main menu bar -- BeginMainMenuBar()/
+    // EndMainMenuBar() shrink the platform viewport's work area for it automatically, so adding a
+    // second menu-bar-height offset here would leave a visible gap between the two strips.
+    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y));
     ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
     ImGui::Begin("##Toolbar", nullptr,
                  ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                      ImGuiWindowFlags_NoSavedSettings);
-    // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors editor.html's #nameInput. The buffer
-    // only resyncs from editorState.track().name when that value has actually changed since last
-    // frame (undo/redo/New/Import all go through setTrackName or replaceTrack, not live typing)
-    // -- otherwise a resync every frame would stomp in-progress keystrokes before they're
-    // committed.
-    {
-      static char nameBuf[256] = "";
-      static std::string lastSyncedName;
-      if (lastSyncedName != editorState.track().name) {
-        std::snprintf(nameBuf, sizeof(nameBuf), "%s", editorState.track().name.c_str());
-        lastSyncedName = editorState.track().name;
-      }
-      ImGui::SetNextItemWidth(220);
-      ImGui::InputText("Track Name", nameBuf, sizeof(nameBuf));
-      if (ImGui::IsItemDeactivatedAfterEdit() && editorState.setTrackName(nameBuf)) lastSyncedName = editorState.track().name;
-    }
-    // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors editor.html's #dirBtn.
-    ImGui::SameLine();
-    if (ImGui::Button(editorState.track().start.reverse ? "Direction: Reversed" : "Direction: Forward")) {
-      editorState.toggleStartReverse();
-      rebake();
-    }
-    ImGui::SameLine();
     ImGui::TextUnformatted("Mode (E/C/R):");
     ImGui::SameLine();
     int modeIndex = static_cast<int>(editorState.mode());
@@ -2043,30 +2065,35 @@ int main(int, char**) {
     if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
     ImGui::SameLine();
     ImGui::BeginDisabled(!editorState.history().canUndo());
-    if (ImGui::Button("Undo")) {
+    if (ImGui::Button(ICON_FA_UNDO " Undo")) {
       if (editorState.undo()) rebake();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!editorState.history().canRedo());
-    if (ImGui::Button("Redo")) {
+    if (ImGui::Button(ICON_FA_REDO " Redo")) {
       if (editorState.redo()) rebake();
     }
     ImGui::EndDisabled();
-    // Mode-specific hint, and any pending file/export status -- consolidated into one status
-    // line rather than scattered SameLine()s after whichever button just ran, since those
-    // buttons now live in the File menu, not here.
-    switch (editorState.mode()) {
-      case editor::EditMode::Edit:
-        ImGui::TextUnformatted("Edit mode: click to select a point or mesh region. Drag to move; shift+drag a mesh to rotate. Delete/Backspace removes the selection.");
-        break;
-      case editor::EditMode::Create:
-        ImGui::TextUnformatted("Create mode: click to add points; click the first point to close, the last to finish open. Right-click cancels the draft.");
-        break;
-      case editor::EditMode::Rails:
-        ImGui::TextUnformatted("Rails mode: click near a mesh edge to toggle it as a rail (orange = flagged). A miss pans, same as right-drag elsewhere.");
-        break;
-    }
+    ImGui::SameLine();
+    // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), same toggles as the View > Point Filters
+    // submenu below -- both read/write the same TopDownView state, so either one moves the other.
+    // Only Position currently has an observable effect -- roll/width/crossSection points have no
+    // on-canvas presence yet at all (gap 1), so those three checkboxes exist for UI parity but are
+    // otherwise inert until that on-canvas rendering lands.
+    ImGui::TextUnformatted("Show:");
+    ImGui::SameLine();
+    bool showPositionToolbar = topDownView.showPositionPoints();
+    if (ImGui::Checkbox("Position##toolbar", &showPositionToolbar)) topDownView.setShowPositionPoints(showPositionToolbar);
+    ImGui::SameLine();
+    bool showRollToolbar = topDownView.showRollPoints();
+    if (ImGui::Checkbox("Roll##toolbar", &showRollToolbar)) topDownView.setShowRollPoints(showRollToolbar);
+    ImGui::SameLine();
+    bool showWidthToolbar = topDownView.showWidthPoints();
+    if (ImGui::Checkbox("Width##toolbar", &showWidthToolbar)) topDownView.setShowWidthPoints(showWidthToolbar);
+    ImGui::SameLine();
+    bool showCrossSectionToolbar = topDownView.showCrossSectionPoints();
+    if (ImGui::Checkbox("Cross-Section##toolbar", &showCrossSectionToolbar)) topDownView.setShowCrossSectionPoints(showCrossSectionToolbar);
     if (!fileIoStatus.empty()) ImGui::TextUnformatted(fileIoStatus.c_str());
     if (!usdExportStatus.empty()) ImGui::TextUnformatted(usdExportStatus.c_str());
     if (!mppModelExportStatus.empty()) ImGui::TextUnformatted(mppModelExportStatus.c_str());
@@ -2079,8 +2106,8 @@ int main(int, char**) {
     // profile bottom-right) is built once via DockBuilder on the first frame only, then never
     // touched again -- io.IniFilename is null (see CreateContext above), so there's no saved
     // layout to conflict with, and every future launch starts from this exact same arrangement.
-    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + menuBarHeight + toolbarHeight));
-    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - menuBarHeight - toolbarHeight));
+    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + toolbarHeight));
+    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - toolbarHeight));
     ImGui::SetNextWindowViewport(mainViewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -2125,6 +2152,11 @@ int main(int, char**) {
     // (e.g. both HandlingPanel and RandomRangesPanel have a "Reset to Default" button) from
     // colliding on ImGui ID.
     ImGui::Begin("Panels");
+    if (ImGui::CollapsingHeader("Track Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::PushID("TrackProperties");
+      if (editor::DrawTrackPropertiesPanel(editorState)) rebake();
+      ImGui::PopID();
+    }
     if (ImGui::CollapsingHeader("Point Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::PushID("PointProperties");
       if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
@@ -2137,7 +2169,7 @@ int main(int, char**) {
     }
     if (ImGui::CollapsingHeader("Triggers")) {
       ImGui::PushID("Triggers");
-      if (editor::DrawTriggersPanel(editorState, currentPathIndex)) rebake();
+      if (editor::DrawTriggersPanel(editorState, currentPathIndex, bakedTrack)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Curves")) {
@@ -2155,9 +2187,9 @@ int main(int, char**) {
       if (editor::DrawHandlingPanel(editorState)) rebake();
       ImGui::PopID();
     }
-    if (ImGui::CollapsingHeader("Random Ranges")) {
-      ImGui::PushID("RandomRanges");
-      editor::DrawRandomRangesPanel(randomRanges);
+    if (ImGui::CollapsingHeader("Random Generation")) {
+      ImGui::PushID("RandomGeneration");
+      if (editor::DrawRandomRangesPanel(editorState, randomRanges, randomSeed, randomComplexity)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Diagnostics")) {

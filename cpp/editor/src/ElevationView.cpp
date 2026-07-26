@@ -54,21 +54,30 @@ std::vector<std::pair<int, double>> collectPositionPoints(const Path& path) {
   return points;
 }
 
-Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool closed, float w, float h) {
-  Layout layout;
-  layout.w = w;
-  layout.h = h;
-  layout.closed = closed;
-  layout.positionCount = static_cast<int>(points.size());
+struct YRange {
+  double minY, maxY;
+};
+
+// Raw (unpadded) extent of the profile's points, degenerating to [-1, 1] when there's nothing to
+// show. Split out from computeLayout() so a drag gesture can combine this frame's raw extent with
+// the extent frozen at drag-start (see DrawElevationView) without re-deriving the flat-profile
+// padding twice.
+YRange rawYRange(const std::vector<std::pair<int, double>>& points) {
   double minY = 1e300, maxY = -1e300;
   for (const auto& [index, y] : points) {
     minY = std::min(minY, y);
     maxY = std::max(maxY, y);
   }
-  if (points.empty() || minY > maxY) {
-    minY = -1.0;
-    maxY = 1.0;
-  }
+  if (points.empty() || minY > maxY) return {-1.0, 1.0};
+  return {minY, maxY};
+}
+
+Layout layoutFromRange(double minY, double maxY, bool closed, int positionCount, float w, float h) {
+  Layout layout;
+  layout.w = w;
+  layout.h = h;
+  layout.closed = closed;
+  layout.positionCount = positionCount;
   if (maxY - minY < 1.0) {
     // Flat or near-flat profiles still need visible headroom, matching editor.js padding a
     // degenerate [minY, maxY] out to a sane span rather than dividing by ~0.
@@ -80,6 +89,11 @@ Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool clo
   layout.maxY = maxY;
   layout.yScale = static_cast<float>((h - 2.0f * kPadY) / (maxY - minY));
   return layout;
+}
+
+Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool closed, float w, float h) {
+  const YRange range = rawYRange(points);
+  return layoutFromRange(range.minY, range.maxY, closed, static_cast<int>(points.size()), w, h);
 }
 
 void drawAxis(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& layout) {
@@ -143,7 +157,18 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
 
   const Path& path = state.track().paths[pathIndex];
   const std::vector<std::pair<int, double>> points = collectPositionPoints(path);
-  const Layout layout = computeLayout(points, path.closed, canvasSize.x, canvasSize.y);
+  const Layout liveLayout = computeLayout(points, path.closed, canvasSize.x, canvasSize.y);
+  // Mirrors TopDownView::freezeBounds: the dragged point's own y-value feeds back into the range
+  // (and therefore yScale) every frame, so recomputing the layout from scratch each frame runs
+  // away -- growing the y-span SHRINKS yScale, which INCREASES world-units-per-pixel, so the
+  // further you drag, the faster it goes. An expand-only range (grow to keep the dragged point
+  // framed, never shrink) was tried and rejected: it still grows the span as the point moves
+  // further out, so it reproduces the exact same runaway. Freezing the whole layout at drag-start
+  // is the only fix that keeps sensitivity constant for the gesture; the tradeoff is a point
+  // dragged far enough draws outside the visible canvas until release, at which point the layout
+  // is recomputed fresh (see below) and the view snaps to fit it.
+  static std::optional<Layout> frozenLayout;
+  const Layout& layout = frozenLayout.has_value() ? *frozenLayout : liveLayout;
 
   ImGui::InvisibleButton("elevationViewInput", canvasSize, ImGuiButtonFlags_MouseButtonLeft);
   const bool hovered = ImGui::IsItemHovered();
@@ -174,11 +199,23 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   // mouse happens to be over THIS view. Mirrors TopDownCanvas.cpp's same fix for the reverse
   // direction (elevation drags spuriously moving X/Z in the top-down view).
   if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && selectionOnThisPath) {
-    if (!state.dragging()) state.beginDrag();
+    if (!state.dragging()) {
+      state.beginDrag();
+      frozenLayout = liveLayout;
+    }
     state.dragSelectedElevationTo(worldYAt(layout, mouseLocal.y));
     mutated = true;
-  } else if (state.dragging() && selectionOnThisPath && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-    state.endDrag();
+  } else if (frozenLayout.has_value() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+    // Gated on frozenLayout (this view's OWN gesture state), not state.dragging(): dragging_ is
+    // one flag shared by every drag kind in EditorState, and TopDownCanvas.cpp -- drawn earlier
+    // this frame -- has its own generic "state.dragging() && released" handler that unconditionally
+    // calls state.endDrag() on mouse-up regardless of which view/point started the drag. That runs
+    // first and clears dragging_ before this check ever sees it, so gating the freeze release on
+    // dragging() being *still* true left it stuck forever after the first drag. state.endDrag() is
+    // idempotent (just clears two flags), so calling it again here even if TopDownCanvas already
+    // did is harmless.
+    if (state.dragging()) state.endDrag();
+    frozenLayout.reset();
   }
 
   drawAxis(drawList, canvasOrigin, layout);

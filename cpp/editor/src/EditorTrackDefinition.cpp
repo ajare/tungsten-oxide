@@ -301,6 +301,7 @@ TrackDefinition normalize(const json& data) {
       trigger.width = std::max(0.5, numberOr(raw, "width", 40.0));
       trigger.height = std::max(0.5, numberOr(raw, "height", 12.0));
       trigger.rotation = numberOr(raw, "rotation", 0.0);
+      trigger.autoWidth = raw.contains("autoWidth") && jsonTruthy(raw.at("autoWidth"));
       if (trigger.type == "checkpoint") trigger.role = stringOr(raw, "role") == "finish" ? "finish" : "intermediate";
       if (stringOr(host, "kind") == "mesh") {
         trigger.host.kind = "mesh";
@@ -311,6 +312,7 @@ TrackDefinition normalize(const json& data) {
         trigger.host.kind = "path";
         trigger.host.pathId = stringOr(host, "pathId");
         trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+        trigger.host.lateral = numberOr(host, "lateral", 0.0);
       }
       out.triggers.push_back(std::move(trigger));
     }
@@ -428,14 +430,17 @@ json zoneToJson(const Zone& zone) {
 }
 
 json triggerToJson(const Trigger& trigger) {
-  json host = trigger.host.kind == "mesh" ? json{{"kind", "mesh"}, {"meshId", trigger.host.meshId}, {"x", trigger.host.x}, {"z", trigger.host.z}}
-                                          : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}};
+  json host =
+      trigger.host.kind == "mesh"
+          ? json{{"kind", "mesh"}, {"meshId", trigger.host.meshId}, {"x", trigger.host.x}, {"z", trigger.host.z}}
+          : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}, {"lateral", trigger.host.lateral}};
   json out = {{"id", trigger.id},
               {"type", trigger.type},
               {"direction", trigger.direction},
               {"width", trigger.width},
               {"height", trigger.height},
               {"rotation", trigger.rotation},
+              {"autoWidth", trigger.autoWidth},
               {"host", std::move(host)}};
   if (trigger.type == "checkpoint") out["role"] = trigger.role;
   return out;
