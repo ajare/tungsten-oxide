@@ -17,6 +17,8 @@ npm-debug.log*
 cpp/build/
 cpp/core/build/
 cpp/willpower/build/
+# Per-library Visual Studio build trees (including .vs/IPCH caches).
+cpp/willpower/**/build/
 
 # ImGui writes its window-layout settings file to the process's working
 # directory at runtime (track_editor doesn't override io.IniFilename yet).
