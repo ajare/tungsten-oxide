@@ -42,6 +42,15 @@ constexpr float kSegmentHighlightThickness = 4.0f;
 // above without a fourth distinct fill color to track.
 const ImU32 kWeldTargetColor = IM_COL32(49, 214, 107, 255);
 constexpr float kWeldTargetRingThickness = 2.5f;
+// Shift-drag rubber band (EDITOR_PARITY_GAPS.md gap 6, new interaction alongside the plain
+// drag-to-weld above): a live line from the dragged endpoint to the cursor, matching
+// js/editor.js's joinDrag colors exactly -- yellow while free, the SAME green as kWeldTargetColor
+// once snapped onto a valid drop target (js/editor.js:1215, '#ffd23c'/'#31d66b'). Drawn solid
+// rather than JS's dashed [6,4]: this file already accepts that simplification elsewhere (e.g.
+// drawCreateDraft's solid line for JS's own dashed create-mode draft).
+const ImU32 kJoinDragFreeColor = IM_COL32(255, 210, 60, 255);
+constexpr float kJoinDragLineThickness = 2.0f;
+constexpr float kJoinDragMinPx = 12.0f;  // matches editor.js's JOIN_DRAG_MIN_PX
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
 // Selected points get a crisp white "handle" border immediately at the fill edge, on top of the
@@ -915,6 +924,17 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
   return std::atan2(worldZ - originZ, worldX - originX) * 180.0 / std::numbers::pi;
 }
 
+// Live state for the shift-drag rubber-band gesture (EDITOR_PARITY_GAPS.md gap 6), mirroring
+// js/editor.js's joinDragFrom/joinDragTarget/joinDragScreen. `from` has a value for the entire
+// gesture once armed; `target` is whichever OTHER open endpoint the cursor currently rests on, if
+// any; `currentLocal` is the cursor's canvas-local position, used to draw the free end of the line
+// when not snapped to a target.
+struct JoinDragPreview {
+  std::optional<EditorState::OpenEndpointRef> from;
+  std::optional<EditorState::OpenEndpointRef> target;
+  ImVec2 currentLocal{0.0f, 0.0f};
+};
+
 // Left click/drag: hit-test + select + move a position point or mesh placement (Edit mode only --
 // mirrors editor.js's dragging === 'top'/'meshTop'/'meshRotate'). Shift+drag on a mesh rotates it
 // about its own placement origin instead of moving it. Returns true if the track was mutated this
@@ -923,9 +943,10 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
 // around it.
 bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
                          const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered, bool itemActive,
-                         std::optional<EditorState::OpenEndpointRef>& outWeldTarget) {
+                         std::optional<EditorState::OpenEndpointRef>& outWeldTarget, JoinDragPreview& outJoinDrag) {
   bool mutated = false;
   outWeldTarget = std::nullopt;
+  outJoinDrag = JoinDragPreview{};
   // Decided once per gesture, at the mousedown that starts it -- mirrors editor.js's mousedown
   // handler picking a `dragging` mode ('top'/'meshTop'/'panTop'/...) once and sticking with it,
   // rather than re-deriving "what to drag" from whatever happens to be selected on every
@@ -942,7 +963,34 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // ALREADY resting on when this drag started, if any -- excluded from weldTarget candidates for
   // the rest of the gesture so merely being selected while coincident never re-triggers a weld.
   static std::optional<EditorState::OpenEndpointRef> weldExcludeTarget;
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+  // Shift-drag rubber-band gesture (EDITOR_PARITY_GAPS.md gap 6): a SEPARATE gesture from the
+  // plain drag-to-weld above (mirrors js/editor.js's dedicated `dragging === 'joinDrag'` mode,
+  // distinct from `dragging === 'top'`) -- it never relocates the dragged point itself, only
+  // previews a connection or, on release into empty space, appends a new point. `joinDragFrom`
+  // persists across frames like weldTarget above (the release check runs on a frame where
+  // draggingGesture may already be false); `joinDragStartLocal` is the mousedown position, used
+  // only to measure the release-time drag distance against kJoinDragMinPx.
+  static std::optional<EditorState::OpenEndpointRef> joinDragFrom;
+  static std::optional<EditorState::OpenEndpointRef> joinDragTarget;
+  static ImVec2 joinDragStartLocal;
+  const std::optional<EditorState::OpenEndpointRef> shiftClickEndpointHit =
+      (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::GetIO().KeyShift)
+          ? [&] {
+              const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+              // excludePathIndex -1 finds the globally nearest open endpoint (nothing legitimately
+              // has that index, so nothing is excluded) -- there's no "self" yet since no gesture
+              // has started.
+              return state.hitTestOpenEndpoint(world.x, world.z, pickRadiusWorld, -1, false);
+            }()
+          : std::nullopt;
+  if (shiftClickEndpointHit.has_value()) {
+    // Shift-clicking an open endpoint starts the rubber-band gesture instead of the normal
+    // select-and-drag handling below -- mirrors editor.js's mousedown checking `e.shiftKey` and an
+    // endpoint hit BEFORE falling through to the plain-click branch (js/editor.js:3281-3298).
+    joinDragFrom = shiftClickEndpointHit;
+    joinDragTarget.reset();
+    joinDragStartLocal = mouseLocal;
+  } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1) win over a position-point
     // hit, mirroring editor.js's mousedown priority (crossSection, then width, then roll, all
     // before nodeAtTop's position check -- js/editor.js:3270-3277).
@@ -1019,7 +1067,53 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // windows draw, spuriously overwriting the selected point's X/Z with whatever world position the
   // mouse happens to be over in THIS view. Mirrors the itemActive gating handleRailsModeInput
   // already uses for right-click panning, just applied to the left-click point/mesh drag path too.
-  const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+  // Excludes an active join-drag gesture (see below): that gesture never moves the dragged point,
+  // pans, or drags a mesh/width/roll/cross-section/trigger handle, so none of the draggingGesture-
+  // keyed branches below should fire while it owns the mouse -- otherwise a stale selection from
+  // before the shift-click (e.g. a still-selected position point) would ALSO start moving under
+  // the same drag.
+  const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && !joinDragFrom.has_value();
+
+  // Join-drag update + release (EDITOR_PARITY_GAPS.md gap 6): runs independently of
+  // draggingGesture's 2px threshold (mirrors editor.js's own joinDrag mousemove having no
+  // threshold either -- only the release-into-empty-space branch below is distance-gated).
+  if (joinDragFrom.has_value()) {
+    if (itemActive && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+      // Excludes only the dragged endpoint itself, not that path's OTHER endpoint -- dragging one
+      // end onto the other end of the SAME open path is exactly how a curve closes itself,
+      // mirroring hitTestOpenEndpoint's own doc comment and the plain drag-to-weld above.
+      joinDragTarget = state.hitTestOpenEndpoint(world.x, world.z, pickRadiusWorld, joinDragFrom->pathIndex, joinDragFrom->atEnd);
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      if (joinDragTarget.has_value()) {
+        // Over a valid target: connect, mirroring performJoin() via joinSel = [from, target]
+        // (js/editor.js:3536-3538). joinPathEndpoints itself makes the two endpoints coincide (by
+        // copying the target point onto the source's slot), so there's no separate "snap" step
+        // needed here.
+        mutated = state.joinPathEndpoints(joinDragFrom->pathIndex, joinDragFrom->atEnd, joinDragTarget->pathIndex, joinDragTarget->atEnd) || mutated;
+      } else {
+        // Released into empty space: extend the curve instead, but only past a minimum drag
+        // distance -- mirrors extendCurveFromDrag's own JOIN_DRAG_MIN_PX guard (js/editor.js:3539-
+        // 3543), which exists so a plain shift-click (no real drag) doesn't spuriously append a
+        // point. Snapped to the grid like JS's own `snapWorldXZ(screenToWorld(...))` call there.
+        const float dx = mouseLocal.x - joinDragStartLocal.x, dy = mouseLocal.y - joinDragStartLocal.y;
+        if (std::sqrt(dx * dx + dy * dy) >= kJoinDragMinPx) {
+          const WorldPoint2D dropWorld = view.snapWorldXZ(view.screenToWorld(mouseLocal.x, mouseLocal.y));
+          mutated = state.extendOpenPathFromEndpoint(joinDragFrom->pathIndex, joinDragFrom->atEnd, dropWorld.x, dropWorld.z).has_value() || mutated;
+        }
+      }
+      joinDragFrom.reset();
+      joinDragTarget.reset();
+    } else {
+      // Not released this frame -- report the live preview for drawJoinDragLine (below panDragActive
+      // won't touch it since draggingGesture is already false for the whole rest of this gesture).
+      outJoinDrag.from = joinDragFrom;
+      outJoinDrag.target = joinDragTarget;
+      outJoinDrag.currentLocal = mouseLocal;
+    }
+  }
+
   // selectionIsPosition() (not just selection().valid()) guards this: a roll/width/cross-section
   // handle counts as a valid selection too (EDITOR_PARITY_FIXES.md gap 1's handles are click-to-
   // select only), but dragSelectedTo() writes to Vec3 pos.x/z, which those point kinds don't use
@@ -1199,6 +1293,32 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     view.releaseBoundsFreeze();
   }
   return mutated;
+}
+
+// Shift-drag rubber band (EDITOR_PARITY_GAPS.md gap 6): a line from the dragged endpoint's world
+// position to wherever the cursor currently is -- yellow while free, green (reusing
+// kWeldTargetColor) and snapped to the target endpoint's own position once hovering a valid drop
+// point -- mirrors js/editor.js:1207-1220. No-op if the gesture isn't active.
+void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track* baked,
+                      const JoinDragPreview& joinDrag) {
+  if (!joinDrag.from.has_value() || baked == nullptr) return;
+  if (joinDrag.from->pathIndex < 0 || joinDrag.from->pathIndex >= static_cast<int>(baked->paths.size())) return;
+  const auto& fromAnchors = baked->paths[joinDrag.from->pathIndex].anchors;
+  if (fromAnchors.empty()) return;
+  const tox::Vec3& fromPos = joinDrag.from->atEnd ? fromAnchors.back() : fromAnchors.front();
+  const ImVec2 from = toAbsolute(canvasOrigin, view.worldToScreen(fromPos.x, fromPos.z));
+
+  ImVec2 to = toAbsolute(canvasOrigin, joinDrag.currentLocal);
+  ImU32 color = kJoinDragFreeColor;
+  if (joinDrag.target.has_value() && joinDrag.target->pathIndex >= 0 && joinDrag.target->pathIndex < static_cast<int>(baked->paths.size())) {
+    const auto& targetAnchors = baked->paths[joinDrag.target->pathIndex].anchors;
+    if (!targetAnchors.empty()) {
+      const tox::Vec3& targetPos = joinDrag.target->atEnd ? targetAnchors.back() : targetAnchors.front();
+      to = toAbsolute(canvasOrigin, view.worldToScreen(targetPos.x, targetPos.z));
+      color = kWeldTargetColor;
+    }
+  }
+  drawList->AddLine(from, to, color, kJoinDragLineThickness);
 }
 
 // Rails mode is modal: a left click either toggles the nearest edge within pick tolerance, or (no
@@ -1426,9 +1546,10 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   static WorldPoint2D contextMenuWorld;  // set right before OpenPopup, read once BeginPopup opens it
   const double pickRadiusWorld = kPickRadiusPx / view.scale();
   std::optional<EditorState::OpenEndpointRef> weldTarget;
+  JoinDragPreview joinDrag;
   switch (state.mode()) {
     case EditMode::Edit: {
-      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered, itemActive, weldTarget);
+      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered, itemActive, weldTarget, joinDrag);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid())
@@ -1614,6 +1735,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor);
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor);
     drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget);
+    drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag);
   }
   // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1), drawn after position points
   // -- mirrors editor.js's drawTop() drawing them in that same order (position at

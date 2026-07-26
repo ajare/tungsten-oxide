@@ -527,6 +527,22 @@ public:
     return best;
   }
 
+  // Shift-drag-into-empty-space release action (EDITOR_PARITY_GAPS.md gap 6): extends an open
+  // path by appending (atEnd=true) or prepending (atEnd=false) a new position point at
+  // (worldX, worldZ), inheriting the dragged endpoint's own current Y -- there's no on-curve
+  // sample to inherit from beyond the curve's own end (mirrors extendCurveFromDrag,
+  // js/editor.js:2862-2880). Delegates to insertPositionOnSegment, which already pushes undo and
+  // selects the new point.
+  std::optional<int> extendOpenPathFromEndpoint(int pathIndex, bool atEnd, double worldX, double worldZ) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
+    const Path& path = track_.paths[pathIndex];
+    if (path.closed) return std::nullopt;
+    const TrackPoint* fromPoint = atEnd ? lastPosition(path) : firstPosition(path);
+    if (fromPoint == nullptr) return std::nullopt;
+    const int insertAt = atEnd ? positionCount(path) : 0;
+    return insertPositionOnSegment(pathIndex, insertAt, worldX, fromPoint->pos.y, worldZ);
+  }
+
   // ---- Disjoint / reconnect (EDITOR_PARITY_FIXES.md gap 5) ----
   //
   // "Disjoint" splits a shared/smooth control point into a hard, unsmoothed seam -- mirrors

@@ -242,7 +242,7 @@ height**. C++'s elevation view previously only selected and dragged existing poi
 
 ---
 
-## 6. Shift-drag endpoint: rubber band → connect, or extend the curve
+## 6. Shift-drag endpoint: rubber band → connect, or extend the curve — ✅ Implemented
 
 JS shift-drags an open curve's endpoint with a live rubber-band line — yellow `#ffd23c` while
 free, green `#31d66b` and snapped to the node when over a valid drop target
@@ -252,13 +252,44 @@ free, green `#31d66b` and snapped to the node when over a valid drop target
 - in empty space, past `JOIN_DRAG_MIN_PX` → **`extendCurveFromDrag(from, screenPos)`** (`:2862-2880`),
   which appends a brand-new point extending that curve, inheriting the dragged endpoint's elevation.
 
-C++ has plain drag-to-weld (drag a selected endpoint onto another endpoint, `TopDownCanvas.cpp`
-`weldTarget` machinery) — no shift modifier, no rubber band, and **no extend-into-empty-space**.
+C++ already had plain drag-to-weld (drag a selected endpoint onto another endpoint, `TopDownCanvas.cpp`
+`weldTarget` machinery) — no shift modifier, no rubber band, and no extend-into-empty-space. Both
+gestures now coexist: plain drag still relocates the point continuously; shift-drag never moves it,
+only previews, and mutates once on release.
 
-Extend-on-release is the valuable half: it is the only way in JS to grow an existing open curve
-without re-entering Create mode. `EditorState::insertPositionOnSegment` plus the existing
-`hitTestOpenEndpoint`/`weldTarget` state gets most of the way there; the new part is the
-release-in-empty-space branch and the minimum-drag-distance guard.
+### Implementation (done)
+
+`EditorState.hpp` gained `extendOpenPathFromEndpoint(pathIndex, atEnd, worldX, worldZ)` —
+appends/prepends a new position point at the drop location, inheriting the endpoint's own current Y
+(mirrors `extendCurveFromDrag`), delegating to the existing `insertPositionOnSegment`.
+
+`TopDownCanvas.cpp`:
+
+- New `JoinDragPreview{from, target, currentLocal}` struct threads the live gesture state from
+  `handleEditModeInput` out to the drawing code, alongside the existing `outWeldTarget` out-param.
+- Shift-clicking an open endpoint (`state.hitTestOpenEndpoint(..., -1, false)` — excludePathIndex
+  `-1` matches nothing, so it finds the globally nearest one) starts the gesture instead of falling
+  into the existing plain-click/select-and-drag branch, mirroring JS's mousedown checking
+  `e.shiftKey` and an endpoint hit first.
+- The existing `draggingGesture` (which gates every OTHER drag branch: position/width/roll/
+  cross-section/trigger/mesh/pan) now also requires `!joinDragFrom.has_value()`, so none of those
+  branches can fire while this gesture owns the mouse — otherwise a stale pre-shift-click selection
+  could start moving under the same drag.
+- While active: `joinDragTarget` is re-hit-tested every frame via `hitTestOpenEndpoint` (excluding
+  only the dragged endpoint itself, so closing a curve onto its own other end still works). On
+  release: a target calls the existing `joinPathEndpoints` (which already makes the endpoints
+  coincide by copying the target point onto the source's slot, so no separate "snap" step is
+  needed); no target, past `kJoinDragMinPx` (12px, matching `JOIN_DRAG_MIN_PX`), calls
+  `extendOpenPathFromEndpoint` with a grid-snapped drop position.
+- New `drawJoinDragLine(...)` draws the rubber band from the endpoint's baked anchor position to
+  the cursor (or the target's anchor position when snapped), reusing `kWeldTargetColor` for the
+  "valid target" green (same JS hex value) and a new `kJoinDragFreeColor` for the free/yellow state.
+  Drawn solid rather than JS's dashed `[6,4]`, matching this file's existing solid-line
+  simplification for `drawCreateDraft`'s own dashed-in-JS create-mode draft.
+
+Scope note: mirrors JS's endpoint-to-endpoint connect only, not JS's third case (dropping onto an
+INTERIOR point of a different path, which splits the target path there) — the same scope reduction
+`joinPathEndpoints` and the Curves panel's Join feature already document and rely on.
 
 ---
 
