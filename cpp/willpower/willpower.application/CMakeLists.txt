@@ -117,7 +117,7 @@ endif()
 # massivepolypusher. Override the cache entry when it lives elsewhere.
 set(WILLPOWER_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../ext/massivepolypusher" CACHE PATH
   "Root of the MassivePolyPusher dependency")
-set(WILLPOWER_APPLICATION_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
+set(WILLPOWER_APPLICATION_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 
 add_library(Willpower.Application ${_willpower_application_lib_type}
   ${WILLPOWER_APPLICATION_SOURCES} ${WILLPOWER_APPLICATION_HEADERS})

@@ -25,19 +25,19 @@ namespace WP_NAMESPACE
 
 			private:
 
-				void parseMeshSpecificationPrimitiveType(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, XmlNode* node);
+				void parseMeshSpecificationPrimitiveType(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, wp::XmlNode* node);
 
-				void parseMeshSpecificationIndexed(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, XmlNode* node);
+				void parseMeshSpecificationIndexed(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, wp::XmlNode* node);
 
-				void parseMeshSpecificationStorage(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, XmlNode* node);
+				void parseMeshSpecificationStorage(ProgramResource* resource, mpp::mesh::MeshSpecification* meshSpec, wp::XmlNode* node);
 
-				void parseMeshSpecificationBuffer(ProgramResource* resource, mpp::mesh::VertexBufferAttributeLayout* layout, XmlNode* node);
+				void parseMeshSpecificationBuffer(ProgramResource* resource, mpp::mesh::VertexBufferAttributeLayout* layout, wp::XmlNode* node);
 
 			protected:
 
-				void parseAttribs(ProgramResource* resource, XmlNode* node);
+				void parseAttribs(ProgramResource* resource, wp::XmlNode* node);
 
-				void parseMeshSpecification(ProgramResource* resource, XmlNode* node);
+				void parseMeshSpecification(ProgramResource* resource, wp::XmlNode* node);
 
 			public:
 

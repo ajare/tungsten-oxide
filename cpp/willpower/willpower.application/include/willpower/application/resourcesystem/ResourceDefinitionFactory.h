@@ -54,7 +54,7 @@ namespace WP_NAMESPACE
 				*
 				*	\return the Resource instance.
 				*/
-				virtual void create(Resource* resource, ResourceManager* resourceMgr, XmlNode* node) = 0;
+				virtual void create(Resource* resource, ResourceManager* resourceMgr, wp::XmlNode* node) = 0;
 			};
 		}
 	} // application

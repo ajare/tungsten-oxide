@@ -53,7 +53,7 @@ set(LAUNCHER_SOURCES
 # SDL3 SDK libraries. Override these cache entries when they live elsewhere.
 set(LAUNCHER_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
   "Root of the MassivePolyPusher dependency")
-set(LAUNCHER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/third_party" CACHE PATH
+set(LAUNCHER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party" CACHE PATH
   "Root of the launcher third-party SDK headers and libraries")
 set(LAUNCHER_LIB_ARCH x64 CACHE STRING "Architecture used by the launcher SDK libraries")
 

@@ -56,9 +56,9 @@ namespace WP_NAMESPACE
 
 			private:
 
-				ResourceRecordBaseData parseResource(XmlNode* element, std::string const& namesp, std::string const& file);
+				ResourceRecordBaseData parseResource(wp::XmlNode* element, std::string const& namesp, std::string const& file);
 
-				void scanResourceElement(XmlNode* parent, std::string namesp = "");
+				void scanResourceElement(wp::XmlNode* parent, std::string namesp = "");
 
 				ResourceRecord const& getResourceRecord(std::string const& resource, std::string namesp = "") const;
 

@@ -9,6 +9,10 @@
 #   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
 #   launcher/   Windows host for a Willpower application DLL — see
 #               launcher/CMakeLists.txt.
+#   applib/     shared gameplay/entity/state primitives — see
+#               applib/CMakeLists.txt.
+#   tungsten-monoxide/  BooleanWorld application DLL — see
+#               tungsten-monoxide/CMakeLists.txt.
 #   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
 #
@@ -34,6 +38,8 @@ add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)
 add_subdirectory(launcher)
+add_subdirectory(applib)
+add_subdirectory(tungsten-monoxide)
 add_subdirectory(editor)
 
 foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)

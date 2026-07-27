@@ -16,7 +16,9 @@ npm-debug.log*
 # vendored nlohmann header and sources are tracked; build trees are not.
 cpp/build/
 cpp/core/build/
+cpp/applib/build/
 cpp/launcher/build/
+cpp/tungsten-monoxide/build/
 cpp/willpower/build/
 # Per-library Visual Studio build trees (including .vs/IPCH caches).
 cpp/willpower/**/build/

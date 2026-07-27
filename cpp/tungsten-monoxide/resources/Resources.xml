@@ -1,0 +1,261 @@
+<?xml version="1.0"?>
+<Resources>
+
+	<Resource type="Game" name="BooleanWorld">
+		<DependentResources />
+		
+		<Definitions>
+			<Definition />
+		</Definitions>
+	</Resource>
+
+	<!--
+	Entity resources
+	-->
+	<Resource type="Image" name="EntityImage" location="images/entities.png">
+		<Option name="filtering">none</Option>
+		<Option name="uv-style">atlas</Option>
+	</Resource>
+
+	<Resource type="ImageSet" name="EntityImageSet">
+		<DependentResources>
+			<DependentResource id="Image" ref="EntityImage" />
+		</DependentResources>
+		
+		<Definitions>
+			<Definition>
+				<Images>
+					<ImageSet name="Mage" x="0" y="0" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Skeleton" x="0" y="48" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="SkeletonWizard" x="0" y="96" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Goblin" x="0" y="144" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="GoblinShaman" x="0" y="192" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Wight" x="0" y="240" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="GiantBat" x="0" y="288" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Cobra" x="0" y="336" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="KingCobra" x="0" y="384" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Minotaur" x="0" y="432" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Beholder" x="192" y="48" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Demon" x="192" y="96" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Dragon" x="192" y="144" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="IceGolem" x="192" y="192" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Angel" x="192" y="240" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Archangel" x="192" y="288" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="FireElemental" x="192" y="336" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="AirElemental" x="192" y="384" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="AcidBlob" x="192" y="432" width="48" height="48" count="4" dx="48" dy="0" />
+					<ImageSet name="Circle" x="192" y="0" width="48" height="48" count="1" dx="48" dy="0" />
+				</Images>
+			</Definition>
+		</Definitions>
+	</Resource>
+	
+	<Resource type="AnimationSet" name="EntityAnimations">
+		<DependentResources>
+			<DependentResource id="Image" ref="EntityImageSet" />
+		</DependentResources>
+		
+		<Definitions>
+			<Definition>
+				<Animations>
+					<Animation name="Circle" loopStyle="forwards">
+						<Frames imageset="Circle" time="0.2" count="1" />
+					</Animation>
+					<Animation name="Mage" loopStyle="forwards">
+						<Frames imageset="Mage" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Skeleton" loopStyle="forwards">
+						<Frames imageset="Skeleton" time="0.2" count="4" />
+					</Animation>
+					<Animation name="SkeletonWizard" loopStyle="forwards">
+						<Frames imageset="SkeletonWizard" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Goblin" loopStyle="forwards">
+						<Frames imageset="Goblin" time="0.2" count="4" />
+					</Animation>
+					<Animation name="GoblinShaman" loopStyle="forwards">
+						<Frames imageset="GoblinShaman" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Wight" loopStyle="forwards">
+						<Frames imageset="Wight" time="0.2" count="4" />
+					</Animation>
+					<Animation name="GiantBat" loopStyle="forwards">
+						<Frames imageset="GiantBat" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Cobra" loopStyle="forwards">
+						<Frames imageset="Cobra" time="0.2" count="4" />
+					</Animation>
+					<Animation name="KingCobra" loopStyle="forwards">
+						<Frames imageset="KingCobra" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Minotaur" loopStyle="forwards">
+						<Frames imageset="Minotaur" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Beholder" loopStyle="forwards">
+						<Frames imageset="Beholder" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Demon" loopStyle="forwards">
+						<Frames imageset="Demon" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Dragon" loopStyle="forwards">
+						<Frames imageset="Dragon" time="0.2" count="4" />
+					</Animation>
+					<Animation name="IceGolem" loopStyle="forwards">
+						<Frames imageset="IceGolem" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Angel" loopStyle="forwards">
+						<Frames imageset="Angel" time="0.2" count="4" />
+					</Animation>
+					<Animation name="Archangel" loopStyle="forwards">
+						<Frames imageset="Archangel" time="0.2" count="4" />
+					</Animation>
+					<Animation name="FireElemental" loopStyle="forwards">
+						<Frames imageset="FireElemental" time="0.2" count="4" />
+					</Animation>
+					<Animation name="AirElemental" loopStyle="forwards">
+						<Frames imageset="AirElemental" time="0.2" count="4" />
+					</Animation>
+					<Animation name="AcidBlob" loopStyle="forwards">
+						<Frames imageset="AcidBlob" time="0.2" count="4" />
+					</Animation>
+				</Animations>
+			</Definition>
+		</Definitions>
+	</Resource>
+
+	<Resource type="ProtoEntity" name="Player">
+		<DependentResources>
+			<DependentResource id="Animations" ref="/EntityAnimations" />
+		</DependentResources>
+
+		<Definitions>
+			<Definition>
+				<Properties>
+					<Physical>
+						<Collision>true</Collision>
+						<Size type="AABB">40,40</Size>
+					</Physical>
+					<Visual>
+						<Animation key="idle">Circle</Animation>
+					</Visual>
+				</Properties>
+			</Definition>
+		</Definitions>		
+	</Resource>
+	
+	<!--
+	Audio resources
+	-->
+	<Resource type="AudioBank" name="Bank.Master" location="audio/Themes/Build/Desktop/Master.bank" />
+	
+	<Resource type="AudioBank" name="Bank.Strings" location="audio/Themes/Build/Desktop/Master.strings.bank" />
+
+	<Resource type="AudioBank" name="Bank.Themes" location="audio/Themes/Build/Desktop/Themes.bank" />	
+	
+	<!-- 
+	Map resources
+	-->	
+	<Resource type="Image" name="TestTexture" location="images/test.png" />
+
+	<Resource type="Image" name="Floor5" location="images/floor5.png" />
+
+	<Resource type="Image" name="Floor6" location="images/floor6.png" />
+	
+	<!--
+	Maps
+	-->
+	<Namespace name="World">	
+		<Resource type="Shader" name="WorldVertexShader" location="shaders/world.vert" />
+
+		<Resource type="Shader" name="WorldFragmentShader" location="shaders/world.frag">
+			<Definitions>
+				<Definition>
+					<textures>1</textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+		
+		<Resource type="Program" name="WorldProgram">
+			<DependentResources>
+				<DependentResource id="Vertex" ref="WorldVertexShader" />
+				<DependentResource id="Fragment" ref="WorldFragmentShader" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<!-- attribs:
+					- textures: if >0, 'textures' is set (defaults to 0)
+					- colours: if true, 'colours' is set (defaults to false)
+					- diffuse: if true, 'diffuse' is set (defaults to false)
+					-->
+					<Attribs>
+						<textures>1</textures>
+						<!-- <diffuse>true</diffuse> -->
+					</Attribs>
+					
+					<MeshSpecification>
+						<primitive>triangles</primitive>
+						<indexed>false</indexed>
+						<storage>dynamic</storage>
+						
+						<Buffers>
+							<Buffer>
+								<Channels>
+									<Channel>
+										<data>position3</data>
+										<type>float32</type>
+									</Channel>
+									<Channel>
+										<data>normal3</data>
+										<type>float32</type>
+									</Channel>
+								</Channels>
+							</Buffer>
+							<Buffer>
+								<Channels>
+									<Channel>
+										<data>texcoord2</data>
+										<type>float32</type>
+									</Channel>
+									<Channel>
+										<data>colour4</data>
+										<type>uint8</type>
+										<normalised>true</normalised>
+									</Channel>
+								</Channels>
+							</Buffer>
+						</Buffers>
+					</MeshSpecification>
+				</Definition>
+			</Definitions>
+		</Resource>
+		
+		<Resource type="Material" name="Material.Default">
+			<DependentResources>
+				<DependentResource id="Program" ref="WorldProgram" />
+				<DependentResource id="Texture" ref="/Floor5" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture sampler="TEX1" type="resource">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+
+		<Resource type="TextFile" name="WorldFile" location="gen-2.yaml" />
+
+		<Resource type="Map" name="World">
+			<DependentResources>
+				<DependentResource id="Yaml" ref="WorldFile" />
+			</DependentResources>
+			<Definitions>
+				<Definition factory="BooleanWorld">
+					<Resource>Yaml</Resource>
+				</Definition>
+			</Definitions>
+		</Resource>
+	</Namespace>    
+</Resources>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<objects serializationModel="Studio.02.03.00">
+	<object class="AudioFile" id="{75205e71-6cf6-47f3-884b-2e848451dc89}">
+		<property name="assetPath">
+			<value>underwater.ogg</value>
+		</property>
+		<property name="frequencyInKHz">
+			<value>44.0999985</value>
+		</property>
+		<property name="channelCount">
+			<value>1</value>
+		</property>
+		<property name="length">
+			<value>6.2226984126984126</value>
+		</property>
+		<relationship name="masterAssetFolder">
+			<destination>{ebf5563d-0367-4a2a-8924-26b4f1b5c671}</destination>
+		</relationship>
+	</object>
+</objects>

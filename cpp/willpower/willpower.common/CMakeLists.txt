@@ -92,7 +92,7 @@ source_group("Header Files" FILES ${WILLPOWER_COMMON_HEADERS})
 
 target_include_directories(Willpower.Common PUBLIC include)
 target_include_directories(Willpower.Common PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include"  # spline_library, vendored under cpp/willpower/
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/include"  # spline_library, vendored under cpp/
   "${WILLPOWER_VENDOR_DIR}/include")
 
 target_compile_definitions(Willpower.Common PRIVATE

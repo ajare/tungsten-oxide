@@ -20,7 +20,7 @@ namespace WP_NAMESPACE
 			{
 			}
 
-			void AudioBankDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, XmlNode* node)
+			void AudioBankDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node)
 			{
 				auto bankRes = static_cast<AudioBankResource*>(resource);
 			}

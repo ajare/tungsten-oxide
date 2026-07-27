@@ -17,7 +17,7 @@ namespace WP_NAMESPACE
 			{
 			}
 
-			void AnimationSetDefaultDefinitionFactory::create(Resource* resource, ResourceManager* resourceMgr, XmlNode* node)
+			void AnimationSetDefaultDefinitionFactory::create(Resource* resource, ResourceManager* resourceMgr, wp::XmlNode* node)
 			{
 				WP_UNUSED(resourceMgr);
 

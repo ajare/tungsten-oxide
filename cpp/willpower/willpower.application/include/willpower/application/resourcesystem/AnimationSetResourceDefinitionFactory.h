@@ -21,13 +21,13 @@ namespace WP_NAMESPACE
 
 				void clear(AnimationSetResource* resource);
 
-				AnimationSetResource::LoopStyle parseLoopStyle(AnimationSetResource* resource, std::string const& animation, XmlNode* node);
+				AnimationSetResource::LoopStyle parseLoopStyle(AnimationSetResource* resource, std::string const& animation, wp::XmlNode* node);
 
-				void parseFrame(AnimationSetResource const* resource, AnimationSetResource::Frame* frame, XmlNode* node);
+				void parseFrame(AnimationSetResource const* resource, AnimationSetResource::Frame* frame, wp::XmlNode* node);
 
-				void parseTag(AnimationSetResource::Frame* frame, XmlNode* node);
+				void parseTag(AnimationSetResource::Frame* frame, wp::XmlNode* node);
 
-				void checkFrameOverrides(AnimationSetResource* resource, std::string const& animation, AnimationSetResource::FrameSet* frameset, XmlNode* node, bool requireIndex);
+				void checkFrameOverrides(AnimationSetResource* resource, std::string const& animation, AnimationSetResource::FrameSet* frameset, wp::XmlNode* node, bool requireIndex);
 				
 				AnimationSetResource::Frame createFrame(ImageSetResource::ImageDefinition const& imageDef, int offx, int offy, float time);
 

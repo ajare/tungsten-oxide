@@ -15,7 +15,7 @@ namespace WP_NAMESPACE
 
 				ImageDefaultDefinitionFactory();
 
-				void create(Resource* resource, ResourceManager* resourceMgr, XmlNode* node) override;
+				void create(Resource* resource, ResourceManager* resourceMgr, wp::XmlNode* node) override;
 			};
 
 		} // resourcesystem

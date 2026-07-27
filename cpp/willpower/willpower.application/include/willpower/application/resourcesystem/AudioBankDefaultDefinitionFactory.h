@@ -17,7 +17,7 @@ namespace WP_NAMESPACE
 
 				AudioBankDefaultDefinitionFactory();
 
-				void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, XmlNode* node) override;
+				void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
 			};
 
 		} // resourcesystem

@@ -70,7 +70,7 @@ source_group("Header Files" FILES ${WILLPOWER_GEOMETRY_HEADERS})
 target_include_directories(Willpower.Geometry PUBLIC include)
 target_include_directories(Willpower.Geometry PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower.serialization/include"  # missing, see note above
-  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include")             # spline_library, vendored under cpp/willpower/
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/include")             # spline_library, vendored under cpp/
 
 target_link_libraries(Willpower.Geometry PUBLIC Willpower.Common)
 if (TARGET Willpower.Serialization)

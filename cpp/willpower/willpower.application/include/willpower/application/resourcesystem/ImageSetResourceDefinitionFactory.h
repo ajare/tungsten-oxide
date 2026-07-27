@@ -29,7 +29,7 @@ namespace WP_NAMESPACE
 
 				void calculateUvCoords(ImageSetResource* resource, ImageSetResource::ImageDefinition* imageDef);
 
-				ImageSetResource::ImageDefinition createImageDefinition(ImageSetResource* resource, std::string const& name, XmlNode* node);
+				ImageSetResource::ImageDefinition createImageDefinition(ImageSetResource* resource, std::string const& name, wp::XmlNode* node);
 
 			public:
 
