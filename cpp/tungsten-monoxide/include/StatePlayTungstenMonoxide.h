@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include <mpp/Camera.h>
+#include <mpp/ResourceWrangler.h>
 
 #include <willpower/application/StateFactory.h>
 
@@ -19,6 +20,16 @@
 #include "DisplayMessage.h"
 
 
+class TmResourceWrangler : public mpp::ResourceWrangler {
+public:
+
+	TmResourceWrangler() 
+		: ResourceWrangler("TungstenMonoxidePlay")
+	{
+	}
+};
+
+
 class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay
 {
 	double mGlobalTime;
@@ -26,6 +37,10 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay
 	mpp::CameraPtr mCamera3d;
 
 	bool mExitScheduled;
+
+	TmResourceWrangler mWrangler;
+
+	mpp::ResourcePtr mTorus;
 
 private:
 
@@ -60,6 +75,8 @@ protected:
 	void updateActions(std::vector<std::string> const& activeStates, float frameTime) override;
 
 	void updatePreRenderers(float frameTime) override;
+
+	void setupScene() override;
 
 	void setup(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args) override;
 
