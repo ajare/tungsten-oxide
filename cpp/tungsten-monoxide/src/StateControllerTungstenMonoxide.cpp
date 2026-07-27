@@ -55,22 +55,20 @@ void StateControllerTungstenMonoxide::updateTransitionData(string const& prevSta
 {
 	if (prevStateName == "Load")
 	{
-		setTransitionNextMap(&mTransitionData.mapData, "World", nullptr);
+		setTransitionNextMap(&mTransitionData.mapData, "Track", "Tracks", nullptr);
 	}
 	else if (prevStateName == "Play")
 	{
 		transferTransitionMapData(&transitionData->mapData.prevMap,	&mTransitionData.mapData.prevMap);
 
-		string nextMapName;
 		switch (mMapCount)
 		{
 		case 1:
-			nextMapName = "World";
-
 			setTransitionNextMap(
 				&mTransitionData.mapData, 
-				nextMapName, 
-				mwResourceMgr->getResource(nextMapName, nextMapName));
+				"Track",
+                "Tracks",
+				mwResourceMgr->getResource("Track", "Tracks"));
 			break;
 		}
 	}

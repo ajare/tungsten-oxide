@@ -41,10 +41,11 @@ namespace applib
 		to->map = from->map;
 	}
 
-	void StateController::setTransitionNextMap(MapTransitionData* data, string const& name, application::resourcesystem::ResourcePtr resource)
+	void StateController::setTransitionNextMap(MapTransitionData* data, string const& name, string const& namesp, application::resourcesystem::ResourcePtr resource)
 	{
 		data->nextMap.map = resource;
 		data->nextMapName = name;
+        data->nextMapNamespace = namesp;
 	}
 
 	void StateController::exitImpl()

@@ -28,7 +28,7 @@ namespace applib
 
 		void transferTransitionMapData(MapTransitionData::MapData* from, MapTransitionData::MapData* to);
 
-		void setTransitionNextMap(MapTransitionData* data, std::string const& name, wp::application::resourcesystem::ResourcePtr resource);
+		void setTransitionNextMap(MapTransitionData* data, std::string const& name, std::string const& namesp, wp::application::resourcesystem::ResourcePtr resource);
 
 		void setup(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args = nullptr) override;
 

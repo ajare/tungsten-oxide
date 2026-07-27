@@ -18,7 +18,7 @@ StateMapLoadTungstenMonoxide::StateMapLoadTungstenMonoxide(bool useThreading)
 void StateMapLoadTungstenMonoxide::loadResources(wp::application::resourcesystem::ResourceManager* resourceMgr, applib::MapTransitionData* transitionData)
 {
 	string mapName = transitionData->nextMapName;
-	string mapNamespace = mapName;
+  string mapNamespace = transitionData->nextMapNamespace;
 
 	// Set next map in transition data
 	auto mapResource = resourceMgr->getResource(mapName, mapNamespace);

@@ -16,7 +16,7 @@ namespace applib
 
 		MapData prevMap, nextMap;
 
-		std::string nextMapName;
+		std::string nextMapName, nextMapNamespace;
 	};
 
 }  // applib

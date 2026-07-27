@@ -11,5 +11,5 @@ void main()
 	
 	// This hack is in because the camera matrix is flipping the x coord for
 	// some reason.  It needs to be fixed, but until then, this is required.
-	gl_Position.x = -gl_Position.x;
+	//gl_Position.x = -gl_Position.x;
 }

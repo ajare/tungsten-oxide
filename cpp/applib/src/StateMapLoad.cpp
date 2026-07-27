@@ -29,7 +29,7 @@ namespace applib
 	void StateMapLoad::loadResources(application::resourcesystem::ResourceManager* resourceMgr, MapTransitionData* transitionData)
 	{
 		string mapName = transitionData->nextMapName;
-		string mapNamespace = mapName;
+		string mapNamespace = transitionData->nextMapNamespace;
 
 		// Set next map in transition data
 		auto mapResource = resourceMgr->getResource(mapName, mapNamespace);

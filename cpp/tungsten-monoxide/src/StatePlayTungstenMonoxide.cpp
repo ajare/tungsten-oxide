@@ -125,7 +125,7 @@ void StatePlayTungstenMonoxide::setup(application::resourcesystem::ResourceManag
 
 	// Set up objects to pass to next state
 	mTransitionData.mapData.prevMap.map = transitionData->mapData.nextMap.map;
-	mTransitionData.userData = transitionData->userData; // WorldRenderer
+	mTransitionData.userData = transitionData->userData;
 
 	mMap = transitionData->mapData.nextMap.map;
 

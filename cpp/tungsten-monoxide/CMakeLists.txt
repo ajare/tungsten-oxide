@@ -18,7 +18,6 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/MapException.h
   include/MetricsDataProvider.h
   include/Platform.h
-  include/PrimitiveLineDataProvider.h
   include/ProtoEntity.h
   include/ProtoEntityDefinitionFactory.h
   include/ReactiveCamera.h
@@ -28,7 +27,6 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/StateMapTransitionTungstenMonoxide.h
   include/StateMapUnloadTungstenMonoxide.h
   include/StatePlayTungstenMonoxide.h
-  include/StatePlayTransitionData.h
   include/imgui/imconfig.h
   include/imgui/imgui.h
   include/imgui/imgui_internal.h

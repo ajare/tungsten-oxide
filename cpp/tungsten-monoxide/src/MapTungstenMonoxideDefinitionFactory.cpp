@@ -5,7 +5,7 @@
 
 
 MapTungstenMonoxideDefinitionFactory::MapTungstenMonoxideDefinitionFactory()
-	: applib::MapResourceDefinitionFactory("TungstenMonoxide")
+	: applib::MapResourceDefinitionFactory("Track")
 {
 }
 

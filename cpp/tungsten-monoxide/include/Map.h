@@ -33,7 +33,7 @@ class MapResourceFactory : public wp::application::resourcesystem::ResourceFacto
 public:
 
 	explicit MapResourceFactory(wp::Logger* logger)
-		: wp::application::resourcesystem::ResourceFactory("Map")
+		: wp::application::resourcesystem::ResourceFactory("Track")
 		, mwLogger(logger)
 	{
 	}
