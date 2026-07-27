@@ -11,7 +11,7 @@
 #               launcher/CMakeLists.txt.
 #   applib/     shared gameplay/entity/state primitives — see
 #               applib/CMakeLists.txt.
-#   tungsten-monoxide/  BooleanWorld application DLL — see
+#   tungsten-monoxide/  TungstenMonoxide application DLL — see
 #               tungsten-monoxide/CMakeLists.txt.
 #   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
@@ -37,8 +37,8 @@ enable_testing()
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)
-add_subdirectory(launcher)
 add_subdirectory(applib)
+add_subdirectory(launcher)
 add_subdirectory(tungsten-monoxide)
 add_subdirectory(editor)
 

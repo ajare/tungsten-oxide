@@ -1,17 +1,16 @@
 #pragma once
 
-#include <applib/GameDefaultDefinitionFactory.h>
+#include <applib/MapResourceDefinitionFactory.h>
 
 #include "Platform.h"
 
 
-class GameDefinitionFactory : public applib::GameDefaultDefinitionFactory
+class MapTungstenMonoxideDefinitionFactory : public applib::MapResourceDefinitionFactory
 {
 public:
 
-	GameDefinitionFactory();
+	MapTungstenMonoxideDefinitionFactory();
 
 	void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
-
 };
 

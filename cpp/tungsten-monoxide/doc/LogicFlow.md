@@ -2,7 +2,7 @@
 
 ## States
 
-The game starts off in the first State registered.  This is done in the application, typically in ``DLL.cpp``.  For BooleanWorld,
+The game starts off in the first State registered.  This is done in the application, typically in ``DLL.cpp``.  For TungstenMonoxide,
 The game starts off in the **Controller** State.
 
 ### StateController
@@ -34,11 +34,11 @@ The function ``getNextStateName()`` defines the following flow from here on:
 - **Unload** is the final State, and exits.
 
 It also modifies the **StateTransitionData** which is used to communicate between States.  This is
-done in ``StateControllerBooleanWorld::updateTransitionData()``.
+done in ``StateControllerTungstenMonoxide::updateTransitionData()``.
 
 ### StateMapLoad
 
-This State loads all resources related to the given **Map**.  The name of the Map is set in ``StateControllerBooleanWorld::updateTransitionData()``,
+This State loads all resources related to the given **Map**.  The name of the Map is set in ``StateControllerTungstenMonoxide::updateTransitionData()``,
 and corresponds to a namespace in the resource file.
 
 After loading, a **WorldRenderer** instance is created in post, and passed in **TransitionData** to the next State.
@@ -47,7 +47,7 @@ After loading, a **WorldRenderer** instance is created in post, and passed in **
 
 This is the main game loop.
 
-The entry point is ``StatePlayBooleanWorld::setup()``, which:
+The entry point is ``StatePlayTungstenMonoxide::setup()``, which:
 
 - Creates Entity Management, registering a factory for triangle meshes.
 - Sets up initial Entities, ie the Player.

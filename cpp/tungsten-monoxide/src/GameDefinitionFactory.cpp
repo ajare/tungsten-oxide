@@ -10,7 +10,7 @@ GameDefinitionFactory::GameDefinitionFactory()
 {
 }
 
-void GameDefinitionFactory::create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, utils::XmlNode* node)
+void GameDefinitionFactory::create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node)
 {
 	VAR_UNUSED(resource);
 	VAR_UNUSED(resourceMgr);

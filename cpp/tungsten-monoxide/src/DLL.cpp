@@ -1,5 +1,3 @@
-#include <clipper2/clipper.h>
-
 #include <willpower/common/Logger.h>
 
 #include <willpower/application/StateFactory.h>
@@ -12,24 +10,22 @@
 #include <applib/StateMapTransition.h>
 #include <applib/Game.h>
 #include <applib/MapDefaultDefinitionFactory.h>
-#include <applib/MapTiledDefinitionFactory.h>
 #include <applib/ProtoEntityDefaultDefinitionFactory.h>
-#include <applib/ImageSetTiledDefinitionFactory.h>
 
-#include "MapBooleanWorldDefinitionFactory.h"
+#include "MapTungstenMonoxideDefinitionFactory.h"
 #include "GameDefinitionFactory.h"
 #include "ProtoEntityDefinitionFactory.h"
 
 // Model
-#include "BooleanWorldModel.h"
-#include "EntityHandlerBooleanWorld.h"
+#include "TungstenMonoxideModel.h"
+#include "EntityHandlerTungstenMonoxide.h"
 
 // States
-#include "StateMapLoadBooleanWorld.h"
-#include "StateMapUnloadBooleanWorld.h"
-#include "StateMapTransitionBooleanWorld.h"
-#include "StateControllerBooleanWorld.h"
-#include "StatePlayBooleanWorld.h"
+#include "StateMapLoadTungstenMonoxide.h"
+#include "StateMapUnloadTungstenMonoxide.h"
+#include "StateMapTransitionTungstenMonoxide.h"
+#include "StateControllerTungstenMonoxide.h"
+#include "StatePlayTungstenMonoxide.h"
 
 // Resources
 #include "Game.h"
@@ -43,13 +39,13 @@ static applib::Model* model = nullptr;
 
 // State factories
 static int nextStateFactory = 0;
-static StateControllerBooleanWorldFactory* stateControllerFactory = nullptr;
+static StateControllerTungstenMonoxideFactory* stateControllerFactory = nullptr;
 static applib::StateLoadFactory* stateLoadFactory = nullptr;
 static applib::StateUnloadFactory* stateUnloadFactory = nullptr;
 static applib::StateMapLoadFactory* stateMapLoadFactory = nullptr;
 static applib::StateMapUnloadFactory* stateMapUnloadFactory = nullptr;
 static applib::StateMapTransitionFactory* stateMapTransitionFactory = nullptr;
-static StatePlayBooleanWorldFactory* statePlayBooleanWorldFactory = nullptr;
+static StatePlayTungstenMonoxideFactory* statePlayTungstenMonoxideFactory = nullptr;
 
 
 // Arguments
@@ -59,7 +55,7 @@ extern "C"
 {
 	__declspec(dllexport) char const* dllGetName()
 	{
-		return "BooleanWorld";
+		return "TungstenMonoxide";
 	}
 
 	__declspec(dllexport) int dllSetArgument(char const* arg, char const* value)
@@ -109,7 +105,7 @@ extern "C"
 			stateFactory = stateMapTransitionFactory;
 			break;
 		case 6:
-			stateFactory = statePlayBooleanWorldFactory;
+			stateFactory = statePlayTungstenMonoxideFactory;
 			break;
 		default:
 			stateFactory = nullptr;
@@ -122,44 +118,37 @@ extern "C"
 
 	__declspec(dllexport) void dllOnEntry(wp::Logger* logger, wp::application::resourcesystem::ResourceManager* resourceMgr)
 	{
-		auto entityHandlerFactory = [](shared_ptr<applib::AnimationDatabase> animDatabase)
+		auto entityHandlerFactory = []()
 		{
-			return new EntityHandlerBooleanWorld(animDatabase);
+			return new EntityHandlerTungstenMonoxide();
 		};
 
-		model = new BooleanWorldModel(entityHandlerFactory, resourceMgr);
+		model = new TungstenMonoxideModel(entityHandlerFactory, resourceMgr);
 		applib::ModelInstance::set(model);
 
 		// Create state factories
-		stateControllerFactory = new StateControllerBooleanWorldFactory(logger);
+		stateControllerFactory = new StateControllerTungstenMonoxideFactory(logger);
 		stateLoadFactory = new applib::StateLoadFactory(logger, resourceMgr, gThreadedLoading);
 		stateUnloadFactory = new applib::StateUnloadFactory(logger, resourceMgr, gThreadedLoading);
-		stateMapLoadFactory = new StateMapLoadBooleanWorldFactory(logger, resourceMgr, gThreadedLoading);
-		stateMapUnloadFactory = new StateMapUnloadBooleanWorldFactory(logger, resourceMgr, gThreadedLoading);
-		stateMapTransitionFactory = new StateMapTransitionBooleanWorldFactory(logger, resourceMgr, gThreadedLoading);
-		statePlayBooleanWorldFactory = new StatePlayBooleanWorldFactory(logger);
+		stateMapLoadFactory = new StateMapLoadTungstenMonoxideFactory(logger, resourceMgr, gThreadedLoading);
+		stateMapUnloadFactory = new StateMapUnloadTungstenMonoxideFactory(logger, resourceMgr, gThreadedLoading);
+		stateMapTransitionFactory = new StateMapTransitionTungstenMonoxideFactory(logger, resourceMgr, gThreadedLoading);
+		statePlayTungstenMonoxideFactory = new StatePlayTungstenMonoxideFactory(logger);
 
 		// Add resource factories
-		resourceMgr->addResourceFactory(new GameResourceFactory(model->animationDatabase));
+		resourceMgr->addResourceFactory(new GameResourceFactory());
 		resourceMgr->addResourceFactory(new MapResourceFactory(logger));
-		resourceMgr->addResourceFactory(new ProtoEntityResourceFactory(model->entityHandler, model->animationDatabase));
+		resourceMgr->addResourceFactory(new ProtoEntityResourceFactory(model->entityHandler));
 
 		// Add resource definition factories
 		resourceMgr->addResourceDefinitionFactory(new GameDefinitionFactory());
-		resourceMgr->addResourceDefinitionFactory(new MapBooleanWorldDefinitionFactory());
-		resourceMgr->addResourceDefinitionFactory(new applib::MapTiledDefinitionFactory());
+		resourceMgr->addResourceDefinitionFactory(new MapTungstenMonoxideDefinitionFactory());
 		resourceMgr->addResourceDefinitionFactory(new ProtoEntityDefinitionFactory());
-		resourceMgr->addResourceDefinitionFactory(new applib::ImageSetTiledDefinitionFactory());
-
-		// Memory allocators
-		Clipper2Lib::WmInitialiseAllocators(4, 2 * 1024 * 1024);
 	}
 
 	__declspec(dllexport) void dllOnExit()
 	{
 		// Memory allocators
-		Clipper2Lib::WmDestroyAllocators();
-
 		// Destroy state factories
 		delete stateControllerFactory;
 		stateControllerFactory = nullptr;
@@ -179,8 +168,8 @@ extern "C"
 		delete stateMapTransitionFactory;
 		stateMapTransitionFactory = nullptr;
 
-		delete statePlayBooleanWorldFactory;
-		statePlayBooleanWorldFactory = nullptr;
+		delete statePlayTungstenMonoxideFactory;
+		statePlayTungstenMonoxideFactory = nullptr;
 
 		// Model
 		delete model;

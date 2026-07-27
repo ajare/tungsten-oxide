@@ -9,13 +9,8 @@
 
 #include <applib/Map.h>
 
-#include <core/World.h>
-
-
 class Map : public applib::Map
 {
-	bw::core::World* mWorld;
-
 	wp::Logger* mwLogger;
 
 public:
@@ -29,12 +24,6 @@ public:
 	);
 
 	~Map();
-
-	bw::core::World* getWorld();
-
-	bw::core::World const* getWorld() const;
-
-	void loadWorldFromYaml(wp::application::resourcesystem::ResourcePtr resource);
 };
 
 class MapResourceFactory : public wp::application::resourcesystem::ResourceFactory

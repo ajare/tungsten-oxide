@@ -53,8 +53,17 @@ set(LAUNCHER_SOURCES
 # SDL3 SDK libraries. Override these cache entries when they live elsewhere.
 set(LAUNCHER_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
   "Root of the MassivePolyPusher dependency")
-set(LAUNCHER_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party" CACHE PATH
-  "Root of the launcher third-party SDK headers and libraries")
+set(_launcher_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
+set(_launcher_legacy_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/third_party")
+if (LAUNCHER_THIRD_PARTY_DIR STREQUAL _launcher_legacy_third_party_dir)
+  set(LAUNCHER_THIRD_PARTY_DIR "${_launcher_third_party_dir}" CACHE PATH
+    "Root of the launcher third-party SDK headers and libraries" FORCE)
+else()
+  set(LAUNCHER_THIRD_PARTY_DIR "${_launcher_third_party_dir}" CACHE PATH
+    "Root of the launcher third-party SDK headers and libraries")
+endif()
+unset(_launcher_legacy_third_party_dir)
+unset(_launcher_third_party_dir)
 set(LAUNCHER_LIB_ARCH x64 CACHE STRING "Architecture used by the launcher SDK libraries")
 
 set(_launcher_resources)
@@ -67,6 +76,21 @@ endif()
 # LoadLibrary/GetProcAddress.
 add_executable(Launcher WIN32 ${LAUNCHER_SOURCES} ${LAUNCHER_HEADERS} ${_launcher_resources})
 target_compile_features(Launcher PRIVATE cxx_std_20)
+# AppLib is not a link dependency of Launcher, but its DLL is loaded by the
+# application DLL and must sit beside Launcher at runtime.
+if (TARGET AppLib)
+  add_dependencies(Launcher AppLib)
+  set(LAUNCHER_CMAKE_RUNTIME_FILES
+    $<TARGET_RUNTIME_DLLS:Launcher>
+    $<TARGET_FILE:AppLib>)
+else()
+  set(LAUNCHER_CMAKE_RUNTIME_FILES $<TARGET_RUNTIME_DLLS:Launcher>)
+endif()
+# Match the Debugging settings from the legacy Visual Studio launcher project.
+# Generator expressions leave these settings blank for non-Debug configurations.
+set_target_properties(Launcher PROPERTIES
+  VS_DEBUGGER_WORKING_DIRECTORY "$<$<CONFIG:Debug>:$(OutDir)>"
+  VS_DEBUGGER_COMMAND_ARGUMENTS "$<$<CONFIG:Debug>:TungstenMonoxide.cfg>")
 source_group("Header Files" FILES ${LAUNCHER_HEADERS})
 
 target_include_directories(Launcher PRIVATE
@@ -105,12 +129,57 @@ else()
   message(WARNING "Launcher uses the Windows-only WinMain/LoadLibrary implementation.")
 endif()
 
-# CMake-managed target DLLs (not the legacy raw import libraries above) are
-# copied beside the executable, replacing the vcxproj's CopyWillpowerBinaries
-# post-build batch script for the targets CMake can identify.
-if (WIN32 AND WILLPOWER_BUILD_SHARED_LIBS)
+# Runtime deployment, converted from build/CopyWillpowerBinaries.bat. The
+# batch file copied the machine-specific Launcher support files, every bundled
+# third-party runtime file, and DLLs from each MassivePolyPusher component.
+# Do the glob at *build* time in a generated script: wrapping a CMake list in a
+# configuration generator expression expands it into invalid `$<1:...>` /
+# `$<0:...>` command arguments in Visual Studio projects.
+set(LAUNCHER_SUPPORT_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/build/support/$ENV{COMPUTERNAME}/vs2026/${LAUNCHER_LIB_ARCH}")
+set(_launcher_copy_runtime_script [=[
+if (NOT DEFINED OUTPUT_DIR OR NOT DEFINED CONFIG)
+  message(FATAL_ERROR "OUTPUT_DIR and CONFIG are required")
+endif()
+
+set(_runtime_roots
+  "@LAUNCHER_SUPPORT_ROOT@/${CONFIG}"
+  "@LAUNCHER_THIRD_PARTY_DIR@/bin/vs2026/@LAUNCHER_LIB_ARCH@/${CONFIG}"
+  "@LAUNCHER_MPP_DIR@/mpp/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
+  "@LAUNCHER_MPP_DIR@/mpp-mesh/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
+  "@LAUNCHER_MPP_DIR@/mpp-program/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
+  "@LAUNCHER_MPP_DIR@/mpp-helper/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
+  "@LAUNCHER_MPP_DIR@/ext/utils/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}")
+
+file(MAKE_DIRECTORY "${OUTPUT_DIR}")
+foreach(_runtime_root IN LISTS _runtime_roots)
+  if (EXISTS "${_runtime_root}")
+    file(GLOB _runtime_files LIST_DIRECTORIES false "${_runtime_root}/*")
+    if (_runtime_files)
+      execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_runtime_files} "${OUTPUT_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    endif()
+  endif()
+endforeach()
+]=])
+file(CONFIGURE
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CopyLauncherRuntime.cmake"
+  CONTENT "${_launcher_copy_runtime_script}"
+  @ONLY)
+unset(_launcher_copy_runtime_script)
+
+if (WIN32)
   add_custom_command(TARGET Launcher POST_BUILD
+    # CMake targets (Willpower.Application/Common and any target dependencies)
+    # replace the batch script's per-Willpower-DLL copy commands.
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_RUNTIME_DLLS:Launcher> $<TARGET_FILE_DIR:Launcher>
+      ${LAUNCHER_CMAKE_RUNTIME_FILES} "$<TARGET_FILE_DIR:Launcher>"
+    # The generated script skips missing optional roots and copies all files
+    # from the support/vendor/MPP directories that do exist for this config.
+    COMMAND ${CMAKE_COMMAND}
+      "-DOUTPUT_DIR=$<TARGET_FILE_DIR:Launcher>"
+      "-DCONFIG=$<IF:$<CONFIG:Debug>,Debug,Release>"
+      -P "${CMAKE_CURRENT_BINARY_DIR}/CopyLauncherRuntime.cmake"
     COMMAND_EXPAND_LISTS)
 endif()

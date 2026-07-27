@@ -18,13 +18,12 @@ ProtoEntity::ProtoEntity(string const& name,
 	string const& source,
 	map<string, string> const& tags,
 	application::resourcesystem::ResourceLocation* location,
-	shared_ptr<applib::EntityHandler> entityHandler,
-	shared_ptr<applib::AnimationDatabase> animDatabase)
-	: applib::ProtoEntity(name, namesp, source, tags, location, entityHandler, animDatabase)
+	shared_ptr<applib::EntityHandler> entityHandler)
+	: applib::ProtoEntity(name, namesp, source, tags, location, entityHandler)
 {
 }
 
-void ProtoEntity::loadExtraDefinitions(utils::XmlNode* node, entt::entity protoId)
+void ProtoEntity::loadExtraDefinitions(wp::XmlNode* node, entt::entity protoId)
 {
 	auto statsNode = node->getOptionalChild("Stats");
 	if (statsNode)

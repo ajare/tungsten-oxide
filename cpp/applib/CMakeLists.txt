@@ -1,4 +1,4 @@
-# AppLib — shared gameplay/entity/state primitives used by BooleanWorld.
+# AppLib — shared gameplay/entity/state primitives used by TungstenMonoxide.
 # Converted from build/vs2026/AppLib.vcxproj. Several original Willpower
 # feature libraries (Collide, Firepower, Serialization and Viz) remain external
 # to this checkout and are retained as prebuilt-library link dependencies.
