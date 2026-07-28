@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <string>
 
 #include "imgui.h"
@@ -24,6 +25,7 @@
 #include <mpp/ResourceWrangler.h>
 
 #include "FileDialog.hpp"
+#include "ModelResourceExport.hpp"
 #include "MppSave.hpp"
 #include "Viewport.hpp"
 
@@ -167,7 +169,19 @@ int main(int argc, char** argv) {
             std::string error;
             const std::string path = modeltool::pathToUtf8(picked.path);
             if (modeltool::saveModelAsMppModel(*viewport->builtModel(), path, &error)) {
-              showStatus("Wrote " + path);
+              // Companion Resources.xml-shaped fragment declaring this model's materials (see
+              // ModelResourceExport.hpp), written beside the .mppmodel with the same stem --
+              // mirrors cpp/editor/main.cpp's own Export MppModel flow (buildTrackResourceXml).
+              const std::filesystem::path xmlPath = std::filesystem::path(picked.path).replace_extension(L"xml");
+              const std::string xml =
+                  modeltool::buildModelMaterialsXml(viewport->builtModel()->source, modeltool::pathToUtf8(picked.path.stem()));
+              std::ofstream xmlOut(xmlPath, std::ios::binary);
+              if (xmlOut) {
+                xmlOut.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+                showStatus("Wrote " + path + " and " + modeltool::pathToUtf8(xmlPath));
+              } else {
+                showStatus("Wrote " + path + " (failed to write companion XML)");
+              }
             } else {
               showStatus("Save failed: " + error);
             }

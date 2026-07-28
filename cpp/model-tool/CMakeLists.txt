@@ -61,6 +61,7 @@ set(MODEL_TOOL_SOURCES
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
+  src/ModelResourceExport.cpp
   src/Viewport.cpp
   src/MppSave.cpp)
 
