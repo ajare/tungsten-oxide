@@ -141,7 +141,7 @@ StatePlayTungstenMonoxide::StatePlayTungstenMonoxide()
 	: StatePlay()
 	, mGlobalTime(0.0)
 	, mExitScheduled(false) 
-	, mTorus(nullptr) 
+	, mTrackModel(nullptr) 
 {
 }
 
@@ -196,23 +196,38 @@ void StatePlayTungstenMonoxide::createGameObjects(application::resourcesystem::R
 	VAR_UNUSED(renderResourceMgr);
 	VAR_UNUSED(args);
 
+	auto track = resourceMgr->getResource("NewTrack", "Tracks");
+    
+	mTrackModel = track->getMppResource();
+    mTrackModel->acquire(&mWrangler);
 
-	mTorus = createTorusModel(renderResourceMgr, &mWrangler);
-        mScene->add3dModel(mTorus);
+    mScene->add3dModel(mTrackModel);
 }
 
 void StatePlayTungstenMonoxide::destroyGameObjects()
 {
-  mTorus->release(&mWrangler);
+  mTrackModel->release(&mWrangler);
 }
 
 void StatePlayTungstenMonoxide::setupEntityFacades()
 {
 }
 
-
-
 void StatePlayTungstenMonoxide::setupScene() {
+	// Place the camera at the first starting-grid slot (Map::getStartGridPoses(), populated from
+	// the Track resource's <StartGrid> -- see cpp/editor's buildTrackResourceXml/StartGrid.hpp).
+	// Empty for a Track resource exported before that field existed, so the camera is simply left
+	// at createCamera()'s hardcoded default in that case rather than indexing an empty vector.
+	auto const& startGridPoses = getMap()->getStartGridPoses();
+	if (!startGridPoses.empty())
+	{
+		tox::Pose const& pose = startGridPoses[0];
+
+		auto camera = static_cast<ReactiveCamera*>(mCamera3d.get());
+		camera->setPosition(glm::vec3((float)pose.pos.x, (float)pose.pos.y, (float)pose.pos.z));
+		camera->setOrientation(glm::vec3((float)pose.forward.x, (float)pose.forward.y, (float)pose.forward.z),
+			glm::vec3((float)pose.up.x, (float)pose.up.y, (float)pose.up.z));
+	}
 }
 
 void StatePlayTungstenMonoxide::setupEntities()
@@ -243,13 +258,13 @@ void StatePlayTungstenMonoxide::setup(application::resourcesystem::ResourceManag
 
 	loadAllReferencedResources();
 
-	setupScene();
-
 	// Set up input
 	registerInput();
 
 	// For subclasses
 	createGameObjects(resourceMgr, renderSystem, renderResourceMgr, args);
+
+	setupScene();
 
 	// Start audio events
 	if (mwAudioSystem)

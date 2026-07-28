@@ -40,7 +40,7 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay
 
 	TmResourceWrangler mWrangler;
 
-	mpp::ResourcePtr mTorus;
+	mpp::ResourcePtr mTrackModel;
 
 private:
 

@@ -1570,7 +1570,7 @@ bool FocusOnSelection(TopDownView& view, const EditorState& state, const tox::Tr
   return true;
 }
 
-bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked) {
+bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked, std::optional<WorldPoint2D>* hoveredWorldOut) {
   const TrackBounds2D bounds = computeViewBounds(state.track(), baked);
 
   ImGui::BeginChild("TopDownCanvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -1677,6 +1677,8 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   const bool itemActive = ImGui::IsItemActive();
   const bool windowFocused = ImGui::IsWindowFocused();
   const ImVec2 mouseLocal = ImVec2(ImGui::GetIO().MousePos.x - canvasOrigin.x, ImGui::GetIO().MousePos.y - canvasOrigin.y);
+
+  if (hoveredWorldOut != nullptr) *hoveredWorldOut = hovered ? std::optional(view.screenToWorld(mouseLocal.x, mouseLocal.y)) : std::nullopt;
 
   if (hovered && ImGui::GetIO().MouseWheel != 0.0f) {
     // 15 slider units per wheel notch (editor.js uses deltaY*0.16 against ~100px/notch deltaY,

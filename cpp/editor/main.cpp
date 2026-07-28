@@ -33,6 +33,7 @@
 // "Load Bundled Textures", reusing M7b's readImageSize/addTextureAsset with FileDialog.hpp's
 // Open dialog -- almost entirely wiring.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1873,9 +1874,57 @@ int main(int, char**) {
   // randomRanges -- a session-only generator preference (see RandomRangesPanel.hpp), not track
   // data, so it lives here rather than in EditorState/undo history.
   editor::RandomTrackRanges randomRanges;
-  std::string usdExportStatus;
-  std::string mppModelExportStatus;
-  std::string fileIoStatus;
+  // Status bar (docked to the bottom of the window, mirrors web/editor.html's #statusBar):
+  // the most recent message replaces whatever's showing and is displayed for 3 seconds.
+  // Deliberately a real wall clock (steady_clock), not ImGui::GetTime(): several showStatus()
+  // calls below happen right after a blocking native file dialog (showOpenFileDialog/
+  // showSaveFileDialog) returns, which pumps its own message loop for however long the user
+  // takes and stalls ImGui::NewFrame()/io.DeltaTime for that whole span. GetTime() would only
+  // catch up on the next frame, immediately consuming (or overshooting) the 3-second budget the
+  // instant the dialog closed, so the message would show for far less than 3 seconds.
+  std::string statusMessage;
+  std::chrono::steady_clock::time_point statusExpiresAt{};
+  auto showStatus = [&](std::string message) {
+    statusMessage = std::move(message);
+    statusExpiresAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  };
+  // Idle status-bar content, shown whenever no timed showStatus() message is active: the four
+  // point/mesh-region/zone/trigger selection slots are mutually exclusive (EditorState.hpp's own
+  // selectXAt()/clearXSelection() calls all reset the other three), so checking them in this order
+  // and returning on the first match never misses or double-reports a selection.
+  auto describeSelection = [&]() -> std::string {
+    if (const editor::SelectedPoint sel = editorState.selection(); sel.valid()) {
+      const auto& point = editorState.track().paths[sel.pathIndex].points[sel.pointIndex];
+      switch (point.kind) {
+        case editor::PointKind::Position: return "Position point selected";
+        case editor::PointKind::Roll: return "Roll point selected";
+        case editor::PointKind::Width: return "Width point selected";
+        case editor::PointKind::CrossSection: return "Cross-section point selected";
+      }
+    }
+    if (const auto& meshId = editorState.selectedMeshId(); meshId.has_value()) {
+      std::string assetName = *meshId;
+      if (const editor::MeshPlacement* placement = editorState.findMeshPlacement(*meshId)) {
+        if (const auto it = editorState.track().meshAssets.find(placement->assetId); it != editorState.track().meshAssets.end())
+          assetName = it->second.name;
+      }
+      return "Mesh region selected: " + assetName;
+    }
+    if (const auto& zoneId = editorState.selectedZoneId(); zoneId.has_value()) {
+      const editor::Zone* zone = editorState.findZone(*zoneId);
+      return "Zone selected: " + (zone != nullptr ? zone->effect : *zoneId);
+    }
+    if (const auto& triggerId = editorState.selectedTriggerId(); triggerId.has_value()) {
+      // Mirrors TriggersPanel.cpp's own "Checkpoint"/"Dummy" + " (Finish)" labeling convention.
+      if (const editor::Trigger* trigger = editorState.findTrigger(*triggerId)) {
+        const bool isCheckpoint = trigger->type == "checkpoint";
+        return std::string("Trigger selected: ") + (isCheckpoint ? "Checkpoint" : "Dummy") +
+               (isCheckpoint && trigger->role == "finish" ? " (Finish)" : "");
+      }
+      return "Trigger selected: " + *triggerId;
+    }
+    return "Nothing selected";
+  };
 
   auto rebake = [&]() {
     // Skip the expensive self-intersection detection pass while a point/mesh drag is in progress
@@ -1941,7 +1990,6 @@ int main(int, char**) {
           editorState.history().push(editorState.track());
           editorState.replaceTrack(buildStarterTrack());
           rebake();
-          fileIoStatus.clear();
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Import JSON...")) {
@@ -1954,9 +2002,9 @@ int main(int, char**) {
               editorState.history().push(editorState.track());
               editorState.replaceTrack(std::move(imported));
               rebake();
-              fileIoStatus = "Loaded " + editor::pathToUtf8(picked.path);
+              showStatus("Loaded " + editor::pathToUtf8(picked.path));
             } catch (const std::exception& error) {
-              fileIoStatus = std::string("Import failed: ") + error.what();
+              showStatus(std::string("Import failed: ") + error.what());
             }
           }
         }
@@ -1969,9 +2017,9 @@ int main(int, char**) {
             // with it (EDITOR_PARITY_FIXES.md finding 3). Import JSON already caught; this didn't.
             try {
               editor::toFile(editorState.track(), picked.path);
-              fileIoStatus = "Wrote " + editor::pathToUtf8(picked.path);
+              showStatus("Wrote " + editor::pathToUtf8(picked.path));
             } catch (const std::exception& error) {
-              fileIoStatus = std::string("Export failed: ") + error.what();
+              showStatus(std::string("Export failed: ") + error.what());
             }
           }
         }
@@ -1994,13 +2042,13 @@ int main(int, char**) {
               // Previously fell through to importMeshFromJsonText with empty text, which reported
               // the clipboard-flavoured "nothing to import (the clipboard is empty)" for a file
               // that simply couldn't be opened (EDITOR_PARITY_FIXES.md finding 8).
-              fileIoStatus = "Mesh import failed: could not open " + editor::pathToUtf8(picked.path);
+              showStatus("Mesh import failed: could not open " + editor::pathToUtf8(picked.path));
             } else {
               std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
               const editor::WorldPoint2D center = topDownView.center();
               const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
               if (error)
-                fileIoStatus = "Mesh import failed: " + *error;
+                showStatus("Mesh import failed: " + *error);
               else
                 rebake();
             }
@@ -2013,11 +2061,11 @@ int main(int, char**) {
           if (const auto text = editor::readClipboardText()) {
             const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
             if (error)
-              fileIoStatus = "Clipboard does not contain a mesh: " + *error;
+              showStatus("Clipboard does not contain a mesh: " + *error);
             else
               rebake();
           } else {
-            fileIoStatus = "Could not read the clipboard";
+            showStatus("Could not read the clipboard");
           }
         }
         ImGui::Separator();
@@ -2030,13 +2078,13 @@ int main(int, char**) {
               std::ofstream out(picked.path, std::ios::binary);
               if (out) {
                 out << usd.text;
-                usdExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(usd.meshCount) + " mesh(es))";
+                showStatus("Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(usd.meshCount) + " mesh(es))");
               } else {
-                usdExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
+                showStatus("Failed to open " + editor::pathToUtf8(picked.path) + " for writing");
               }
             }
           } else {
-            usdExportStatus = "Nothing to export -- current track failed to bake";
+            showStatus("Nothing to export -- current track failed to bake");
           }
         }
         // Export .mppmodel (MPPMODEL_EXPORT_SPEC.md), a from-scratch native writer of
@@ -2055,24 +2103,30 @@ int main(int, char**) {
 
                 // Companion Resources.xml-shaped fragment declaring this Track resource and its
                 // TrackMaterial dependents (see MppModelExport.hpp's buildTrackResourceXml), written
-                // beside the .mppmodel with the same stem.
+                // beside the .mppmodel with the same stem. Also carries the settled starting-grid
+                // poses (StartGrid.hpp), computed here rather than inside buildTrackResourceXml so
+                // that function stays a pure XML-string-builder with no tox::Simulation dependency.
+                const tox::Simulation exportSim(*bakedTrack);
+                const std::vector<tox::Pose> startGridPoses =
+                    tox::StartGrid::startingGridPoses(exportSim, *bakedTrack, tox::StartGrid::DEFAULT_SHIP_COUNT);
                 std::filesystem::path xmlPath = picked.path;
                 xmlPath.replace_extension(L"xml");
-                const std::string xml = editor::buildTrackResourceXml(editorState.track(), editor::pathToUtf8(picked.path.filename()));
+                const std::string xml =
+                    editor::buildTrackResourceXml(editorState.track(), editor::pathToUtf8(picked.path.filename()), startGridPoses);
                 std::ofstream xmlOut(xmlPath, std::ios::binary);
                 if (xmlOut) {
                   xmlOut.write(xml.data(), static_cast<std::streamsize>(xml.size()));
-                  mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " and " + editor::pathToUtf8(xmlPath) + " (" +
-                                          std::to_string(mppModel.meshCount) + " mesh(es))";
+                  showStatus("Wrote " + editor::pathToUtf8(picked.path) + " and " + editor::pathToUtf8(xmlPath) + " (" +
+                             std::to_string(mppModel.meshCount) + " mesh(es))");
                 } else {
-                  mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + ", but failed to open " + editor::pathToUtf8(xmlPath) + " for writing";
+                  showStatus("Wrote " + editor::pathToUtf8(picked.path) + ", but failed to open " + editor::pathToUtf8(xmlPath) + " for writing");
                 }
               } else {
-                mppModelExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
+                showStatus("Failed to open " + editor::pathToUtf8(picked.path) + " for writing");
               }
             }
           } else {
-            mppModelExportStatus = "Nothing to export -- current track failed to bake";
+            showStatus("Nothing to export -- current track failed to bake");
           }
         }
         ImGui::EndMenu();
@@ -2209,20 +2263,25 @@ int main(int, char**) {
     ImGui::SameLine();
     bool showCrossSectionToolbar = topDownView.showCrossSectionPoints();
     if (ImGui::Checkbox("Cross-Section##toolbar", &showCrossSectionToolbar)) topDownView.setShowCrossSectionPoints(showCrossSectionToolbar);
-    if (!fileIoStatus.empty()) ImGui::TextUnformatted(fileIoStatus.c_str());
-    if (!usdExportStatus.empty()) ImGui::TextUnformatted(usdExportStatus.c_str());
-    if (!mppModelExportStatus.empty()) ImGui::TextUnformatted(mppModelExportStatus.c_str());
     const float toolbarHeight = ImGui::GetWindowSize().y;
     ImGui::End();
     ImGui::PopStyleVar();
 
-    // Dockspace host: fills the remaining viewport below the toolbar. The layout itself (left
-    // panel with every property/tool panel tabbed together, top-down view top-right, elevation
-    // profile bottom-right) is built once via DockBuilder on the first frame only, then never
-    // touched again -- io.IniFilename is null (see CreateContext above), so there's no saved
-    // layout to conflict with, and every future launch starts from this exact same arrangement.
+    // Status bar: a fixed strip docked to the bottom of the window (mirrors web/editor.html's
+    // #statusBar), showing the most recent showStatus() message for 3 seconds. Its height is fixed
+    // up front (unlike the toolbar's auto-measured height above) so the dockspace host below can
+    // subtract it out in the same pass it's positioned in, rather than needing a second frame.
+    const float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 16.0f;
+    const bool statusVisible = !statusMessage.empty() && std::chrono::steady_clock::now() < statusExpiresAt;
+
+    // Dockspace host: fills the remaining viewport between the toolbar and the status bar. The
+    // layout itself (left panel with every property/tool panel tabbed together, top-down view
+    // top-right, elevation profile bottom-right) is built once via DockBuilder on the first frame
+    // only, then never touched again -- io.IniFilename is null (see CreateContext above), so
+    // there's no saved layout to conflict with, and every future launch starts from this exact
+    // same arrangement.
     ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + toolbarHeight));
-    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - toolbarHeight));
+    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - toolbarHeight - statusBarHeight));
     ImGui::SetNextWindowViewport(mainViewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -2478,8 +2537,35 @@ int main(int, char**) {
 
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("Top-Down View");
-    if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack)) rebake();
+    std::optional<editor::WorldPoint2D> hoveredWorld;
+    if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack, &hoveredWorld)) rebake();
     ImGui::End();
+
+    // Status bar strip itself: docked to the bottom edge, same fixed/non-dockable/non-movable
+    // construction as the toolbar above (space for it already reserved out of the dockspace host
+    // above). Rendered here, after DrawTopDownCanvas, so hoveredWorld reflects this same frame's
+    // mouse position rather than lagging a frame behind. Always occupies its reserved space (so
+    // the dockspace above never has to resize) -- when no timed showStatus() message is active,
+    // it instead shows a live "X/Z under the cursor + what's selected" readout, normal idle state.
+    ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, statusBarHeight));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+    ImGui::Begin("##StatusBar", nullptr,
+                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoSavedSettings);
+    if (statusVisible) {
+      ImGui::TextUnformatted(statusMessage.c_str());
+    } else {
+      char idleLine[256];
+      if (hoveredWorld.has_value())
+        std::snprintf(idleLine, sizeof(idleLine), "X: %.1f   Z: %.1f    %s", hoveredWorld->x, hoveredWorld->z, describeSelection().c_str());
+      else
+        std::snprintf(idleLine, sizeof(idleLine), "%s", describeSelection().c_str());
+      ImGui::TextUnformatted(idleLine);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 
     // Mirrors editor.js's elevCollapsed: the panel can be hidden (its own persisted preference in
     // the web editor; a plain in-session toggle here, since there's no settings file yet).

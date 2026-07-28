@@ -28,8 +28,10 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "EditorTrackDefinition.hpp"
+#include "Ship.hpp"
 #include "Track.hpp"
 
 namespace editor {
@@ -71,6 +73,15 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track);
 // <Definitions> at all still gets an implicit factory="" one synthesized by
 // ResourceLocation::scanResourceElement(), and no (Map, "") factory is registered -- omitting
 // <Definitions> entirely throws "could not find a definition factory" at load time.
-std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName);
+//
+// startGridPoses is also carried inside <Definition factory="Track">, as a sibling <StartGrid>
+// element holding one <Pose> per slot (index, position, forward, and surface-up/normal as
+// px/py/pz, fx/fy/fz, nx/ny/nz attributes) -- the caller computes these once via
+// tox::StartGrid::startingGridPoses(sim, bakedTrack, ...) (see StartGrid.hpp) and passes the
+// settled result in, so this function stays a pure XML-string-builder with no tox::Simulation
+// dependency of its own. MapTungstenMonoxideDefinitionFactory::create() reads <StartGrid> back out
+// into Map::mStartGridPoses.
+std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
+                                   const std::vector<tox::Pose>& startGridPoses);
 
 }  // namespace editor

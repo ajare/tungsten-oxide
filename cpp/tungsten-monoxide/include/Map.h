@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <willpower/application/resourcesystem/Resource.h>
 #include <willpower/application/resourcesystem/ResourceFactory.h>
@@ -8,6 +9,8 @@
 #include <willpower/common/Logger.h>
 
 #include <applib/Map.h>
+
+#include "Ship.hpp"
 
 class Map : public applib::Map
 {
@@ -22,6 +25,14 @@ class Map : public applib::Map
 	// its TrackMaterial dependents), so a `location=` attribute on the Track element itself is
 	// silently discarded. The Definition-carried filename is the only channel left for it.
 	std::string mModelFileName;
+
+	// The settled starting-grid poses (position/forward/surface-up per slot), set by
+	// MapTungstenMonoxideDefinitionFactory::create() from this resource's <Definition
+	// factory="Track"><StartGrid>...</StartGrid></Definition> -- see
+	// cpp/editor/src/MppModelExport.cpp's buildTrackResourceXml, which computes them via
+	// tox::StartGrid::startingGridPoses(). Empty for a Track resource exported before this field
+	// existed; callers must not assume a non-empty vector.
+	std::vector<tox::Pose> mStartGridPoses;
 
 private:
 
@@ -53,6 +64,8 @@ public:
 	);
 
 	~Map();
+
+	std::vector<tox::Pose> const& getStartGridPoses() const { return mStartGridPoses; }
 };
 
 class MapResourceFactory : public wp::application::resourcesystem::ResourceFactory

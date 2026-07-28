@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <set>
 
@@ -70,23 +71,10 @@ std::string packVertices(const tox::GeometryBatch& batch) {
   return out;
 }
 
-// Mirrors AssImpModelLoader.cpp's index-packing byte order (lines 370-393): little-endian, 2 or 4
-// bytes per index depending on whether 16-bit indices can address every vertex.
-std::pair<std::string, std::uint32_t> packIndices(const tox::GeometryBatch& batch) {
-  const bool wide = batch.vertices.size() > 65535;
-  const std::uint32_t indexWidthBits = wide ? 32 : 16;
-  std::string out;
-  out.reserve(batch.indices.size() * (indexWidthBits / 8));
-  for (std::uint32_t idx : batch.indices) {
-    out.push_back(static_cast<char>(idx & 0xff));
-    out.push_back(static_cast<char>((idx >> 8) & 0xff));
-    if (wide) {
-      out.push_back(static_cast<char>((idx >> 16) & 0xff));
-      out.push_back(static_cast<char>((idx >> 24) & 0xff));
-    }
-  }
-  return {out, indexWidthBits};
-}
+// Sentinel written as each mesh's indexStreamId, matching ModelSerializer::readMesh()'s own
+// documented "4 bytes: index buffer id (or -1 for none)" convention -- this export writes no index
+// streams at all (see exportTrackToMppModel), so there is no valid id to point at.
+constexpr std::uint32_t kNoIndexStream = 0xFFFFFFFFu;
 
 }  // namespace
 
@@ -97,14 +85,8 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
   // before the header/directory are written -- no seek-and-backpatch needed at all (see
   // MppModelExport.hpp's header comment on why the upstream backpatch approach is unsafe to
   // imitate).
-  std::vector<std::string> packedVertices(meshCount), packedIndices(meshCount);
-  std::vector<std::uint32_t> indexWidths(meshCount);
-  for (std::size_t i = 0; i < meshCount; ++i) {
-    packedVertices[i] = packVertices(track.geometry[i]);
-    auto [indexBytes, indexWidthBits] = packIndices(track.geometry[i]);
-    packedIndices[i] = std::move(indexBytes);
-    indexWidths[i] = indexWidthBits;
-  }
+  std::vector<std::string> packedVertices(meshCount);
+  for (std::size_t i = 0; i < meshCount; ++i) packedVertices[i] = packVertices(track.geometry[i]);
 
   // MaterialNames / Materials sections: deliberately empty (MPPMODEL_EXPORT_SPEC.md 5, option 1
   // -- materials are referenced by name only, authored separately in the target project).
@@ -120,27 +102,30 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
     appendBytes(vertexDataSection, packedVertices[i].data(), packedVertices[i].size());
   }
 
-  std::string indexDataSection;
-  for (std::size_t i = 0; i < meshCount; ++i) {
-    // Mirrors writeIndexBuffer(): u32 dataSizeBytes, u32 indexWidthBits, raw bytes.
-    appendU32(indexDataSection, static_cast<std::uint32_t>(packedIndices[i].size()));
-    appendU32(indexDataSection, indexWidths[i]);
-    appendBytes(indexDataSection, packedIndices[i].data(), packedIndices[i].size());
-  }
+  // IndexData section: deliberately empty. Every tox geometry batch is already a triangle soup --
+  // TrackBake.cpp's Builder::tri() and TrackMesh.cpp's addTriangle() give every triangle three
+  // brand-new vertices, never sharing any, so `indices[k] == k` for every batch (the identity
+  // permutation) and vertices.size() == 3 * triangleCount. An index buffer holding 0,1,2,3,... is
+  // pure redundancy: drawing the vertex buffer straight through produces byte-identical geometry.
+  // cpp/tungsten-monoxide's Map.cpp declares the matching non-indexed MeshSpecification and
+  // derives primitiveCount as vertexCount / 3 rather than from indices.
+  const std::string indexDataSection;
 
   std::string meshMetadataSection;
   for (std::size_t i = 0; i < meshCount; ++i) {
     const tox::GeometryBatch& batch = track.geometry[i];
     // Mirrors writeMesh(): str name, u32 primitiveType, u32 primitiveCount, str material,
     // u32 numVertexBuffers, vertexBufferId[numVertexBuffers], u32 indexStreamId. One vertex
-    // stream and one index stream per mesh, added in mesh order, so stream id == mesh index.
+    // stream per mesh, added in mesh order, so vertex stream id == mesh index; no index stream.
     appendString(meshMetadataSection, batch.id);
     appendU32(meshMetadataSection, static_cast<std::uint32_t>(PrimitiveType::Triangles));
-    appendU32(meshMetadataSection, static_cast<std::uint32_t>(batch.indices.size() / 3));
+    // Non-indexed, so primitiveCount comes from the vertex count. Identical to the old
+    // indices.size() / 3 (see the IndexData comment above), just no longer routed via indices.
+    appendU32(meshMetadataSection, static_cast<std::uint32_t>(batch.vertices.size() / 3));
     appendString(meshMetadataSection, batch.materialKey);
     appendU32(meshMetadataSection, 1);  // numVertexBuffers
     appendU32(meshMetadataSection, static_cast<std::uint32_t>(i));
-    appendU32(meshMetadataSection, static_cast<std::uint32_t>(i));  // indexStreamId
+    appendU32(meshMetadataSection, kNoIndexStream);  // indexStreamId: none
   }
 
   // Header (12 bytes) + directory (6 x 16 bytes = 96 bytes) = 108 bytes before section 0 starts.
@@ -158,18 +143,22 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
   const DirectoryEntry materialNamesEntry = makeEntry(DirectoryEntryType::MaterialNames, materialNamesSection, 0);
   const DirectoryEntry materialsEntry = makeEntry(DirectoryEntryType::Materials, materialsSection, 0);
   const DirectoryEntry vertexDataEntry = makeEntry(DirectoryEntryType::VertexData, vertexDataSection, meshCount);
-  const DirectoryEntry indexDataEntry = makeEntry(DirectoryEntryType::IndexData, indexDataSection, meshCount);
+  const DirectoryEntry indexDataEntry = makeEntry(DirectoryEntryType::IndexData, indexDataSection, 0);
   const DirectoryEntry meshMetadataEntry = makeEntry(DirectoryEntryType::MeshMetadata, meshMetadataSection, meshCount);
 
   std::string file;
   file.reserve(cursor);
 
-  // Header: mirrors writeHeader() -- magic 'MPPM', u16 versionMajor=1, u16 versionMinor=1,
-  // u32 flags (FLAG_INDEXED_VERTICES, 0x0001, unconditionally set).
+  // Header: mirrors writeHeader() -- magic 'MPPM', u16 versionMajor=1, u16 versionMinor=1, u32
+  // flags. FLAG_INDEXED_VERTICES (0x0001) is deliberately CLEAR: this export writes no index
+  // streams (see the IndexData comment above). Upstream's own writeHeader() sets it
+  // unconditionally, but nothing in ModelSerializer::load() reads the flag back -- readIndexBuffers
+  // is driven purely by the IndexData directory entry's count, which is 0 here -- so a cleared
+  // flag costs no compatibility and honestly describes the file.
   file.append("MPPM", 4);
   appendU16(file, 1);
   appendU16(file, 1);
-  appendU32(file, 0x0001);
+  appendU32(file, 0x0000);
 
   // Directory: mirrors writeDirectory()'s entry order (Unused, MaterialNames, Materials,
   // VertexData, IndexData, MeshMetadata) -- written with final values directly, no placeholder
@@ -200,6 +189,15 @@ constexpr char kDefaultShellMaterial[] = "Tracks/DefaultShellMaterial";
 constexpr char kDefaultZoneMaterial[] = "Tracks/DefaultZoneMaterial";
 constexpr char kDefaultTriggerMaterial[] = "Tracks/DefaultTriggerMaterial";
 
+// Fixed precision keeps the attribute values compact and diffable while comfortably exceeding the
+// float32 precision the rest of the export already commits to (packVertices() above truncates to
+// float); double round-tripping through decimal digits isn't a goal here.
+std::string formatCoord(double value) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.6f", value);
+  return buf;
+}
+
 std::string xmlEscape(const std::string& value) {
   std::string out;
   out.reserve(value.size());
@@ -217,7 +215,8 @@ std::string xmlEscape(const std::string& value) {
 
 }  // namespace
 
-std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName) {
+std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
+                                   const std::vector<tox::Pose>& startGridPoses) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
   // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
   // curve content.
@@ -257,7 +256,26 @@ std::string buildTrackResourceXml(const TrackDefinition& track, const std::strin
   // and no (Map, "") definition factory is registered -- only (Map, "Track") is (see
   // cpp/tungsten-monoxide/src/DLL.cpp). Omitting it throws "could not find a definition factory".
   xml += "\t\t\t<Definitions>\n\t\t\t\t<Definition factory=\"Track\">\n\t\t\t\t\t<File>" + xmlEscape(mppModelFileName) +
-         "</File>\n\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
+         "</File>\n";
+
+  // <StartGrid>: one settled Pose per grid slot (position, driven-direction forward, surface-up/
+  // normal), computed by the caller via tox::StartGrid::startingGridPoses() (see
+  // MppModelExport.hpp's comment). Omitted entirely when the caller passes no poses (e.g. the
+  // track failed to bake a Simulation), rather than writing an empty element -- consumers should
+  // treat a Track resource with no <StartGrid> the same as one that predates this field.
+  if (!startGridPoses.empty()) {
+    xml += "\t\t\t\t\t<StartGrid>\n";
+    for (std::size_t i = 0; i < startGridPoses.size(); ++i) {
+      const tox::Pose& pose = startGridPoses[i];
+      xml += "\t\t\t\t\t\t<Pose index=\"" + std::to_string(i) + "\" px=\"" + formatCoord(pose.pos.x) + "\" py=\"" +
+             formatCoord(pose.pos.y) + "\" pz=\"" + formatCoord(pose.pos.z) + "\" fx=\"" + formatCoord(pose.forward.x) +
+             "\" fy=\"" + formatCoord(pose.forward.y) + "\" fz=\"" + formatCoord(pose.forward.z) + "\" nx=\"" +
+             formatCoord(pose.up.x) + "\" ny=\"" + formatCoord(pose.up.y) + "\" nz=\"" + formatCoord(pose.up.z) + "\" />\n";
+    }
+    xml += "\t\t\t\t\t</StartGrid>\n";
+  }
+
+  xml += "\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
 
   xml += "\t\t</Resource>\n\t</Namespace>\n</Resources>\n";
   return xml;

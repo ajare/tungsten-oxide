@@ -341,7 +341,10 @@ Vec3 surface(const Frame& f, const Vec3& l, const Vec3& r, double v) {
 }
 Vec3 triNormal(const Vec3& a, const Vec3& b, const Vec3& c) {
   Vec3 n;
-  n.crossVectors(b.clone().sub(a), c.clone().sub(a)).normalize();
+  // cross(c-a, b-a), not cross(b-a, c-a) -- see TrackMesh.cpp's normalOf() for why this operand
+  // order (not the naively expected one) is the one that actually points outward/up rather than
+  // into the ground, for the vertex order Builder::tri()'s callers use.
+  n.crossVectors(c.clone().sub(a), b.clone().sub(a)).normalize();
   if (n.lengthSq() == 0) n.set(0, 1, 0);
   return n;
 }

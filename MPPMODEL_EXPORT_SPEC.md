@@ -103,8 +103,11 @@ MeshMetadata section    count x { str name, u32 primitiveType, u32 primitiveCoun
 ```
 
 `FLAG_INDEXED_VERTICES` is unconditionally set by `writeHeader()` (`ModelSerializer.cpp:224-227`)
-regardless of what's actually written — every `.mppmodel` file is nominally "indexed"; there's no
-non-indexed on-disk variant even though `MeshSpecification`/`Primitive` model the concept.
+regardless of what's actually written — upstream, every `.mppmodel` file is nominally "indexed".
+Nothing in `ModelSerializer::load()` ever reads the flag back, though: `readIndexBuffers()` is
+driven purely by the `IndexData` directory entry's `count`. A writer can therefore emit zero index
+streams and clear the flag, and the read path handles it without special-casing — which is exactly
+what `MppModelExport.cpp` does (see §4.3).
 
 ### 2.2 What is and isn't self-describing
 
@@ -163,8 +166,9 @@ Facts that matter for the converter, established by reading `cpp/core/src/TrackB
 
 - **Every triangle gets three brand-new vertices.** Nothing is ever deduplicated or shared; for
   every batch, `indices.size() == vertices.size() == 3 * triangleCount`, and
-  `indices[k] == k` — the index buffer is the identity permutation. It's still a legal indexed
-  triangle list, just one with no actual sharing (see §4.2 for what this means for the converter).
+  `indices[k] == k` — the index buffer is the identity permutation, i.e. the batch is already a
+  triangle soup and the indices carry no information. This is why the export is non-indexed
+  (see §4.3).
 - **Normals are flat, per-triangle** (`triNormal`/`normalOf`, both a plain cross-product of two
   edges, normalized) — not vertex-averaged smooth normals. All 3 vertices of one triangle share
   the identical normal.
@@ -223,7 +227,7 @@ This is exactly the shape `SpecificationParser::parseMeshSpecification` would bu
 spec like:
 
 ```xml
-<Buffers indexed="true" primitive="triangles" storage="static">
+<Buffers indexed="false" primitive="triangles" storage="static">
   <Buffer>
     <Channel data="position3" type="float32" />
     <Channel data="normal3" type="float32" />
@@ -235,6 +239,19 @@ spec like:
 
 — write this file alongside the converter (or embed the equivalent `MeshSpecification` in
 whatever `.material` resources you author, per §5) so a human/consuming loader has it in writing.
+
+**This layout is load-bearing on both sides and there is no runtime negotiation of it.** The
+binary records a per-stream `vertexStride` but never the attribute meaning (§2.2), and
+`ProgrammaticModelStream::createMeshDataStreams()` derives both the vertex count
+(`dataSize / spec.getVertexStrideInBytes()`) and every attribute's byte offset from the consumer's
+own `MeshSpecification`. A consumer that declares, say, `Colour4/Float` (16 bytes) instead of
+`Colour4/UnsignedByte` (4) computes a 48-byte stride against 36-byte-packed data and silently
+decodes garbage past the first vertex — no exception, just a mesh that renders as nothing. The two
+places that must agree with the table above are
+`cpp/tungsten-monoxide/src/Map.cpp`'s `trackMeshSpecification()` and the `TrackProgram`
+`<MeshSpecification>` in `cpp/tungsten-monoxide/resources/Resources.xml`. `Map.cpp` additionally
+cross-checks the file's own recorded stride against its spec and throws on mismatch, so drift
+surfaces as a load error rather than an invisible one.
 
 ### 4.2 Vertex buffer: pack directly, no `deinterlaceVertexBufferData` needed
 
@@ -269,25 +286,32 @@ note `addVertexStream` takes `std::shared_ptr<const int8_t>`, so wrap `out` in a
 pattern used throughout `AssImpModelLoader.cpp`) rather than handing over a `vector`'s storage
 directly.
 
-### 4.3 Index buffer: pack width-appropriate, little-endian
+### 4.3 Index buffer: none — the export is non-indexed
 
-```cpp
-std::pair<std::vector<std::byte>, std::size_t> packIndices(const tox::GeometryBatch& batch) {
-  const bool wide = batch.vertices.size() > 65535;
-  const std::size_t width = wide ? 32 : 16;
-  std::vector<std::byte> out(batch.indices.size() * (width / 8));
-  std::byte* p = out.data();
-  for (std::uint32_t idx : batch.indices) {
-    *p++ = std::byte(idx & 0xff); *p++ = std::byte((idx >> 8) & 0xff);
-    if (wide) { *p++ = std::byte((idx >> 16) & 0xff); *p++ = std::byte((idx >> 24) & 0xff); }
-  }
-  return {out, width};
-}
-```
+**No index streams are written at all**, and `FLAG_INDEXED_VERTICES` is left clear.
 
-Mirrors `AssImpModelLoader.cpp:370-393`'s exact byte order. Since `GeometryBatch`'s indices are
-already the identity permutation (§3), this step is *structurally* pure repacking — it never
-needs to resolve/deduplicate anything, unlike the general AssImp case.
+Every `GeometryBatch`'s index array is the identity permutation `indices[k] == k` (§3): the batch
+is already a triangle soup, with `vertices.size() == 3 * triangleCount` and no vertex shared
+between triangles. An index buffer holding `0,1,2,3,...` is therefore pure redundancy — drawing
+the vertex buffer straight through yields byte-identical geometry, at 2 bytes/vertex less on disk
+(~5% of a typical track file).
+
+Concretely, in the emitted binary:
+
+- `IndexData` directory entry: `count = 0`, zero-length section. `ModelSerializer::readIndexBuffers()`
+  is driven by that count, so it reads nothing and the section's `start == end` check passes.
+- Each mesh's `indexStreamId` is `0xFFFFFFFF`, matching `readMesh()`'s own documented
+  "index buffer id (or -1 for none)" convention. Nothing may call
+  `ModelSerializer::getIndexData()` for such a mesh — it would index an empty stream vector.
+- `primitiveCount` is `vertices.size() / 3` rather than `indices.size() / 3` (identical values,
+  just no longer routed through indices).
+
+Consumers must declare `setIndexedVertices(false)`; `ProgrammaticModelStream::createMeshDataStreams()`
+then derives `primitiveCount` as `vertexCount / 3` instead of from index data.
+
+Older `.mppmodel` files written before this change still load correctly against a non-indexed
+consumer: their index buffers are simply ignored, and because those indices were the identity
+permutation, the drawn geometry is unchanged.
 
 ### 4.4 Per-batch mesh entry
 
@@ -302,11 +326,9 @@ void exportTrackToMppModel(const tox::Track& track, const std::string& outFile) 
     out.setName(i, batch.id);
     out.setMaterial(i, batch.materialKey);         // see §5 -- not resolved to addMaterial() here
     out.setPrimitiveType(i, mpp::mesh::Primitive::Type::Triangles);
-    out.setPrimitiveCount(i, batch.indices.size() / 3);
+    out.setPrimitiveCount(i, batch.vertices.size() / 3);   // non-indexed, see §4.3
 
-    auto [indexBytes, indexWidth] = packIndices(batch);
-    out.setIndexBuffer(i, toSharedU8(indexBytes), indexWidth);
-
+    // No setIndexBuffer() call: the export is non-indexed (§4.3).
     auto vertexBytes = packVertices(batch);
     out.addVertexStream(i, batch.vertices.size(), 36, toSharedI8(vertexBytes));
   }
@@ -315,12 +337,10 @@ void exportTrackToMppModel(const tox::Track& track, const std::string& outFile) 
 }
 ```
 
-One `GeometryBatch` → one mesh entry, one vertex stream, one index stream — no splitting needed
-*unless* a single batch exceeds `65535` vertices and you want to keep 16-bit indices for size
-(the `>` check above already falls back to 32-bit automatically instead, matching
-`AssImpModelLoader`'s own behaviour — `model-convert`'s alternative, `splitSize`/
-`maxVerticesPerMesh`-driven mesh splitting via `aiProcess_SplitLargeMeshes`, is AssImp-side and
-has no equivalent needed here since nothing forces 16-bit).
+One `GeometryBatch` → one mesh entry, one vertex stream, no index stream. No splitting is needed
+at any batch size: with no index buffer there is no 16-bit vertex-addressing ceiling to stay under
+in the first place (`model-convert`'s `splitSize`/`maxVerticesPerMesh` mesh splitting via
+`aiProcess_SplitLargeMeshes` is AssImp-side and has no equivalent needed here).
 
 ## 5. Materials — out of scope for the geometry conversion itself, needs a decision
 

@@ -15,7 +15,12 @@ namespace editor {
 // in response to input: point select/drag/delete in Edit mode, click-to-add/close/finish in
 // Create mode (EDITOR_CPP_PORT_PLAN.md M3). Returns true if the authored track changed this frame
 // (the caller should re-bake the live preview).
-bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked);
+//
+// `hoveredWorldOut`, if non-null, is set to the mouse's world X/Z position when the mouse is over
+// the canvas this frame, or reset to nullopt otherwise -- lets main.cpp's status bar show a live
+// world-coordinate readout without duplicating this function's own hover/screen-to-world logic.
+bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked,
+                      std::optional<WorldPoint2D>* hoveredWorldOut = nullptr);
 
 // Pans+zooms `view` to frame whichever of the four mutually-exclusive selection kinds (point/
 // mesh-region/zone/trigger) is currently selected -- shared by the top-down canvas's own "Object"

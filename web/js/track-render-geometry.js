@@ -26,7 +26,10 @@ function vec(p) {
 function triangleNormal(a, b, c) {
   const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
   const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-  let x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+  // cross(v, u), not cross(u, v) -- mirrors cpp/core/src/TrackMesh.cpp's normalOf() (see its
+  // comment): for the (a,b,c) vertex order this is always called with, cross(u,v) works out to
+  // cross(edgeRight, tangent), which is provably always -normal (into the ground), not +normal.
+  let x = vy * uz - vz * uy, y = vz * ux - vx * uz, z = vx * uy - vy * ux;
   const len = Math.hypot(x, y, z);
   if (len < 1e-12) return [0, 1, 0];
   x /= len; y /= len; z /= len;

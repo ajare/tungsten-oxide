@@ -1,5 +1,6 @@
 #pragma warning(push)
 #pragma warning(disable : 4201)
+#include <glm/geometric.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #pragma warning(pop)
 
@@ -26,4 +27,11 @@ void ReactiveCamera::setPitch(float pitch)
 {
 	mPitch = pitch;
 	mDirty = true;
+}
+
+void ReactiveCamera::setOrientation(glm::vec3 const& forward, glm::vec3 const& up)
+{
+	mDirection = glm::normalize(forward);
+	mUp = glm::normalize(up);
+	mDirty = false;
 }

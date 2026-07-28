@@ -6,7 +6,7 @@
 void main()
 {
 	vec4 colour = @Vec4(@In(COLOUR));
-    	colour *= @Uniform(DIFFUSE);
+    //colour *= @Uniform(DIFFUSE);
 
 	vec2 tc = @In(TEXCOORDS).st;
 

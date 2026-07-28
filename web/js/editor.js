@@ -3,6 +3,19 @@ import * as TrackMesh from './track-mesh.js';
 import { Mesh, Vector2 } from '@willpower/geometry';
 import { exportTrackToUSDA, sanitizeFileStem } from './usd-export.js';
 
+// ---------- Status bar ----------
+// Non-blocking replacement for window.alert(): editor messages show here for
+// 3s instead of stopping the page with a modal dialog.
+let statusBarTimer = null;
+function showStatus(message) {
+  const bar = document.getElementById('statusBar');
+  if (!bar) return;
+  bar.textContent = message;
+  bar.classList.add('visible');
+  clearTimeout(statusBarTimer);
+  statusBarTimer = setTimeout(() => bar.classList.remove('visible'), 3000);
+}
+
 // ---------- Editor state ----------
 // track.paths: [{ closed, points }, ...] — a track is one or more paths, each
 // either a closed loop or an open curve. `points` is a single array of TYPED
@@ -279,7 +292,7 @@ async function loadTextureFileReference(file) {
     renderTexturePanel();
   } catch (err) {
     URL.revokeObjectURL(objectUrl);
-    alert('Could not load image: ' + (err.message || err));
+    showStatus('Could not load image: ' + (err.message || err));
   }
 }
 async function loadBundledTextureAssets() {
@@ -428,7 +441,7 @@ function addMeshAsset(mesh, name, at) {
 
 function importMeshFile(filename, text) {
   const { mesh, error } = parseMeshJSON(text);
-  if (error) { alert('Mesh import failed: ' + error); return; }
+  if (error) { showStatus('Mesh import failed: ' + error); return; }
   addMeshAsset(mesh, filename);
 }
 
@@ -442,12 +455,12 @@ async function importMeshFromClipboard(centreOn) {
     if (!navigator.clipboard?.readText) throw new Error('clipboard reads are unavailable in this browser (needs https:// or localhost)');
     text = await navigator.clipboard.readText();
   } catch (err) {
-    alert('Could not read the clipboard: ' + err.message +
+    showStatus('Could not read the clipboard: ' + err.message +
       '\n\nUse Import Mesh to load a .json file instead.');
     return;
   }
   const { mesh, error } = parseMeshJSON(text);
-  if (error) { alert('Clipboard does not contain a mesh: ' + error); return; }
+  if (error) { showStatus('Clipboard does not contain a mesh: ' + error); return; }
   let at = { x: 0, z: 0 };
   if (centreOn && Number.isFinite(centreOn.x) && Number.isFinite(centreOn.z)) {
     // Offset by the shape's own centre so it lands *centred* on the click
@@ -1563,19 +1576,19 @@ function convertSelectedPoint(newType) {
   if (curType === newType) return;
 
   if (curType === 'position' && countPointOccurrences(curObj) > 1) {
-    alert('Reconnect this shared/disjoint point before converting it.'); return;
+    showStatus('Reconnect this shared/disjoint point before converting it.'); return;
   }
   if (curType === 'position' && pp.controlPoints.length <= 4) {
-    alert('A track path needs at least 4 position control points.'); return;
+    showStatus('A track path needs at least 4 position control points.'); return;
   }
   if (curType === 'roll' && pp.rollPoints.length <= 2) {
-    alert('A path needs at least 2 roll points.'); return;
+    showStatus('A path needs at least 2 roll points.'); return;
   }
   if (curType === 'width' && pp.widthPoints.length <= 2) {
-    alert('A path needs at least 2 width points.'); return;
+    showStatus('A path needs at least 2 width points.'); return;
   }
   if (curType === 'crossSection' && pp.crossSectionPoints.length <= 2) {
-    alert('A path needs at least 2 cross-section points.'); return;
+    showStatus('A path needs at least 2 cross-section points.'); return;
   }
 
   pushUndo();
@@ -1941,7 +1954,7 @@ function makeDisjoint() {
   if (!path || !point || seamForPoint(point)) return;
   const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   const reason = disjointDisabledReason(path, sel.point);
-  if (reason) { alert(reason); return; }
+  if (reason) { showStatus(reason); return; }
   pushUndo();
   const posObjs = pp.controlPoints;
   const seam = { id: newId('seam'), pointId: point.id };
@@ -1988,15 +2001,15 @@ function reconnectDisjoint() {
   const point = curPoint();
   const seam = seamForPoint(point);
   if (!point || !seam) return;
-  if (!seamIsValid(seam)) { alert('Cannot reconnect: this disjoint seam is stale.'); return; }
+  if (!seamIsValid(seam)) { showStatus('Cannot reconnect: this disjoint seam is stale.'); return; }
   const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   if (seam.kind === 'opened-closed') {
     const pi = track.paths.findIndex(p => p.id === seam.pathId);
-    if (pi < 0) { alert('Cannot reconnect: original path is gone.'); return; }
+    if (pi < 0) { showStatus('Cannot reconnect: original path is gone.'); return; }
     const path = track.paths[pi];
     const pos = parts(path).controlPoints;
     if (pos.length < 2 || pos[0].id !== seam.pointId || pos[pos.length - 1].id !== seam.pointId) {
-      alert('Cannot reconnect: seam endpoints no longer match.'); return;
+      showStatus('Cannot reconnect: seam endpoints no longer match.'); return;
     }
     pushUndo();
     const closedPositions = pos.slice(0, -1);
@@ -2007,12 +2020,12 @@ function reconnectDisjoint() {
   } else if (seam.kind === 'split-open') {
     const li = track.paths.findIndex(p => p.id === seam.leftPathId);
     const ri = track.paths.findIndex(p => p.id === seam.rightPathId);
-    if (li < 0 || ri < 0) { alert('Cannot reconnect: split paths are gone.'); return; }
+    if (li < 0 || ri < 0) { showStatus('Cannot reconnect: split paths are gone.'); return; }
     const leftPath = track.paths[li], rightPath = track.paths[ri];
     const left = parts(leftPath).controlPoints;
     const right = parts(rightPath).controlPoints;
     if (!left.length || !right.length || left[left.length - 1].id !== seam.pointId || right[0].id !== seam.pointId) {
-      alert('Cannot reconnect: seam endpoints no longer match.'); return;
+      showStatus('Cannot reconnect: seam endpoints no longer match.'); return;
     }
     pushUndo();
     const merged = left.concat(right.slice(1));
@@ -2317,7 +2330,7 @@ function renderProps() {
     if (isCheckpoint) document.getElementById('checkpointRole').addEventListener('change', (e) => {
       const role = e.target.value;
       if (isFinish && role === 'intermediate') {
-        alert('Designate another checkpoint as Finish first.');
+        showStatus('Designate another checkpoint as Finish first.');
         e.target.value = 'finish';
         return;
       }
@@ -2384,7 +2397,7 @@ function renderProps() {
         });
       });
       document.getElementById('delCrossSectionBtn').addEventListener('click', () => {
-        if (pp.crossSectionPoints.length <= 2) { alert('A path needs at least 2 cross-section points.'); return; }
+        if (pp.crossSectionPoints.length <= 2) { showStatus('A path needs at least 2 cross-section points.'); return; }
         pushUndo();
         path.points.splice(path.points.indexOf(crossSectionSel), 1);
         crossSectionSel = null;
@@ -2417,7 +2430,7 @@ function renderProps() {
         });
       });
       document.getElementById('delWidthBtn').addEventListener('click', () => {
-        if (pp.widthPoints.length <= 2) { alert('A path needs at least 2 width points.'); return; }
+        if (pp.widthPoints.length <= 2) { showStatus('A path needs at least 2 width points.'); return; }
         pushUndo();
         path.points.splice(path.points.indexOf(widthSel), 1);
         widthSel = null;
@@ -2450,7 +2463,7 @@ function renderProps() {
         });
       });
       document.getElementById('delRollBtn').addEventListener('click', () => {
-        if (pp.rollPoints.length <= 2) { alert('A path needs at least 2 roll points.'); return; }
+        if (pp.rollPoints.length <= 2) { showStatus('A path needs at least 2 roll points.'); return; }
         pushUndo();
         path.points.splice(path.points.indexOf(rollSel), 1);
         rollSel = null;
@@ -2903,7 +2916,7 @@ function selectedIncomingSegment() {
 }
 function deleteSelectedSegment(which = 'outgoing') {
   const seg = segSel || (which === 'incoming' ? selectedIncomingSegment() : selectedOutgoingSegment());
-  if (!seg) { alert(which === 'incoming' ? 'Select a point with a previous segment to delete.' : 'Select a point with a following segment to delete.'); return; }
+  if (!seg) { showStatus(which === 'incoming' ? 'Select a point with a previous segment to delete.' : 'Select a point with a following segment to delete.'); return; }
   deleteSegment(seg.path, seg.i);
 }
 
@@ -2912,8 +2925,8 @@ function deleteSelected() {
   const path = curPath();
   if (!path) return;
   const pp = parts(path);
-  if (countPointOccurrences(curPoint()) > 1) { alert('Reconnect this shared/disjoint point before deleting it.'); return; }
-  if (pp.controlPoints.length <= 4) { alert('A track path needs at least 4 points.'); return; }
+  if (countPointOccurrences(curPoint()) > 1) { showStatus('Reconnect this shared/disjoint point before deleting it.'); return; }
+  if (pp.controlPoints.length <= 4) { showStatus('A track path needs at least 4 points.'); return; }
   pushUndo();
   const idxs = positionIndices(path);
   path.points.splice(idxs[sel.point], 1);
@@ -2929,7 +2942,7 @@ function deleteSelected() {
 function deleteSegment(pi, i) {
   const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   const path = track.paths[pi];
-  if (pathHasDisjointSeam(path)) { alert('Reconnect disjoint corners on this path before deleting segments.'); return; }
+  if (pathHasDisjointSeam(path)) { showStatus('Reconnect disjoint corners on this path before deleting segments.'); return; }
   const idxs = positionIndices(path);
   const n = idxs.length;
   if (path.closed) {
@@ -2944,17 +2957,17 @@ function deleteSegment(pi, i) {
     idxs.forEach((arrIdx, k) => { path.points[arrIdx] = rotated[k]; });
     path.closed = false;
   } else if (i === 0) {
-    if (n - 1 < 4) { alert('Path needs at least 4 control points; cannot shorten further.'); return; }
+    if (n - 1 < 4) { showStatus('Path needs at least 4 control points; cannot shorten further.'); return; }
     pushUndo();
     path.points.splice(idxs[0], 1);
   } else if (i === n - 2) {
-    if (n - 1 < 4) { alert('Path needs at least 4 control points; cannot shorten further.'); return; }
+    if (n - 1 < 4) { showStatus('Path needs at least 4 control points; cannot shorten further.'); return; }
     pushUndo();
     path.points.splice(idxs[n - 1], 1);
   } else {
     const posObjs = idxs.map(k => path.points[k]);
     const left = posObjs.slice(0, i + 1), right = posObjs.slice(i + 1);
-    if (left.length < 4 || right.length < 4) { alert("Splitting here would leave a path with fewer than 4 control points."); return; }
+    if (left.length < 4 || right.length < 4) { showStatus("Splitting here would leave a path with fewer than 4 control points."); return; }
     // Fresh (flat) roll/width points for both halves -- the old splines don't
     // map cleanly onto the split domains, so this is redone by hand.
     pushUndo();
@@ -2995,7 +3008,7 @@ function splitTargetPathAt(pathIndex, pointIndex) {
     return true;
   }
   if (pointIndex <= 0 || pointIndex >= cps.length - 1) return;
-  if (pointIndex + 1 < 4 || cps.length - pointIndex < 4) { alert('Target split would leave a curve with fewer than 4 points.'); return false; }
+  if (pointIndex + 1 < 4 || cps.length - pointIndex < 4) { showStatus('Target split would leave a curve with fewer than 4 points.'); return false; }
   const max = Math.max(1, cps.length - 1);
   const left = cps.slice(0, pointIndex + 1);
   const right = cps.slice(pointIndex);
@@ -3006,7 +3019,7 @@ function splitTargetPathAt(pathIndex, pointIndex) {
   return true;
 }
 function deleteSelectedCurve() {
-  if (track.paths.length <= 1) { alert('A track needs at least one curve.'); return; }
+  if (track.paths.length <= 1) { showStatus('A track needs at least one curve.'); return; }
   syncSelectionToId();
   const deleteIndex = sel.path;
   pushUndo();
@@ -3029,15 +3042,15 @@ function performJoin() {
   const oldStartPoint = startPointObject(), oldReverse = !!(track.start && track.start.reverse);
   let [a, b] = joinSel;
   if (pathHasDisjointSeam(track.paths[a.path]) || pathHasDisjointSeam(track.paths[b.path])) {
-    alert('Reconnect disjoint corners before connecting paths.'); return;
+    showStatus('Reconnect disjoint corners before connecting paths.'); return;
   }
   if (a.path === b.path) {
-    if (!a.end || !b.end || a.end === b.end) { alert('Pick the two different open ends to close this curve.'); return; }
+    if (!a.end || !b.end || a.end === b.end) { showStatus('Pick the two different open ends to close this curve.'); return; }
     pushUndo();
     track.paths[a.path].closed = true;
   } else {
     const aEndpoint = !!a.end, bEndpoint = !!b.end;
-    if (!aEndpoint && !bEndpoint) { alert('One selected point must be an open curve endpoint.'); return; }
+    if (!aEndpoint && !bEndpoint) { showStatus('One selected point must be an open curve endpoint.'); return; }
     pushUndo();
     const source = aEndpoint ? a : b;
     const target = aEndpoint ? b : a;
@@ -3177,7 +3190,7 @@ function setEditMode(mode) {
 
 // ---------- Create mode ----------
 function finishCreateDraft(closed) {
-  if (createDraft.length < 4) { alert('A curve needs at least 4 position points.'); return; }
+  if (createDraft.length < 4) { showStatus('A curve needs at least 4 position points.'); return; }
   pushUndo();
   const path = { id: newId('path'), closed, points: createDraft.slice().concat(flatRollWidthDefaults(closed)) };
   track.paths.push(path);
@@ -3201,7 +3214,7 @@ function createModeClick(x, y) {
   if (draftIdx >= 0 && createDraft.length) {
     if (draftIdx === 0) { finishCreateDraft(true); return; }
     if (draftIdx === createDraft.length - 1) { finishCreateDraft(false); return; }
-    alert('Repeated points are only allowed to finish the curve.');
+    showStatus('Repeated points are only allowed to finish the curve.');
     return;
   }
   const hit = nodeAtTop(x, y);
@@ -3209,7 +3222,7 @@ function createModeClick(x, y) {
   if (p && createDraft.length) {
     if (p === createDraft[0]) { finishCreateDraft(true); return; }
     if (p === createDraft[createDraft.length - 1]) { finishCreateDraft(false); return; }
-    if (createDraft.includes(p)) { alert('Repeated points are only allowed to finish the curve.'); return; }
+    if (createDraft.includes(p)) { showStatus('Repeated points are only allowed to finish the curve.'); return; }
   }
   if (!p) {
     const w = snapWorldXZ(screenToWorld(x, y));
@@ -3614,21 +3627,21 @@ window.addEventListener('keydown', (e) => {
     if (selectedTriggerId) { deleteSelectedTrigger(); return; }
     if (crossSectionSel) {
       const path = curPath();
-      if (parts(path).crossSectionPoints.length <= 2) { alert('A path needs at least 2 cross-section points.'); return; }
+      if (parts(path).crossSectionPoints.length <= 2) { showStatus('A path needs at least 2 cross-section points.'); return; }
       pushUndo();
       path.points.splice(path.points.indexOf(crossSectionSel), 1);
       crossSectionSel = null;
       refresh();
     } else if (widthSel) {
       const path = curPath();
-      if (parts(path).widthPoints.length <= 2) { alert('A path needs at least 2 width points.'); return; }
+      if (parts(path).widthPoints.length <= 2) { showStatus('A path needs at least 2 width points.'); return; }
       pushUndo();
       path.points.splice(path.points.indexOf(widthSel), 1);
       widthSel = null;
       refresh();
     } else if (rollSel) {
       const path = curPath();
-      if (parts(path).rollPoints.length <= 2) { alert('A path needs at least 2 roll points.'); return; }
+      if (parts(path).rollPoints.length <= 2) { showStatus('A path needs at least 2 roll points.'); return; }
       pushUndo();
       path.points.splice(path.points.indexOf(rollSel), 1);
       rollSel = null;
@@ -4272,7 +4285,7 @@ function addZoneAt(wx, wz, effect) {
     host = { kind: 'mesh', meshId: meshHit.placement.id, x: Math.round(wx * 10) / 10, z: Math.round(wz * 10) / 10, rotation: 0 };
   } else {
     const near = nearestPathPlacement(wx, wz);
-    if (!near) { alert('Add a path or mesh region before placing a zone.'); return; }
+    if (!near) { showStatus('Add a path or mesh region before placing a zone.'); return; }
     host = { kind: 'path', pathId: near.pathId, t: Math.round(near.t * 1000) / 1000, lateral: near.lateral };
   }
   pushUndo();
@@ -4392,7 +4405,7 @@ function addTriggerAt(wx, wz, type = 'dummy') {
     width = TrackCore.DEFAULT_TRIGGER_WIDTH;
   } else {
     const near = nearestPathPlacement(wx, wz);
-    if (!near) { alert('Add a path or mesh region before placing a trigger.'); return; }
+    if (!near) { showStatus('Add a path or mesh region before placing a trigger.'); return; }
     host = { kind: 'path', pathId: near.pathId, t: Math.round(near.t * 1000) / 1000 };
     // Default to the road width at that t, so the gate spans the track.
     const path = pathById(near.pathId), pp = parts(path);
@@ -4410,7 +4423,7 @@ function deleteSelectedTrigger() {
   const tr = selectedTrigger();
   if (!tr) return;
   if (tr.type === 'checkpoint' && tr.role === 'finish') {
-    alert('Designate another checkpoint as Finish before deleting this one.');
+    showStatus('Designate another checkpoint as Finish before deleting this one.');
     return;
   }
   pushUndo();
@@ -4488,7 +4501,7 @@ document.getElementById('exportUsdBtn').addEventListener('click', () => {
     a.click();
     URL.revokeObjectURL(a.href);
   } catch (err) {
-    alert('Could not export USD: ' + (err.message || err));
+    showStatus('Could not export USD: ' + (err.message || err));
   }
 });
 // A plain <a href="track.html"> would only ever show whatever the LAST edit
@@ -4608,7 +4621,7 @@ fileInput.addEventListener('change', async (e) => {
     clearMeshSelection();
     invalidateMeshCache();
     refresh();
-  } catch (err) { alert('Could not load track: ' + err.message); }
+  } catch (err) { showStatus('Could not load track: ' + err.message); }
   e.target.value = '';
 });
 

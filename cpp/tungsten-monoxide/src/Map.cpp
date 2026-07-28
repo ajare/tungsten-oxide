@@ -20,9 +20,24 @@ namespace
 {
 
 // The fixed vertex layout MppModelExport.cpp always packs (MPPMODEL_EXPORT_SPEC.md 4.1):
-// Position3(float32) + Normal3(float32) + TexCoord2(float32) + Colour4(normalised float) --
-// mirrors StatePlayTungstenMonoxide.cpp's createTorusMeshSpecification() exactly, since it's the
-// same TrackProgram-compatible layout declared in Resources.xml's "Program" MeshSpecification.
+// Position3(float32, 12B) + Normal3(float32, 12B) + TexCoord2(float32, 8B) +
+// Colour4(normalised UnsignedByte, 4B) = a tightly-packed 36-byte interleaved vertex. This MUST
+// agree byte-for-byte with the exporter, because the .mppmodel binary does not record its own
+// attribute layout (MPPMODEL_EXPORT_SPEC.md 2.2) -- ProgrammaticModelStream derives both the
+// vertex count (dataSize / stride) and every attribute's byte offset purely from this spec, so
+// any disagreement silently decodes garbage rather than failing.
+//
+// Colour4 is UnsignedByte, NOT Float: this is deliberately different from
+// StatePlayTungstenMonoxide.cpp's createTorusMeshSpecification(), whose torus is built in memory
+// with f32 colours and never round-trips through a .mppmodel. Declaring Float here would make
+// getVertexStrideInBytes() report 48 bytes against 36-byte-packed file data. It matches
+// Resources.xml's TrackProgram MeshSpecification (`<data>colour4</data><type>uint8</type>`).
+//
+// Vertices are NOT indexed: every batch tox emits is already a triangle soup (TrackBake.cpp's
+// Builder::tri()/TrackMesh.cpp's addTriangle() give every triangle three brand-new vertices, so
+// vertexCount == 3 * triangleCount), which is why the exporter writes no index buffer at all.
+// With this false, ProgrammaticModelStream derives primitiveCount as vertexCount / 3 instead of
+// from index data. Also matches Resources.xml's `<indexed>false</indexed>`.
 mpp::mesh::MeshSpecification trackMeshSpecification()
 {
 	mpp::mesh::MeshSpecification meshSpec(mpp::mesh::Primitive::Type::Triangles);
@@ -31,28 +46,12 @@ mpp::mesh::MeshSpecification trackMeshSpecification()
 	attribLayout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
 	attribLayout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
 	attribLayout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
-	attribLayout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::Float, true);
+	attribLayout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
 
 	meshSpec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
-	meshSpec.setIndexedVertices(true);
+	meshSpec.setIndexedVertices(false);
 
 	return meshSpec;
-}
-
-// Reads one little-endian index (2 or 4 bytes, matching MppModelExport.cpp's packIndices()) out
-// of a raw index buffer.
-uint32_t readIndex(uint8_t const* data, size_t indexWidthBits, size_t i)
-{
-	size_t const bytesPerIndex = indexWidthBits / 8;
-	uint8_t const* p = data + i * bytesPerIndex;
-
-	uint32_t value = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
-	if (bytesPerIndex == 4)
-	{
-		value |= ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-	}
-
-	return value;
 }
 
 // A mesh's `material` string (a GeometryBatch::materialKey -- see TrackBake.cpp/TrackMesh.cpp) is
@@ -145,31 +144,44 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 			continue;
 		}
 
-		auto meshId = modelStream->createMesh(ser.getName(i), meshSpec, materialMppName, ser.getIndexWidth(i));
+		// indexWidth 16 is inert here (createMesh only validates/stores it for INDEXED meshes, and
+		// trackMeshSpecification() declares non-indexed), but must still be a legal 16 or 32 --
+		// createMesh throws on anything else. Deliberately not ser.getIndexWidth(i): a
+		// non-indexed export writes no index streams at all for that to read.
+		auto meshId = modelStream->createMesh(ser.getName(i), meshSpec, materialMppName, 16);
 
 		size_t vertexCount, vertexStride;
 		shared_ptr<const int8_t> vertexData;
 		ser.getVertexStream(i, 0, &vertexCount, &vertexStride, &vertexData);
 
+		if (vertexStride != meshSpec.getVertexStrideInBytes())
+		{
+			// The file's own recorded stride is the one piece of layout the binary DOES carry
+			// (MPPMODEL_EXPORT_SPEC.md 2.2), so it's worth cross-checking against the layout above
+			// -- a mismatch means the two have drifted and every vertex past the first would
+			// decode as garbage, which is far easier to diagnose here than on screen.
+			throw application::resourcesystem::ResourceException(this, "mesh '" + ser.getName(i) + "' has vertex stride " + to_string(vertexStride) + " bytes, expected " + to_string(meshSpec.getVertexStrideInBytes()) + " (see trackMeshSpecification()).");
+		}
+
 		vector<int8_t> vertexBytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
 		modelStream->addVertexData(meshId, vertexBytes);
 
-		auto indexData = ser.getIndexData(i).get();
-		int const indexWidthBits = ser.getIndexWidth(i);
-		int const primitiveCount = ser.getPrimitiveCount(i);
-
-		for (int t = 0; t < primitiveCount; ++t)
-		{
-			uint32_t const v0 = readIndex(indexData, indexWidthBits, t * 3 + 0);
-			uint32_t const v1 = readIndex(indexData, indexWidthBits, t * 3 + 1);
-			uint32_t const v2 = readIndex(indexData, indexWidthBits, t * 3 + 2);
-
-			modelStream->addTriangle(meshId, v0, v1, v2);
-		}
+		// No addTriangle()/index data: the mesh is non-indexed (see trackMeshSpecification()), so
+		// ProgrammaticModelStream draws the vertex buffer straight through as a triangle soup and
+		// derives primitiveCount as vertexCount / 3 itself. Any index buffer an older, indexed
+		// .mppmodel still carries is ignored -- harmlessly, since tox only ever emitted the
+		// identity permutation (indices[k] == k), which draws identically either way.
 	}
 
 	mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
 	mMppResource->acquire(this);
+	// declareResource()+acquire() only registers/ref-counts the resource -- nothing in the
+	// Scene::add3dModel()/SceneModel3d chain that later consumes getMppResource() ever calls
+	// load() on it (SceneModel3d's constructor only acquire()s), so without this the
+	// ProgrammaticModelStream's createMeshDataStreams()/GPU buffer upload never runs and the mesh
+	// silently has no vertex data. Mirrors StatePlayTungstenMonoxide.cpp's createTorusModel(),
+	// which calls ->load() explicitly right after acquire() for the same reason.
+	mMppResource->load();
 
 	return true;
 }

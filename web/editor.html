@@ -159,6 +159,15 @@
   #handlingPanel .hint { color: #8eb6ca; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
   #handlingPanel .rrRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; color: #b8d8e8; }
   #handlingPanel input[type=number] { width: 84px; background: #0a1a26; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  #statusBar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px);
+    z-index: 30; max-width: 70vw; padding: 8px 16px;
+    background: rgba(16,32,46,0.92); border: 1px solid #2c6a9e; border-radius: 6px;
+    color: var(--text); font: inherit; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    pointer-events: none; opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease;
+    white-space: pre-wrap; text-align: center;
+  }
+  #statusBar.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -301,6 +310,8 @@
     <div class="hint" id="metaHint"></div>
   </div>
 </div>
+
+<div id="statusBar" role="status" aria-live="polite"></div>
 
 <div id="addPointMenu">
   <div class="menuLabel">Add control point</div>

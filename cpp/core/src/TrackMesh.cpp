@@ -39,7 +39,14 @@ Vec2d transform(const MeshPlacementDefinition& placement, const MeshVertexDefini
 
 Vec3 normalOf(const Vec3& a, const Vec3& b, const Vec3& c) {
   Vec3 normal;
-  normal.crossVectors(b.clone().sub(a), c.clone().sub(a)).normalize();
+  // cross(c-a, b-a), not cross(b-a, c-a): for the (a,b,c) winding this and TrackBake.cpp's
+  // triNormal() are always called with (e.g. a road quad's left-ring point, right-ring point,
+  // next-ring point), cross(b-a, c-a) works out to cross(edgeRight, tangent), which is always
+  // -normal (the surface's known-correct up direction), not +normal -- provable via the vector
+  // triple product identity cross(cross(Y,T),T) = -Y for a horizontal unit tangent T. Swapping the
+  // operands (equivalent to negating) makes the computed face normal match the surface's actual
+  // outward direction instead of pointing into the ground.
+  normal.crossVectors(c.clone().sub(a), b.clone().sub(a)).normalize();
   return normal;
 }
 
