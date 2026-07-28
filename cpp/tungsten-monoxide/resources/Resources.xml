@@ -77,6 +77,33 @@
 				</Definition>
 			</Definitions>
 		</Resource>
+		
+		<Resource type="Image" name="TrackTexture" location="images/floor5.png" />
+
+		<Resource type="Material" name="TrackAsphaltMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="TrackTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+
+		<Resource type="TrackMaterial" name="TrackAsphalt">
+			<DependentResources>
+				<DependentResource id="Material" ref="TrackAsphaltMaterial" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition />
+			</Definitions>
+		</Resource>
 
 		<Resource type="TextFile" name="TrackFile" location="track-1.yaml" />
 

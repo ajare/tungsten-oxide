@@ -11,6 +11,8 @@
 #include <applib/Game.h>
 #include <applib/MapDefaultDefinitionFactory.h>
 #include <applib/ProtoEntityDefaultDefinitionFactory.h>
+#include <applib/TrackMaterial.h>
+#include <applib/TrackMaterialDefaultDefinitionFactory.h>
 
 #include "MapTungstenMonoxideDefinitionFactory.h"
 #include "GameDefinitionFactory.h"
@@ -139,11 +141,13 @@ extern "C"
 		resourceMgr->addResourceFactory(new GameResourceFactory());
 		resourceMgr->addResourceFactory(new MapResourceFactory(logger));
 		resourceMgr->addResourceFactory(new ProtoEntityResourceFactory(model->entityHandler));
+		resourceMgr->addResourceFactory(new applib::TrackMaterialResourceFactory());
 
 		// Add resource definition factories
 		resourceMgr->addResourceDefinitionFactory(new GameDefinitionFactory());
 		resourceMgr->addResourceDefinitionFactory(new MapTungstenMonoxideDefinitionFactory());
 		resourceMgr->addResourceDefinitionFactory(new ProtoEntityDefinitionFactory());
+		resourceMgr->addResourceDefinitionFactory(new applib::TrackMaterialDefaultDefinitionFactory());
 	}
 
 	__declspec(dllexport) void dllOnExit()
