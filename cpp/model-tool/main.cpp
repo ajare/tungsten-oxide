@@ -637,8 +637,18 @@ int main(int argc, char** argv) {
     const modeltool::BuiltModel* built = viewport->builtModel();
     if (built != nullptr) {
       if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (const modeltool::ImportedMesh& mesh : built->source.meshes)
+        for (const modeltool::ImportedMesh& mesh : built->source.meshes) {
+          const modeltool::ImportedMaterial& material = built->source.materials[static_cast<std::size_t>(mesh.materialIndex)];
           ImGui::BulletText("%s (%zu tris)", mesh.name.c_str(), mesh.indices.size() / 3);
+          // DefaultFallback's own `name` is the original, never-resolved bare material name (see
+          // MppModelImport.cpp/AssImpImport.cpp) -- flagged the same way the Materials section
+          // below flags it, rather than implying the mesh actually has that material bound.
+          if (material.origin == modeltool::MaterialOrigin::DefaultFallback) {
+            ImGui::TextDisabled("    %s: NOT FOUND -- using default white", material.name.c_str());
+          } else {
+            ImGui::TextDisabled("    %s", material.name.c_str());
+          }
+        }
       }
     } else {
       ImGui::TextDisabled("No model loaded -- File > Open...");

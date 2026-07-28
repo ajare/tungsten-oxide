@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <set>
 
 namespace editor {
@@ -76,9 +77,17 @@ std::string packVertices(const tox::GeometryBatch& batch) {
 // streams at all (see exportTrackToMppModel), so there is no valid id to point at.
 constexpr std::uint32_t kNoIndexStream = 0xFFFFFFFFu;
 
+// See MppModelExport.hpp's comment on `trackMaterialToMaterial`: a materialKey with no entry
+// (the fixed rail/shell/zone/trigger materials, or an empty/legacy "road" literal) passes
+// through unchanged -- those already name real Materials directly.
+std::string resolveMaterialKey(const std::string& materialKey, const std::map<std::string, std::string>& trackMaterialToMaterial) {
+  const auto it = trackMaterialToMaterial.find(materialKey);
+  return it == trackMaterialToMaterial.end() ? materialKey : it->second;
+}
+
 }  // namespace
 
-MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
+MppModelExportResult exportTrackToMppModel(const tox::Track& track, const std::map<std::string, std::string>& trackMaterialToMaterial) {
   const std::size_t meshCount = track.geometry.size();
 
   // Build every section's content in memory first, so every directory offset/count is known
@@ -122,7 +131,7 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
     // Non-indexed, so primitiveCount comes from the vertex count. Identical to the old
     // indices.size() / 3 (see the IndexData comment above), just no longer routed via indices.
     appendU32(meshMetadataSection, static_cast<std::uint32_t>(batch.vertices.size() / 3));
-    appendString(meshMetadataSection, batch.materialKey);
+    appendString(meshMetadataSection, resolveMaterialKey(batch.materialKey, trackMaterialToMaterial));
     appendU32(meshMetadataSection, 1);  // numVertexBuffers
     appendU32(meshMetadataSection, static_cast<std::uint32_t>(i));
     appendU32(meshMetadataSection, kNoIndexStream);  // indexStreamId: none
@@ -216,15 +225,21 @@ std::string xmlEscape(const std::string& value) {
 }  // namespace
 
 std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
-                                   const std::vector<tox::Pose>& startGridPoses) {
+                                   const std::vector<tox::Pose>& startGridPoses,
+                                   const std::map<std::string, std::string>& trackMaterialToMaterial) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
   // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
-  // curve content.
+  // curve content. Resolved through trackMaterialToMaterial first (see MppModelExport.hpp's
+  // comment) so this dependency list always matches what the exported mesh's own material
+  // reference resolves to -- two different TrackMaterials that happen to wrap the same underlying
+  // Material collapse to one dependency here, which `seen` already handles.
   std::vector<std::string> materials;
   std::set<std::string> seen;
   for (const auto& path : track.paths) {
-    if (path.material.empty() || !seen.insert(path.material).second) continue;
-    materials.push_back(path.material);
+    if (path.material.empty()) continue;
+    const std::string resolved = resolveMaterialKey(path.material, trackMaterialToMaterial);
+    if (!seen.insert(resolved).second) continue;
+    materials.push_back(resolved);
   }
   for (const char* fixed :
        {kDefaultRailMaterial, kDefaultMeshMaterial, kDefaultShellMaterial, kDefaultZoneMaterial, kDefaultTriggerMaterial}) {

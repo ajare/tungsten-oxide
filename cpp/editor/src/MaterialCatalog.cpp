@@ -142,6 +142,7 @@ MaterialCatalog MaterialCatalog::load(const std::filesystem::path& resourcesXmlP
       entry.namesp = namesp;
       entry.name = name;
       entry.qualifiedName = qname;
+      entry.materialQualifiedName = qualifiedName(materialNamesp, materialName);
 
       for (const auto& [depId, depRef] : material->dependents) {
         const auto [imageNamesp, imageName] = splitRef(depRef, materialNamesp);

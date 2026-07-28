@@ -41,6 +41,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -2096,13 +2097,20 @@ int main(int, char**) {
                 editor::showSaveFileDialog(L"Export MppModel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}},
                                            toWide(sanitizeFilenameStem(editorState.track().name) + ".mppmodel"), L"mppmodel");
             if (picked.ok) {
-              const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack);
+              // TrackMaterial -> underlying Material qualified name (MaterialCatalog.hpp's
+              // comment): a mesh's material reference must be the actual renderable Material a
+              // picked TrackMaterial wraps, not the TrackMaterial's own name.
+              std::map<std::string, std::string> trackMaterialToMaterial;
+              for (const editor::MaterialEntry& entry : materialCatalog.materials())
+                trackMaterialToMaterial.emplace(entry.qualifiedName, entry.materialQualifiedName);
+
+              const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack, trackMaterialToMaterial);
               std::ofstream out(picked.path, std::ios::binary);
               if (out) {
                 out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
 
                 // Companion Resources.xml-shaped fragment declaring this Track resource and its
-                // TrackMaterial dependents (see MppModelExport.hpp's buildTrackResourceXml), written
+                // Material dependents (see MppModelExport.hpp's buildTrackResourceXml), written
                 // beside the .mppmodel with the same stem. Also carries the settled starting-grid
                 // poses (StartGrid.hpp), computed here rather than inside buildTrackResourceXml so
                 // that function stays a pure XML-string-builder with no tox::Simulation dependency.
@@ -2111,8 +2119,8 @@ int main(int, char**) {
                     tox::StartGrid::startingGridPoses(exportSim, *bakedTrack, tox::StartGrid::DEFAULT_SHIP_COUNT);
                 std::filesystem::path xmlPath = picked.path;
                 xmlPath.replace_extension(L"xml");
-                const std::string xml =
-                    editor::buildTrackResourceXml(editorState.track(), editor::pathToUtf8(picked.path.filename()), startGridPoses);
+                const std::string xml = editor::buildTrackResourceXml(
+                    editorState.track(), editor::pathToUtf8(picked.path.filename()), startGridPoses, trackMaterialToMaterial);
                 std::ofstream xmlOut(xmlPath, std::ios::binary);
                 if (xmlOut) {
                   xmlOut.write(xml.data(), static_cast<std::streamsize>(xml.size()));

@@ -27,6 +27,7 @@
 // backpatching needed at all) loads back correctly despite that latent upstream bug.
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -47,13 +48,28 @@ struct MppModelExportResult {
 // MassivePolyPusher project is expected to define "road"/"rail"/"mesh-region" materials itself,
 // plus Tracks/DefaultShellMaterial, Tracks/DefaultZoneMaterial, and Tracks/DefaultTriggerMaterial
 // for shells/zones/triggers (all declared in Resources.xml).
-MppModelExportResult exportTrackToMppModel(const tox::Track& track);
+//
+// `trackMaterialToMaterial` maps a TrackMaterial's qualified name (what path.material/
+// batch.materialKey actually holds for path-surface geometry -- see MaterialsPanel.cpp) to the
+// underlying Material resource it wraps (MaterialCatalog::MaterialEntry::materialQualifiedName):
+// a mesh's material reference is written as the resolved Material name whenever batch.materialKey
+// has an entry here, since a TrackMaterial isn't itself a renderable resource (see
+// applib::TrackMaterial::getMaterial()) and this exporter has no other way to name the thing a
+// mesh should actually render with. A materialKey with no entry (the fixed rail/shell/zone/
+// trigger materials, which already name real Materials directly, or an empty/legacy "road"
+// literal) passes through unchanged. Defaults to empty (no resolution, matching this function's
+// old behavior) so existing self-check call sites that don't have a MaterialCatalog handy still
+// compile unchanged.
+MppModelExportResult exportTrackToMppModel(const tox::Track& track,
+                                            const std::map<std::string, std::string>& trackMaterialToMaterial = {});
 
 // Builds a standalone Willpower <Resources> XML document (same schema as
 // cpp/tungsten-monoxide/resources/Resources.xml) declaring this track as a `type="Track"`
-// resource, listing -- by namespace-qualified ref, not re-declaring -- every TrackMaterial this
-// track's curves are actually assigned to (path.material, deduped), plus the fixed
-// rail/mesh/shell/zone/trigger materials every track's export always depends on
+// resource, listing -- by namespace-qualified ref, not re-declaring -- every Material this
+// track's curves are actually assigned to (path.material resolved through
+// `trackMaterialToMaterial`, deduped -- see exportTrackToMppModel's comment on why: the
+// dependency must match whatever the exported mesh's own material reference resolves to), plus
+// the fixed rail/mesh/shell/zone/trigger materials every track's export always depends on
 // (Tracks/DefaultRailMaterial, Tracks/DefaultMeshMaterial, Tracks/DefaultShellMaterial,
 // Tracks/DefaultZoneMaterial, Tracks/DefaultTriggerMaterial -- must stay in sync with
 // cpp/core/src/TrackBake.cpp's and TrackMesh.cpp's hardcoded materialKey strings). Meant to be
@@ -82,6 +98,7 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track);
 // dependency of its own. MapTungstenMonoxideDefinitionFactory::create() reads <StartGrid> back out
 // into Map::mStartGridPoses.
 std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
-                                   const std::vector<tox::Pose>& startGridPoses);
+                                   const std::vector<tox::Pose>& startGridPoses,
+                                   const std::map<std::string, std::string>& trackMaterialToMaterial = {});
 
 }  // namespace editor
