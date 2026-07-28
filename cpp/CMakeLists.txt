@@ -15,6 +15,8 @@
 #               tungsten-monoxide/CMakeLists.txt.
 #   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
+#   model-tool/ model_tool, the AssImp import/preview/save tool for MassivePolyPusher's model
+#               format — see model-tool/CMakeLists.txt and ../docs/adr/0001-model-tool.md.
 #
 # core links Willpower.Geometry for current-schema mesh topology validation and
 # triangulation. The target link establishes build order; explicit dependencies
@@ -41,6 +43,7 @@ add_subdirectory(applib)
 add_subdirectory(launcher)
 add_subdirectory(tungsten-monoxide)
 add_subdirectory(editor)
+add_subdirectory(model-tool)
 
 foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)
   if (TARGET ${_willpower_target})
