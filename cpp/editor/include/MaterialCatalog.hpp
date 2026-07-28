@@ -11,7 +11,9 @@
 //
 // Structural problems (the file can't be found/parsed, or doesn't look like a Resources.xml, or
 // there are no usable TrackMaterial entries at all, or the fixed "Tracks/DefaultRailMaterial"/
-// "Tracks/DefaultMeshMaterial" Materials rails/mesh regions always export with are missing) throw
+// "Tracks/DefaultMeshMaterial"/"Tracks/DefaultShellMaterial"/"Tracks/DefaultZoneMaterial"/
+// "Tracks/DefaultTriggerMaterial" Materials rails/mesh regions/shells/zones/triggers always
+// export with are missing) throw
 // (wp::XmlException or std::runtime_error), meant to be treated as a fatal startup error by the
 // caller. A single TrackMaterial with a broken dependency chain (missing ref, unreadable texture)
 // is instead skipped with a warning on stderr; the rest of the catalog still loads.

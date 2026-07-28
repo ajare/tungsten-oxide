@@ -22,7 +22,8 @@ enum class GeometryKind { PathSurface,
                           PathRail,
                           MeshSurface,
                           MeshRail,
-                          ZoneSurface };
+                          ZoneSurface,
+                          TriggerSurface };
 struct TextureBinding {
   std::string assetId;
   int tile{0};

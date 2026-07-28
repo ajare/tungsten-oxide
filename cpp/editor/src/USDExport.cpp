@@ -71,15 +71,18 @@ struct MaterialStyle {
   double r, g, b, roughness;
 };
 
-// A small fixed palette keyed by core's semantic materialKey strings (TrackBake.cpp/TrackMesh.cpp:
-// "road", "shell", "rail", "mesh-region", "zone-<effect>"); unrecognized/future keys fall back to
-// a neutral gray rather than failing the export.
+// A small fixed palette keyed by core's actual materialKey strings (TrackBake.cpp/TrackMesh.cpp):
+// "road" (or an authored TrackMaterial name) for path surfaces, and the fixed
+// "Tracks/Default{Rail,Mesh,Shell,Zone,Trigger}Material" keys for rails, mesh regions, shells,
+// zones, and triggers respectively; unrecognized/future keys (including authored TrackMaterial
+// names) fall back to a neutral gray rather than failing the export.
 MaterialStyle styleFor(const std::string& materialKey) {
   if (materialKey == "road") return {0.32, 0.55, 0.65, 0.75};
-  if (materialKey == "shell") return {0.23, 0.36, 0.45, 0.9};
-  if (materialKey == "rail") return {0.75, 0.35, 0.25, 0.6};
-  if (materialKey == "mesh-region") return {0.42, 0.31, 0.59, 0.8};
-  if (materialKey.rfind("zone-", 0) == 0) return {0.85, 0.75, 0.2, 0.5};
+  if (materialKey == "Tracks/DefaultShellMaterial") return {0.23, 0.36, 0.45, 0.9};
+  if (materialKey == "Tracks/DefaultRailMaterial") return {0.75, 0.35, 0.25, 0.6};
+  if (materialKey == "Tracks/DefaultMeshMaterial") return {0.42, 0.31, 0.59, 0.8};
+  if (materialKey == "Tracks/DefaultZoneMaterial") return {0.85, 0.75, 0.2, 0.5};
+  if (materialKey == "Tracks/DefaultTriggerMaterial") return {0.9, 0.25, 0.55, 0.4};
   return {0.6, 0.6, 0.6, 0.8};
 }
 

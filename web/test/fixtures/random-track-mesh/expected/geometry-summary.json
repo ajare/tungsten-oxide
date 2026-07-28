@@ -2,7 +2,7 @@
   "random-track-mesh-324508639.json": {
     "pathCount": 1,
     "placementCount": 1,
-    "batchCount": 8,
+    "batchCount": 9,
     "warningCount": 0,
     "batches": [
       {
@@ -49,7 +49,7 @@
       {
         "id": "path-0-shell",
         "kind": "PathShell",
-        "materialKey": "shell",
+        "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 8400,
         "indexCount": 8400,
         "hasUv": false,
@@ -239,7 +239,7 @@
       {
         "id": "zone-random-path-zone-324508639",
         "kind": "ZoneSurface",
-        "materialKey": "zone-velocityChange",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 192,
         "indexCount": 192,
         "hasUv": true,
@@ -277,7 +277,7 @@
       {
         "id": "zone-random-mesh-zone-324508639",
         "kind": "ZoneSurface",
-        "materialKey": "zone-startGrid",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 6,
         "indexCount": 6,
         "hasUv": true,
@@ -311,13 +311,51 @@
           2.412302393388624,
           1.3480602084115767
         ]
+      },
+      {
+        "id": "trigger-random-finish-324508639",
+        "kind": "TriggerSurface",
+        "materialKey": "Tracks/DefaultTriggerMaterial",
+        "vertexCount": 6,
+        "indexCount": 6,
+        "hasUv": true,
+        "texture": null,
+        "min": [
+          153.42444138577574,
+          8.166453998708967,
+          141.8328972832585
+        ],
+        "max": [
+          178.7095998419755,
+          24.47078842120329,
+          164.37396952515746
+        ],
+        "area": 505.616302216225,
+        "centroid": [
+          166.06702061387563,
+          16.318621209956127,
+          153.10343340420798
+        ],
+        "orientedArea": [
+          -339.18425721534214,
+          -30.972717557359953,
+          373.68780484676995
+        ],
+        "uvMin": [
+          0,
+          0
+        ],
+        "uvMax": [
+          1,
+          1
+        ]
       }
     ]
   },
   "random-track-mesh-610839776.json": {
     "pathCount": 1,
     "placementCount": 1,
-    "batchCount": 8,
+    "batchCount": 9,
     "warningCount": 0,
     "batches": [
       {
@@ -361,7 +399,7 @@
       {
         "id": "path-0-shell",
         "kind": "PathShell",
-        "materialKey": "shell",
+        "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 10644,
         "indexCount": 10644,
         "hasUv": false,
@@ -551,7 +589,7 @@
       {
         "id": "zone-random-path-zone-610839776",
         "kind": "ZoneSurface",
-        "materialKey": "zone-velocityChange",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 96,
         "indexCount": 96,
         "hasUv": true,
@@ -589,7 +627,7 @@
       {
         "id": "zone-random-mesh-zone-610839776",
         "kind": "ZoneSurface",
-        "materialKey": "zone-startGrid",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 6,
         "indexCount": 6,
         "hasUv": true,
@@ -623,13 +661,51 @@
           1.1683376385093045,
           1.5374076810354986
         ]
+      },
+      {
+        "id": "trigger-random-finish-610839776",
+        "kind": "TriggerSurface",
+        "materialKey": "Tracks/DefaultTriggerMaterial",
+        "vertexCount": 6,
+        "indexCount": 6,
+        "hasUv": true,
+        "texture": null,
+        "min": [
+          113.57854466527971,
+          -8.617803471735808,
+          170.39032328016137
+        ],
+        "max": [
+          146.09117963023925,
+          15.010606614141931,
+          192.69083372464056
+        ],
+        "area": 467.9930410801578,
+        "centroid": [
+          129.83486214775948,
+          3.196401571203062,
+          181.54057850240093
+        ],
+        "orientedArea": [
+          -264.3294095674196,
+          -26.809210748334262,
+          385.2644753364175
+        ],
+        "uvMin": [
+          0,
+          0
+        ],
+        "uvMax": [
+          1,
+          1
+        ]
       }
     ]
   },
   "random-track-mesh-195948557.json": {
     "pathCount": 1,
     "placementCount": 2,
-    "batchCount": 10,
+    "batchCount": 11,
     "warningCount": 0,
     "batches": [
       {
@@ -676,7 +752,7 @@
       {
         "id": "path-0-shell",
         "kind": "PathShell",
-        "materialKey": "shell",
+        "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 13416,
         "indexCount": 13416,
         "hasUv": false,
@@ -942,7 +1018,7 @@
       {
         "id": "zone-random-path-zone-195948557",
         "kind": "ZoneSurface",
-        "materialKey": "zone-velocityChange",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 96,
         "indexCount": 96,
         "hasUv": true,
@@ -980,7 +1056,7 @@
       {
         "id": "zone-random-mesh-zone-195948557",
         "kind": "ZoneSurface",
-        "materialKey": "zone-startGrid",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 6,
         "indexCount": 6,
         "hasUv": true,
@@ -1014,13 +1090,51 @@
           2.6311499062188277,
           1.4084817985810028
         ]
+      },
+      {
+        "id": "trigger-random-finish-195948557",
+        "kind": "TriggerSurface",
+        "materialKey": "Tracks/DefaultTriggerMaterial",
+        "vertexCount": 6,
+        "indexCount": 6,
+        "hasUv": true,
+        "texture": null,
+        "min": [
+          213.98890884430864,
+          -11.666626211514362,
+          136.19711199921193
+        ],
+        "max": [
+          250.87503105500872,
+          0.6685520641222791,
+          142.49442898420378
+        ],
+        "area": 366.636813046975,
+        "centroid": [
+          232.43196994965868,
+          -5.4990370736960426,
+          139.34577049170787
+        ],
+        "orientedArea": [
+          -59.19222191838991,
+          -14.31912482845391,
+          361.54362974578015
+        ],
+        "uvMin": [
+          0,
+          0
+        ],
+        "uvMax": [
+          1,
+          1
+        ]
       }
     ]
   },
   "random-track-mesh-3221344269.json": {
     "pathCount": 1,
     "placementCount": 2,
-    "batchCount": 10,
+    "batchCount": 11,
     "warningCount": 0,
     "batches": [
       {
@@ -1067,7 +1181,7 @@
       {
         "id": "path-0-shell",
         "kind": "PathShell",
-        "materialKey": "shell",
+        "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 9312,
         "indexCount": 9312,
         "hasUv": false,
@@ -1333,7 +1447,7 @@
       {
         "id": "zone-random-path-zone-3221344269",
         "kind": "ZoneSurface",
-        "materialKey": "zone-velocityChange",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 96,
         "indexCount": 96,
         "hasUv": true,
@@ -1371,7 +1485,7 @@
       {
         "id": "zone-random-mesh-zone-3221344269",
         "kind": "ZoneSurface",
-        "materialKey": "zone-startGrid",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 6,
         "indexCount": 6,
         "hasUv": true,
@@ -1405,13 +1519,51 @@
           1.591058362624608,
           1.7266162486436465
         ]
+      },
+      {
+        "id": "trigger-random-finish-3221344269",
+        "kind": "TriggerSurface",
+        "materialKey": "Tracks/DefaultTriggerMaterial",
+        "vertexCount": 6,
+        "indexCount": 6,
+        "hasUv": true,
+        "texture": null,
+        "min": [
+          117.61051261116765,
+          11.970552551110547,
+          207.52567175090644
+        ],
+        "max": [
+          125.84000790130263,
+          31.547927377952448,
+          240.65539887313736
+        ],
+        "area": 423.09632364775075,
+        "centroid": [
+          121.72526025623513,
+          21.759239964531496,
+          224.0905353120219
+        ],
+        "orientedArea": [
+          -405.9304055747431,
+          -82.0053697953278,
+          86.63789147306363
+        ],
+        "uvMin": [
+          0,
+          0
+        ],
+        "uvMax": [
+          1,
+          1
+        ]
       }
     ]
   },
   "random-track-mesh-1592594996.json": {
     "pathCount": 1,
     "placementCount": 2,
-    "batchCount": 10,
+    "batchCount": 11,
     "warningCount": 0,
     "batches": [
       {
@@ -1455,7 +1607,7 @@
       {
         "id": "path-0-shell",
         "kind": "PathShell",
-        "materialKey": "shell",
+        "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 17412,
         "indexCount": 17412,
         "hasUv": false,
@@ -1721,7 +1873,7 @@
       {
         "id": "zone-random-path-zone-1592594996",
         "kind": "ZoneSurface",
-        "materialKey": "zone-velocityChange",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 144,
         "indexCount": 144,
         "hasUv": true,
@@ -1759,7 +1911,7 @@
       {
         "id": "zone-random-mesh-zone-1592594996",
         "kind": "ZoneSurface",
-        "materialKey": "zone-startGrid",
+        "materialKey": "Tracks/DefaultZoneMaterial",
         "vertexCount": 6,
         "indexCount": 6,
         "hasUv": true,
@@ -1792,6 +1944,44 @@
         "uvMax": [
           1.8347871461107084,
           1.3035487615076513
+        ]
+      },
+      {
+        "id": "trigger-random-finish-1592594996",
+        "kind": "TriggerSurface",
+        "materialKey": "Tracks/DefaultTriggerMaterial",
+        "vertexCount": 6,
+        "indexCount": 6,
+        "hasUv": true,
+        "texture": null,
+        "min": [
+          -21.508671714604237,
+          -2.5814740929265083,
+          278.22528568049654
+        ],
+        "max": [
+          -7.55165907747578,
+          10.017662097813714,
+          310.89554265897334
+        ],
+        "area": 286.38004902266573,
+        "centroid": [
+          -14.530165396040006,
+          3.718094002443603,
+          294.56041416973494
+        ],
+        "orientedArea": [
+          -261.19660653040563,
+          50.03961164223885,
+          106.23512828588679
+        ],
+        "uvMin": [
+          0,
+          0
+        ],
+        "uvMax": [
+          1,
+          1
         ]
       }
     ]

@@ -455,7 +455,10 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     Builder sh;
     sh.b.id = "path-" + std::to_string(pi) + "-shell";
     sh.b.kind = GeometryKind::PathShell;
-    sh.b.materialKey = "shell";
+    // Fixed material for every shell mesh, regardless of the path's own TrackMaterial -- must stay
+    // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+    // "DefaultShellMaterial", and with MaterialCatalog's startup existence check for it.
+    sh.b.materialKey = "Tracks/DefaultShellMaterial";
     auto under = [](const Frame& f, Vec3 p) { return p.addScaledVector(f.normal, -f.crossSectionThickness); };
     auto ringUnderPoint = [&](int ring, double v) {
       const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
@@ -689,7 +692,10 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         Builder geometry;
         geometry.b.id = "zone-" + z.id;
         geometry.b.kind = GeometryKind::ZoneSurface;
-        geometry.b.materialKey = "zone-" + z.effect;
+        // Fixed material for every zone surface, regardless of effect -- must stay in sync with
+        // cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+        // "DefaultZoneMaterial", and with MaterialCatalog's startup existence check for it.
+        geometry.b.materialKey = "Tracks/DefaultZoneMaterial";
         geometry.b.hasUv = true;
         geometry.tri(a, b, c, {-zone.halfLength * uvScale, -zone.halfWidth * uvScale},
                      {zone.halfLength * uvScale, -zone.halfWidth * uvScale},
@@ -758,7 +764,10 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         Builder zone;
         zone.b.id = "zone-" + z.id;
         zone.b.kind = GeometryKind::ZoneSurface;
-        zone.b.materialKey = "zone-" + z.effect;
+        // Fixed material for every zone surface, regardless of effect -- must stay in sync with
+        // cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+        // "DefaultZoneMaterial", and with MaterialCatalog's startup existence check for it.
+        zone.b.materialKey = "Tracks/DefaultZoneMaterial";
         zone.b.hasUv = true;
         const double uvWidth = z.width / 6.0;
         std::vector<double> rowDistances(rows + 1);
@@ -873,6 +882,26 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         trigger.up = frameAtTrigger.normal;
       } else {
         continue;
+      }
+      {
+        // Gate quad matching track-game.js's buildTriggerDebugMesh corners exactly (c0=(-1,0),
+        // c1=(1,0), c2=(1,1), c3=(-1,1) in right/up space, same two-triangle split) -- this is the
+        // renderer-neutral counterpart of that debug-only three.js quad, not a new shape.
+        Builder trig;
+        trig.b.id = "trigger-" + t.id;
+        trig.b.kind = GeometryKind::TriggerSurface;
+        // Fixed material for every trigger gate, regardless of trigger type -- must stay in sync
+        // with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+        // "DefaultTriggerMaterial", and with MaterialCatalog's startup existence check for it.
+        trig.b.materialKey = "Tracks/DefaultTriggerMaterial";
+        trig.b.hasUv = true;
+        auto corner = [&](double sr, double su) {
+          return trigger.center.clone().addScaledVector(trigger.right, sr * trigger.halfWidth).addScaledVector(trigger.up, su * trigger.height);
+        };
+        Vec3 c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
+        trig.tri(c0, c1, c2, {0, 0}, {1, 0}, {1, 1});
+        trig.tri(c0, c2, c3, {0, 0}, {1, 1}, {0, 1});
+        track.geometry.push_back(std::move(trig.b));
       }
       track.triggers.push_back(std::move(trigger));
     }

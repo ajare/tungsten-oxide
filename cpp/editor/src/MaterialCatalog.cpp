@@ -174,11 +174,13 @@ MaterialCatalog MaterialCatalog::load(const std::filesystem::path& resourcesXmlP
     throw std::runtime_error("No TrackMaterial resources found in '" + pathToUtf8(resourcesXmlPath) + "'.");
   }
 
-  // Rails and mesh regions always export with these two fixed materials (see TrackBake.cpp/
-  // TrackMesh.cpp's hardcoded "Tracks/DefaultRailMaterial"/"Tracks/DefaultMeshMaterial"
-  // materialKey values) -- fail hard here rather than let a .mppmodel silently reference a
-  // material Resources.xml doesn't actually define.
-  for (const char* requiredMaterial : {"DefaultRailMaterial", "DefaultMeshMaterial"}) {
+  // Rails, mesh regions, shells, zones, and triggers always export with these fixed materials
+  // (see TrackBake.cpp/TrackMesh.cpp's hardcoded "Tracks/DefaultRailMaterial"/
+  // "Tracks/DefaultMeshMaterial"/"Tracks/DefaultShellMaterial"/"Tracks/DefaultZoneMaterial"/
+  // "Tracks/DefaultTriggerMaterial" materialKey values) -- fail hard here rather than let a
+  // .mppmodel silently reference a material Resources.xml doesn't actually define.
+  for (const char* requiredMaterial :
+       {"DefaultRailMaterial", "DefaultMeshMaterial", "DefaultShellMaterial", "DefaultZoneMaterial", "DefaultTriggerMaterial"}) {
     const RawResource* material = findResource(namespaces, "Tracks", requiredMaterial);
     if (material == nullptr || material->type != "Material") {
       throw std::runtime_error(std::string("Required Material 'Tracks/") + requiredMaterial + "' not found in '" +

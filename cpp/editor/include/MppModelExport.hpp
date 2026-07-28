@@ -42,18 +42,21 @@ struct MppModelExportResult {
 // One tox::GeometryBatch -> one mppmodel mesh entry, one vertex stream, one index stream (see
 // MPPMODEL_EXPORT_SPEC.md 4.4). Materials are referenced by name only (batch.materialKey) and
 // never added via addMaterial-equivalent machinery (spec 5, option 1) -- the target
-// MassivePolyPusher project is expected to define "road"/"shell"/"rail"/"mesh-region"/
-// "zone-<effect>" materials itself.
+// MassivePolyPusher project is expected to define "road"/"rail"/"mesh-region" materials itself,
+// plus Tracks/DefaultShellMaterial, Tracks/DefaultZoneMaterial, and Tracks/DefaultTriggerMaterial
+// for shells/zones/triggers (all declared in Resources.xml).
 MppModelExportResult exportTrackToMppModel(const tox::Track& track);
 
 // Builds a standalone Willpower <Resources> XML document (same schema as
 // cpp/tungsten-monoxide/resources/Resources.xml) declaring this track as a `type="Track"`
 // resource, listing -- by namespace-qualified ref, not re-declaring -- every TrackMaterial this
-// track's curves are actually assigned to (path.material, deduped), plus the two fixed rail/mesh
-// materials every track's export always depends on (Tracks/DefaultRailMaterial,
-// Tracks/DefaultMeshMaterial -- must stay in sync with cpp/core/src/TrackBake.cpp's and
-// TrackMesh.cpp's hardcoded materialKey strings). Meant to be merged into the game's real
-// Resources.xml, where those TrackMaterial/Material resources are expected to already be declared
+// track's curves are actually assigned to (path.material, deduped), plus the fixed
+// rail/mesh/shell/zone/trigger materials every track's export always depends on
+// (Tracks/DefaultRailMaterial, Tracks/DefaultMeshMaterial, Tracks/DefaultShellMaterial,
+// Tracks/DefaultZoneMaterial, Tracks/DefaultTriggerMaterial -- must stay in sync with
+// cpp/core/src/TrackBake.cpp's and TrackMesh.cpp's hardcoded materialKey strings). Meant to be
+// merged into the game's real Resources.xml, where those TrackMaterial/Material resources are
+// expected to already be declared
 // -- this file only ever emits <DependentResource ref="..."> entries, never full material/program/
 // texture definitions.
 //

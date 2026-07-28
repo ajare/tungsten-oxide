@@ -80,6 +80,9 @@
 		
 		<Resource type="Image" name="DefaultRailTexture" location="images/test.png" />
 		<Resource type="Image" name="DefaultMeshTexture" location="images/test.png" />
+		<Resource type="Image" name="DefaultShellTexture" location="images/test.png" />
+		<Resource type="Image" name="DefaultZoneTexture" location="images/test.png" />
+		<Resource type="Image" name="DefaultTriggerTexture" location="images/test.png" />
 		<Resource type="Image" name="DefaultTrackTexture" location="images/test.png" />
 		<Resource type="Image" name="TrackTexture" location="images/floor5.png" />
 
@@ -102,6 +105,51 @@
 			<DependentResources>
 				<DependentResource id="Program" ref="TrackProgram" />
 				<DependentResource id="Texture" ref="DefaultMeshTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+
+		<Resource type="Material" name="DefaultShellMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultShellTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+
+		<Resource type="Material" name="DefaultZoneMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultZoneTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+	
+		<Resource type="Material" name="DefaultTriggerMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultTriggerTexture" />
 			</DependentResources>
 
 			<Definitions>
@@ -165,9 +213,12 @@
 		
 		<Resource type="Track" name="NewTrack">
 			<DependentResources>
-				<DependentResource id="Tracks/AlphaltTrack" ref="Tracks/AlphaltTrack" />
+				<DependentResource id="Tracks/DefaultTrack" ref="Tracks/DefaultTrack" />
 				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
 				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
+				<DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial" />
+				<DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial" />
+				<DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial" />
 			</DependentResources>
 			<Definitions>
 				<Definition factory="Track">

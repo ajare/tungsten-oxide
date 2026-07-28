@@ -3,9 +3,12 @@
 	<Namespace name="Tracks">
 		<Resource type="Track" name="NewTrack">
 			<DependentResources>
-				<DependentResource id="Tracks/AlphaltTrack" ref="Tracks/AlphaltTrack" />
+				<DependentResource id="Tracks/DefaultTrack" ref="Tracks/DefaultTrack" />
 				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
 				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
+				<DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial" />
+				<DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial" />
+				<DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial" />
 			</DependentResources>
 			<Definitions>
 				<Definition factory="Track">

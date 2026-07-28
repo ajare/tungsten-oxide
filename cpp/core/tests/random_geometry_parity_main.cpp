@@ -41,6 +41,7 @@ std::string kindName(GeometryKind kind) {
     case GeometryKind::MeshSurface: return "MeshSurface";
     case GeometryKind::MeshRail: return "MeshRail";
     case GeometryKind::ZoneSurface: return "ZoneSurface";
+    case GeometryKind::TriggerSurface: return "TriggerSurface";
   }
   return "unknown";
 }

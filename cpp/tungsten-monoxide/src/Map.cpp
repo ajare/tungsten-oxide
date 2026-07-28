@@ -128,10 +128,11 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 	for (size_t i = 0; i < ser.getMeshCount(); ++i)
 	{
 		// Not every exported mesh has a material declared as a dependent -- MppModelExport.cpp
-		// exports every tox::Track geometry batch, including auxiliary ones (PathShell's "shell",
-		// ZoneSurface's "zone-<effect>") that buildTrackResourceXml deliberately doesn't list
-		// (there's no rendering material defined for them yet). Skip those rather than fail the
-		// whole track load over geometry nothing renders yet.
+		// exports every tox::Track geometry batch, including a PathSurface batch that falls back
+		// to the legacy "road" materialKey literal (TrackBake.cpp) when a path has no authored
+		// TrackMaterial, which buildTrackResourceXml deliberately doesn't list (there's no
+		// rendering material defined for it). Skip those rather than fail the whole track load
+		// over geometry nothing renders yet.
 		string materialMppName;
 
 		try

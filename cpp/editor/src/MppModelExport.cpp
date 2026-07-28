@@ -192,10 +192,13 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
 
 namespace {
 
-// The two materials TrackBake.cpp/TrackMesh.cpp always assign to rail/mesh-region geometry,
-// regardless of what any path is assigned -- see MppModelExport.hpp's comment.
+// The materials TrackBake.cpp/TrackMesh.cpp always assign to rail/mesh-region/shell/zone/trigger
+// geometry, regardless of what any path is assigned -- see MppModelExport.hpp's comment.
 constexpr char kDefaultRailMaterial[] = "Tracks/DefaultRailMaterial";
 constexpr char kDefaultMeshMaterial[] = "Tracks/DefaultMeshMaterial";
+constexpr char kDefaultShellMaterial[] = "Tracks/DefaultShellMaterial";
+constexpr char kDefaultZoneMaterial[] = "Tracks/DefaultZoneMaterial";
+constexpr char kDefaultTriggerMaterial[] = "Tracks/DefaultTriggerMaterial";
 
 std::string xmlEscape(const std::string& value) {
   std::string out;
@@ -216,14 +219,16 @@ std::string xmlEscape(const std::string& value) {
 
 std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
-  // plus the two fixed rail/mesh materials every export depends on regardless of curve content.
+  // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
+  // curve content.
   std::vector<std::string> materials;
   std::set<std::string> seen;
   for (const auto& path : track.paths) {
     if (path.material.empty() || !seen.insert(path.material).second) continue;
     materials.push_back(path.material);
   }
-  for (const char* fixed : {kDefaultRailMaterial, kDefaultMeshMaterial}) {
+  for (const char* fixed :
+       {kDefaultRailMaterial, kDefaultMeshMaterial, kDefaultShellMaterial, kDefaultZoneMaterial, kDefaultTriggerMaterial}) {
     if (seen.insert(fixed).second) materials.push_back(fixed);
   }
 

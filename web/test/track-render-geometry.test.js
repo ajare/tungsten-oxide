@@ -32,7 +32,7 @@ test('renderer-neutral build emits every agreed geometry kind except trigger deb
   const track = fixture('mesh-effects.json');
   const built = buildTrackRenderGeometry(track, bakeTrackPhysics(track));
   const kinds = new Set(built.batches.map(b => b.kind));
-  for (const kind of ['PathSurface', 'PathShell', 'PathRail', 'MeshSurface', 'MeshRail', 'ZoneSurface']) {
+  for (const kind of ['PathSurface', 'PathShell', 'PathRail', 'MeshSurface', 'MeshRail', 'ZoneSurface', 'TriggerSurface']) {
     assert.ok(kinds.has(kind), `contains ${kind}`);
   }
   assert.equal(kinds.has('TriggerDebug'), false);
@@ -71,7 +71,7 @@ test('path-hosted zones produce conforming renderer-neutral geometry', () => {
   const zone = buildTrackRenderGeometry(track).batches.find(b => b.id === 'zone-path-grid');
   assert.ok(zone && zone.indices.length > 0);
   assert.equal(zone.hasUv, true);
-  assert.equal(zone.materialKey, 'zone-startGrid');
+  assert.equal(zone.materialKey, 'Tracks/DefaultZoneMaterial');
 });
 
 test('path texture identity and tile are retained without loading an image', () => {

@@ -130,7 +130,7 @@ function pathBatches(track, path, pathIndex) {
         surfacePoint(end, breaks[k]), underPoint(end, breaks[k]),
         surfacePoint(end, breaks[k + 1]), underPoint(end, breaks[k + 1]));
     }
-    out.push(batch(`path-${pathIndex}-shell`, 'PathShell', 'shell', shell));
+    out.push(batch(`path-${pathIndex}-shell`, 'PathShell', 'Tracks/DefaultShellMaterial', shell));
   }
 
   for (const [side, sideKey] of [['left', 'sLeft'], ['right', 'sRight']]) {
@@ -198,7 +198,20 @@ function zoneBatch(zone) {
       addTri(triangles, b, d, c, [u0, v1], [u1, v1], [u1, v0]);
     }
   }
-  return batch(`zone-${zone.id}`, 'ZoneSurface', `zone-${zone.effect}`, triangles, { hasUv: true });
+  return batch(`zone-${zone.id}`, 'ZoneSurface', 'Tracks/DefaultZoneMaterial', triangles, { hasUv: true });
+}
+
+// Gate quad matching track-game.js's buildTriggerDebugMesh corners exactly (c0=(-1,0), c1=(1,0),
+// c2=(1,1), c3=(-1,1) in right/up space, same two-triangle split) -- this is the renderer-neutral
+// counterpart of that debug-only three.js quad, not a new shape.
+function triggerBatch(trigger) {
+  const { center: c, right: r, up: u, halfWidth: hw, height: h } = trigger;
+  const corner = (sr, su) => [c.x + r.x * sr * hw + u.x * su * h, c.y + r.y * sr * hw + u.y * su * h, c.z + r.z * sr * hw + u.z * su * h];
+  const c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
+  const triangles = [];
+  addTri(triangles, c0, c1, c2, [0, 0], [1, 0], [1, 1]);
+  addTri(triangles, c0, c2, c3, [0, 0], [1, 1], [0, 1]);
+  return batch(`trigger-${trigger.id}`, 'TriggerSurface', 'Tracks/DefaultTriggerMaterial', triangles, { hasUv: true });
 }
 
 export function buildTrackRenderGeometry(track, bakedWorld = bakeTrackPhysics(track)) {
@@ -206,5 +219,6 @@ export function buildTrackRenderGeometry(track, bakedWorld = bakeTrackPhysics(tr
   bakedWorld.paths.forEach((path, i) => batches.push(...pathBatches(track, path, i)));
   bakedWorld.meshRegions.forEach((region, i) => batches.push(...meshBatches(region, i)));
   bakedWorld.zones.forEach(zone => batches.push(zoneBatch(zone)));
+  bakedWorld.triggers.forEach(trigger => batches.push(triggerBatch(trigger)));
   return { batches, warnings: [...(bakedWorld.warnings || [])] };
 }
