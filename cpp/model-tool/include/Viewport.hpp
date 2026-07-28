@@ -66,7 +66,20 @@ class Viewport {
   void orbit(float deltaAzimuthDeg, float deltaElevationDeg) { camera_->orbit(deltaAzimuthDeg, deltaElevationDeg); }
   void zoom(float deltaDistance) { camera_->zoom(deltaDistance); }
 
+  // Optional XZ reference grid, mirroring cpp/editor's top-down grid (TopDownView.hpp's
+  // showGrid_/gridSize_ defaults: visible, 32 units) -- independent of whatever model is loaded
+  // (or whether one is at all), rebuilt into its own Lines-primitive Model3d resource whenever
+  // visibility or size changes. Extends 1024 units out from the origin along both X and Z (2048
+  // total), lying flat on the Y=0 plane.
+  bool gridVisible() const { return gridVisible_; }
+  void setGridVisible(bool visible);
+  double gridSize() const { return gridSize_; }
+  void setGridSize(double size);
+
  private:
+  void rebuildGrid();
+  void destroyGrid();
+
   mpp::RenderSystem& renderSystem_;
   mpp::ResourceManager& resourceMgr_;
   mpp::ResourceWrangler& wrangler_;
@@ -78,6 +91,11 @@ class Viewport {
   mpp::RenderPipelinePtr pipeline_;
 
   std::optional<BuiltModel> built_;
+
+  bool gridVisible_{true};
+  double gridSize_{32.0};
+  mpp::ResourcePtr gridModelResource_;
+  mpp::SceneModel3dPtr gridSceneModel_;
 };
 
 }  // namespace modeltool

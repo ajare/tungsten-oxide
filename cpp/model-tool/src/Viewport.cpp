@@ -1,6 +1,7 @@
 #include "Viewport.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 
 #pragma warning(push)
@@ -11,15 +12,37 @@
 
 #include <glew/glew.h>
 
+#include <mpp/ProgrammaticModelStream.h>
 #include <mpp/RenderSystem.h>
 #include <mpp/ResourceManager.h>
 #include <mpp/ResourceWrangler.h>
 #include <mpp/Texture.h>
+#include <mpp/mesh/MeshSpecification.h>
 
 #include "AssImpImport.hpp"
 
 namespace modeltool {
 namespace {
+
+// A fresh unique name every rebuild (toggling visibility, changing size), matching
+// ModelResources.cpp's gModelGeneration precedent for the same reason: never looked up by a
+// caller-meaningful name, so a generation counter is simplest.
+std::atomic<int> gGridGeneration{0};
+
+// Same fixed vertex layout as ModelResources.cpp's fixedMeshSpecification() (so the grid resolves
+// to the same core "__mpp_p3d_tris_p3n3t2c4__" program as every other model), but Lines instead of
+// Triangles.
+mpp::mesh::MeshSpecification gridMeshSpecification() {
+  mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Lines);
+  mpp::mesh::VertexBufferAttributeLayout* layout = spec.createVertexBufferAttributeLayout(false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
+  spec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
+  spec.setIndexedVertices(true);
+  return spec;
+}
 
 struct Bounds {
   glm::vec3 center{0.0f, 0.0f, 0.0f};
@@ -66,9 +89,12 @@ Viewport::Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resour
   // Kept (not just created-and-discarded): renderFrame() reads back its own internal SceneTarget
   // texture every frame -- see this header's top comment.
   pipeline_ = renderSystem_.getOrCreateRenderPipeline("ModelToolViewport");
+
+  rebuildGrid();
 }
 
 Viewport::~Viewport() {
+  destroyGrid();
   if (sceneModel_) scene_->remove3dModel(sceneModel_);
   if (built_.has_value()) releaseBuiltModel(*built_, wrangler_, materialLibrary_);
   if (scene_) scene_->unload();
@@ -125,6 +151,76 @@ unsigned int Viewport::renderFrame(int width, int height) {
   GLint boundId = 0;
   glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundId);
   return static_cast<unsigned int>(boundId);
+}
+
+void Viewport::setGridVisible(bool visible) {
+  if (visible == gridVisible_) return;
+  gridVisible_ = visible;
+  rebuildGrid();
+}
+
+void Viewport::setGridSize(double size) {
+  if (size == gridSize_) return;
+  gridSize_ = size;
+  rebuildGrid();
+}
+
+void Viewport::destroyGrid() {
+  if (gridSceneModel_) {
+    scene_->remove3dModel(gridSceneModel_);
+    gridSceneModel_.reset();
+  }
+  if (gridModelResource_) {
+    // Matches ModelResources.cpp's releaseBuiltModel(): release only, no deleteResource -- every
+    // rebuild gets a fresh generation-numbered name (see gGridGeneration), so nothing is ever
+    // looked up by this name again; the same precedent every model Open already relies on.
+    gridModelResource_->release(&wrangler_);
+    gridModelResource_.reset();
+  }
+}
+
+void Viewport::rebuildGrid() {
+  destroyGrid();
+  if (!gridVisible_) return;
+
+  // 1024 units out from the origin in both X and Z (2048 total), lying flat on the Y=0 plane.
+  constexpr float kExtent = 1024.0f;
+  const float step = static_cast<float>(gridSize_);
+
+  const mpp::mesh::MeshSpecification meshSpec = gridMeshSpecification();
+  auto* modelStream = new mpp::ProgrammaticModelStream(&resourceMgr_);
+  const std::size_t meshIndex =
+      modelStream->createMesh("GridLines", meshSpec, materialLibrary_.defaultFallbackMaterial()->getName(), 16);
+
+  std::vector<ImportedVertex> vertices;
+  const auto addLine = [&](float x0, float z0, float x1, float z1) {
+    const std::uint32_t i0 = static_cast<std::uint32_t>(vertices.size());
+    ImportedVertex a;
+    a.px = x0;
+    a.py = 0.0f;
+    a.pz = z0;
+    a.ny = 1.0f;
+    a.r = a.g = a.b = 90;
+    a.a = 255;
+    ImportedVertex b = a;
+    b.px = x1;
+    b.pz = z1;
+    vertices.push_back(a);
+    vertices.push_back(b);
+    modelStream->addLine(meshIndex, i0, i0 + 1);
+  };
+
+  for (float x = -kExtent; x <= kExtent + 0.5f * step; x += step) addLine(x, -kExtent, x, kExtent);
+  for (float z = -kExtent; z <= kExtent + 0.5f * step; z += step) addLine(-kExtent, z, kExtent, z);
+
+  const std::vector<std::uint8_t> packed = packVertices(vertices);
+  modelStream->addVertexData(meshIndex, std::vector<std::int8_t>(packed.begin(), packed.end()));
+
+  const std::string modelName = "ModelTool.Grid." + std::to_string(gGridGeneration.fetch_add(1));
+  gridModelResource_ = resourceMgr_.declareResource(modelName, mpp::ResourceStreamPtr(modelStream)).first;
+  gridModelResource_->acquire(&wrangler_);
+  gridModelResource_->load();
+  gridSceneModel_ = scene_->add3dModel(gridModelResource_);
 }
 
 }  // namespace modeltool

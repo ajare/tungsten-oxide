@@ -487,6 +487,9 @@ int main(int argc, char** argv) {
       if (ImGui::IsKeyPressed(ImGuiKey_O)) doOpen();
       if (ImGui::IsKeyPressed(ImGuiKey_S)) doSave();
     }
+    // G toggles the viewport's reference grid, unmodified (mirrors cpp/editor's own G shortcut for
+    // its top-down grid -- TopDownView.hpp/main.cpp).
+    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_G)) viewport->setGridVisible(!viewport->gridVisible());
 
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("File")) {
@@ -499,6 +502,23 @@ int main(int argc, char** argv) {
         if (ImGui::MenuItem("Import Materials XML...")) doImportMaterialsXml();
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) running = false;
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("View")) {
+        // Mirrors cpp/editor's own "Show Grid" / "Grid Size" View menu entries (main.cpp) and
+        // TopDownView.hpp's defaults (visible, 32 units) -- see Viewport.hpp's gridVisible()/
+        // gridSize() comment for why this grid extends 1024 units out from the origin instead of
+        // following the camera/model bounds like the editor's top-down one does.
+        bool gridVisible = viewport->gridVisible();
+        if (ImGui::MenuItem("Show Grid", "G", &gridVisible)) viewport->setGridVisible(gridVisible);
+        if (ImGui::BeginMenu("Grid Size", gridVisible)) {
+          const int gridSizeOptions[] = {8, 16, 32, 64};
+          for (int option : gridSizeOptions) {
+            const bool selected = static_cast<double>(option) == viewport->gridSize();
+            if (ImGui::MenuItem(std::to_string(option).c_str(), nullptr, selected)) viewport->setGridSize(static_cast<double>(option));
+          }
+          ImGui::EndMenu();
+        }
         ImGui::EndMenu();
       }
       ImGui::EndMainMenuBar();
