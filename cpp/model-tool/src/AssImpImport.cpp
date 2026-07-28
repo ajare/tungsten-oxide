@@ -1,6 +1,7 @@
 #include "AssImpImport.hpp"
 
 #include <filesystem>
+#include <set>
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -8,6 +9,18 @@
 
 namespace modeltool {
 namespace {
+
+// Deliberately not std::filesystem::path::stem() -- utf8Path is UTF-8, and on Windows
+// std::filesystem::path built from a narrow std::string is interpreted through the system ANSI
+// codepage, silently mangling non-ASCII text (the same class of bug FileDialog.hpp's pathToUtf8
+// exists to avoid). '/'/'\\'/'.' are all single ASCII bytes that never appear as part of a UTF-8
+// multi-byte sequence, so plain byte-wise scanning is safe here.
+std::string utf8FileStem(const std::string& utf8Path) {
+  const std::size_t slash = utf8Path.find_last_of("/\\");
+  const std::string filename = slash == std::string::npos ? utf8Path : utf8Path.substr(slash + 1);
+  const std::size_t dot = filename.find_last_of('.');
+  return dot == std::string::npos ? filename : filename.substr(0, dot);
+}
 
 std::uint8_t normalizedByte(float c) {
   const float clamped = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
@@ -126,6 +139,21 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   // ImportedMaterial already satisfies).
   if (out.materials.empty()) out.materials.push_back(ImportedMaterial{"default", std::nullopt, false});
 
+  // Qualify every material's raw AssImp name into a MaterialLibrary key: "<model-filename-stem>/
+  // <raw-name>", deduplicated within this one import (AssImp commonly hands back generic/repeated
+  // names like "material" or "" across multiple materials in one file). This keeps two unrelated
+  // models that each happen to have a material literally called "material" from colliding with
+  // each other in MaterialLibrary's single shared namespace; re-importing the exact same file will
+  // still collide with itself (by design -- see MaterialLibrary.hpp's Replace/Ignore handling).
+  const std::string modelStem = utf8FileStem(utf8Path);
+  std::set<std::string> seenNames;
+  for (ImportedMaterial& material : out.materials) {
+    const std::string base = modelStem + "/" + material.name;
+    std::string candidate = base;
+    while (!seenNames.insert(candidate).second) candidate += "_";
+    material.name = candidate;
+  }
+
   out.meshes.reserve(scene->mNumMeshes);
   for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
     ImportedMesh mesh = convertMesh(*scene->mMeshes[i]);
@@ -134,6 +162,24 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
     if (mesh.materialIndex < 0 || static_cast<std::size_t>(mesh.materialIndex) >= out.materials.size()) mesh.materialIndex = 0;
     out.meshes.push_back(std::move(mesh));
   }
+
+  // AssImp commonly synthesizes an implicit placeholder material (e.g. a "DefaultMaterial" with
+  // no texture) for meshes that don't explicitly reference one, in addition to whatever real
+  // materials the scene actually declares -- if nothing ends up using it, don't create/display/
+  // declare it at all (matches ModelResourceExport.cpp's own "only export materials actually
+  // referenced" rule, just applied here at import time instead of at export time).
+  std::vector<bool> referenced(out.materials.size(), false);
+  for (const ImportedMesh& mesh : out.meshes) referenced[static_cast<std::size_t>(mesh.materialIndex)] = true;
+
+  std::vector<ImportedMaterial> prunedMaterials;
+  std::vector<int> remappedIndex(out.materials.size(), -1);
+  for (std::size_t i = 0; i < out.materials.size(); ++i) {
+    if (!referenced[i]) continue;
+    remappedIndex[i] = static_cast<int>(prunedMaterials.size());
+    prunedMaterials.push_back(std::move(out.materials[i]));
+  }
+  out.materials = std::move(prunedMaterials);
+  for (ImportedMesh& mesh : out.meshes) mesh.materialIndex = remappedIndex[static_cast<std::size_t>(mesh.materialIndex)];
 
   return out;
 }

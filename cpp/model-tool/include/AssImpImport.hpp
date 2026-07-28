@@ -25,9 +25,25 @@ struct ImportedVertex {
   std::uint8_t r{255}, g{255}, b{255}, a{255};
 };
 
+// How a mesh's material entry should be resolved into a live mpp Material (see
+// ModelResources.hpp/MaterialLibrary.hpp):
+//   - Embedded: the material's own definition travels with this model (an AssImp material is
+//     always Embedded; a .mppmodel mesh whose material name is in the file's own Materials
+//     section is too) -- create+declare it into MaterialLibrary as ModelOwned.
+//   - ExternalReference: the mesh names a material that isn't embedded here, but IS already
+//     loaded in MaterialLibrary under that exact name -- reference it (acquireExistingReference),
+//     don't declare a new one.
+//   - DefaultFallback: the mesh names a material that's neither embedded nor currently loaded --
+//     rendered with model-tool's single shared default-white 3D material instead, with a warning
+//     surfaced to the user (see MppModelImport.hpp).
+enum class MaterialOrigin { Embedded, ExternalReference, DefaultFallback };
+
 // A material's only extracted metadata is its diffuse/base-color texture path (see ADR 0001 D4) --
 // nullopt when the source material has no usable (non-embedded) diffuse/base-color texture, in
-// which case the default-white sentinel material is used instead (D7).
+// which case the default-white sentinel texture is used instead (D7). `name` is always the fully
+// qualified MaterialLibrary key by the time importModel()/importMppModel() returns -- for AssImp
+// materials this is "<model-filename-stem>/<material-name>" (deduplicated within one import), for
+// .mppmodel materials it's whatever qualified name the file itself declared.
 struct ImportedMaterial {
   std::string name;
   std::optional<std::string> diffuseTexturePath;  // absolute filesystem path when present
@@ -35,6 +51,8 @@ struct ImportedMaterial {
   // in .glb) rather than an external file -- embedded textures are skipped for v1 (ADR 0001 D4).
   // Surfaced so the caller can report it rather than silently treating it like "no texture".
   bool skippedEmbeddedTexture{false};
+  // Always Embedded for AssImp-sourced materials; MppModelImport.cpp sets the other two values.
+  MaterialOrigin origin{MaterialOrigin::Embedded};
 };
 
 struct ImportedMesh {

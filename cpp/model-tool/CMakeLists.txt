@@ -62,6 +62,9 @@ set(MODEL_TOOL_SOURCES
   src/OrbitCamera.cpp
   src/ModelResources.cpp
   src/ModelResourceExport.cpp
+  src/MaterialXmlImport.cpp
+  src/MaterialLibrary.cpp
+  src/MppModelImport.cpp
   src/Viewport.cpp
   src/MppSave.cpp)
 
@@ -114,6 +117,10 @@ target_link_directories(model_tool PRIVATE
 target_link_libraries(model_tool PRIVATE
   SDL2::SDL2
   SDL2::SDL2main
+  # Willpower::Common's XmlReader parses imported Resources.xml-shaped material files (see
+  # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
+  # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
+  Willpower::Common
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>

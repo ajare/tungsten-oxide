@@ -74,6 +74,48 @@ FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector
   return result;
 }
 
+FileDialogMultiResult showOpenMultipleFilesDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters) {
+  FileDialogMultiResult result;
+  ComScope com;
+  if (!com.ok()) return result;
+  IFileOpenDialog* dialog = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))) || dialog == nullptr)
+    return result;
+
+  DWORD options = 0;
+  dialog->GetOptions(&options);
+  dialog->SetOptions(options | FOS_ALLOWMULTISELECT);
+  dialog->SetTitle(title.c_str());
+  const std::vector<COMDLG_FILTERSPEC> specs = toSpecs(filters);
+  if (!specs.empty()) {
+    dialog->SetFileTypes(static_cast<UINT>(specs.size()), specs.data());
+    dialog->SetFileTypeIndex(1);
+  }
+
+  if (SUCCEEDED(dialog->Show(nullptr))) {
+    IShellItemArray* items = nullptr;
+    if (SUCCEEDED(dialog->GetResults(&items)) && items != nullptr) {
+      DWORD count = 0;
+      items->GetCount(&count);
+      for (DWORD i = 0; i < count; ++i) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(items->GetItemAt(i, &item)) && item != nullptr) {
+          PWSTR pathText = nullptr;
+          if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &pathText)) && pathText != nullptr) {
+            result.paths.emplace_back(pathText);
+            CoTaskMemFree(pathText);
+          }
+          item->Release();
+        }
+      }
+      items->Release();
+    }
+  }
+  dialog->Release();
+  result.ok = !result.paths.empty();
+  return result;
+}
+
 std::wstring utf8ToWide(const std::string& utf8) {
   if (utf8.empty()) return {};
   const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);

@@ -3,6 +3,11 @@
 // docked ImGui panel rather than to the default framebuffer full-screen). Owns the current
 // BuiltModel (ModelResources.hpp) and the OrbitCamera (D8) framed on it.
 //
+// Import/material-resolution orchestration lives in main.cpp, not here: setModel() only accepts an
+// ALREADY-BUILT model (materials fully resolved -- see MaterialLibrary.hpp's Replace/Ignore
+// conflict handling, which may span several frames via a modal before a model is ready). Viewport's
+// only responsibility is swapping it into the Scene and releasing whatever was there before.
+//
 // Does NOT push its own RenderTarget around renderScene() (an earlier version of this file did,
 // and it silently rendered into nothing visible): mpp::RenderPipeline's default RenderPass
 // constructs and owns its own internal "SceneTarget" texture (mpp/src/RenderPass.cpp), sized to
@@ -17,11 +22,11 @@
 
 #include <memory>
 #include <optional>
-#include <string>
 
 #include <mpp/RenderPipeline.h>
 #include <mpp/Scene.h>
 
+#include "MaterialLibrary.hpp"
 #include "ModelResources.hpp"
 #include "OrbitCamera.hpp"
 
@@ -35,16 +40,19 @@ namespace modeltool {
 
 class Viewport {
  public:
-  Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler);
+  Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler,
+            MaterialLibrary& materialLibrary);
   ~Viewport();
 
   Viewport(const Viewport&) = delete;
   Viewport& operator=(const Viewport&) = delete;
 
-  // Releases whatever model is currently loaded (a no-op if none is), then imports and builds a
-  // new one, framing the camera on its bounds. Returns an error message on import/build failure
-  // (the viewport is left with no model loaded in that case).
-  std::optional<std::string> loadModel(const std::string& utf8Path);
+  // Releases whatever model is currently loaded (a no-op if none is, via MaterialLibrary so any
+  // ModelOwned material it referenced gets its refcount decremented), then adopts `built` and
+  // frames the camera on its bounds. `built`'s own material references must already be resolved
+  // (and, for any name shared with the outgoing model, acquired BEFORE this call -- see
+  // main.cpp's finalizeModelBuild()) so a shared name's refcount never transiently drops to zero.
+  void setModel(BuiltModel built);
 
   bool hasModel() const { return built_.has_value(); }
   const BuiltModel* builtModel() const { return built_.has_value() ? &*built_ : nullptr; }
@@ -62,6 +70,7 @@ class Viewport {
   mpp::RenderSystem& renderSystem_;
   mpp::ResourceManager& resourceMgr_;
   mpp::ResourceWrangler& wrangler_;
+  MaterialLibrary& materialLibrary_;
 
   mpp::ScenePtr scene_;
   mpp::SceneModel3dPtr sceneModel_;

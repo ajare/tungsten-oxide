@@ -39,17 +39,30 @@ std::shared_ptr<std::uint8_t> packIndices(const std::vector<std::uint32_t>& indi
 
 }  // namespace
 
-bool saveModelAsMppModel(const BuiltModel& built, const std::string& utf8Path, std::string* outError) {
+bool saveModelAsMppModel(const BuiltModel& built, MaterialLibrary& materialLibrary, const std::string& utf8Path, std::string* outError) {
   try {
     mpp::ModelSerializer serializer;
 
-    for (const BuiltMaterial& material : built.materials) serializer.addMaterial(material.name, material.stream);
+    // Materials are referenced by name only -- MaterialNames/Materials stay empty (see this
+    // header's top comment) -- but every non-fallback name is still checked against
+    // materialLibrary here, so saving fails loudly rather than silently producing a file whose
+    // mesh.material fields reference something that's no longer loaded (and so the companion XML,
+    // built from this same ImportedModel by main.cpp, is guaranteed to describe something real).
+    for (const ImportedMaterial& material : built.source.materials) {
+      if (material.origin == MaterialOrigin::DefaultFallback) continue;
+      if (!materialLibrary.materials().count(material.name)) {
+        if (outError) *outError = "Material '" + material.name + "' is no longer loaded.";
+        return false;
+      }
+    }
 
     const std::size_t meshCount = built.source.meshes.size();
     serializer.setMeshCount(meshCount);
     for (std::size_t i = 0; i < meshCount; ++i) {
       const ImportedMesh& mesh = built.source.meshes[i];
-      const std::string& materialName = built.materials[static_cast<std::size_t>(mesh.materialIndex)].name;
+      const ImportedMaterial& meshMaterial = built.source.materials[static_cast<std::size_t>(mesh.materialIndex)];
+      const std::string materialName =
+          meshMaterial.origin == MaterialOrigin::DefaultFallback ? materialLibrary.defaultFallbackMaterial()->getName() : meshMaterial.name;
       const std::size_t indexWidth = mesh.vertices.size() > 65535 ? 32 : 16;
 
       serializer.setName(i, mesh.name);

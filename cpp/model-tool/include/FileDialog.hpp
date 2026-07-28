@@ -21,11 +21,21 @@ struct FileDialogResult {
   std::filesystem::path path;
 };
 
+struct FileDialogMultiResult {
+  bool ok{false};
+  std::vector<std::filesystem::path> paths;
+};
+
 // `defaultFileName` seeds the Save dialog's filename field (ignored by Open); `defaultExtension`
 // is appended by the shell when the user doesn't type one (no leading dot, e.g. L"mppmodel").
 FileDialogResult showOpenFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters);
 FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters,
                                      const std::wstring& defaultFileName, const std::wstring& defaultExtension);
+
+// Same as showOpenFileDialog, but with FOS_ALLOWMULTISELECT set -- lets the user pick several
+// Resources.xml-shaped material files in one dialog (see MaterialXmlImport.hpp's caller in
+// main.cpp). `ok` is true only if at least one file was picked.
+FileDialogMultiResult showOpenMultipleFilesDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters);
 
 // UTF-8 <-> native-wide conversions for the Win32 text boundary (dialog default filenames, status
 // text built from a returned path, stb_image). std::wstring(narrow.begin(), narrow.end()) widens

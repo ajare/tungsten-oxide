@@ -1,12 +1,17 @@
 // ModelResourceExport.hpp — builds a Resources.xml-shaped fragment declaring one Image + Material
-// resource pair per ImportedModel::materials entry, written beside the saved .mppmodel (see
-// main.cpp's Save As flow). Mirrors cpp/editor/src/MppModelExport.cpp's buildTrackResourceXml,
-// which does the analogous thing for a Track's exported .mppmodel.
-//
-// Unlike Track's export (MPPMODEL_EXPORT_SPEC.md 5, option 1: materials are referenced by name
-// only, authored separately in the consuming project's own Resources.xml), model-tool actually
-// knows each material's real texture, so this writes complete, self-contained Material
-// declarations rather than bare <DependentResource> refs to externally-authored ones.
+// resource pair per material at least one mesh in the model actually references (NOT necessarily
+// every ImportedModel::materials entry -- a .mppmodel's own embedded materials are all created and
+// displayed regardless of use per MppModelImport.hpp, but nothing unused belongs in what a model
+// exports), written beside the saved .mppmodel (see main.cpp's Save As flow). Mirrors
+// cpp/editor/src/MppModelExport.cpp's buildTrackResourceXml,
+// which does the analogous thing for a Track's exported .mppmodel -- and, like that export
+// (MPPMODEL_EXPORT_SPEC.md 5, option 1), materials are referenced by name only in the saved
+// .mppmodel binary itself (see MppSave.hpp): this XML fragment is the ONLY place a saved model's
+// materials are actually declared/described. This also sidesteps mpp::ResourceStreamSerializer's
+// save/load round-trip entirely, which turned out to have several independent bugs when actually
+// exercised (a directory-offset miscalculation, a corrupted string-length prefix, a missing
+// re-attached texture-load function, and a uniform count/size mismatch) -- none of that machinery
+// is invoked at all once materials are described here instead of embedded in the binary.
 //
 // Every declared Material references mpp::RenderSystem's built-in core program
 // ("__mpp_p3d_tris_p3n3t2c4__") by name rather than declaring a <Resource type="Program"> of its
@@ -24,11 +29,17 @@
 
 namespace modeltool {
 
-// `namespaceName` becomes the <Namespace name="..."> wrapping every declared resource -- callers
-// typically pass the saved .mppmodel's own filename stem, keeping resource names stable and
-// collision-free across repeated exports of different models into the same Resources.xml-style
-// catalog. Material/Image resource names are derived from ImportedMaterial::name, deduplicated
-// with a numeric suffix when two materials share a name (or when a name is empty).
-std::string buildModelMaterialsXml(const ImportedModel& model, const std::string& namespaceName);
+// Each ImportedMaterial::name is already a fully qualified MaterialLibrary key ("namespace/leaf",
+// or just "leaf" for an unnamespaced one -- see AssImpImport.cpp/MppModelImport.cpp) by the time
+// this runs, so the qualified name is split back into (namespace, leaf) per material and grouped
+// into one <Namespace> block per distinct namespace (plus a flat, unwrapped group for any
+// unnamespaced entries) -- this is NOT a single namespace wrapping every resource, unlike an
+// earlier version of this function. `defaultFallbackMaterialName` is the resource name a
+// DefaultFallback-origin material entry (MaterialOrigin) actually resolves to at render time (see
+// MaterialLibrary::defaultFallbackMaterial()) -- used in place of that entry's own `name` (which
+// otherwise holds the original, never-actually-resolved bare material name for display purposes
+// only), so the exported XML always matches what the saved .mppmodel's own mesh.material fields
+// reference.
+std::string buildModelMaterialsXml(const ImportedModel& model, const std::string& defaultFallbackMaterialName);
 
 }  // namespace modeltool

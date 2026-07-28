@@ -1,6 +1,9 @@
-// ModelResources.hpp — builds live mpp resources (Materials, Model) from an ImportedModel, shared
-// by the viewport (which renders them) and MppSave (which serializes the same material streams
-// into the saved .mppmodel). See docs/adr/0001-model-tool.md, D5.
+// ModelResources.hpp — builds a live mpp Model resource from an ImportedModel. Unlike the
+// original version of this file, materials are NOT owned privately per model: every material
+// entry (whether AssImp-embedded or .mppmodel-embedded/externally-referenced/defaulted) is
+// resolved through MaterialLibrary (see MaterialLibrary.hpp) by main.cpp *before* buildModel() is
+// called -- buildModel() only does final assembly against already-resolved MaterialReferences, so
+// it never needs to know about name collisions/conflict resolution itself.
 //
 // No custom shader/Program is declared here, despite ADR 0001 D6 describing "one small bundled
 // GLSL program": mpp::RenderSystem::createCoreResources() already declares a core Program resource
@@ -9,23 +12,20 @@
 // modulated by a diffuse sampler) -- see mpp/DefaultShaders.h's FragmentShader3dTemplate. A
 // ProgrammaticMaterialStream that never calls setProgram() (just setProgram2d(false)) resolves to
 // it automatically via ResourceManager::getDefault3dProgram() (see mpp/src/Material.cpp), which is
-// exactly the pattern StatePlayTungstenMonoxide::createTorusMaterial() already uses. Writing a new
-// Program via mpp::program::Parser turned out to be unnecessary.
-//
-// No willpower.application Resource/XML system is used anywhere here (ADR D1) -- everything is
-// built programmatically against bare mpp::ResourceManager, the same way
-// ext/massivepolypusher/demo-suite's ModelScene and StatePlayTungstenMonoxide::createTorusModel()
-// already do.
+// exactly the pattern StatePlayTungstenMonoxide::createTorusMaterial() already uses.
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <mpp/Resource.h>
 #include <mpp/ResourceStream.h>
+#include <mpp/mesh/MeshSpecification.h>
 
 #include "AssImpImport.hpp"
+#include "MaterialLibrary.hpp"
 
 namespace mpp {
 class ResourceManager;
@@ -34,33 +34,37 @@ class ResourceWrangler;
 
 namespace modeltool {
 
-struct BuiltMaterial {
-  std::string name;                   // the resource name this material was declared under
-  mpp::ResourceStreamPtr stream;      // the live ProgrammaticMaterialStream, kept for MppSave's addMaterial()
-  mpp::ResourcePtr materialResource;   // the declared Resource wrapping `stream`, for release
-  mpp::ResourcePtr textureResource;    // non-null only when a real (non-sentinel) texture was declared
-};
-
 struct BuiltModel {
-  mpp::ResourcePtr modelResource;        // the live Model resource, added to the Scene
-  std::vector<BuiltMaterial> materials;  // parallel to ImportedModel::materials
-  ImportedModel source;                  // retained for MppSave (mesh names/vertices/indices)
+  mpp::ResourcePtr modelResource;  // the live Model resource, added to the Scene
+  // Parallel to source.materials -- nullopt for a DefaultFallback entry (which references
+  // model-tool's own shared default-white material, never torn down per-model). Released via
+  // MaterialLibrary::releaseModelReference() in releaseBuiltModel().
+  std::vector<std::optional<MaterialReference>> materialRefs;
+  ImportedModel source;  // retained for MppSave (mesh names/vertices/indices) and the left panel
 };
 
-// Builds one Material resource per ImportedModel::materials entry (named texture when present,
-// mpp's built-in "__mpp_tex_none__" sentinel otherwise -- ADR D7) plus one Model resource
-// referencing them, and acquires+loads all of it against `wrangler`. The caller is responsible for
-// adding the returned BuiltModel::modelResource to a Scene and eventually calling
-// releaseBuiltModel().
-BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported);
+// Builds one Model resource from `imported`. `materialRefs` must be parallel to
+// `imported.materials` (same size), already resolved by the caller: a real MaterialReference for
+// every Embedded/ExternalReference entry (see MaterialLibrary::declareModelOwned()/
+// acquireExistingReference()), nullopt for every DefaultFallback entry. `defaultFallbackMaterialName`
+// is the resource name a DefaultFallback mesh's material resolves to (see
+// MaterialLibrary::defaultFallbackMaterial()).
+BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported,
+                       std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName);
 
-// Releases every resource buildModel() acquired against `wrangler` (model, materials, and any
-// per-material textures).
-void releaseBuiltModel(BuiltModel& built, mpp::ResourceWrangler& wrangler);
+// Releases the Model resource and every material reference buildModel() was given, via
+// `materialLibrary` (so a ModelOwned material whose refcount reaches zero is properly cleaned up).
+void releaseBuiltModel(BuiltModel& built, mpp::ResourceWrangler& wrangler, MaterialLibrary& materialLibrary);
 
 // Packs ImportedVertex into the fixed 36-byte layout (position f32x3, normal f32x3, uv f32x2,
-// colour unorm8x4) -- shared by buildModel()'s live GPU upload and MppSave's file serialization,
-// so the byte layout is defined in exactly one place.
+// colour unorm8x4) -- shared by buildModel()'s live GPU upload, MppSave's file serialization, and
+// MppModelImport's unpacking of a loaded .mppmodel's own vertex streams.
 std::vector<std::uint8_t> packVertices(const std::vector<ImportedVertex>& vertices);
+
+// The MeshSpecification every ProgrammaticMaterialStream this app declares is built against (see
+// this header's top comment) -- shared with MaterialLibrary.cpp, which declares materials outside
+// of any particular model's build, but still needs the identical spec so its materials resolve to
+// the same core default 3D program.
+mpp::mesh::MeshSpecification fixedMeshSpecification();
 
 }  // namespace modeltool

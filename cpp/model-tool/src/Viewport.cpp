@@ -52,8 +52,9 @@ Bounds computeBounds(const ImportedModel& model) {
 
 }  // namespace
 
-Viewport::Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler)
-    : renderSystem_(renderSystem), resourceMgr_(resourceMgr), wrangler_(wrangler) {
+Viewport::Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler,
+                    MaterialLibrary& materialLibrary)
+    : renderSystem_(renderSystem), resourceMgr_(resourceMgr), wrangler_(wrangler), materialLibrary_(materialLibrary) {
   scene_ = std::make_shared<mpp::Scene>(&renderSystem_);
   scene_->load();
   scene_->setClearColour(mpp::Colour(0.12f, 0.12f, 0.14f, 1.0f));
@@ -69,30 +70,25 @@ Viewport::Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resour
 
 Viewport::~Viewport() {
   if (sceneModel_) scene_->remove3dModel(sceneModel_);
-  if (built_.has_value()) releaseBuiltModel(*built_, wrangler_);
+  if (built_.has_value()) releaseBuiltModel(*built_, wrangler_, materialLibrary_);
   if (scene_) scene_->unload();
 }
 
-std::optional<std::string> Viewport::loadModel(const std::string& utf8Path) {
-  std::string error;
-  std::optional<ImportedModel> imported = importModel(utf8Path, &error);
-  if (!imported.has_value()) return error;
-
-  const Bounds bounds = computeBounds(*imported);
+void Viewport::setModel(BuiltModel built) {
+  const Bounds bounds = computeBounds(built.source);
 
   if (built_.has_value()) {
     if (sceneModel_) {
       scene_->remove3dModel(sceneModel_);
       sceneModel_.reset();
     }
-    releaseBuiltModel(*built_, wrangler_);
+    releaseBuiltModel(*built_, wrangler_, materialLibrary_);
     built_.reset();
   }
 
-  built_ = buildModel(resourceMgr_, wrangler_, std::move(*imported));
+  built_ = std::move(built);
   sceneModel_ = scene_->add3dModel(built_->modelResource);
   camera_->frameOnBounds(bounds.center, bounds.radius);
-  return std::nullopt;
 }
 
 unsigned int Viewport::renderFrame(int width, int height) {
