@@ -53,6 +53,11 @@ struct Path {
   bool closed{true};
   std::vector<TrackPoint> points;
   std::optional<TextureBinding> texture;
+  // Namespace-qualified Willpower TrackMaterial name (e.g. "Tracks/DefaultTrack"), assigned via
+  // the Materials panel. Empty only transiently (EditorState::setAvailableMaterials/
+  // finishCreateDraft backfill it to the alphabetically-first material as soon as one is known);
+  // mirrors core's PathDefinition::material, which this round-trips through schema-10 JSON.
+  std::string material;
 };
 
 // `attributesJson` carries the geometry-js "attributes" object verbatim as opaque serialized JSON

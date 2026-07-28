@@ -68,7 +68,7 @@ set(EDITOR_SOURCES
   src/MppModelExport.cpp
   src/RandomTrack.cpp
   src/TextureCache.cpp
-  src/TexturePanel.cpp
+  src/MaterialsPanel.cpp
   src/FileDialog.cpp
   src/Clipboard.cpp
   src/TrackPropertiesPanel.cpp
@@ -78,7 +78,9 @@ set(EDITOR_SOURCES
   src/MeshPanel.cpp
   src/CurvesPanel.cpp
   src/HandlingPanel.cpp
-  src/RandomRangesPanel.cpp)
+  src/RandomRangesPanel.cpp
+  src/EditorIni.cpp
+  src/MaterialCatalog.cpp)
 
 add_executable(track_editor
   main.cpp
@@ -94,6 +96,7 @@ target_include_directories(track_editor PRIVATE
 
 target_link_libraries(track_editor PRIVATE
   core
+  Willpower::Common
   SDL2::SDL2
   SDL2::SDL2main)
 
@@ -111,3 +114,8 @@ add_custom_command(TARGET track_editor POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     $<TARGET_RUNTIME_DLLS:track_editor> $<TARGET_FILE_DIR:track_editor>
   COMMAND_EXPAND_LISTS)
+
+# Editor config .ini, copied beside the executable so a direct run/F5 picks it up.
+add_custom_command(TARGET track_editor POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/editor.ini" "$<TARGET_FILE_DIR:track_editor>/editor.ini")

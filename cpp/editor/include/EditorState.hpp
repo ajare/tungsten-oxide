@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <optional>
@@ -1021,6 +1022,36 @@ public:
     return true;
   }
 
+  // ---- TrackMaterials (Materials panel) ----
+
+  const std::vector<std::string>& availableMaterials() const { return availableMaterials_; }
+
+  // Alphabetically-first available material, or "" if none are known yet (main.cpp calls
+  // setAvailableMaterials once at startup, right after MaterialCatalog loads -- before that, and
+  // in every main.cpp self-test that never calls it at all, this stays empty and every path's
+  // material stays "" too, which is harmless since nothing there exercises mppmodel export).
+  std::string defaultMaterial() const { return availableMaterials_.empty() ? std::string() : availableMaterials_.front(); }
+
+  // Called once at startup once MaterialCatalog has loaded (main.cpp), and whenever a track's
+  // material set could otherwise go stale. Stores the sorted qualified-name list and immediately
+  // backfills every current path's material (see backfillMaterials()).
+  void setAvailableMaterials(std::vector<std::string> qualifiedNames) {
+    availableMaterials_ = std::move(qualifiedNames);
+    std::sort(availableMaterials_.begin(), availableMaterials_.end());
+    backfillMaterials();
+  }
+
+  // Mirrors assignPathTexture's no-op-if-unchanged guard.
+  bool assignPathMaterial(int pathIndex, const std::string& qualifiedName) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return false;
+    if (!std::binary_search(availableMaterials_.begin(), availableMaterials_.end(), qualifiedName)) return false;
+    Path& path = track_.paths[pathIndex];
+    if (path.material == qualifiedName) return false;
+    history_.push(track_);
+    path.material = qualifiedName;
+    return true;
+  }
+
   bool deleteSelectedMesh() {
     if (!selectedMeshId_.has_value()) return false;
     const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
@@ -1741,9 +1772,29 @@ private:
     return h00 * p1.second + h10 * m1 + h01 * p2.second + h11 * m2;
   }
 
+  // Resolves every path's material to a concrete, known-good qualified name: empty (never
+  // authored) or unresolvable (references a TrackMaterial that no longer exists in the current
+  // MaterialCatalog, e.g. Resources.xml changed since the track was authored) both fall back to
+  // defaultMaterial(), with a stderr warning for the latter case only (the former is the normal,
+  // silent case for a brand-new path or a JS-authored track that never had this field at all). A
+  // no-op with an empty availableMaterials_ (nothing loaded yet, or in main.cpp's self-tests).
+  void backfillMaterials() {
+    if (availableMaterials_.empty()) return;
+    for (auto& path : track_.paths) {
+      const bool known = std::binary_search(availableMaterials_.begin(), availableMaterials_.end(), path.material);
+      if (known) continue;
+      if (!path.material.empty()) {
+        std::fprintf(stderr, "EditorState: path '%s' referenced unknown material '%s'; falling back to '%s'.\n",
+                     path.id.c_str(), path.material.c_str(), defaultMaterial().c_str());
+      }
+      path.material = defaultMaterial();
+    }
+  }
+
   void replaceTrackKeepHistory(TrackDefinition replacement) {
     track_ = std::move(replacement);
     backfillPointIds(track_);  // see the constructor's comment on why this must never be skipped
+    backfillMaterials();
     selection_ = {};
     dragging_ = false;
     dragMutated_ = false;
@@ -2127,6 +2178,7 @@ private:
     Path path;
     path.id = newPathId();
     path.closed = closed;
+    path.material = defaultMaterial();
     // Points minted in this same loop aren't in track_ yet, so newPointId's scan can't see them --
     // `reserved` tracks ids minted so far this call so two points in one draft can never collide
     // with each other, only with what's already on the track (mirrors web/js/editor.js's newId, which
@@ -2153,6 +2205,7 @@ private:
 
   TrackDefinition track_;
   History history_;
+  std::vector<std::string> availableMaterials_;  // sorted qualified names; see setAvailableMaterials
   EditMode mode_{EditMode::Edit};
   SelectedPoint selection_;
   bool dragging_{false};

@@ -163,7 +163,10 @@ MeshRegion compilePlacement(const MeshAssetDefinition& asset, const AssetTopolog
 void addGeometry(Track& track, const MeshRegion& region) {
   GeometryBatch surface;
   surface.id = "mesh-" + region.id + "-surface";
-  surface.materialKey = "mesh-region";
+  // Fixed material for every mesh region -- must stay in sync with
+  // cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+  // "DefaultMeshMaterial", and with MaterialCatalog's startup existence check for it.
+  surface.materialKey = "Tracks/DefaultMeshMaterial";
   surface.kind = GeometryKind::MeshSurface;
   for (const auto& triangle : region.triangles) {
     addTriangle(surface, {triangle.points[0].x, region.elevation, triangle.points[0].y},
@@ -174,7 +177,9 @@ void addGeometry(Track& track, const MeshRegion& region) {
 
   GeometryBatch rails;
   rails.id = "mesh-" + region.id + "-rails";
-  rails.materialKey = "rail";
+  // Same fixed rail material as PathRail (see TrackBake.cpp's pathGeometry) -- rails always use
+  // "Tracks/DefaultRailMaterial" regardless of what mesh region they belong to.
+  rails.materialKey = "Tracks/DefaultRailMaterial";
   rails.kind = GeometryKind::MeshRail;
   for (const auto& rail : region.rails) {
     const Vec3 a(rail.a.x, region.elevation, rail.a.y), b(rail.b.x, region.elevation, rail.b.y);

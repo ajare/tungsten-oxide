@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<Resources>
+	<Namespace name="Tracks">
+		<Resource type="Track" name="NewTrack">
+			<DependentResources>
+				<DependentResource id="Tracks/AlphaltTrack" ref="Tracks/AlphaltTrack" />
+				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
+				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
+			</DependentResources>
+			<Definitions>
+				<Definition factory="Track">
+					<File>NewTrack.mppmodel</File>
+				</Definition>
+			</Definitions>
+		</Resource>
+	</Namespace>
+</Resources>

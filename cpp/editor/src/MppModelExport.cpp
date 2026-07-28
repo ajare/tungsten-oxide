@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <set>
 
 namespace editor {
 namespace {
@@ -187,6 +188,74 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track) {
   file += meshMetadataSection;
 
   return {std::move(file), meshCount};
+}
+
+namespace {
+
+// The two materials TrackBake.cpp/TrackMesh.cpp always assign to rail/mesh-region geometry,
+// regardless of what any path is assigned -- see MppModelExport.hpp's comment.
+constexpr char kDefaultRailMaterial[] = "Tracks/DefaultRailMaterial";
+constexpr char kDefaultMeshMaterial[] = "Tracks/DefaultMeshMaterial";
+
+std::string xmlEscape(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char c : value) {
+    switch (c) {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      default: out += c; break;
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName) {
+  // Every distinct material this track's curves are actually assigned to, in first-seen order,
+  // plus the two fixed rail/mesh materials every export depends on regardless of curve content.
+  std::vector<std::string> materials;
+  std::set<std::string> seen;
+  for (const auto& path : track.paths) {
+    if (path.material.empty() || !seen.insert(path.material).second) continue;
+    materials.push_back(path.material);
+  }
+  for (const char* fixed : {kDefaultRailMaterial, kDefaultMeshMaterial}) {
+    if (seen.insert(fixed).second) materials.push_back(fixed);
+  }
+
+  std::string xml = "<?xml version=\"1.0\"?>\n<Resources>\n\t<Namespace name=\"Tracks\">\n";
+  // No `location=` attribute: Track is always composite (it lists TrackMaterial dependents below),
+  // and ResourceManager::instantiateResource() unconditionally discards a composite resource's own
+  // `location`/source. The .mppmodel filename instead travels via <Definition><File> below, which
+  // MapTungstenMonoxideDefinitionFactory::create() reads into Map::mModelFileName.
+  xml += "\t\t<Resource type=\"Track\" name=\"" + xmlEscape(track.name) + "\">\n";
+
+  if (!materials.empty()) {
+    xml += "\t\t\t<DependentResources>\n";
+    // id == ref (the qualified name) -- Map::load() (cpp/tungsten-monoxide/src/Map.cpp) resolves
+    // each mesh's material by calling getDependentResource() with the exact "Tracks/..." string
+    // baked into the mesh's GeometryBatch.materialKey, so the id must match that verbatim. `seen`
+    // above already dedupes by qualified name, so no id collision is possible here.
+    for (const std::string& qualifiedName : materials) {
+      xml += "\t\t\t\t<DependentResource id=\"" + xmlEscape(qualifiedName) + "\" ref=\"" + xmlEscape(qualifiedName) + "\" />\n";
+    }
+    xml += "\t\t\t</DependentResources>\n";
+  }
+
+  // <File> carries the .mppmodel filename (see the no-`location=` comment above). The
+  // <Definitions> block itself is also mandatory even apart from that: a resource with none at all
+  // still gets an implicit factory="" one synthesized by ResourceLocation::scanResourceElement(),
+  // and no (Map, "") definition factory is registered -- only (Map, "Track") is (see
+  // cpp/tungsten-monoxide/src/DLL.cpp). Omitting it throws "could not find a definition factory".
+  xml += "\t\t\t<Definitions>\n\t\t\t\t<Definition factory=\"Track\">\n\t\t\t\t\t<File>" + xmlEscape(mppModelFileName) +
+         "</File>\n\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
+
+  xml += "\t\t</Resource>\n\t</Namespace>\n</Resources>\n";
+  return xml;
 }
 
 }  // namespace editor

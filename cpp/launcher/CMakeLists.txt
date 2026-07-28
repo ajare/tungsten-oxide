@@ -3,7 +3,6 @@
 # GLFW path (WINDOWING_SYSTEM defaults to WINDOW_GLFW in src/Main.cpp).
 set(LAUNCHER_HEADERS
   include/ApplicationDLL.h
-  include/DirectoryResourceLocation.h
   include/ExitApplicationException.h
   include/ImGuiDataProvider.h
   include/Platform.h
@@ -28,7 +27,6 @@ set(LAUNCHER_HEADERS
 
 set(LAUNCHER_SOURCES
   src/ApplicationDLL.cpp
-  src/DirectoryResourceLocation.cpp
   src/glfw/ImGuiGLFW.cpp
   src/glfw/TimerGLFW.cpp
   src/glfw/WindowGLFW.cpp

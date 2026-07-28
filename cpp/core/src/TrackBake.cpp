@@ -422,7 +422,9 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   Builder top;
   top.b.id = "path-" + std::to_string(pi) + "-surface";
   top.b.kind = GeometryKind::PathSurface;
-  top.b.materialKey = "road";
+  // Falls back to the legacy "road" literal when no TrackMaterial was authored (see
+  // PathDefinition::material's comment) -- preserves JS<->C++ parity for tracks without it.
+  top.b.materialKey = def.material.empty() ? "road" : def.material;
   top.b.hasUv = true;
   if (def.texture) top.b.texture = TextureBinding{def.texture->assetId, def.texture->tile};
   std::vector<std::vector<double>> br;
@@ -506,7 +508,10 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     Builder r;
     r.b.id = "path-" + std::to_string(pi) + "-rail-" + side.first;
     r.b.kind = GeometryKind::PathRail;
-    r.b.materialKey = "rail";
+    // Fixed material for every rail mesh, regardless of the path's own TrackMaterial -- must stay
+    // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+    // "DefaultRailMaterial", and with MaterialCatalog's startup existence check for it.
+    r.b.materialKey = "Tracks/DefaultRailMaterial";
     const int railN = static_cast<int>(path.centerline.size());
     const int railSegments = def.closed ? railN : railN - 1;
     for (int i = 0; i < railSegments; i++) {

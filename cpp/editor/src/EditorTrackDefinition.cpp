@@ -106,6 +106,7 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
     }
   }
   if (raw.is_object() && raw.contains("texture")) path.texture = normalizePathTexture(raw.at("texture"));
+  path.material = stringOr(raw, "material");
   return path;
 }
 
@@ -369,6 +370,7 @@ json pathToJson(const Path& path) {
   for (const auto& point : path.points) points.push_back(pointToJson(point));
   json out = {{"id", path.id}, {"closed", path.closed}, {"points", std::move(points)}};
   if (path.texture) out["texture"] = json{{"asset", path.texture->assetId}, {"tile", path.texture->tile}};
+  if (!path.material.empty()) out["material"] = path.material;
   return out;
 }
 

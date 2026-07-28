@@ -78,7 +78,55 @@
 			</Definitions>
 		</Resource>
 		
+		<Resource type="Image" name="DefaultRailTexture" location="images/test.png" />
+		<Resource type="Image" name="DefaultMeshTexture" location="images/test.png" />
+		<Resource type="Image" name="DefaultTrackTexture" location="images/test.png" />
 		<Resource type="Image" name="TrackTexture" location="images/floor5.png" />
+
+		<Resource type="Material" name="DefaultRailMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultRailTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+
+		<Resource type="Material" name="DefaultMeshMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultMeshTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
+		
+		<Resource type="Material" name="DefaultTrackMaterial">
+			<DependentResources>
+				<DependentResource id="Program" ref="TrackProgram" />
+				<DependentResource id="Texture" ref="DefaultTrackTexture" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition>
+					<Textures>
+						<Texture type="resource" sampler="TEX1">Texture</Texture>
+					</Textures>
+				</Definition>
+			</Definitions>
+		</Resource>
 
 		<Resource type="Material" name="TrackAsphaltMaterial">
 			<DependentResources>
@@ -95,7 +143,17 @@
 			</Definitions>
 		</Resource>
 
-		<Resource type="TrackMaterial" name="TrackAsphalt">
+		<Resource type="TrackMaterial" name="DefaultTrack">
+			<DependentResources>
+				<DependentResource id="Material" ref="DefaultTrackMaterial" />
+			</DependentResources>
+
+			<Definitions>
+				<Definition />
+			</Definitions>
+		</Resource>
+		
+		<Resource type="TrackMaterial" name="AlphaltTrack">
 			<DependentResources>
 				<DependentResource id="Material" ref="TrackAsphaltMaterial" />
 			</DependentResources>
@@ -104,18 +162,19 @@
 				<Definition />
 			</Definitions>
 		</Resource>
-
-		<Resource type="TextFile" name="TrackFile" location="track-1.yaml" />
-
-		<Resource type="Track" name="Track">
+		
+		<Resource type="Track" name="NewTrack">
 			<DependentResources>
-				<DependentResource id="Yaml" ref="TrackFile" />
+				<DependentResource id="Tracks/AlphaltTrack" ref="Tracks/AlphaltTrack" />
+				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
+				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
 			</DependentResources>
 			<Definitions>
 				<Definition factory="Track">
-					<Resource>Yaml</Resource>
+					<File>NewTrack.mppmodel</File>
 				</Definition>
 			</Definitions>
 		</Resource>
-	</Namespace>    
+
+	</Namespace>
 </Resources>

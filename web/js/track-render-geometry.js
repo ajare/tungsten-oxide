@@ -147,7 +147,7 @@ function pathBatches(track, path, pathIndex) {
       addTri(rails, pairs[i][0], pairs[j][0], pairs[i][1]);
       addTri(rails, pairs[i][1], pairs[j][0], pairs[j][1]);
     }
-    out.push(batch(`path-${pathIndex}-rail-${side}`, 'PathRail', 'rail', rails));
+    out.push(batch(`path-${pathIndex}-rail-${side}`, 'PathRail', 'Tracks/DefaultRailMaterial', rails));
   }
   return out;
 }
@@ -165,8 +165,8 @@ function meshBatches(region, index) {
   }
   const id = region.compiled.id || index;
   return [
-    batch(`mesh-${id}-surface`, 'MeshSurface', 'mesh-region', surface),
-    batch(`mesh-${id}-rails`, 'MeshRail', 'rail', rails)
+    batch(`mesh-${id}-surface`, 'MeshSurface', 'Tracks/DefaultMeshMaterial', surface),
+    batch(`mesh-${id}-rails`, 'MeshRail', 'Tracks/DefaultRailMaterial', rails)
   ];
 }
 

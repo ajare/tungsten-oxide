@@ -171,6 +171,7 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
     auto texture = normalizePathTexture(raw.at("texture"), textureValid);
     if (textureValid) path.texture = std::move(texture);
   }
+  path.material = stringOr(raw, "material");
   return path;
 }
 

@@ -40,7 +40,7 @@
 #include "ApplicationDLL.h"
 #include "StateManager.h"
 #include "ExitApplicationException.h"
-#include "DirectoryResourceLocation.h"
+#include "willpower/application/resourcesystem/DirectoryResourceLocation.h"
 #include "ZipResourceLocation.h"
 #include "ImGuiDataProvider.h"
 
@@ -222,7 +222,7 @@ ProgramOptions startup(string const& configFile)
 	gResourceMgr->addResourceLocationFactory("Directory", [](string const& location, string const& definitionFile)
 		-> application::resourcesystem::ResourceLocation*
 	{
-		return new DirectoryResourceLocation(gLogger, location, definitionFile);
+		return new application::resourcesystem::DirectoryResourceLocation(gLogger, location, definitionFile);
 	});
 
 	gResourceMgr->addResourceLocationFactory("ZipFile", [](string const& location, string const& definitionFile)

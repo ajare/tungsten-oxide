@@ -29,6 +29,7 @@
 
 #include <string>
 
+#include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 
 namespace editor {
@@ -44,5 +45,29 @@ struct MppModelExportResult {
 // MassivePolyPusher project is expected to define "road"/"shell"/"rail"/"mesh-region"/
 // "zone-<effect>" materials itself.
 MppModelExportResult exportTrackToMppModel(const tox::Track& track);
+
+// Builds a standalone Willpower <Resources> XML document (same schema as
+// cpp/tungsten-monoxide/resources/Resources.xml) declaring this track as a `type="Track"`
+// resource, listing -- by namespace-qualified ref, not re-declaring -- every TrackMaterial this
+// track's curves are actually assigned to (path.material, deduped), plus the two fixed rail/mesh
+// materials every track's export always depends on (Tracks/DefaultRailMaterial,
+// Tracks/DefaultMeshMaterial -- must stay in sync with cpp/core/src/TrackBake.cpp's and
+// TrackMesh.cpp's hardcoded materialKey strings). Meant to be merged into the game's real
+// Resources.xml, where those TrackMaterial/Material resources are expected to already be declared
+// -- this file only ever emits <DependentResource ref="..."> entries, never full material/program/
+// texture definitions.
+//
+// mppModelFileName is carried as <Definitions><Definition factory="Track"><File>...</File>
+// </Definitions>, NOT a `location=` attribute on the Resource element: this Track resource is
+// always composite (it lists TrackMaterial dependents), and
+// ResourceManager::instantiateResource() (cpp/willpower/willpower.application) unconditionally
+// discards a composite resource's own `location`/source, so `location=` would be silently ignored.
+// MapTungstenMonoxideDefinitionFactory::create() (cpp/tungsten-monoxide) reads <File> back out
+// into Map::mModelFileName. The (Map, "Track") definition factory it's registered under
+// (cpp/tungsten-monoxide/src/DLL.cpp) is also mandatory for a different reason: a resource with no
+// <Definitions> at all still gets an implicit factory="" one synthesized by
+// ResourceLocation::scanResourceElement(), and no (Map, "") factory is registered -- omitting
+// <Definitions> entirely throws "could not find a definition factory" at load time.
+std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName);
 
 }  // namespace editor

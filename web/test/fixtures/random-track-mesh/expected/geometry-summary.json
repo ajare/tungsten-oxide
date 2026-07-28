@@ -87,7 +87,7 @@
       {
         "id": "path-0-rail-left",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -125,7 +125,7 @@
       {
         "id": "path-0-rail-right",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -163,7 +163,7 @@
       {
         "id": "mesh-random-placement-324508639-a-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 18,
         "indexCount": 18,
         "hasUv": false,
@@ -201,7 +201,7 @@
       {
         "id": "mesh-random-placement-324508639-a-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 30,
         "indexCount": 30,
         "hasUv": false,
@@ -399,7 +399,7 @@
       {
         "id": "path-0-rail-left",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -437,7 +437,7 @@
       {
         "id": "path-0-rail-right",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -475,7 +475,7 @@
       {
         "id": "mesh-random-placement-610839776-a-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 33,
         "indexCount": 33,
         "hasUv": false,
@@ -513,7 +513,7 @@
       {
         "id": "mesh-random-placement-610839776-a-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 42,
         "indexCount": 42,
         "hasUv": false,
@@ -714,7 +714,7 @@
       {
         "id": "path-0-rail-left",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -752,7 +752,7 @@
       {
         "id": "path-0-rail-right",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -790,7 +790,7 @@
       {
         "id": "mesh-random-placement-195948557-a-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 18,
         "indexCount": 18,
         "hasUv": false,
@@ -828,7 +828,7 @@
       {
         "id": "mesh-random-placement-195948557-a-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 30,
         "indexCount": 30,
         "hasUv": false,
@@ -866,7 +866,7 @@
       {
         "id": "mesh-random-placement-195948557-b-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 18,
         "indexCount": 18,
         "hasUv": false,
@@ -904,7 +904,7 @@
       {
         "id": "mesh-random-placement-195948557-b-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 30,
         "indexCount": 30,
         "hasUv": false,
@@ -1105,7 +1105,7 @@
       {
         "id": "path-0-rail-left",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -1143,7 +1143,7 @@
       {
         "id": "path-0-rail-right",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -1181,7 +1181,7 @@
       {
         "id": "mesh-random-placement-3221344269-a-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 12,
         "indexCount": 12,
         "hasUv": false,
@@ -1219,7 +1219,7 @@
       {
         "id": "mesh-random-placement-3221344269-a-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 24,
         "indexCount": 24,
         "hasUv": false,
@@ -1257,7 +1257,7 @@
       {
         "id": "mesh-random-placement-3221344269-b-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 12,
         "indexCount": 12,
         "hasUv": false,
@@ -1295,7 +1295,7 @@
       {
         "id": "mesh-random-placement-3221344269-b-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 24,
         "indexCount": 24,
         "hasUv": false,
@@ -1493,7 +1493,7 @@
       {
         "id": "path-0-rail-left",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -1531,7 +1531,7 @@
       {
         "id": "path-0-rail-right",
         "kind": "PathRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
         "hasUv": false,
@@ -1569,7 +1569,7 @@
       {
         "id": "mesh-random-placement-1592594996-a-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 33,
         "indexCount": 33,
         "hasUv": false,
@@ -1607,7 +1607,7 @@
       {
         "id": "mesh-random-placement-1592594996-a-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 36,
         "indexCount": 36,
         "hasUv": false,
@@ -1645,7 +1645,7 @@
       {
         "id": "mesh-random-placement-1592594996-b-surface",
         "kind": "MeshSurface",
-        "materialKey": "mesh-region",
+        "materialKey": "Tracks/DefaultMeshMaterial",
         "vertexCount": 33,
         "indexCount": 33,
         "hasUv": false,
@@ -1683,7 +1683,7 @@
       {
         "id": "mesh-random-placement-1592594996-b-rails",
         "kind": "MeshRail",
-        "materialKey": "rail",
+        "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 36,
         "indexCount": 36,
         "hasUv": false,

@@ -55,7 +55,7 @@ void StateControllerTungstenMonoxide::updateTransitionData(string const& prevSta
 {
 	if (prevStateName == "Load")
 	{
-		setTransitionNextMap(&mTransitionData.mapData, "Track", "Tracks", nullptr);
+		setTransitionNextMap(&mTransitionData.mapData, "NewTrack", "Tracks", nullptr);
 	}
 	else if (prevStateName == "Play")
 	{
@@ -68,7 +68,7 @@ void StateControllerTungstenMonoxide::updateTransitionData(string const& prevSta
 				&mTransitionData.mapData, 
 				"Track",
                 "Tracks",
-				mwResourceMgr->getResource("Track", "Tracks"));
+				mwResourceMgr->getResource("NewTrack", "Tracks"));
 			break;
 		}
 	}

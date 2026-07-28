@@ -28,6 +28,7 @@ set(WILLPOWER_APPLICATION_HEADERS
   include/willpower/application/resourcesystem/AudioBankResource.h
   include/willpower/application/resourcesystem/AudioBankResourceDefinitionFactory.h
   include/willpower/application/resourcesystem/DataStream.h
+  include/willpower/application/resourcesystem/DirectoryResourceLocation.h
   include/willpower/application/resourcesystem/ImageDefaultDefinitionFactory.h
   include/willpower/application/resourcesystem/ImageResource.h
   include/willpower/application/resourcesystem/ImageResourceDefinitionFactory.h
@@ -75,6 +76,7 @@ set(WILLPOWER_APPLICATION_SOURCES
   src/resourcesystem/AudioBankDefaultDefinitionFactory.cpp
   src/resourcesystem/AudioBankResourceDefinitionFactory.cpp
   src/resourcesystem/DataStream.cpp
+  src/resourcesystem/DirectoryResourceLocation.cpp
   src/resourcesystem/ImageDefaultDefinitionFactory.cpp
   src/resourcesystem/ImageResource.cpp
   src/resourcesystem/ImageResourceDefinitionFactory.cpp
@@ -149,6 +151,7 @@ target_link_libraries(Willpower.Application PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
   $<IF:$<CONFIG:Debug>,MppProgramd,MppProgram>
+  $<IF:$<CONFIG:Debug>,Utilsd,Utils>
   FreeImage fmod_vc fmodstudio_vc fsbank_vc)
 
 target_compile_definitions(Willpower.Application PRIVATE

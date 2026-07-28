@@ -222,13 +222,13 @@ int main(int argc, char** argv) {
         if (surface != loaded.track->geometry.end()) {
           check(surface->vertices.size() == region.triangles.size() * 3 && surface->indices.size() == region.triangles.size() * 3,
                 label + " surface geometry covers every Willpower triangle");
-          check(surface->materialKey == "mesh-region" && !surface->hasUv && !surface->texture,
+          check(surface->materialKey == "Tracks/DefaultMeshMaterial" && !surface->hasUv && !surface->texture,
                 label + " mesh surface keeps renderer-neutral material metadata");
         }
         if (rails != loaded.track->geometry.end()) {
           check(rails->vertices.size() == region.rails.size() * 6 && rails->indices.size() == region.rails.size() * 6,
                 label + " rail geometry covers every compiled rail");
-          check(rails->materialKey == "rail" && !rails->hasUv && !rails->texture,
+          check(rails->materialKey == "Tracks/DefaultRailMaterial" && !rails->hasUv && !rails->texture,
                 label + " mesh rails keep renderer-neutral material metadata");
         }
         for (const auto batch : {surface, rails}) {

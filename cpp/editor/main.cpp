@@ -40,7 +40,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 #include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
@@ -53,16 +55,18 @@
 
 #include "Clipboard.hpp"
 #include "EditorHistory.hpp"
+#include "EditorIni.hpp"
 #include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 #include "ElevationView.hpp"
 #include "FileDialog.hpp"
 #include "fontawesome/IconsFontAwesome5.h"
+#include "MaterialCatalog.hpp"
+#include "MaterialsPanel.hpp"
 #include "RandomTrack.hpp"
 #include "StartGrid.hpp"
 #include "TextureCache.hpp"
-#include "TexturePanel.hpp"
 #include "HandlingPanel.hpp"
 #include "RandomRangesPanel.hpp"
 #include "PropertiesPanel.hpp"
@@ -1488,6 +1492,62 @@ std::filesystem::path findEditorResourceFile(const std::string& filename) {
   return {};
 }
 
+// Structural resource-loading failures (missing/empty editor.ini, an unresolvable Resources
+// path, or a malformed Resources.xml) are treated as fatal -- the editor tears down whatever
+// SDL/ImGui state it already created and exits, rather than silently running with no material
+// catalog. A single TrackMaterial with a broken dependency chain is NOT structural (see
+// MaterialCatalog::load) and does not reach this path.
+[[noreturn]] void failStartup(SDL_Window* window, SDL_GLContext glContext, const std::string& message) {
+  std::fprintf(stderr, "%s\n", message.c_str());
+  ImGui_ImplOpenGL3_Shutdown();
+  ImGui_ImplSDL2_Shutdown();
+  ImGui::DestroyContext();
+  SDL_GL_DeleteContext(glContext);
+  SDL_DestroyWindow(window);
+  SDL_Quit();
+  std::exit(1);
+}
+
+// editor.ini is a build artifact copied beside track_editor.exe (see the editor CMakeLists.txt
+// POST_BUILD step), not a source-tree file -- unlike findEditorResourceFile() above (which
+// intentionally walks up from the CWD to source-tree cpp/editor/resources/, since the
+// FontAwesome font it locates is never copied to the output directory), this must resolve
+// against the executable's own directory via SDL_GetBasePath() so a stray source-tree
+// editor.ini can never shadow what was actually deployed alongside the running exe.
+std::filesystem::path exeDirEditorIniPath() {
+  char* base = SDL_GetBasePath();
+  if (base == nullptr) return {};
+
+  std::filesystem::path result = std::filesystem::path(base) / "editor.ini";
+  SDL_free(base);
+  return result;
+}
+
+// Loads editor.ini's [Resources] Path entry and, from that, the TrackMaterial catalog (see
+// MaterialCatalog.hpp). Called once at startup, after the TextureCache it eager-loads texture
+// thumbnails through already exists.
+editor::MaterialCatalog loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext, editor::TextureCache& textureCache) {
+  try {
+    const std::filesystem::path iniPath = exeDirEditorIniPath();
+    if (iniPath.empty() || !std::filesystem::exists(iniPath)) {
+      throw std::runtime_error("editor.ini not found beside the executable.");
+    }
+
+    const editor::EditorIni ini = editor::EditorIni::load(iniPath);
+    const std::optional<std::string> resourcesPath = ini.get("Resources", "Path");
+    if (!resourcesPath.has_value() || resourcesPath->empty()) {
+      throw std::runtime_error("editor.ini has no [Resources] Path entry.");
+    }
+
+    // Path is relative to editor.ini's own (deployed, beside-the-executable) directory -- e.g.
+    // cpp/build/editor/Release/../../../tungsten-monoxide/resources/Resources.xml.
+    const std::filesystem::path resolvedResourcesPath = (iniPath.parent_path() / *resourcesPath).lexically_normal();
+    return editor::MaterialCatalog::load(resolvedResourcesPath, textureCache);
+  } catch (const std::exception& e) {
+    failStartup(window, glContext, std::string("Failed to load material resources: ") + e.what());
+  }
+}
+
 int main(int, char**) {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -1550,10 +1610,19 @@ int main(int, char**) {
   // icon-font recipe -- see cpp/editor/include/fontawesome/README-VENDORED.md). Missing the font
   // file (e.g. a stripped-down checkout) just falls back to the default font with no icons, rather
   // than failing to start.
-  io.Fonts->AddFontDefault();
+  constexpr float kBaseFontSize = 13.0f;  // ImGui's own default font size.
+  // AddFontDefault() must be given an explicit SizePixels here: left implicit (the plain
+  // AddFontDefault() call this used to be), this vendored ImGui's newer font-atlas code sets
+  // ImFontFlags_ImplicitRefSize on the resulting font, and merging FontAwesome on top of it below
+  // with an explicit SizePixels then trips
+  // "Cannot use MergeMode with an explicit reference size when the destination font used an
+  // implicit reference size!" in ImFontAtlas::AddFont (imgui_draw.cpp) -- an assert in Debug
+  // builds, and silently wrong glyph scaling in Release.
+  ImFontConfig defaultFontConfig;
+  defaultFontConfig.SizePixels = kBaseFontSize;
+  io.Fonts->AddFontDefault(&defaultFontConfig);
   const std::filesystem::path iconFontPath = findEditorResourceFile(FONT_ICON_FILE_NAME_FAS);
   if (!iconFontPath.empty()) {
-    constexpr float kBaseFontSize = 13.0f;
     constexpr float kIconFontSize = kBaseFontSize * 2.0f / 3.0f;  // FontAwesome's own sizing recipe
     static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
     ImFontConfig iconConfig;
@@ -1773,6 +1842,22 @@ int main(int, char**) {
   // plus its baked preview and view/camera state, all surviving across frames. There is no
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
   editor::EditorState editorState(buildStarterTrack());
+  editor::TextureCache textureCache;
+  // Loaded once at startup (editor.ini -> Resources.xml -> TrackMaterial entries + their
+  // textures, eager-loaded into textureCache above) and unloaded on exit when this local goes
+  // out of scope at the end of main() -- same RAII lifetime as textureCache itself. Must happen
+  // before the first bake below: setAvailableMaterials backfills the starter track's paths (still
+  // material == "" at this point) to the alphabetically-first TrackMaterial, and that backfill has
+  // to be visible in the very first tox::Track::fromJson bake, not just after the first rebake().
+  editor::MaterialCatalog materialCatalog = loadMaterialCatalog(window, glContext, textureCache);
+  std::fprintf(stdout, "MaterialCatalog: %zu TrackMaterial resource(s) loaded\n", materialCatalog.materials().size());
+  std::fflush(stdout);
+  {
+    std::vector<std::string> qualifiedNames;
+    qualifiedNames.reserve(materialCatalog.materials().size());
+    for (const auto& entry : materialCatalog.materials()) qualifiedNames.push_back(entry.qualifiedName);
+    editorState.setAvailableMaterials(std::move(qualifiedNames));
+  }
   tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   // Self-intersection crossing detection (EDITOR_PARITY_GAPS.md gap 1) is the one expensive
@@ -1781,7 +1866,6 @@ int main(int, char**) {
   // guard around detectPathCrossings.
   std::vector<tox::SelfIntersection> cachedCrossings = bakedResult.track.has_value() ? bakedResult.track->selfIntersections : std::vector<tox::SelfIntersection>{};
   editor::TopDownView topDownView;
-  editor::TextureCache textureCache;
   bool elevationVisible = true;
   int randomSeed = 12345;
   int randomComplexity = 5;
@@ -1968,7 +2052,21 @@ int main(int, char**) {
               std::ofstream out(picked.path, std::ios::binary);
               if (out) {
                 out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
-                mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))";
+
+                // Companion Resources.xml-shaped fragment declaring this Track resource and its
+                // TrackMaterial dependents (see MppModelExport.hpp's buildTrackResourceXml), written
+                // beside the .mppmodel with the same stem.
+                std::filesystem::path xmlPath = picked.path;
+                xmlPath.replace_extension(L"xml");
+                const std::string xml = editor::buildTrackResourceXml(editorState.track(), editor::pathToUtf8(picked.path.filename()));
+                std::ofstream xmlOut(xmlPath, std::ios::binary);
+                if (xmlOut) {
+                  xmlOut.write(xml.data(), static_cast<std::streamsize>(xml.size()));
+                  mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + " and " + editor::pathToUtf8(xmlPath) + " (" +
+                                          std::to_string(mppModel.meshCount) + " mesh(es))";
+                } else {
+                  mppModelExportStatus = "Wrote " + editor::pathToUtf8(picked.path) + ", but failed to open " + editor::pathToUtf8(xmlPath) + " for writing";
+                }
               } else {
                 mppModelExportStatus = "Failed to open " + editor::pathToUtf8(picked.path) + " for writing";
               }
@@ -2199,9 +2297,9 @@ int main(int, char**) {
       if (editor::DrawCurvesPanel(editorState)) rebake();
       ImGui::PopID();
     }
-    if (ImGui::CollapsingHeader("Textures")) {
-      ImGui::PushID("Textures");
-      if (editor::DrawTexturePanel(editorState, textureCache, currentPathIndex)) rebake();
+    if (ImGui::CollapsingHeader("Materials")) {
+      ImGui::PushID("Materials");
+      if (editor::DrawMaterialsPanel(editorState, materialCatalog, textureCache, currentPathIndex)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Handling")) {
