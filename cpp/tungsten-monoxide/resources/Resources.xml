@@ -8,6 +8,22 @@
 			<Definition />
 		</Definitions>
 	</Resource>
+
+	<Resource type="Image" name="BoxTexture" location="images/CesiumLogoFlat.png" />
+	
+	<Resource type="Material" name="Texture">
+		<DependentResources>
+			<DependentResource id="Program" ref="__mpp_p3d_tris_p3n3t2c4__" />
+			<DependentResource id="Texture" ref="BoxTexture" />
+		</DependentResources>
+		<Definitions>
+			<Definition>
+				<Textures>
+					<Texture type="resource" sampler="TEX1">Texture</Texture>
+				</Textures>
+			</Definition>
+		</Definitions>
+	</Resource>	
 	
 	<!--
 	Maps

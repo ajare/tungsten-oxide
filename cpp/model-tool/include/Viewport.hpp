@@ -23,6 +23,11 @@
 #include <memory>
 #include <optional>
 
+#pragma warning(push)
+#pragma warning(disable : 4201)
+#include <glm/vec3.hpp>
+#pragma warning(pop)
+
 #include <mpp/RenderPipeline.h>
 #include <mpp/Scene.h>
 
@@ -76,9 +81,43 @@ class Viewport {
   double gridSize() const { return gridSize_; }
   void setGridSize(double size);
 
+  // Per-axis size (X/Y/Z, hi - lo) of the currently loaded model's own vertex data -- i.e. NOT
+  // multiplied by previewScale() -- so the Scale panel's "target size on this axis" math always
+  // starts from the same un-baked reference regardless of what preview scale is already dialed in.
+  // Returns {0,0,0} if no model is loaded.
+  glm::vec3 sourceExtents() const;
+
+  // Uniform scale factor applied only to the viewport's render transform (Scale panel's live
+  // preview) -- does not touch vertex data. 1.0 = no scale. Reset to 1.0 whenever a new model is
+  // loaded (setModel()) or the current scale is baked (bakeScale()).
+  float previewScale() const { return previewScale_; }
+  void setPreviewScale(float scale);
+
+  // Multiplies every vertex position of the current model by previewScale(), rebuilds the GPU
+  // model resource from the scaled data, resets previewScale() back to 1.0, and reframes the
+  // camera on the new bounds. No-op if no model is loaded or previewScale() is already 1.0.
+  // Pushes the pre-bake geometry onto the undo history (see below) and clears the redo history.
+  void bakeScale();
+
+  // Undo/redo history over geometry-mutating edits (currently just bakeScale()) -- NOT over which
+  // model is loaded, or MaterialLibrary state. Capped at kMaxHistory entries per direction (oldest
+  // dropped once full); setModel() clears both stacks, since a previous model's geometry history
+  // isn't meaningful once it's gone. canUndo()/canRedo() drive main.cpp's Edit menu/shortcuts.
+  static constexpr std::size_t kMaxHistory = 20;
+  bool canUndo() const { return !undoStack_.empty(); }
+  bool canRedo() const { return !redoStack_.empty(); }
+  void undo();
+  void redo();
+
  private:
   void rebuildGrid();
   void destroyGrid();
+
+  // Swaps `newSource` in as the current model's geometry: rebuilds the GPU model resource from it,
+  // resets previewScale() to 1.0, and reframes the camera on its bounds. Shared by bakeScale(),
+  // undo(), and redo() -- none of them touch material references (see rebuildModelResource()'s
+  // comment), only the vertex/mesh data and its GPU representation.
+  void replaceSourceGeometry(ImportedModel newSource);
 
   mpp::RenderSystem& renderSystem_;
   mpp::ResourceManager& resourceMgr_;
@@ -91,6 +130,9 @@ class Viewport {
   mpp::RenderPipelinePtr pipeline_;
 
   std::optional<BuiltModel> built_;
+  float previewScale_{1.0f};
+  std::vector<ImportedModel> undoStack_;
+  std::vector<ImportedModel> redoStack_;
 
   bool gridVisible_{true};
   double gridSize_{32.0};

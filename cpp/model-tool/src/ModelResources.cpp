@@ -51,8 +51,8 @@ std::vector<std::uint8_t> packVertices(const std::vector<ImportedVertex>& vertic
   return out;
 }
 
-BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported,
-                       std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName) {
+mpp::ResourcePtr rebuildModelResource(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, const ImportedModel& imported,
+                                       const std::string& defaultFallbackMaterialName) {
   const int generation = gModelGeneration.fetch_add(1);
   const mpp::mesh::MeshSpecification meshSpec = fixedMeshSpecification();
 
@@ -73,12 +73,17 @@ BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& 
       modelStream->addTriangle(meshIndex, mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]);
   }
 
-  BuiltModel built;
   const std::string modelName = "ModelTool.Model." + std::to_string(generation);
-  built.modelResource = resourceMgr.declareResource(modelName, mpp::ResourceStreamPtr(modelStream)).first;
-  built.modelResource->acquire(&wrangler);
-  built.modelResource->load();
+  mpp::ResourcePtr resource = resourceMgr.declareResource(modelName, mpp::ResourceStreamPtr(modelStream)).first;
+  resource->acquire(&wrangler);
+  resource->load();
+  return resource;
+}
 
+BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported,
+                       std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName) {
+  BuiltModel built;
+  built.modelResource = rebuildModelResource(resourceMgr, wrangler, imported, defaultFallbackMaterialName);
   built.materialRefs = std::move(materialRefs);
   built.source = std::move(imported);
   return built;

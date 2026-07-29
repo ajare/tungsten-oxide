@@ -44,32 +44,44 @@ mpp::mesh::MeshSpecification gridMeshSpecification() {
   return spec;
 }
 
+struct Aabb {
+  glm::vec3 lo{0.0f, 0.0f, 0.0f};
+  glm::vec3 hi{0.0f, 0.0f, 0.0f};
+  bool any{false};
+};
+
+Aabb computeAabb(const ImportedModel& model) {
+  Aabb aabb;
+  aabb.lo = glm::vec3(std::numeric_limits<float>::max());
+  aabb.hi = glm::vec3(-std::numeric_limits<float>::max());
+  for (const ImportedMesh& mesh : model.meshes) {
+    for (const ImportedVertex& v : mesh.vertices) {
+      aabb.any = true;
+      aabb.lo.x = std::min(aabb.lo.x, v.px);
+      aabb.lo.y = std::min(aabb.lo.y, v.py);
+      aabb.lo.z = std::min(aabb.lo.z, v.pz);
+      aabb.hi.x = std::max(aabb.hi.x, v.px);
+      aabb.hi.y = std::max(aabb.hi.y, v.py);
+      aabb.hi.z = std::max(aabb.hi.z, v.pz);
+    }
+  }
+  if (!aabb.any) aabb.lo = aabb.hi = glm::vec3(0.0f);
+  return aabb;
+}
+
 struct Bounds {
   glm::vec3 center{0.0f, 0.0f, 0.0f};
   float radius{1.0f};
 };
 
 Bounds computeBounds(const ImportedModel& model) {
-  glm::vec3 lo(std::numeric_limits<float>::max());
-  glm::vec3 hi(-std::numeric_limits<float>::max());
-  bool any = false;
-  for (const ImportedMesh& mesh : model.meshes) {
-    for (const ImportedVertex& v : mesh.vertices) {
-      any = true;
-      lo.x = std::min(lo.x, v.px);
-      lo.y = std::min(lo.y, v.py);
-      lo.z = std::min(lo.z, v.pz);
-      hi.x = std::max(hi.x, v.px);
-      hi.y = std::max(hi.y, v.py);
-      hi.z = std::max(hi.z, v.pz);
-    }
-  }
-  if (!any) return {};
+  const Aabb aabb = computeAabb(model);
+  if (!aabb.any) return {};
   Bounds bounds;
-  bounds.center = (lo + hi) * 0.5f;
+  bounds.center = (aabb.lo + aabb.hi) * 0.5f;
   // Half the AABB diagonal, not a tight bounding sphere -- cheap to compute and always contains
   // every vertex, which is all auto-framing needs.
-  bounds.radius = glm::length(hi - lo) * 0.5f;
+  bounds.radius = glm::length(aabb.hi - aabb.lo) * 0.5f;
   return bounds;
 }
 
@@ -113,8 +125,81 @@ void Viewport::setModel(BuiltModel built) {
   }
 
   built_ = std::move(built);
+  previewScale_ = 1.0f;
+  undoStack_.clear();
+  redoStack_.clear();
   sceneModel_ = scene_->add3dModel(built_->modelResource);
   camera_->frameOnBounds(bounds.center, bounds.radius);
+}
+
+glm::vec3 Viewport::sourceExtents() const {
+  if (!built_.has_value()) return glm::vec3(0.0f);
+  const Aabb aabb = computeAabb(built_->source);
+  return aabb.hi - aabb.lo;
+}
+
+void Viewport::setPreviewScale(float scale) {
+  previewScale_ = scale;
+  if (sceneModel_) {
+    sceneModel_->resetTransform();
+    sceneModel_->scale(glm::vec3(scale));
+  }
+}
+
+void Viewport::replaceSourceGeometry(ImportedModel newSource) {
+  if (sceneModel_) {
+    scene_->remove3dModel(sceneModel_);
+    sceneModel_.reset();
+  }
+  // Only the GPU model resource is torn down and rebuilt here -- material references are untouched
+  // (see rebuildModelResource()'s comment), so releaseBuiltModel()'s material bookkeeping would be
+  // both unnecessary and wrong to run for a bake/undo/redo.
+  built_->modelResource->release(&wrangler_);
+  built_->modelResource = rebuildModelResource(resourceMgr_, wrangler_, newSource, materialLibrary_.defaultFallbackMaterial()->getName());
+  built_->source = std::move(newSource);
+
+  previewScale_ = 1.0f;
+  sceneModel_ = scene_->add3dModel(built_->modelResource);
+
+  const Bounds bounds = computeBounds(built_->source);
+  camera_->frameOnBounds(bounds.center, bounds.radius);
+}
+
+void Viewport::bakeScale() {
+  if (!built_.has_value() || previewScale_ == 1.0f) return;
+  const float factor = previewScale_;
+
+  undoStack_.push_back(built_->source);
+  if (undoStack_.size() > kMaxHistory) undoStack_.erase(undoStack_.begin());
+  redoStack_.clear();
+
+  ImportedModel scaled = built_->source;
+  for (ImportedMesh& mesh : scaled.meshes) {
+    for (ImportedVertex& v : mesh.vertices) {
+      v.px *= factor;
+      v.py *= factor;
+      v.pz *= factor;
+    }
+  }
+  replaceSourceGeometry(std::move(scaled));
+}
+
+void Viewport::undo() {
+  if (undoStack_.empty() || !built_.has_value()) return;
+  redoStack_.push_back(built_->source);
+  if (redoStack_.size() > kMaxHistory) redoStack_.erase(redoStack_.begin());
+  ImportedModel restored = std::move(undoStack_.back());
+  undoStack_.pop_back();
+  replaceSourceGeometry(std::move(restored));
+}
+
+void Viewport::redo() {
+  if (redoStack_.empty() || !built_.has_value()) return;
+  undoStack_.push_back(built_->source);
+  if (undoStack_.size() > kMaxHistory) undoStack_.erase(undoStack_.begin());
+  ImportedModel restored = std::move(redoStack_.back());
+  redoStack_.pop_back();
+  replaceSourceGeometry(std::move(restored));
 }
 
 unsigned int Viewport::renderFrame(int width, int height) {

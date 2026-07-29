@@ -52,6 +52,16 @@ struct BuiltModel {
 BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported,
                        std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName);
 
+// Rebuilds just the live GPU Model resource from `imported`'s current mesh/vertex data, under a
+// fresh generation-numbered name -- the same stream-building logic buildModel() uses, factored out
+// so Viewport::bakeScale() can regenerate geometry after scaling vertex positions in place without
+// touching material references (baking a scale doesn't change which materials the model uses, so
+// there's nothing for buildModel()'s materialRefs handling to do here). Already acquired and
+// loaded against `wrangler`, same as buildModel()'s own modelResource -- caller is only responsible
+// for releasing it (and whatever it's replacing) when done.
+mpp::ResourcePtr rebuildModelResource(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, const ImportedModel& imported,
+                                       const std::string& defaultFallbackMaterialName);
+
 // Releases the Model resource and every material reference buildModel() was given, via
 // `materialLibrary` (so a ModelOwned material whose refcount reaches zero is properly cleaned up).
 void releaseBuiltModel(BuiltModel& built, mpp::ResourceWrangler& wrangler, MaterialLibrary& materialLibrary);

@@ -6,6 +6,11 @@
 // matching the rest of this app's GLEW-as-GL-loader choice (ADR D2, include/imgui/imconfig.h).
 #include <glew/glew.h>
 
+#pragma warning(push)
+#pragma warning(disable : 4201)
+#include <glm/vec3.hpp>
+#pragma warning(pop)
+
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -468,6 +473,12 @@ int main(int argc, char** argv) {
   bool running = true;
   bool dockLayoutBuilt = false;
 
+  // Scale panel state: which axis' extent targetSize is measured against, applied as a live
+  // (visual-only) preview via Viewport::setPreviewScale() and committed to vertex data via
+  // Viewport::bakeScale().
+  int scaleAxisIndex = 0;  // 0 = X, 1 = Y, 2 = Z
+  float scaleTargetSize = 1.0f;
+
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -481,11 +492,23 @@ int main(int argc, char** argv) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    // Ctrl+O/Ctrl+S, global since there's no text-input widget yet that would need to steal these
-    // keys (mirrors cpp/editor/main.cpp's own !io.WantTextInput-guarded shortcut block).
+    // Ctrl+O/Ctrl+S/Ctrl+Z/Ctrl+Y, global since there's no text-input widget yet that would need to
+    // steal these keys (mirrors cpp/editor/main.cpp's own !io.WantTextInput-guarded shortcut block).
     if (!io.WantTextInput && io.KeyCtrl) {
       if (ImGui::IsKeyPressed(ImGuiKey_O)) doOpen();
       if (ImGui::IsKeyPressed(ImGuiKey_S)) doSave();
+      if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
+        if (viewport->canUndo()) {
+          viewport->undo();
+          showStatus("Undo");
+        }
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_Y)) {
+        if (viewport->canRedo()) {
+          viewport->redo();
+          showStatus("Redo");
+        }
+      }
     }
     // G toggles the viewport's reference grid, unmodified (mirrors cpp/editor's own G shortcut for
     // its top-down grid -- TopDownView.hpp/main.cpp).
@@ -502,6 +525,19 @@ int main(int argc, char** argv) {
         if (ImGui::MenuItem("Import Materials XML...")) doImportMaterialsXml();
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) running = false;
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Edit")) {
+        // Undo/redo covers geometry-mutating edits only (currently just Bake Scale) -- see
+        // Viewport::undo()/redo()'s comment.
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, viewport->canUndo())) {
+          viewport->undo();
+          showStatus("Undo");
+        }
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, viewport->canRedo())) {
+          viewport->redo();
+          showStatus("Redo");
+        }
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("View")) {
@@ -733,6 +769,42 @@ int main(int argc, char** argv) {
           ImGui::BulletText("%s: NOT FOUND -- using default white", name.c_str());
           ImGui::PopID();
         }
+      }
+    }
+
+    if (ImGui::CollapsingHeader("Scale", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (built == nullptr) {
+        ImGui::TextDisabled("No model loaded");
+      } else {
+        // sourceExtents() is always the un-baked model's own size -- scaling is proportional to
+        // that, not to whatever preview scale (if any) is already dialed in, so repeatedly
+        // adjusting the axis/target before baking doesn't compound.
+        const glm::vec3 extents = viewport->sourceExtents();
+        const float axisExtents[3] = {extents.x, extents.y, extents.z};
+        ImGui::Text("Current size: %.3f x %.3f x %.3f", extents.x, extents.y, extents.z);
+
+        const char* axisLabels[] = {"X", "Y", "Z"};
+        ImGui::Combo("Axis", &scaleAxisIndex, axisLabels, 3);
+        ImGui::InputFloat("Target Size", &scaleTargetSize);
+        if (scaleTargetSize < 0.0f) scaleTargetSize = 0.0f;
+
+        const float currentExtent = axisExtents[scaleAxisIndex];
+        const bool canApply = currentExtent > 1e-6f && scaleTargetSize > 0.0f;
+        ImGui::BeginDisabled(!canApply);
+        if (ImGui::Button("Apply Scale (Preview)")) viewport->setPreviewScale(scaleTargetSize / currentExtent);
+        ImGui::EndDisabled();
+
+        ImGui::Text("Preview scale: x%.4f", viewport->previewScale());
+        ImGui::SameLine();
+        // Bake multiplies every vertex position by the current preview scale, rebuilds the GPU
+        // model from the scaled data, and resets the preview scale back to 1.0 -- disabled when
+        // there's nothing to bake (no scale applied yet).
+        ImGui::BeginDisabled(viewport->previewScale() == 1.0f);
+        if (ImGui::Button("Bake Scale")) {
+          viewport->bakeScale();
+          showStatus("Baked scale into model geometry");
+        }
+        ImGui::EndDisabled();
       }
     }
     ImGui::End();
