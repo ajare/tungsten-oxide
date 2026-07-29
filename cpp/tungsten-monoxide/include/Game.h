@@ -9,29 +9,31 @@
 
 #include "Platform.h"
 
+class Game : public applib::Game {
+  friend class GameDefinitionFactory;
 
-class Game : public applib::Game
-{
+  std::string mShipModelFile;
+  std::string mShipMaterial;
+
 public:
-
-	Game(std::string const& name,
+  Game(std::string const& name,
        std::string const& namesp,
        std::string const& source,
        std::map<std::string, std::string> const& tags,
        wp::application::resourcesystem::ResourceLocation* location);
+
+  std::string const& getShipModelFile() const { return mShipModelFile; }
+  std::string const& getShipMaterial() const { return mShipMaterial; }
+  std::string getShipModelPath() const;
 };
 
-class GameResourceFactory : public wp::application::resourcesystem::ResourceFactory
-{
+class GameResourceFactory : public wp::application::resourcesystem::ResourceFactory {
 public:
+  explicit GameResourceFactory()
+      : wp::application::resourcesystem::ResourceFactory("Game") {
+  }
 
-	explicit GameResourceFactory()
-		: wp::application::resourcesystem::ResourceFactory("Game")
-	{
-	}
-
-	wp::application::resourcesystem::Resource* createResource(std::string const& name, std::string const& namesp, std::string const& source, std::map<std::string, std::string> const& tags, wp::application::resourcesystem::ResourceLocation* location) override
-	{
-		return new Game(name, namesp, source, tags, location);
-	}
+  wp::application::resourcesystem::Resource* createResource(std::string const& name, std::string const& namesp, std::string const& source, std::map<std::string, std::string> const& tags, wp::application::resourcesystem::ResourceLocation* location) override {
+    return new Game(name, namesp, source, tags, location);
+  }
 };

@@ -1,11 +1,13 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 #include <deque>
 #include <mutex>
 
 #include <mpp/Camera.h>
 #include <mpp/ResourceWrangler.h>
+#include <mpp/SceneModel3d.h>
 
 #include <willpower/application/StateFactory.h>
 
@@ -18,101 +20,119 @@
 #include "Platform.h"
 #include "Map.h"
 #include "DisplayMessage.h"
-
+#include "GameSession.hpp"
 
 class TmResourceWrangler : public mpp::ResourceWrangler {
 public:
-
-	TmResourceWrangler() 
-		: ResourceWrangler("TungstenMonoxidePlay")
-	{
-	}
+  TmResourceWrangler()
+      : ResourceWrangler("TungstenMonoxidePlay") {
+  }
 };
 
+class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
+  double mGlobalTime;
 
-class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay
-{
-	double mGlobalTime;
+  mpp::CameraPtr mCamera3d;
 
-	mpp::CameraPtr mCamera3d;
+  bool mExitScheduled;
 
-	bool mExitScheduled;
+  TmResourceWrangler mWrangler;
 
-	TmResourceWrangler mWrangler;
+  mpp::ResourcePtr mTrackModel;
+  mpp::ResourcePtr mShipModel;
+  mpp::SceneModel3dPtr mTrackSceneModel;
+  std::vector<mpp::SceneModel3dPtr> mShipSceneModels;
+  std::unique_ptr<tox::GameSession> mGameSession;
 
-	mpp::ResourcePtr mTrackModel;
+  struct ShipVisualState {
+    tox::Vec3 groundPos;
+    tox::Vec3 up{0, 1, 0};
+    double bobTime{0};
+    double landingBounce{0};
+    double landingBounceVel{0};
+    double bank{0};
+    double pitch{0};
+    double steer{0};
+    bool airborne{false};
+    double lastVerticalVelocity{0};
+  };
+  std::vector<ShipVisualState> mShipVisualStates;
+  double mCameraZoom{1.0};
+  double mCameraHeight{6.4};
+  double mLookAtHeight{1.6};
+  double mLapFlashUntil{0.0};
 
 private:
+  mpp::ResourcePtr createShipModel(wp::application::resourcesystem::ResourceManager* resourceMgr,
+                                   mpp::ResourceManager* renderResourceMgr);
+  void updateShips(float frameTime);
+  void updateChaseCamera(float frameTime);
+  void renderHud(mpp::RenderSystem* renderSystem) const;
 
-	void createCamera();
-	
-	void registerInput() override;
+  void createCamera();
 
-	void createGameObjects(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args) override;
+  void registerInput() override;
 
-	void destroyGameObjects() override;
+  void createGameObjects(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args) override;
 
-	void setupEntityFacades() override;
+  void destroyGameObjects() override;
 
-	void setupEntities() override;
+  void setupEntityFacades() override;
 
-	void updatePreInput(float frameTime) override;
+  void setupEntities() override;
 
-	void updatePreEntities(float frameTime) override;
+  void updatePreInput(float frameTime) override;
 
-	void updatePostEntities(float frameTime) override;
+  void updatePreEntities(float frameTime) override;
 
-	void updateAudio(float frameTime);
+  void updatePostEntities(float frameTime) override;
 
-	Map* getMap();
+  void updateAudio(float frameTime);
 
-	Map const* getMap() const;
+  Map* getMap();
 
-	void exit();
+  Map const* getMap() const;
+
+  void exit();
 
 protected:
+  void updateActions(std::vector<std::string> const& activeStates, float frameTime) override;
 
-	void updateActions(std::vector<std::string> const& activeStates, float frameTime) override;
+  void updatePreRenderers(float frameTime) override;
 
-	void updatePreRenderers(float frameTime) override;
+  void updateCamera(float frameTime) override;
 
-	void setupScene() override;
+  void setupScene() override;
 
-	void setup(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args) override;
+  void setup(wp::application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args) override;
 
-	void suspendImpl(void* args = nullptr) override;
+  void suspendImpl(void* args = nullptr) override;
 
-	void resumeImpl(void* args) override;
+  void resumeImpl(void* args) override;
 
-	void updateImpl(float frameTime) override;
+  void updateImpl(float frameTime) override;
 
-	void renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
+  void renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
 
 public:
+  StatePlayTungstenMonoxide();
 
-	StatePlayTungstenMonoxide();
+  ~StatePlayTungstenMonoxide();
 
-	~StatePlayTungstenMonoxide();
-
-	std::vector<std::string> getDebuggingText() const override;
+  std::vector<std::string> getDebuggingText() const override;
 };
 
-class StatePlayTungstenMonoxideFactory : public wp::application::StateFactory
-{
-	wp::Logger* mLogger;
+class StatePlayTungstenMonoxideFactory : public wp::application::StateFactory {
+  wp::Logger* mLogger;
 
 public:
+  explicit StatePlayTungstenMonoxideFactory(wp::Logger* logger)
+      : wp::application::StateFactory("Play"), mLogger(logger) {
+  }
 
-	explicit StatePlayTungstenMonoxideFactory(wp::Logger* logger)
-		: wp::application::StateFactory("Play")
-		, mLogger(logger)
-	{
-	}
-
-	wp::application::State* createState()
-	{
-		auto state = new StatePlayTungstenMonoxide();
-		state->setLogger(mLogger);
-		return state;
-	}
+  wp::application::State* createState() {
+    auto state = new StatePlayTungstenMonoxide();
+    state->setLogger(mLogger);
+    return state;
+  }
 };

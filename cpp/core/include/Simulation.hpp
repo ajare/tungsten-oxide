@@ -1,6 +1,5 @@
-// Simulation.hpp — declarations for the physics step, transliterated line-for-line
-// from web/js/track-physics.js (Simulation.stepPhysics + its helpers). Bodies live in
-// src/Simulation.cpp.
+// Simulation.hpp — immutable track queries, placement/trigger helpers, and the
+// compatibility stepPhysics facade. Per-ship integration lives in Ship.cpp.
 //
 // Includes spline-corridor and mesh-region ownership, collision, transitions,
 // airborne landing, zones/triggers, and respawn recovery. The old baked-world
@@ -46,7 +45,9 @@ struct StepResult {
 // `LapCompleted`. Notices are emitted from inside fireTrigger itself, so a
 // frame split into several physics sub-steps still emits each occurrence
 // exactly once.
-enum class TriggerNotice { Fired, CheckpointAccepted, LapCompleted };
+enum class TriggerNotice { Fired,
+                           CheckpointAccepted,
+                           LapCompleted };
 
 // --- pure helpers (mirror of the track-physics.js exports) -----------------
 double effectiveMaxSpeed(const Physics& p);
@@ -67,6 +68,8 @@ void addImpactJolt(Physics& p, double normalImpactSpeed);
 class Simulation {
 public:
   explicit Simulation(const Track& track);
+
+  const Track& track() const { return track_; }
 
   // Game-only observation hooks (mirror of web/js/track-physics.js's injected
   // `opts.onTriggerFired`/`opts.now`). Both default to no-ops so existing

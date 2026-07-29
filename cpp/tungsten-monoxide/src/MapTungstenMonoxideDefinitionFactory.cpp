@@ -1,60 +1,41 @@
-#include <willpower/application/resourcesystem/ResourceManager.h>
-#include <willpower/common/StringUtils.h>
+#include <set>
+
+#include <willpower/application/resourcesystem/ResourceExceptions.h>
 
 #include "MapTungstenMonoxideDefinitionFactory.h"
 #include "Map.h"
 
-
 MapTungstenMonoxideDefinitionFactory::MapTungstenMonoxideDefinitionFactory()
-	: applib::MapResourceDefinitionFactory("Track")
-{
+    : applib::MapResourceDefinitionFactory("Track") {
 }
 
-// Reads one Vec3-shaped attribute triple off `node` using the given attribute-name prefix (e.g.
-// "p" for px/py/pz), mirroring buildTrackResourceXml's formatCoord() output.
-static tox::Vec3 readVec3Attribs(wp::XmlNode* node, char const* prefix)
-{
-	tox::Vec3 v;
-	v.x = wp::StringUtils::parseFloat(node->getAttribute(std::string(prefix) + "x"));
-	v.y = wp::StringUtils::parseFloat(node->getAttribute(std::string(prefix) + "y"));
-	v.z = wp::StringUtils::parseFloat(node->getAttribute(std::string(prefix) + "z"));
-	return v;
-}
+void MapTungstenMonoxideDefinitionFactory::create(
+    wp::application::resourcesystem::Resource* resource,
+    wp::application::resourcesystem::ResourceManager* resourceMgr,
+    wp::XmlNode* node) {
+  VAR_UNUSED(resourceMgr);
+  auto mapRes = static_cast<Map*>(resource);
 
-// Reads the .mppmodel filename out of <Definition factory="Track"><File>...</File></Definition>
-// and stashes it on Map::mModelFileName, for Map::load() to resolve against the resource's
-// DirectoryResourceLocation. This can't just be the Resource's own `location`/getSource(): Track
-// is a composite resource now (it lists TrackMaterial dependents), and
-// ResourceManager::instantiateResource() unconditionally forces a composite resource's `source` to
-// "" regardless of any `location=` attribute -- see Map.h's comment on mModelFileName.
-void MapTungstenMonoxideDefinitionFactory::create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node)
-{
-	VAR_UNUSED(resourceMgr);
+  mapRes->mModelFileName = node->getChild("ModelFile")->getValue();
+  mapRes->mTrackDataFileName = node->getChild("TrackData")->getValue();
+  if (mapRes->mModelFileName.empty() || mapRes->mTrackDataFileName.empty()) {
+    throw wp::application::resourcesystem::ResourceException(
+        resource, "Track definition requires non-empty <ModelFile> and <TrackData> values.");
+  }
 
-	auto mapRes = static_cast<Map*>(resource);
-
-	auto fileNode = node->getChild("File");
-	mapRes->mModelFileName = fileNode->getValue();
-
-	// <StartGrid><Pose index=".." px=".." py=".." pz=".." fx=".." fy=".." fz=".." nx=".." ny=".."
-	// nz=".." />...</StartGrid>, written by cpp/editor's buildTrackResourceXml (MppModelExport.cpp)
-	// from tox::StartGrid::startingGridPoses(). Optional: a Track resource exported before this
-	// field existed simply has no <StartGrid> child, and mStartGridPoses stays empty rather than
-	// throwing (see Map.h's comment on mStartGridPoses).
-	auto startGridNode = node->getOptionalChild("StartGrid");
-	if (startGridNode)
-	{
-		auto poseNode = startGridNode->getOptionalChild("Pose");
-		if (poseNode)
-		{
-			do
-			{
-				tox::Pose pose;
-				pose.pos = readVec3Attribs(poseNode, "p");
-				pose.forward = readVec3Attribs(poseNode, "f");
-				pose.up = readVec3Attribs(poseNode, "n");
-				mapRes->mStartGridPoses.push_back(pose);
-			} while (poseNode->next());
-		}
-	}
+  auto meshesNode = node->getChild("TrackMeshes");
+  auto meshNode = meshesNode->getOptionalChild("Mesh");
+  std::set<std::string> seen;
+  if (meshNode) {
+    do {
+      std::string name = meshNode->getValue();
+      if (name.empty())
+        throw wp::application::resourcesystem::ResourceException(resource, "TrackMeshes contains an empty <Mesh> name.");
+      if (!seen.insert(name).second)
+        throw wp::application::resourcesystem::ResourceException(resource, "TrackMeshes contains duplicate mesh '" + name + "'.");
+      mapRes->mTrackMeshNames.push_back(std::move(name));
+    } while (meshNode->next());
+  }
+  if (mapRes->mTrackMeshNames.empty())
+    throw wp::application::resourcesystem::ResourceException(resource, "Track definition requires at least one <TrackMeshes><Mesh> entry.");
 }

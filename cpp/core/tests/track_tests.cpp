@@ -685,6 +685,82 @@ int main(int argc, char** argv) {
     check(loaded && loaded.track->definition.triggers.size() == 1, "dangling trigger host is dropped without disturbing valid Finish");
   }
 
+  {
+    CollisionTriangle lower;
+    lower.positions[0] = {-2, 0, -2};
+    lower.positions[1] = {0, 0, 2};
+    lower.positions[2] = {2, 0, -2};
+    lower.normals[0] = lower.normals[1] = lower.normals[2] = {0, 1, 0};
+    lower.surfaceId = 10;
+    CollisionTriangle upper = lower;
+    for (auto& position : upper.positions) position.y = 5;
+    upper.surfaceId = 20;
+    TrackCollisionSurface surface({lower, upper});
+    auto lowerHit = surface.nearestAlongAxis({0, 0.2, 0}, {0, 1, 0}, 6);
+    auto upperHit = surface.nearestAlongAxis({0, 4.8, 0}, {0, 1, 0}, 6);
+    check(lowerHit && lowerHit->surfaceId == 10 && std::fabs(lowerHit->position.y) < 1e-12,
+          "BVH contact prefers the nearest stacked lower surface");
+    check(upperHit && upperHit->surfaceId == 20 && std::fabs(upperHit->position.y - 5) < 1e-12,
+          "BVH contact preserves the nearest stacked upper surface");
+    check(surface.sweep({0, 2, 0}, {0, -2, 0}).has_value(), "one-sided sweep lands while moving into the road normal");
+    check(!surface.sweep({0, -2, 0}, {0, 2, 0}).has_value(), "one-sided sweep rejects the road underside");
+
+    CollisionTriangle smooth = lower;
+    smooth.normals[0] = {0, 1, 0};
+    smooth.normals[1] = Vec3(0, 1, 1).normalize();
+    smooth.normals[2] = Vec3(1, 1, 0).normalize();
+    TrackCollisionSurface smoothSurface({smooth});
+    auto smoothHit = smoothSurface.nearestAlongAxis({0, 0.1, 0}, {0, 1, 0}, 1);
+    check(smoothHit && smoothHit->normal.y < 1.0 && smoothHit->normal.y > 0.7,
+          "contact normal barycentrically interpolates exported vertex normals");
+  }
+
+  {
+    auto loaded = Track::fromJson(base.dump());
+    check(static_cast<bool>(loaded), "external-contact ship fixture loads");
+    if (loaded) {
+      Track& track = *loaded.track;
+      Simulation analytical(track);
+      const Pose start = StartGrid::startingGridPoses(analytical, track, 1).front();
+      Vec3 right;
+      right.crossVectors(start.up, start.forward).normalize();
+      const Vec3 center = start.pos.clone().addScaledVector(start.up, 2.0);
+      const Vec3 a = center.clone().addScaledVector(right, -20).addScaledVector(start.forward, -20);
+      const Vec3 b = center.clone().addScaledVector(right, 20).addScaledVector(start.forward, -20);
+      const Vec3 c = center.clone().addScaledVector(right, 20).addScaledVector(start.forward, 20);
+      const Vec3 d = center.clone().addScaledVector(right, -20).addScaledVector(start.forward, 20);
+      CollisionTriangle first, second;
+      first.positions[0] = a;
+      first.positions[1] = b;
+      first.positions[2] = c;
+      second.positions[0] = a;
+      second.positions[1] = c;
+      second.positions[2] = d;
+      for (int corner = 0; corner < 3; ++corner) {
+        first.normals[corner] = start.up;
+        second.normals[corner] = start.up;
+      }
+      track.collisionSurface = std::make_shared<TrackCollisionSurface>(
+          std::vector<CollisionTriangle>{first, second});
+      Simulation external(track);
+
+      Ship parked = shipAt(external, track, start.pos, start.forward);
+      const StepResult parkedStep = parked.step(external, 1.0 / 120.0, 0, 0, 0);
+      check(std::fabs(parked.physics.groundPos.clone().sub(center).dot(start.up)) < 1e-9 &&
+                !parked.physics.airborne && parkedStep.surfaceNormal.dot(start.up) > 0.999999,
+            "Ship::step makes an external triangle surface authoritative for parked contact");
+
+      Ship falling = shipAt(external, track, center.clone().addScaledVector(start.up, 2.0), start.forward);
+      falling.physics.airborne = true;
+      falling.physics.verticalVel = -10.0;
+      falling.prevTriggerPos = falling.physics.groundPos;
+      falling.step(external, 0.15, 0, 0, 0);
+      check(!falling.physics.airborne &&
+                std::fabs(falling.physics.groundPos.clone().sub(center).dot(start.up)) < 1e-9,
+            "Ship::step lands on an external triangle swept before the analytical road");
+    }
+  }
+
   if (failures) {
     std::cerr << failures << " track loader test(s) failed\n";
     return 1;

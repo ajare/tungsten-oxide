@@ -11,6 +11,7 @@
 #include <vector>
 #include "Vec3.hpp"
 #include "TrackDefinition.hpp"
+#include "TrackCollision.hpp"
 #include "TrackGeometry.hpp"
 #include "TrackMesh.hpp"
 
@@ -86,6 +87,9 @@ struct Track {
   std::vector<Trigger> triggers;
   std::vector<MeshRegion> meshRegions;
   std::vector<GeometryBatch> geometry;
+  // Optional external road triangles supplied by a native Track resource.
+  // JSON-only consumers leave this null and retain analytical collision.
+  TrackCollisionSurfacePtr collisionSurface;
   // Every self-intersection found across every path/side, from an UNBOUNDED full pairwise scan on
   // the pre-collapse edges (EDITOR_PARITY_GAPS.md gap 1) -- unlike the bounded, iterative collapse
   // pass that actually mutates the baked geometry, this finds every crossing regardless of span, so

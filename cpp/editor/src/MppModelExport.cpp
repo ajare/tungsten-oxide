@@ -25,9 +25,17 @@ void appendString(std::string& out, const std::string& value) {
   appendBytes(out, value.data(), value.size());
 }
 
-enum class PrimitiveType : std::uint32_t { Points = 0, Lines = 1, Triangles = 2 };
+enum class PrimitiveType : std::uint32_t { Points = 0,
+                                           Lines = 1,
+                                           Triangles = 2 };
 
-enum class DirectoryEntryType : std::uint32_t { Unused = 0, MaterialNames = 1, Materials = 2, VertexData = 3, IndexData = 4, MeshMetadata = 5, Count = 6 };
+enum class DirectoryEntryType : std::uint32_t { Unused = 0,
+                                                MaterialNames = 1,
+                                                Materials = 2,
+                                                VertexData = 3,
+                                                IndexData = 4,
+                                                MeshMetadata = 5,
+                                                Count = 6 };
 
 struct DirectoryEntry {
   DirectoryEntryType type{DirectoryEntryType::Unused};
@@ -198,15 +206,6 @@ constexpr char kDefaultShellMaterial[] = "Tracks/DefaultShellMaterial";
 constexpr char kDefaultZoneMaterial[] = "Tracks/DefaultZoneMaterial";
 constexpr char kDefaultTriggerMaterial[] = "Tracks/DefaultTriggerMaterial";
 
-// Fixed precision keeps the attribute values compact and diffable while comfortably exceeding the
-// float32 precision the rest of the export already commits to (packVertices() above truncates to
-// float); double round-tripping through decimal digits isn't a goal here.
-std::string formatCoord(double value) {
-  char buf[32];
-  std::snprintf(buf, sizeof(buf), "%.6f", value);
-  return buf;
-}
-
 std::string xmlEscape(const std::string& value) {
   std::string out;
   out.reserve(value.size());
@@ -224,9 +223,9 @@ std::string xmlEscape(const std::string& value) {
 
 }  // namespace
 
-std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
-                                   const std::vector<tox::Pose>& startGridPoses,
-                                   const std::map<std::string, std::string>& trackMaterialToMaterial) {
+std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
+                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
+                                  const std::map<std::string, std::string>& trackMaterialToMaterial) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
   // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
   // curve content. Resolved through trackMaterialToMaterial first (see MppModelExport.hpp's
@@ -270,26 +269,15 @@ std::string buildTrackResourceXml(const TrackDefinition& track, const std::strin
   // still gets an implicit factory="" one synthesized by ResourceLocation::scanResourceElement(),
   // and no (Map, "") definition factory is registered -- only (Map, "Track") is (see
   // cpp/tungsten-monoxide/src/DLL.cpp). Omitting it throws "could not find a definition factory".
-  xml += "\t\t\t<Definitions>\n\t\t\t\t<Definition factory=\"Track\">\n\t\t\t\t\t<File>" + xmlEscape(mppModelFileName) +
-         "</File>\n";
-
-  // <StartGrid>: one settled Pose per grid slot (position, driven-direction forward, surface-up/
-  // normal), computed by the caller via tox::StartGrid::startingGridPoses() (see
-  // MppModelExport.hpp's comment). Omitted entirely when the caller passes no poses (e.g. the
-  // track failed to bake a Simulation), rather than writing an empty element -- consumers should
-  // treat a Track resource with no <StartGrid> the same as one that predates this field.
-  if (!startGridPoses.empty()) {
-    xml += "\t\t\t\t\t<StartGrid>\n";
-    for (std::size_t i = 0; i < startGridPoses.size(); ++i) {
-      const tox::Pose& pose = startGridPoses[i];
-      xml += "\t\t\t\t\t\t<Pose index=\"" + std::to_string(i) + "\" px=\"" + formatCoord(pose.pos.x) + "\" py=\"" +
-             formatCoord(pose.pos.y) + "\" pz=\"" + formatCoord(pose.pos.z) + "\" fx=\"" + formatCoord(pose.forward.x) +
-             "\" fy=\"" + formatCoord(pose.forward.y) + "\" fz=\"" + formatCoord(pose.forward.z) + "\" nx=\"" +
-             formatCoord(pose.up.x) + "\" ny=\"" + formatCoord(pose.up.y) + "\" nz=\"" + formatCoord(pose.up.z) + "\" />\n";
-    }
-    xml += "\t\t\t\t\t</StartGrid>\n";
+  xml += "\t\t\t<Definitions>\n\t\t\t\t<Definition factory=\"Track\">\n";
+  xml += "\t\t\t\t\t<ModelFile>" + xmlEscape(mppModelFileName) + "</ModelFile>\n";
+  xml += "\t\t\t\t\t<TrackData>" + xmlEscape(trackDataFileName) + "</TrackData>\n";
+  xml += "\t\t\t\t\t<TrackMeshes>\n";
+  for (const tox::GeometryBatch& batch : bakedTrack.geometry) {
+    if (batch.kind != tox::GeometryKind::PathSurface && batch.kind != tox::GeometryKind::MeshSurface) continue;
+    xml += "\t\t\t\t\t\t<Mesh>" + xmlEscape(batch.id) + "</Mesh>\n";
   }
-
+  xml += "\t\t\t\t\t</TrackMeshes>\n";
   xml += "\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
 
   xml += "\t\t</Resource>\n\t</Namespace>\n</Resources>\n";

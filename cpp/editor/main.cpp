@@ -33,6 +33,7 @@
 // "Load Bundled Textures", reusing M7b's readImageSize/addTextureAsset with FileDialog.hpp's
 // Open dialog -- almost entirely wiring.
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1037,7 +1038,7 @@ Gap6SmokeCheckResult runGap6SmokeCheck() {
     const std::vector<tox::Pose> reversePoses = tox::StartGrid::startingGridPoses(reverseSim, *reverseBaked.track, 1);
     if (!forwardPoses.empty() && !reversePoses.empty()) {
       const double dot = forwardPoses[0].forward.x * reversePoses[0].forward.x + forwardPoses[0].forward.y * reversePoses[0].forward.y +
-                          forwardPoses[0].forward.z * reversePoses[0].forward.z;
+                         forwardPoses[0].forward.z * reversePoses[0].forward.z;
       result.bakedGridReversed = dot < 0.0;
     }
   }
@@ -1078,8 +1079,8 @@ Gap7SmokeCheckResult runGap7SmokeCheck() {
   state.setHandling(180.0, 60.0, 160.0, 900.0);
   const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
   result.bakedHandlingMatches = static_cast<bool>(baked) && baked.track->definition.handling.maxSpeed == 180.0 &&
-                                 baked.track->definition.handling.accel == 60.0 && baked.track->definition.handling.turnSpeed == 160.0 &&
-                                 baked.track->definition.handling.weight == 900.0;
+                                baked.track->definition.handling.accel == 60.0 && baked.track->definition.handling.turnSpeed == 160.0 &&
+                                baked.track->definition.handling.weight == 900.0;
 
   return result;
 }
@@ -1122,7 +1123,7 @@ Gap9SmokeCheckResult runGap9SmokeCheck() {
   createState.createModeClick(200.0, 200.0, 1.0, 200.0, 200.0);
   createState.createModeClick(100.0, 200.0, 1.0, 100.0, 200.0);  // finishCreateDraft needs 4+ points
   result.createClickSnapsNewPoint = createState.createDraft().size() == 4 && createState.createDraft()[0].x == 96.0 &&
-                                     createState.createDraft()[0].z == 96.0;
+                                    createState.createDraft()[0].z == 96.0;
   // Click near the stored (already-snapped) first draft point using the raw hit-test coordinate,
   // but pass a deliberately bogus "snapped" pair -- if the draft closes anyway, that proves
   // hit-testing used the raw click, not the snapped argument only meant for a genuinely new point.
@@ -1228,16 +1229,24 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
     return s;
   };
 
-  if (!need(12) || bytes.compare(0, 4, "MPPM") != 0) { result.error = "bad header/magic"; return result; }
+  if (!need(12) || bytes.compare(0, 4, "MPPM") != 0) {
+    result.error = "bad header/magic";
+    return result;
+  }
   pos = 4;
   result.versionMajor = u16();
   result.versionMinor = u16();
   result.flags = u32();
 
-  struct Entry { std::uint32_t type, start, end, count; };
+  struct Entry {
+    std::uint32_t type, start, end, count;
+  };
   Entry entries[6];
   for (auto& e : entries) {
-    if (!need(16)) { result.error = "truncated directory"; return result; }
+    if (!need(16)) {
+      result.error = "truncated directory";
+      return result;
+    }
     e.type = u32();
     e.start = u32();
     e.end = u32();
@@ -1256,13 +1265,19 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
     mesh.primitiveCount = u32();
     mesh.material = str();
     const std::uint32_t numVertexBuffers = u32();
-    if (numVertexBuffers != 1) { result.error = "expected exactly one vertex buffer per mesh"; return result; }
+    if (numVertexBuffers != 1) {
+      result.error = "expected exactly one vertex buffer per mesh";
+      return result;
+    }
     const std::uint32_t vertexStreamId = u32();
     const std::uint32_t indexStreamId = u32();
     streamIds.push_back({vertexStreamId, indexStreamId});
     result.meshes.push_back(mesh);
   }
-  if (pos != meshDir.end) { result.error = "mesh metadata section size mismatch"; return result; }
+  if (pos != meshDir.end) {
+    result.error = "mesh metadata section size mismatch";
+    return result;
+  }
 
   pos = vertexDir.start;
   for (std::uint32_t i = 0; i < vertexDir.count; ++i) {
@@ -1276,7 +1291,10 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
       result.meshes[i].vertexDataSize = dataSize;
     }
   }
-  if (pos != vertexDir.end) { result.error = "vertex data section size mismatch"; return result; }
+  if (pos != vertexDir.end) {
+    result.error = "vertex data section size mismatch";
+    return result;
+  }
 
   pos = indexDir.start;
   for (std::uint32_t i = 0; i < indexDir.count; ++i) {
@@ -1288,7 +1306,10 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
       result.meshes[i].indexDataSize = dataSize;
     }
   }
-  if (pos != indexDir.end) { result.error = "index data section size mismatch"; return result; }
+  if (pos != indexDir.end) {
+    result.error = "index data section size mismatch";
+    return result;
+  }
 
   result.ok = true;
   return result;
@@ -1412,8 +1433,8 @@ Gap11SmokeCheckResult runGap11SmokeCheck() {
   {
     editor::EditorState state(buildOpenTestTrack(8));
     result.openMiddleSegmentSplits = state.deleteSegmentAt(0, 3) && state.track().paths.size() == 2 &&
-                                      editor::EditorState::positionCount(state.track().paths[0]) == 4 &&
-                                      editor::EditorState::positionCount(state.track().paths[1]) == 4;
+                                     editor::EditorState::positionCount(state.track().paths[0]) == 4 &&
+                                     editor::EditorState::positionCount(state.track().paths[1]) == 4;
 
     editor::EditorState guardState(buildOpenTestTrack(7));  // splitting at i=1 leaves a 2-point half
     result.openMiddleSplitGuardHolds = !guardState.deleteSegmentAt(0, 1);
@@ -1431,7 +1452,7 @@ Gap11SmokeCheckResult runGap11SmokeCheck() {
     const int before = editor::EditorState::positionCount(state.track().paths[0]);
     const auto inserted = state.insertPositionOnSegment(0, 2, 150.0, 3.0, 25.0);
     result.insertOnSegmentAddsPoint = inserted.has_value() && editor::EditorState::positionCount(state.track().paths[0]) == before + 1 &&
-                                       state.track().paths[0].points[*inserted].pos.x == 150.0;
+                                      state.track().paths[0].points[*inserted].pos.x == 150.0;
     const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
     result.insertedPointBakes = static_cast<bool>(baked);
   }
@@ -1936,8 +1957,10 @@ int main(int, char**) {
     const bool detect = !editorState.dragging();
     bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()), detect);
     if (bakedResult.track.has_value()) {
-      if (detect) cachedCrossings = bakedResult.track->selfIntersections;
-      else bakedResult.track->selfIntersections = cachedCrossings;
+      if (detect)
+        cachedCrossings = bakedResult.track->selfIntersections;
+      else
+        bakedResult.track->selfIntersections = cachedCrossings;
     }
     bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   };
@@ -2105,33 +2128,80 @@ int main(int, char**) {
                 trackMaterialToMaterial.emplace(entry.qualifiedName, entry.materialQualifiedName);
 
               const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack, trackMaterialToMaterial);
-              std::ofstream out(picked.path, std::ios::binary);
-              if (out) {
-                out.write(mppModel.bytes.data(), static_cast<std::streamsize>(mppModel.bytes.size()));
+              std::filesystem::path jsonPath = picked.path;
+              jsonPath.replace_extension(L"json");
+              std::filesystem::path xmlPath = picked.path;
+              xmlPath.replace_extension(L"xml");
+              const std::string json = editor::toJson(editorState.track()) + "\n";
+              const std::string xml = editor::buildTrackResourceXml(
+                  editorState.track(), *bakedTrack, editor::pathToUtf8(picked.path.filename()),
+                  editor::pathToUtf8(jsonPath.filename()), trackMaterialToMaterial);
 
-                // Companion Resources.xml-shaped fragment declaring this Track resource and its
-                // Material dependents (see MppModelExport.hpp's buildTrackResourceXml), written
-                // beside the .mppmodel with the same stem. Also carries the settled starting-grid
-                // poses (StartGrid.hpp), computed here rather than inside buildTrackResourceXml so
-                // that function stays a pure XML-string-builder with no tox::Simulation dependency.
-                const tox::Simulation exportSim(*bakedTrack);
-                const std::vector<tox::Pose> startGridPoses =
-                    tox::StartGrid::startingGridPoses(exportSim, *bakedTrack, tox::StartGrid::DEFAULT_SHIP_COUNT);
-                std::filesystem::path xmlPath = picked.path;
-                xmlPath.replace_extension(L"xml");
-                const std::string xml = editor::buildTrackResourceXml(
-                    editorState.track(), editor::pathToUtf8(picked.path.filename()), startGridPoses, trackMaterialToMaterial);
-                std::ofstream xmlOut(xmlPath, std::ios::binary);
-                if (xmlOut) {
-                  xmlOut.write(xml.data(), static_cast<std::streamsize>(xml.size()));
-                  showStatus("Wrote " + editor::pathToUtf8(picked.path) + " and " + editor::pathToUtf8(xmlPath) + " (" +
-                             std::to_string(mppModel.meshCount) + " mesh(es))");
-                } else {
-                  showStatus("Wrote " + editor::pathToUtf8(picked.path) + ", but failed to open " + editor::pathToUtf8(xmlPath) + " for writing");
+              const std::array<std::filesystem::path, 3> finalPaths{picked.path, jsonPath, xmlPath};
+              const std::array<std::string, 3> contents{mppModel.bytes, json, xml};
+              std::array<std::filesystem::path, 3> tempPaths, backupPaths;
+              bool wroteAll = true;
+              for (std::size_t i = 0; i < finalPaths.size(); ++i) {
+                tempPaths[i] = finalPaths[i];
+                tempPaths[i] += L".tmp";
+                backupPaths[i] = finalPaths[i];
+                backupPaths[i] += L".bak";
+                std::ofstream output(tempPaths[i], std::ios::binary | std::ios::trunc);
+                if (!output || !output.write(contents[i].data(), static_cast<std::streamsize>(contents[i].size()))) {
+                  wroteAll = false;
+                  break;
                 }
-              } else {
-                showStatus("Failed to open " + editor::pathToUtf8(picked.path) + " for writing");
               }
+
+              bool committed = wroteAll;
+              std::array<bool, 3> movedToBackup{false, false, false};
+              std::array<bool, 3> installed{false, false, false};
+              if (committed) {
+                std::error_code ec;
+                for (std::size_t i = 0; i < finalPaths.size(); ++i) {
+                  ec.clear();
+                  std::filesystem::remove(backupPaths[i], ec);
+                  ec.clear();
+                  if (std::filesystem::exists(finalPaths[i])) {
+                    std::filesystem::rename(finalPaths[i], backupPaths[i], ec);
+                    movedToBackup[i] = !ec;
+                  }
+                  if (ec) {
+                    committed = false;
+                    break;
+                  }
+                }
+                if (committed) {
+                  for (std::size_t i = 0; i < finalPaths.size(); ++i) {
+                    ec.clear();
+                    std::filesystem::rename(tempPaths[i], finalPaths[i], ec);
+                    installed[i] = !ec;
+                    if (ec) {
+                      committed = false;
+                      break;
+                    }
+                  }
+                }
+                if (!committed) {
+                  for (std::size_t i = 0; i < finalPaths.size(); ++i) {
+                    ec.clear();
+                    if (installed[i]) std::filesystem::remove(finalPaths[i], ec);
+                    ec.clear();
+                    if (movedToBackup[i]) std::filesystem::rename(backupPaths[i], finalPaths[i], ec);
+                  }
+                } else {
+                  for (auto const& backup : backupPaths) std::filesystem::remove(backup, ec);
+                }
+              }
+              for (auto const& temp : tempPaths) {
+                std::error_code ec;
+                std::filesystem::remove(temp, ec);
+              }
+              if (committed)
+                showStatus("Wrote " + editor::pathToUtf8(picked.path) + ", " + editor::pathToUtf8(jsonPath) + " and " +
+                           editor::pathToUtf8(xmlPath) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))");
+              else
+                showStatus("Export failed; existing model, JSON and XML were left unchanged");
             }
           } else {
             showStatus("Nothing to export -- current track failed to bake");
@@ -2380,165 +2450,165 @@ int main(int, char**) {
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Diagnostics")) {
-    ImGui::PushID("Diagnostics");
-    ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
-    ImGui::Separator();
-    ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
-    ImGui::BulletText("JSON round-trip (toJson . fromJson . toJson idempotent): %s", smoke.roundTripOk ? "OK" : "MISMATCH");
-    if (smoke.bakeOk) {
-      ImGui::BulletText("tox::Track::fromJson bake: OK (%zu path(s), %zu geometry batch(es), %zu warning(s))", smoke.pathCount,
-                        smoke.geometryBatchCount, smoke.warningCount);
-    } else {
-      ImGui::BulletText("tox::Track::fromJson bake: FAILED (%s)", smoke.bakeError.c_str());
-    }
-    ImGui::BulletText("EditorHistory undo/redo round trip: %s", smoke.undoRedoOk ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M3 smoke check (EditorState logic, exercised directly):");
-    ImGui::BulletText("drag moves point / undo restores / redo reapplies: %s / %s / %s", m3Smoke.dragMovedPoint ? "OK" : "MISMATCH",
-                      m3Smoke.dragUndoRestored ? "OK" : "MISMATCH", m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH");
-    ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
-                      m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
-    ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M4 smoke check (mesh placement, exercised directly):");
-    ImGui::BulletText("place / drag / rotate: %s / %s / %s", m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH",
-                      m4Smoke.rotateApplied ? "OK" : "MISMATCH");
-    ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
-                      m4Smoke.deleted ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M5 smoke check (rail-edge toggle, exercised directly):");
-    ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
-                      m5Smoke.selectionSet ? "OK" : "MISMATCH");
-    ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
-    ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
-                      m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M7a smoke check (random-track bake + USD export, exercised directly):");
-    ImGui::BulletText("random track bakes: %s (%zu path(s), %zu geometry batch(es))", m7aSmoke.randomBakeOk ? "OK" : "FAILED",
-                      m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
-    ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
-                      m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
-    ImGui::TextUnformatted("MppModel smoke check (MPPMODEL_EXPORT_SPEC.md, exercised directly):");
-    ImGui::BulletText("header / mesh count / fields match / byte sizes match / wide-index branch: %s / %s / %s / %s / %s",
-                      mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
-                      mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
-                      mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
-    ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
-                      m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
-    ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
-                      m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
-                      m7bSmoke.deleted ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("M7c smoke check (mesh-section random-track generation, exercised directly):");
-    ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
-                      m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
-                      m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
-    ImGui::TextUnformatted("M9 smoke check (mesh JSON import, exercised directly):");
-    ImGui::BulletText("parse / import / rails boundary by default: %s / %s / %s", m9Smoke.parsedFromJson ? "OK" : "MISMATCH",
-                      m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
-    ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
-                      m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Parity-fix smoke check (EDITOR_PARITY_FIXES.md findings 1/4/5, exercised directly):");
-    ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
-                      paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
-    ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
-                      paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
-    ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap1 smoke check (roll/width/crossSection point editing, exercised directly):");
-    ImGui::BulletText("add roll/width/crossSection / edit fields / delete: %s/%s/%s / %s / %s", gap1Smoke.rollAdded ? "OK" : "MISMATCH",
-                      gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",
-                      gap1Smoke.fieldsEdited ? "OK" : "MISMATCH", gap1Smoke.deleted ? "OK" : "MISMATCH");
-    ImGui::BulletText("baked roll/width reflect the edit: %s / %s", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
-                      gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
-    ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
-                      gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
-    ImGui::BulletText("selectionIsPosition true for position / false for aux / false when invalid: %s / %s / %s",
-                      gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
-                      gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
-    ImGui::BulletText("width-drag: selectionIsWidth true/false / dragged / clamps to floor: %s / %s / %s / %s",
-                      gap1Smoke.selectionIsWidthTrueForWidth ? "OK" : "MISMATCH", gap1Smoke.selectionIsWidthFalseForPosition ? "OK" : "MISMATCH",
-                      gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH");
-    ImGui::BulletText("width-drag: undo restores / refused while a position point is selected: %s / %s",
-                      gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
-    ImGui::BulletText("roll-drag: selectionIsRoll true/false / dragged / clamps to range: %s / %s / %s / %s",
-                      gap1Smoke.selectionIsRollTrueForRoll ? "OK" : "MISMATCH", gap1Smoke.selectionIsRollFalseForPosition ? "OK" : "MISMATCH",
-                      gap1Smoke.rollDragged ? "OK" : "MISMATCH", gap1Smoke.rollDragClampsToRange ? "OK" : "MISMATCH");
-    ImGui::BulletText("roll-drag: undo restores / refused while a position point is selected: %s / %s",
-                      gap1Smoke.rollDragUndone ? "OK" : "MISMATCH", gap1Smoke.rollDragRefusedForPositionSelection ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
-    ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
-                      gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
-    ImGui::BulletText("empty name stays live in memory / falls back only on serialize: %s / %s",
-                      gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap3 smoke check (zones, exercised directly):");
-    ImGui::BulletText("add / select / baked as path zone / baked factor default: %s / %s / %s / %s", gap3Smoke.added ? "OK" : "MISMATCH",
-                      gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
-                      gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH");
-    ImGui::BulletText("edit fields / add start-grid zone / bakes with both / delete: %s / %s / %s / %s", gap3Smoke.edited ? "OK" : "MISMATCH",
-                      gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
-                      gap3Smoke.deleted ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap4 smoke check (triggers, exercised directly):");
-    ImGui::BulletText("add / select / baked as gate / edit fields: %s / %s / %s / %s", gap4Smoke.added ? "OK" : "MISMATCH",
-                      gap4Smoke.selected ? "OK" : "MISMATCH", gap4Smoke.bakedAsGate ? "OK" : "MISMATCH",
-                      gap4Smoke.edited ? "OK" : "MISMATCH");
-    ImGui::BulletText("second checkpoint / finish stays unique / delete blocked while finish / delete after demotion: %s / %s / %s / %s",
-                      gap4Smoke.secondCheckpointAdded ? "OK" : "MISMATCH", gap4Smoke.finishUniqueAfterPromotion ? "OK" : "MISMATCH",
-                      gap4Smoke.deleteBlockedWhileFinish ? "OK" : "MISMATCH", gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap5 smoke check (curve management, exercised directly):");
-    ImGui::BulletText("default current path / clamps with one path: %s / %s", gap5Smoke.defaultCurrentPathIsZero ? "OK" : "MISMATCH",
-                      gap5Smoke.clampsWithOnePath ? "OK" : "MISMATCH");
-    ImGui::BulletText("closed-path disjoint / bakes open / reconnect: %s / %s / %s", gap5Smoke.closedMadeDisjoint ? "OK" : "MISMATCH",
-                      gap5Smoke.closedBakesOpen ? "OK" : "MISMATCH", gap5Smoke.closedReconnected ? "OK" : "MISMATCH");
-    ImGui::BulletText("open-path split / bakes as two paths / delete prunes dangling seam: %s / %s / %s",
-                      gap5Smoke.openSplitDisjoint ? "OK" : "MISMATCH", gap5Smoke.openSplitBakes ? "OK" : "MISMATCH",
-                      gap5Smoke.deleteCurrentPathPrunesDanglingSeam ? "OK" : "MISMATCH");
-    ImGui::BulletText("join same-path closes / join cross-path junction / bakes: %s / %s / %s",
-                      gap5Smoke.joinedSamePathCloses ? "OK" : "MISMATCH", gap5Smoke.joinedCrossPathCreatesJunction ? "OK" : "MISMATCH",
-                      gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap6 smoke check (direction toggle / start point, exercised directly):");
-    ImGui::BulletText("toggle / undo / redo: %s / %s / %s", gap6Smoke.toggled ? "OK" : "MISMATCH",
-                      gap6Smoke.toggleUndone ? "OK" : "MISMATCH", gap6Smoke.toggleRedone ? "OK" : "MISMATCH");
-    ImGui::BulletText("set start point / no-op when already start / undo: %s / %s / %s", gap6Smoke.startMoved ? "OK" : "MISMATCH",
-                      gap6Smoke.startMoveNoOpWhenAlreadyStart ? "OK" : "MISMATCH", gap6Smoke.startMoveUndone ? "OK" : "MISMATCH");
-    ImGui::BulletText("baked starting-grid forward direction actually flips: %s", gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap7 smoke check (handling panel, exercised directly):");
-    ImGui::BulletText("edit / out-of-range clamp / undo / redo: %s / %s / %s / %s", gap7Smoke.edited ? "OK" : "MISMATCH",
-                      gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH", gap7Smoke.redone ? "OK" : "MISMATCH");
-    ImGui::BulletText("reset to default / baked handling matches edited value: %s / %s", gap7Smoke.reset ? "OK" : "MISMATCH",
-                      gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap8 smoke check (random ranges panel, exercised directly):");
-    ImGui::BulletText("custom turn-count range respected / default ranges still bake: %s / %s",
-                      gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap10 smoke check (render modes / point filters / physics overlay, exercised directly):");
-    ImGui::BulletText("default banked / render mode round-trips / filters default shown / position filter toggles: %s / %s / %s / %s",
-                      gap10Smoke.defaultRenderModeIsBanked ? "OK" : "MISMATCH", gap10Smoke.renderModeRoundTrips ? "OK" : "MISMATCH",
-                      gap10Smoke.pointFiltersDefaultShown ? "OK" : "MISMATCH", gap10Smoke.positionFilterToggles ? "OK" : "MISMATCH");
-    ImGui::BulletText("physics points hidden by default / selection round-trips / hiding clears selection: %s / %s / %s",
-                      gap10Smoke.physicsPointsHiddenByDefault ? "OK" : "MISMATCH", gap10Smoke.physicsSelectionRoundTrips ? "OK" : "MISMATCH",
-                      gap10Smoke.hidingPhysicsClearsSelection ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap11 smoke check (segment select/delete/split, insert-on-segment, exercised directly):");
-    ImGui::BulletText("outgoing nullopt on aux selection / at open-path end / incoming nullopt at open-path start: %s / %s / %s",
-                      gap11Smoke.outgoingNulloptOnAuxSelection ? "OK" : "MISMATCH", gap11Smoke.outgoingNulloptAtOpenPathEnd ? "OK" : "MISMATCH",
-                      gap11Smoke.incomingNulloptAtOpenPathStart ? "OK" : "MISMATCH");
-    ImGui::BulletText("closed-path delete opens path / keeps all points: %s / %s", gap11Smoke.closedSegmentDeleteOpensPath ? "OK" : "MISMATCH",
-                      gap11Smoke.closedSegmentDeleteKeepsAllPoints ? "OK" : "MISMATCH");
-    ImGui::BulletText("open first-segment shrinks / floor guard holds: %s / %s", gap11Smoke.openFirstSegmentShrinks ? "OK" : "MISMATCH",
-                      gap11Smoke.openFloorGuardHolds ? "OK" : "MISMATCH");
-    ImGui::BulletText("open middle-segment splits / split guard holds / disjoint-seam guard holds: %s / %s / %s",
-                      gap11Smoke.openMiddleSegmentSplits ? "OK" : "MISMATCH", gap11Smoke.openMiddleSplitGuardHolds ? "OK" : "MISMATCH",
-                      gap11Smoke.disjointSeamGuardHolds ? "OK" : "MISMATCH");
-    ImGui::BulletText("insert-on-segment adds point / bakes: %s / %s", gap11Smoke.insertOnSegmentAddsPoint ? "OK" : "MISMATCH",
-                      gap11Smoke.insertedPointBakes ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap9 smoke check (grid display / size / snap, exercised directly):");
-    ImGui::BulletText("no snap by default / snaps once shown+enabled / hidden grid disables snap: %s / %s / %s",
-                      gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",
-                      gap9Smoke.hiddenGridDisablesSnap ? "OK" : "MISMATCH");
-    ImGui::BulletText("respects configured grid size / create-click snaps new point / closing stays unsnapped: %s / %s / %s",
-                      gap9Smoke.respectsGridSize ? "OK" : "MISMATCH", gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH",
-                      gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
-    ImGui::TextUnformatted("Gap14 smoke check (undo/redo disabled state, exercised directly):");
-    ImGui::BulletText("empty at start / undo enabled after edit / redo disabled after edit: %s / %s / %s",
-                      gap14Smoke.emptyAtStart ? "OK" : "MISMATCH", gap14Smoke.undoEnabledAfterEdit ? "OK" : "MISMATCH",
-                      gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH");
-    ImGui::BulletText("redo enabled after undo / undo disabled once exhausted: %s / %s", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
-                      gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
+      ImGui::PushID("Diagnostics");
+      ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
+      ImGui::Separator();
+      ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
+      ImGui::BulletText("JSON round-trip (toJson . fromJson . toJson idempotent): %s", smoke.roundTripOk ? "OK" : "MISMATCH");
+      if (smoke.bakeOk) {
+        ImGui::BulletText("tox::Track::fromJson bake: OK (%zu path(s), %zu geometry batch(es), %zu warning(s))", smoke.pathCount,
+                          smoke.geometryBatchCount, smoke.warningCount);
+      } else {
+        ImGui::BulletText("tox::Track::fromJson bake: FAILED (%s)", smoke.bakeError.c_str());
+      }
+      ImGui::BulletText("EditorHistory undo/redo round trip: %s", smoke.undoRedoOk ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M3 smoke check (EditorState logic, exercised directly):");
+      ImGui::BulletText("drag moves point / undo restores / redo reapplies: %s / %s / %s", m3Smoke.dragMovedPoint ? "OK" : "MISMATCH",
+                        m3Smoke.dragUndoRestored ? "OK" : "MISMATCH", m3Smoke.dragRedoReapplied ? "OK" : "MISMATCH");
+      ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
+                        m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
+      ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M4 smoke check (mesh placement, exercised directly):");
+      ImGui::BulletText("place / drag / rotate: %s / %s / %s", m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH",
+                        m4Smoke.rotateApplied ? "OK" : "MISMATCH");
+      ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
+                        m4Smoke.deleted ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M5 smoke check (rail-edge toggle, exercised directly):");
+      ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
+                        m5Smoke.selectionSet ? "OK" : "MISMATCH");
+      ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
+      ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
+                        m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M7a smoke check (random-track bake + USD export, exercised directly):");
+      ImGui::BulletText("random track bakes: %s (%zu path(s), %zu geometry batch(es))", m7aSmoke.randomBakeOk ? "OK" : "FAILED",
+                        m7aSmoke.randomPathCount, m7aSmoke.randomGeometryBatchCount);
+      ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
+                        m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
+      ImGui::TextUnformatted("MppModel smoke check (MPPMODEL_EXPORT_SPEC.md, exercised directly):");
+      ImGui::BulletText("header / mesh count / fields match / byte sizes match / wide-index branch: %s / %s / %s / %s / %s",
+                        mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
+                        mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
+                        mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
+      ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
+                        m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");
+      ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
+                        m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
+                        m7bSmoke.deleted ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("M7c smoke check (mesh-section random-track generation, exercised directly):");
+      ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
+                        m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
+                        m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
+      ImGui::TextUnformatted("M9 smoke check (mesh JSON import, exercised directly):");
+      ImGui::BulletText("parse / import / rails boundary by default: %s / %s / %s", m9Smoke.parsedFromJson ? "OK" : "MISMATCH",
+                        m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
+      ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
+                        m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Parity-fix smoke check (EDITOR_PARITY_FIXES.md findings 1/4/5, exercised directly):");
+      ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
+                        paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
+      ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
+                        paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
+      ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap1 smoke check (roll/width/crossSection point editing, exercised directly):");
+      ImGui::BulletText("add roll/width/crossSection / edit fields / delete: %s/%s/%s / %s / %s", gap1Smoke.rollAdded ? "OK" : "MISMATCH",
+                        gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",
+                        gap1Smoke.fieldsEdited ? "OK" : "MISMATCH", gap1Smoke.deleted ? "OK" : "MISMATCH");
+      ImGui::BulletText("baked roll/width reflect the edit: %s / %s", gap1Smoke.bakedRollApplied ? "OK" : "MISMATCH",
+                        gap1Smoke.bakedWidthApplied ? "OK" : "MISMATCH");
+      ImGui::BulletText("4-position floor holds / aux points unguarded by it: %s / %s",
+                        gap1Smoke.deletingBelowFourPositionsRefused ? "OK" : "MISMATCH", gap1Smoke.deletingAuxPointsUnguarded ? "OK" : "MISMATCH");
+      ImGui::BulletText("selectionIsPosition true for position / false for aux / false when invalid: %s / %s / %s",
+                        gap1Smoke.selectionIsPositionTrueForPosition ? "OK" : "MISMATCH", gap1Smoke.selectionIsPositionFalseForAux ? "OK" : "MISMATCH",
+                        gap1Smoke.selectionIsPositionFalseWhenInvalid ? "OK" : "MISMATCH");
+      ImGui::BulletText("width-drag: selectionIsWidth true/false / dragged / clamps to floor: %s / %s / %s / %s",
+                        gap1Smoke.selectionIsWidthTrueForWidth ? "OK" : "MISMATCH", gap1Smoke.selectionIsWidthFalseForPosition ? "OK" : "MISMATCH",
+                        gap1Smoke.widthDragged ? "OK" : "MISMATCH", gap1Smoke.widthDragClampsToFloor ? "OK" : "MISMATCH");
+      ImGui::BulletText("width-drag: undo restores / refused while a position point is selected: %s / %s",
+                        gap1Smoke.widthDragUndone ? "OK" : "MISMATCH", gap1Smoke.widthDragRefusedForPositionSelection ? "OK" : "MISMATCH");
+      ImGui::BulletText("roll-drag: selectionIsRoll true/false / dragged / clamps to range: %s / %s / %s / %s",
+                        gap1Smoke.selectionIsRollTrueForRoll ? "OK" : "MISMATCH", gap1Smoke.selectionIsRollFalseForPosition ? "OK" : "MISMATCH",
+                        gap1Smoke.rollDragged ? "OK" : "MISMATCH", gap1Smoke.rollDragClampsToRange ? "OK" : "MISMATCH");
+      ImGui::BulletText("roll-drag: undo restores / refused while a position point is selected: %s / %s",
+                        gap1Smoke.rollDragUndone ? "OK" : "MISMATCH", gap1Smoke.rollDragRefusedForPositionSelection ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap2 smoke check (track name editing, exercised directly):");
+      ImGui::BulletText("rename / undo / redo / same-name no-op refused: %s / %s / %s / %s", gap2Smoke.renamed ? "OK" : "MISMATCH",
+                        gap2Smoke.undone ? "OK" : "MISMATCH", gap2Smoke.redone ? "OK" : "MISMATCH", gap2Smoke.noOpRefused ? "OK" : "MISMATCH");
+      ImGui::BulletText("empty name stays live in memory / falls back only on serialize: %s / %s",
+                        gap2Smoke.emptyNameLiveInMemory ? "OK" : "MISMATCH", gap2Smoke.emptyNameFallsBackOnSerialize ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap3 smoke check (zones, exercised directly):");
+      ImGui::BulletText("add / select / baked as path zone / baked factor default: %s / %s / %s / %s", gap3Smoke.added ? "OK" : "MISMATCH",
+                        gap3Smoke.selected ? "OK" : "MISMATCH", gap3Smoke.bakedAsPathZone ? "OK" : "MISMATCH",
+                        gap3Smoke.bakedFactorApplied ? "OK" : "MISMATCH");
+      ImGui::BulletText("edit fields / add start-grid zone / bakes with both / delete: %s / %s / %s / %s", gap3Smoke.edited ? "OK" : "MISMATCH",
+                        gap3Smoke.startGridAdded ? "OK" : "MISMATCH", gap3Smoke.bakesWithMultipleZones ? "OK" : "MISMATCH",
+                        gap3Smoke.deleted ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap4 smoke check (triggers, exercised directly):");
+      ImGui::BulletText("add / select / baked as gate / edit fields: %s / %s / %s / %s", gap4Smoke.added ? "OK" : "MISMATCH",
+                        gap4Smoke.selected ? "OK" : "MISMATCH", gap4Smoke.bakedAsGate ? "OK" : "MISMATCH",
+                        gap4Smoke.edited ? "OK" : "MISMATCH");
+      ImGui::BulletText("second checkpoint / finish stays unique / delete blocked while finish / delete after demotion: %s / %s / %s / %s",
+                        gap4Smoke.secondCheckpointAdded ? "OK" : "MISMATCH", gap4Smoke.finishUniqueAfterPromotion ? "OK" : "MISMATCH",
+                        gap4Smoke.deleteBlockedWhileFinish ? "OK" : "MISMATCH", gap4Smoke.deletedAfterDemotion ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap5 smoke check (curve management, exercised directly):");
+      ImGui::BulletText("default current path / clamps with one path: %s / %s", gap5Smoke.defaultCurrentPathIsZero ? "OK" : "MISMATCH",
+                        gap5Smoke.clampsWithOnePath ? "OK" : "MISMATCH");
+      ImGui::BulletText("closed-path disjoint / bakes open / reconnect: %s / %s / %s", gap5Smoke.closedMadeDisjoint ? "OK" : "MISMATCH",
+                        gap5Smoke.closedBakesOpen ? "OK" : "MISMATCH", gap5Smoke.closedReconnected ? "OK" : "MISMATCH");
+      ImGui::BulletText("open-path split / bakes as two paths / delete prunes dangling seam: %s / %s / %s",
+                        gap5Smoke.openSplitDisjoint ? "OK" : "MISMATCH", gap5Smoke.openSplitBakes ? "OK" : "MISMATCH",
+                        gap5Smoke.deleteCurrentPathPrunesDanglingSeam ? "OK" : "MISMATCH");
+      ImGui::BulletText("join same-path closes / join cross-path junction / bakes: %s / %s / %s",
+                        gap5Smoke.joinedSamePathCloses ? "OK" : "MISMATCH", gap5Smoke.joinedCrossPathCreatesJunction ? "OK" : "MISMATCH",
+                        gap5Smoke.joinedCrossPathBakes ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap6 smoke check (direction toggle / start point, exercised directly):");
+      ImGui::BulletText("toggle / undo / redo: %s / %s / %s", gap6Smoke.toggled ? "OK" : "MISMATCH",
+                        gap6Smoke.toggleUndone ? "OK" : "MISMATCH", gap6Smoke.toggleRedone ? "OK" : "MISMATCH");
+      ImGui::BulletText("set start point / no-op when already start / undo: %s / %s / %s", gap6Smoke.startMoved ? "OK" : "MISMATCH",
+                        gap6Smoke.startMoveNoOpWhenAlreadyStart ? "OK" : "MISMATCH", gap6Smoke.startMoveUndone ? "OK" : "MISMATCH");
+      ImGui::BulletText("baked starting-grid forward direction actually flips: %s", gap6Smoke.bakedGridReversed ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap7 smoke check (handling panel, exercised directly):");
+      ImGui::BulletText("edit / out-of-range clamp / undo / redo: %s / %s / %s / %s", gap7Smoke.edited ? "OK" : "MISMATCH",
+                        gap7Smoke.clamped ? "OK" : "MISMATCH", gap7Smoke.undone ? "OK" : "MISMATCH", gap7Smoke.redone ? "OK" : "MISMATCH");
+      ImGui::BulletText("reset to default / baked handling matches edited value: %s / %s", gap7Smoke.reset ? "OK" : "MISMATCH",
+                        gap7Smoke.bakedHandlingMatches ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap8 smoke check (random ranges panel, exercised directly):");
+      ImGui::BulletText("custom turn-count range respected / default ranges still bake: %s / %s",
+                        gap8Smoke.customTurnCountRespected ? "OK" : "MISMATCH", gap8Smoke.defaultRangesStillBake ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap10 smoke check (render modes / point filters / physics overlay, exercised directly):");
+      ImGui::BulletText("default banked / render mode round-trips / filters default shown / position filter toggles: %s / %s / %s / %s",
+                        gap10Smoke.defaultRenderModeIsBanked ? "OK" : "MISMATCH", gap10Smoke.renderModeRoundTrips ? "OK" : "MISMATCH",
+                        gap10Smoke.pointFiltersDefaultShown ? "OK" : "MISMATCH", gap10Smoke.positionFilterToggles ? "OK" : "MISMATCH");
+      ImGui::BulletText("physics points hidden by default / selection round-trips / hiding clears selection: %s / %s / %s",
+                        gap10Smoke.physicsPointsHiddenByDefault ? "OK" : "MISMATCH", gap10Smoke.physicsSelectionRoundTrips ? "OK" : "MISMATCH",
+                        gap10Smoke.hidingPhysicsClearsSelection ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap11 smoke check (segment select/delete/split, insert-on-segment, exercised directly):");
+      ImGui::BulletText("outgoing nullopt on aux selection / at open-path end / incoming nullopt at open-path start: %s / %s / %s",
+                        gap11Smoke.outgoingNulloptOnAuxSelection ? "OK" : "MISMATCH", gap11Smoke.outgoingNulloptAtOpenPathEnd ? "OK" : "MISMATCH",
+                        gap11Smoke.incomingNulloptAtOpenPathStart ? "OK" : "MISMATCH");
+      ImGui::BulletText("closed-path delete opens path / keeps all points: %s / %s", gap11Smoke.closedSegmentDeleteOpensPath ? "OK" : "MISMATCH",
+                        gap11Smoke.closedSegmentDeleteKeepsAllPoints ? "OK" : "MISMATCH");
+      ImGui::BulletText("open first-segment shrinks / floor guard holds: %s / %s", gap11Smoke.openFirstSegmentShrinks ? "OK" : "MISMATCH",
+                        gap11Smoke.openFloorGuardHolds ? "OK" : "MISMATCH");
+      ImGui::BulletText("open middle-segment splits / split guard holds / disjoint-seam guard holds: %s / %s / %s",
+                        gap11Smoke.openMiddleSegmentSplits ? "OK" : "MISMATCH", gap11Smoke.openMiddleSplitGuardHolds ? "OK" : "MISMATCH",
+                        gap11Smoke.disjointSeamGuardHolds ? "OK" : "MISMATCH");
+      ImGui::BulletText("insert-on-segment adds point / bakes: %s / %s", gap11Smoke.insertOnSegmentAddsPoint ? "OK" : "MISMATCH",
+                        gap11Smoke.insertedPointBakes ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap9 smoke check (grid display / size / snap, exercised directly):");
+      ImGui::BulletText("no snap by default / snaps once shown+enabled / hidden grid disables snap: %s / %s / %s",
+                        gap9Smoke.noSnapByDefault ? "OK" : "MISMATCH", gap9Smoke.snapOnlyWhenGridShownAndSnapEnabled ? "OK" : "MISMATCH",
+                        gap9Smoke.hiddenGridDisablesSnap ? "OK" : "MISMATCH");
+      ImGui::BulletText("respects configured grid size / create-click snaps new point / closing stays unsnapped: %s / %s / %s",
+                        gap9Smoke.respectsGridSize ? "OK" : "MISMATCH", gap9Smoke.createClickSnapsNewPoint ? "OK" : "MISMATCH",
+                        gap9Smoke.createClickClosingStaysUnsnapped ? "OK" : "MISMATCH");
+      ImGui::TextUnformatted("Gap14 smoke check (undo/redo disabled state, exercised directly):");
+      ImGui::BulletText("empty at start / undo enabled after edit / redo disabled after edit: %s / %s / %s",
+                        gap14Smoke.emptyAtStart ? "OK" : "MISMATCH", gap14Smoke.undoEnabledAfterEdit ? "OK" : "MISMATCH",
+                        gap14Smoke.redoDisabledAfterEdit ? "OK" : "MISMATCH");
+      ImGui::BulletText("redo enabled after undo / undo disabled once exhausted: %s / %s", gap14Smoke.redoEnabledAfterUndo ? "OK" : "MISMATCH",
+                        gap14Smoke.undoDisabledAfterUndoingEverything ? "OK" : "MISMATCH");
       ImGui::PopID();
     }
     ImGui::End();

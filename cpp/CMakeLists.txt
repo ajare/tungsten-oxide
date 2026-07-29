@@ -45,6 +45,13 @@ add_subdirectory(tungsten-monoxide)
 add_subdirectory(editor)
 add_subdirectory(model-tool)
 
+# The launcher dynamically loads the application DLL rather than linking it,
+# so express the build/deployment relationship explicitly. TungstenMonoxide's
+# post-build step copies itself and its runtime DLLs beside Launcher.
+if (TARGET Launcher AND TARGET TungstenMonoxide)
+  add_dependencies(Launcher TungstenMonoxide)
+endif()
+
 foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)
   if (TARGET ${_willpower_target})
     add_dependencies(core ${_willpower_target})

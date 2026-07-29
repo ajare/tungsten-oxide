@@ -50,7 +50,7 @@ void GameSession::step(const std::vector<ControlIntent>& intents, double dt) {
     const ControlIntent& intent = i < intents.size() ? intents[i] : kIdle;
 
     if (intent.respawn) {
-      simulation_.respawn(ship);
+      ship.respawn(simulation_);
       GameEvent event;
       event.type = GameEventType::Respawned;
       event.shipIndex = static_cast<int>(i);
@@ -62,7 +62,7 @@ void GameSession::step(const std::vector<ControlIntent>& intents, double dt) {
     const int subSteps = std::max(1, static_cast<int>(std::ceil(clamped / Consts::MAX_PHYSICS_STEP)));
     const double sdt = clamped / subSteps;
     for (int s = 0; s < subSteps; s++) {
-      const StepResult r = simulation_.stepPhysics(ship, sdt, intent.throttle, intent.brake, intent.steer);
+      const StepResult r = ship.step(simulation_, sdt, intent.throttle, intent.brake, intent.steer);
       if (r.railHit) {
         GameEvent event;
         event.type = GameEventType::RailHit;

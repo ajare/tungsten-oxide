@@ -1,379 +1,425 @@
 #define NOMINMAX
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <iomanip>
+#include <sstream>
 
-#include <mpp/ProgrammaticMaterialStream.h>
+#include <mpp/ModelSerializer.h>
 #include <mpp/ProgrammaticModelStream.h>
 
-#include <mpp/helper/FreeCamera.h>
+#pragma warning(push)
+#pragma warning(disable : 4201)
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
+#pragma warning(pop)
 
 #include <willpower/application/StateExceptions.h>
-
-#include <applib/ModelInstance.h>
-
-#include "imgui/imgui.h"
-#include "imgui/implot.h"
+#include <willpower/application/resourcesystem/ResourceExceptions.h>
 
 #include "StatePlayTungstenMonoxide.h"
-#include "TungstenMonoxideModel.h"
-#include "EntityHandlerTungstenMonoxide.h"
-#include "EntityType.h"
+#include "Game.h"
 #include "Map.h"
 #include "ReactiveCamera.h"
-#include "GameException.h"
-
-#define CLIPPING_RECORD_COUNT_MAX		10
-#define DISPLAY_MESSAGE_COUNT_MAX		128
-#define DISPLAY_MESSAGE_TIME			10
 
 using namespace std;
 using namespace wp;
 
 DisplayMessage::Level gDisplayMessageLevel = DisplayMessage::Level::Debug;
 
-// ImGui colours go here so they don't clutter up the header file
-const ImColor gImGui_MapBackgroundColour{ 0.2f, 0.2f, 0.8f };
-const ImColor gImGui_TriangulationLineColour{ 0.8f, 0.8f, 0.2f };
-const ImColor gImGui_MapBorderColour{ 1.0f, 1.0f, 0.7f };
-const ImColor gImGui_PrimitiveColour{ 0.8f, 0.2f, 0.2f };
-const ImColor gImGui_PrimitiveInSourceSetColour{ 0.8f, 0.8f, 0.2f, 0.5f };
-const ImColor gImGui_PrimitiveInViewColour{ 0.8f, 0.2f, 0.2f, 0.5f };
-const ImColor gImGui_PrimitiveStaticBoundsColour{ 0.2f, 0.8f, 0.2f };
-const ImColor gImGui_PrimitiveAnimatedBoundsColour{ 0.2f, 0.2f, 0.8f };
-const ImColor gImGui_CollisionLineSolidColour{ 0.8f, 0.8f, 0.2f };
-const ImColor gImGui_CollisionLine2WayColour{ 0.6f, 0.6f, 0.0f };
-const ImColor gImGui_ViewAreaColour{ 0.5f, 0.5f, 0.5f };
+namespace {
+constexpr double CAM_BACK = 13.0;
+constexpr double CAM_ZOOM_MIN = 0.4;
+constexpr double CAM_ZOOM_MAX = 3.0;
+constexpr double CAM_ZOOM_RATE = 1.2;
+constexpr double CAM_UP_MIN = 0.5;
+constexpr double CAM_UP_MAX = 25.0;
+constexpr double CAM_UP_RATE = 6.0;
+constexpr double LOOK_AT_FORWARD = 12.0;
+constexpr double LOOK_AT_UP_MIN = -6.0;
+constexpr double LOOK_AT_UP_MAX = 12.0;
+constexpr double LOOK_AT_UP_RATE = 4.0;
+constexpr double SHIP_CENTER_HEIGHT = 0.3;
 
-
-mpp::mesh::MeshSpecification createTorusMeshSpecification() {
-  mpp::mesh::MeshSpecification meshSpec(mpp::mesh::Primitive::Type::Triangles);
-
-  mpp::mesh::VertexBufferAttributeLayout* attribLayout = meshSpec.createVertexBufferAttributeLayout(false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::Float, true);
-
-  meshSpec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
-  meshSpec.setIndexedVertices(true);
-
-  return meshSpec;
+mpp::mesh::MeshSpecification shipMeshSpecification() {
+  mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Triangles);
+  auto layout = spec.createVertexBufferAttributeLayout(false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
+  layout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
+  spec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
+  spec.setIndexedVertices(true);
+  return spec;
 }
 
-void createTorusMaterial(mpp::mesh::MeshSpecification const& meshSpec, mpp::ResourceManager* resourceMgr, TmResourceWrangler* wrangler) {
-
-  auto materialStream = new mpp::ProgrammaticMaterialStream(resourceMgr);
-  materialStream->setProgram2d(false);
-  materialStream->setMeshSpecification(meshSpec);
-  materialStream->setTexture("TEX1", "__mpp_tex_none__");
-
-  auto res = resourceMgr->declareResource("Torus.Material", mpp::ResourceStreamPtr(materialStream)).first;
-  res->acquire(wrangler);
-  res->load();
+glm::vec3 toGlm(tox::Vec3 const& value) {
+  return {static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
 }
 
-mpp::ResourcePtr createTorusModel(mpp::ResourceManager* resourceMgr, TmResourceWrangler* wrangler) {
-  auto torusMeshSpec = createTorusMeshSpecification();
-  createTorusMaterial(torusMeshSpec, resourceMgr, wrangler);
-
-  auto torusStream = new mpp::ProgrammaticModelStream(resourceMgr);
-  auto torusMeshId = torusStream->createMesh("Torus", torusMeshSpec, "Torus.Material", 32);
-
-  // Torus has 64 rings of 16 vertices each
-  size_t ringSize{16};
-  size_t numRings{64};
-  size_t radius{48};
-  size_t thickness{12};
-
-  mpp::mesh::VertexData torusData(torusMeshSpec, ringSize * numRings);
-
-  float dp = 2 * 3.14159f / ringSize;
-  float dt = 2 * 3.14159f / numRings;
-
-  for (size_t i = 0; i < numRings; ++i) {
-    float theta = dt * i;
-
-    for (size_t j = 0; j < ringSize; ++j) {
-      float phi = dp * j;
-
-      float nx = cosf(theta);
-      float ny = sinf(phi);
-      float nz = sinf(theta);
-
-      float x = nx * (radius + cosf(phi) * thickness);
-      float y = ny * thickness;
-      float z = nz * (radius + cosf(phi) * thickness);
-
-      // Hypertrochoid
-      // float x = pow(cosf(theta), 3) * (radius + cosf(phi) * thickness);
-      // float z = pow(sinf(theta), 3) * (radius + cosf(phi) * thickness);
-
-      torusData.f32(x, y, z);                                                   // Position
-      torusData.f32(nx, ny, nz);                                                // Normal
-      torusData.f32(i / ((float)numRings - 1) * 8, j / ((float)ringSize - 1));  // UV coord
-      torusData.f32(1.0f, 1.0f, 1.0f, 1.0f);                                    // Colour
-    }
-  }
-
-  torusStream->addVertexData(torusMeshId, torusData);
-
-  for (size_t i = 0; i < numRings; ++i) {
-    for (size_t j = 0; j < ringSize; ++j) {
-      auto i0 = i * ringSize + j;
-      auto i1 = i * ringSize + ((j + 1) % ringSize);
-      auto i2 = ((i + 1) % numRings) * ringSize + ((j + 1) % ringSize);
-      auto i3 = ((i + 1) % numRings) * ringSize + j;
-
-      torusStream->addTriangle(torusMeshId, (uint32_t)i0, (uint32_t)i1, (uint32_t)i2);
-      torusStream->addTriangle(torusMeshId, (uint32_t)i2, (uint32_t)i3, (uint32_t)i0);
-    }
-  }
-
-  auto torus = resourceMgr->declareResource("Model.Torus", mpp::ResourceStreamPtr(torusStream)).first;
-  torus->acquire(wrangler);
-  torus->load();
-
-  return torus;
+string formatTime(double seconds) {
+  seconds = max(0.0, seconds);
+  int milliseconds = static_cast<int>(seconds * 1000.0) % 1000;
+  int totalSeconds = static_cast<int>(seconds);
+  ostringstream out;
+  out << setfill('0') << setw(2) << totalSeconds / 60 << ':' << setw(2) << totalSeconds % 60 << '.' << setw(3) << milliseconds;
+  return out.str();
 }
 
+void applyShipTransform(mpp::SceneModel3dPtr const& model, tox::Vec3 const& position,
+                        tox::Vec3 const& upValue, tox::Vec3 const& forwardValue, double pitch, double bank) {
+  tox::Vec3 up = upValue.clone().normalize();
+  tox::Vec3 forward = forwardValue.clone().addScaledVector(up, -forwardValue.dot(up));
+  if (forward.lengthSq() < 1e-9) forward.set(0, 0, 1);
+  forward.normalize();
+  tox::Vec3 right;
+  right.crossVectors(up, forward).normalize();
+  forward.crossVectors(right, up).normalize();
+
+  glm::mat3 basis(toGlm(right), toGlm(up), toGlm(forward));
+  glm::quat orientation = glm::quat_cast(basis);
+  orientation *= glm::quat(glm::vec3(static_cast<float>(pitch), 0.0f, static_cast<float>(bank)));
+  float angle = glm::angle(orientation);
+  glm::vec3 axis = angle > 1e-6f ? glm::axis(orientation) : glm::vec3(0, 1, 0);
+
+  model->resetTransform();
+  model->translate(toGlm(position));
+  model->rotateSelf(angle, axis);
+  model->scale(glm::vec3(2.4f, 0.8f, 4.0f));
+}
+}  // namespace
 
 StatePlayTungstenMonoxide::StatePlayTungstenMonoxide()
-	: StatePlay()
-	, mGlobalTime(0.0)
-	, mExitScheduled(false) 
-	, mTrackModel(nullptr) 
-{
+    : StatePlay(), mGlobalTime(0.0), mExitScheduled(false), mTrackModel(nullptr), mShipModel(nullptr) {
 }
 
-StatePlayTungstenMonoxide::~StatePlayTungstenMonoxide()
-{
-}
+StatePlayTungstenMonoxide::~StatePlayTungstenMonoxide() = default;
 
-Map* StatePlayTungstenMonoxide::getMap()
-{
-	return static_cast<Map*>(mMap.get());
-}
-
-Map const* StatePlayTungstenMonoxide::getMap() const
-{
-	return static_cast<Map const*>(mMap.get());
-}
+Map* StatePlayTungstenMonoxide::getMap() { return static_cast<Map*>(mMap.get()); }
+Map const* StatePlayTungstenMonoxide::getMap() const { return static_cast<Map const*>(mMap.get()); }
 
 vector<string> StatePlayTungstenMonoxide::getDebuggingText() const {
-  auto mouseScreen = getMouseScreenPosition();
-
+  if (!mGameSession || mGameSession->ships().empty()) return {};
+  auto const& ship = mGameSession->ships()[0];
   return {
-      STR_FORMAT("Mouse screen: {:.0f},{:.0f}", mouseScreen.x, mouseScreen.y),
-  };
+      STR_FORMAT("Ship: {:.2f},{:.2f},{:.2f}", ship.physics.groundPos.x, ship.physics.groundPos.y, ship.physics.groundPos.z),
+      STR_FORMAT("Speed: {:.1f} km/h", abs(ship.physics.speed) * 3.6),
+      STR_FORMAT("Laps: {}  checkpoints: {}/{}", ship.race.laps, ship.race.hit.size(), ship.race.intermediateIds.size())};
 }
 
-void StatePlayTungstenMonoxide::createCamera()
-{
-	float aspectRatio = mwRenderSystem->getWindowWidth() / (float)mwRenderSystem->getWindowHeight();
-
-	auto camera = new ReactiveCamera(glm::vec3(0, 0, 150), 180.0f, 0.0f, 90, aspectRatio);
-	camera->setClipDistances(0.1f, 250 + 10);
-
-	mCamera3d = shared_ptr<mpp::Camera>(camera);
+void StatePlayTungstenMonoxide::createCamera() {
+  float aspectRatio = mwRenderSystem->getWindowWidth() / static_cast<float>(mwRenderSystem->getWindowHeight());
+  auto camera = new ReactiveCamera(glm::vec3(0, 0, 150), 180.0f, 0.0f, 65.0f, aspectRatio);
+  camera->setClipDistances(0.2f, 2000.0f);
+  mCamera3d = shared_ptr<mpp::Camera>(camera);
 }
 
-void StatePlayTungstenMonoxide::registerInput()
-{
-	using namespace application;
-
-	//											Keys pressed/released/down		// Buttons P/R/D	Wheel U/D,		modifiers	gui-disabled
-	registerInputState("Exit",					{ Key::Escape }, {}, {},		{}, {}, {},			false, false,	0,			false);
-	registerInputState("Forward",				{}, {}, { Key::UpArrow },		{},	{},	{},			false, false,	0,			true);
-	registerInputState("Down",					{}, {}, { Key::DownArrow },		{},	{},	{},			false, false,	0,			true);
-	registerInputState("Back",					{}, {}, { Key::LeftArrow },		{},	{},	{},			false, false,	0,			true);
-	registerInputState("Right",					{},	{},	{ Key::RightArrow },	{},	{},	{},			false, false,	0,			true);
+void StatePlayTungstenMonoxide::registerInput() {
+  using namespace application;
+  registerInputState("Exit", {Key::Escape}, {}, {}, {}, {}, {}, false, false, 0, false);
+  // InputStateManager treats every key in one definition as a chord (logical
+  // AND), not alternatives. Register keyboard alternatives separately so W
+  // works without also requiring UpArrow, and likewise for steering/braking.
+  registerInputState("Accelerate", {}, {}, {Key::W}, {}, {}, {}, false, false, 0, true);
+  registerInputState("AccelerateAlt", {}, {}, {Key::UpArrow}, {}, {}, {}, false, false, 0, true);
+  registerInputState("Brake", {}, {}, {Key::S}, {}, {}, {}, false, false, 0, true);
+  registerInputState("BrakeAlt", {}, {}, {Key::DownArrow}, {}, {}, {}, false, false, 0, true);
+  registerInputState("SteerLeft", {}, {}, {Key::A}, {}, {}, {}, false, false, 0, true);
+  registerInputState("SteerLeftAlt", {}, {}, {Key::LeftArrow}, {}, {}, {}, false, false, 0, true);
+  registerInputState("SteerRight", {}, {}, {Key::D}, {}, {}, {}, false, false, 0, true);
+  registerInputState("SteerRightAlt", {}, {}, {Key::RightArrow}, {}, {}, {}, false, false, 0, true);
+  registerInputState("Respawn", {Key::R}, {}, {}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraZoomIn", {}, {}, {Key::LeftBracket}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraZoomOut", {}, {}, {Key::RightBracket}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraUp", {}, {}, {Key::O}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraDown", {}, {}, {Key::K}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraAimUp", {}, {}, {Key::P}, {}, {}, {}, false, false, 0, true);
+  registerInputState("CameraAimDown", {}, {}, {Key::L}, {}, {}, {}, false, false, 0, true);
 }
 
-void StatePlayTungstenMonoxide::createGameObjects(application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args)
-{
-	VAR_UNUSED(resourceMgr);
-	VAR_UNUSED(renderSystem);
-	VAR_UNUSED(renderResourceMgr);
-	VAR_UNUSED(args);
+mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
+    application::resourcesystem::ResourceManager* resourceMgr, mpp::ResourceManager* renderResourceMgr) {
+  auto game = static_pointer_cast<Game>(resourceMgr->getResource("TungstenMonoxide", ""));
+  mpp::ModelSerializer serializer(renderResourceMgr);
+  try {
+    serializer.load(game->getShipModelPath());
+  } catch (exception const& error) {
+    throw application::resourcesystem::ResourceException(game.get(), "failed to load ShipModel: " + string(error.what()));
+  }
 
-	auto track = resourceMgr->getResource("NewTrack", "Tracks");
-    
-	mTrackModel = track->getMppResource();
-    mTrackModel->acquire(&mWrangler);
+  auto material = resourceMgr->getResource(game->getShipMaterial(), "");
+  if (!material || material->getType() != "Material")
+    throw application::resourcesystem::ResourceException(game.get(), "ShipModel Material is missing or is not a Material resource.");
 
-    mScene->add3dModel(mTrackModel);
+  auto spec = shipMeshSpecification();
+  auto stream = new mpp::ProgrammaticModelStream(renderResourceMgr);
+  for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
+    if (serializer.getPrimitiveType(i) != mpp::mesh::Primitive::Type::Triangles)
+      throw application::resourcesystem::ResourceException(game.get(), "ShipModel contains a non-triangle mesh.");
+    int indexWidth = serializer.getIndexWidth(i);
+    if (indexWidth != 16 && indexWidth != 32)
+      throw application::resourcesystem::ResourceException(
+          game.get(), "ShipModel must contain indexed meshes with 16- or 32-bit indices.");
+    auto meshId = stream->createMesh(serializer.getName(i), spec, material->getQualifiedName(), indexWidth);
+    size_t vertexCount, stride;
+    shared_ptr<const int8_t> vertexData;
+    serializer.getVertexStream(i, 0, &vertexCount, &stride, &vertexData);
+    if (stride != spec.getVertexStrideInBytes())
+      throw application::resourcesystem::ResourceException(game.get(), "ShipModel has an unsupported vertex layout.");
+    stream->addVertexData(meshId, vector<int8_t>(vertexData.get(), vertexData.get() + vertexCount * stride));
+    auto indices = serializer.getIndexData(i);
+    for (int triangle = 0; triangle < serializer.getPrimitiveCount(i); ++triangle) {
+      uint32_t corners[3];
+      for (int corner = 0; corner < 3; ++corner) {
+        const size_t index = static_cast<size_t>(triangle) * 3 + corner;
+        if (indexWidth == 16) {
+          uint16_t value;
+          memcpy(&value, indices.get() + index * sizeof(value), sizeof(value));
+          corners[corner] = value;
+        } else {
+          memcpy(&corners[corner], indices.get() + index * sizeof(corners[corner]),
+                 sizeof(corners[corner]));
+        }
+        if (corners[corner] >= vertexCount)
+          throw application::resourcesystem::ResourceException(
+              game.get(), "ShipModel contains an out-of-range triangle index.");
+      }
+      stream->addTriangle(meshId, corners[0], corners[1], corners[2]);
+    }
+  }
+
+  auto resource = renderResourceMgr->declareResource("TungstenMonoxide.ShipModel", mpp::ResourceStreamPtr(stream)).first;
+  resource->acquire(&mWrangler);
+  resource->load();
+  return resource;
 }
 
-void StatePlayTungstenMonoxide::destroyGameObjects()
-{
-  mTrackModel->release(&mWrangler);
+void StatePlayTungstenMonoxide::createGameObjects(
+    application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem,
+    mpp::ResourceManager* renderResourceMgr, void* args) {
+  VAR_UNUSED(renderSystem);
+  VAR_UNUSED(args);
+  auto trackResource = resourceMgr->getResource("NewTrack", "Tracks");
+  mTrackModel = trackResource->getMppResource();
+  mTrackModel->acquire(&mWrangler);
+  // Map::load only declares the render model because it can run on a worker
+  // without an OpenGL context. MapLoad normally uploads it on the main thread;
+  // keep this defensive for direct Play-state setup paths.
+  if (!mTrackModel->isLoaded()) mTrackModel->load();
+  mTrackSceneModel = mScene->add3dModel(mTrackModel);
+  mTrackSceneModel->resetTransform();
+
+  if (!getMap()->getTrack())
+    throw application::resourcesystem::ResourceException(trackResource.get(), "Track resource has no compiled TrackData.");
+  mGameSession = make_unique<tox::GameSession>(getMap()->getTrack(), tox::StartGrid::DEFAULT_SHIP_COUNT);
+  auto const& poses = getMap()->getStartGridPoses();
+  if (poses.size() != mGameSession->ships().size())
+    throw application::resourcesystem::ResourceException(trackResource.get(), "starting-grid pose count does not match the game roster.");
+  for (size_t i = 0; i < poses.size(); ++i) mGameSession->ships()[i].placeAt(mGameSession->simulation(), poses[i]);
+
+  mShipModel = createShipModel(resourceMgr, renderResourceMgr);
+  mShipSceneModels.reserve(mGameSession->ships().size());
+  mShipVisualStates.resize(mGameSession->ships().size());
+  for (size_t i = 0; i < mGameSession->ships().size(); ++i) {
+    mShipSceneModels.push_back(mScene->add3dModel(mShipModel));
+    auto const& physics = mGameSession->ships()[i].physics;
+    mShipVisualStates[i].groundPos = physics.groundPos;
+    mShipVisualStates[i].up = physics.up;
+    mShipVisualStates[i].airborne = physics.airborne;
+    applyShipTransform(mShipSceneModels[i], physics.groundPos.clone().addScaledVector(physics.up, 1.0),
+                       physics.up, physics.forward, 0, 0);
+  }
 }
 
-void StatePlayTungstenMonoxide::setupEntityFacades()
-{
+void StatePlayTungstenMonoxide::destroyGameObjects() {
+  mGameSession.reset();
+  mShipVisualStates.clear();
+  for (auto const& model : mShipSceneModels) mScene->remove3dModel(model);
+  mShipSceneModels.clear();
+  if (mTrackSceneModel) mScene->remove3dModel(mTrackSceneModel);
+  mTrackSceneModel.reset();
+  if (mShipModel) mShipModel->release(&mWrangler);
+  mShipModel.reset();
+  if (mTrackModel) mTrackModel->release(&mWrangler);
+  mTrackModel.reset();
 }
+
+void StatePlayTungstenMonoxide::setupEntityFacades() {}
+void StatePlayTungstenMonoxide::setupEntities() {}
 
 void StatePlayTungstenMonoxide::setupScene() {
-	// Place the camera at the first starting-grid slot (Map::getStartGridPoses(), populated from
-	// the Track resource's <StartGrid> -- see cpp/editor's buildTrackResourceXml/StartGrid.hpp).
-	// Empty for a Track resource exported before that field existed, so the camera is simply left
-	// at createCamera()'s hardcoded default in that case rather than indexing an empty vector.
-	auto const& startGridPoses = getMap()->getStartGridPoses();
-	if (!startGridPoses.empty())
-	{
-		tox::Pose const& pose = startGridPoses[0];
-
-		auto camera = static_cast<ReactiveCamera*>(mCamera3d.get());
-		camera->setPosition(glm::vec3((float)pose.pos.x, (float)pose.pos.y, (float)pose.pos.z));
-		camera->setOrientation(glm::vec3((float)pose.forward.x, (float)pose.forward.y, (float)pose.forward.z),
-			glm::vec3((float)pose.up.x, (float)pose.up.y, (float)pose.up.z));
-	}
+  mScene->setClearColour(mpp::Colour::Black);
+  updateShips(0.0f);
+  updateChaseCamera(0.0f);
 }
 
-void StatePlayTungstenMonoxide::setupEntities()
-{
+void StatePlayTungstenMonoxide::setup(
+    application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem,
+    mpp::ResourceManager* renderResourceMgr, void* args) {
+  auto transitionData = static_cast<applib::StateTransitionData*>(args);
+  mTransitionData.mapData.prevMap.map = transitionData->mapData.nextMap.map;
+  mTransitionData.userData = transitionData->userData;
+  mMap = transitionData->mapData.nextMap.map;
+  createInput();
+  createScreenFxManagement();
+  createEntityManagement();
+  createCamera();
+  mEntityMgr->setRenderersVisible(false);
+  loadAllReferencedResources();
+  registerInput();
+  createGameObjects(resourceMgr, renderSystem, renderResourceMgr, args);
+  setupScene();
+  transitionData->userData = nullptr;
 }
 
-void StatePlayTungstenMonoxide::setup(application::resourcesystem::ResourceManager* resourceMgr, mpp::RenderSystem* renderSystem, mpp::ResourceManager* renderResourceMgr, void* args)
-{
-	WP_UNUSED(resourceMgr);
+void StatePlayTungstenMonoxide::updatePreInput(float frameTime) { VAR_UNUSED(frameTime); }
+void StatePlayTungstenMonoxide::updatePreEntities(float frameTime) { VAR_UNUSED(frameTime); }
+void StatePlayTungstenMonoxide::updateAudio(float frameTime) { VAR_UNUSED(frameTime); }
 
-	auto transitionData = static_cast<applib::StateTransitionData*>(args);
-
-	// Set up objects to pass to next state
-	mTransitionData.mapData.prevMap.map = transitionData->mapData.nextMap.map;
-	mTransitionData.userData = transitionData->userData;
-
-	mMap = transitionData->mapData.nextMap.map;
-
-	createInput();
-	createScreenFxManagement();
-	createEntityManagement();
-
-	createCamera();
-
-	// We want to turn off the default entity rendering from AppLib here, as it is for 2d entities,
-	// and these should only be visible in the minimap
-	mEntityMgr->setRenderersVisible(false);
-
-	loadAllReferencedResources();
-
-	// Set up input
-	registerInput();
-
-	// For subclasses
-	createGameObjects(resourceMgr, renderSystem, renderResourceMgr, args);
-
-	setupScene();
-
-	// Start audio events
-	if (mwAudioSystem)
-	{
-		for (int i = 0; i < 1; ++i)
-		{
-			//auto event = mwAudioSystem->startEvent();
-		}
-	}
-
-	// Finish move of transition data
-	transitionData->userData = nullptr;
+void StatePlayTungstenMonoxide::updatePostEntities(float frameTime) {
+  updateShips(frameTime);
+  if (mwAudioSystem) updateAudio(frameTime);
 }
 
-void StatePlayTungstenMonoxide::updatePreInput(float frameTime)
-{
-	VAR_UNUSED(frameTime);
+void StatePlayTungstenMonoxide::exit() { throw wp::application::ReturnFromStateException(&mTransitionData); }
+
+void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates, float frameTime) {
+  if (!mGameSession) return;
+  tox::ControlIntent player;
+  for (auto const& state : activeStates) {
+    if (state == "Exit")
+      exit();
+    else if (state == "Accelerate" || state == "AccelerateAlt")
+      player.throttle = 1;
+    else if (state == "Brake" || state == "BrakeAlt")
+      player.brake = 1;
+    else if (state == "SteerLeft" || state == "SteerLeftAlt")
+      player.steer += 1;
+    else if (state == "SteerRight" || state == "SteerRightAlt")
+      player.steer -= 1;
+    else if (state == "Respawn")
+      player.respawn = true;
+    else if (state == "CameraZoomIn")
+      mCameraZoom = max(CAM_ZOOM_MIN, mCameraZoom / (1 + CAM_ZOOM_RATE * frameTime));
+    else if (state == "CameraZoomOut")
+      mCameraZoom = min(CAM_ZOOM_MAX, mCameraZoom * (1 + CAM_ZOOM_RATE * frameTime));
+    else if (state == "CameraUp")
+      mCameraHeight = min(CAM_UP_MAX, mCameraHeight + CAM_UP_RATE * frameTime);
+    else if (state == "CameraDown")
+      mCameraHeight = max(CAM_UP_MIN, mCameraHeight - CAM_UP_RATE * frameTime);
+    else if (state == "CameraAimUp")
+      mLookAtHeight = min(LOOK_AT_UP_MAX, mLookAtHeight + LOOK_AT_UP_RATE * frameTime);
+    else if (state == "CameraAimDown")
+      mLookAtHeight = max(LOOK_AT_UP_MIN, mLookAtHeight - LOOK_AT_UP_RATE * frameTime);
+  }
+  vector<tox::ControlIntent> intents(mGameSession->ships().size());
+  if (!intents.empty()) intents[0] = player;
+  if (!mShipVisualStates.empty()) mShipVisualStates[0].steer = player.steer;
+  mGameSession->step(intents, frameTime);
+  for (auto const& event : mGameSession->events())
+    if (event.shipIndex == 0 && event.type == tox::GameEventType::LapCompleted)
+      mLapFlashUntil = mGameSession->sessionTime() + 0.5;
+  mEntityMgr->setRenderersVisible(false);
 }
 
-void StatePlayTungstenMonoxide::updatePreEntities(float frameTime)
-{
+void StatePlayTungstenMonoxide::updateShips(float frameTime) {
+  if (!mGameSession) return;
+  for (size_t i = 0; i < mGameSession->ships().size(); ++i) {
+    auto const& physics = mGameSession->ships()[i].physics;
+    auto& visual = mShipVisualStates[i];
+    if (visual.airborne && !physics.airborne) {
+      double impact = max(0.0, -visual.lastVerticalVelocity);
+      visual.landingBounce += min(3.2, impact * 0.09);
+      visual.landingBounceVel += min(16.0, impact * 0.35);
+    }
+    visual.airborne = physics.airborne;
+    visual.lastVerticalVelocity = physics.verticalVel;
+
+    double expectedStep = abs(physics.speed) * frameTime * 1.5 + 0.16;
+    if (visual.groundPos.distanceTo(physics.groundPos) > expectedStep)
+      visual.groundPos.lerp(physics.groundPos, min(1.0, frameTime * 18.0));
+    else
+      visual.groundPos = physics.groundPos;
+    visual.up.lerp(physics.up, min(1.0, frameTime * 18.0)).normalize();
+    visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
+    visual.landingBounceVel *= exp(-7.0 * frameTime);
+    visual.landingBounce += visual.landingBounceVel * frameTime;
+    visual.bobTime += frameTime;
+    bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
+    double hover = idle ? 1.0 : 1.0 + sin(visual.bobTime * 6.0) * 0.06 + visual.landingBounce;
+    double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
+    double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
+    visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);
+    visual.pitch += (physics.speed * 0.004 - visual.pitch) * min(1.0, frameTime * 6.0);
+    tox::Vec3 position = visual.groundPos.clone().addScaledVector(visual.up, hover);
+    applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, visual.pitch, visual.bank);
+  }
 }
 
-void StatePlayTungstenMonoxide::updateAudio(float frameTime)
-{
+void StatePlayTungstenMonoxide::updateChaseCamera(float frameTime) {
+  VAR_UNUSED(frameTime);
+  if (!mGameSession || mGameSession->ships().empty()) return;
+  auto camera = static_cast<ReactiveCamera*>(mCamera3d.get());
+  camera->setAspectRatio(mwRenderSystem->getWindowWidth() / static_cast<float>(mwRenderSystem->getWindowHeight()));
+  auto const& physics = mGameSession->ships()[0].physics;
+  auto const& visual = mShipVisualStates[0];
+  tox::Vec3 up = visual.up;
+  tox::Vec3 forward = physics.forward.clone().addScaledVector(up, -physics.forward.dot(up)).normalize();
+  tox::Vec3 center = visual.groundPos.clone().addScaledVector(up, SHIP_CENTER_HEIGHT);
+  tox::Vec3 position = center.clone().addScaledVector(forward, -CAM_BACK * mCameraZoom).addScaledVector(up, mCameraHeight * mCameraZoom);
+  tox::Vec3 lookAt = center.clone().addScaledVector(forward, LOOK_AT_FORWARD).addScaledVector(up, mLookAtHeight);
+  camera->setPosition(toGlm(position));
+  camera->setOrientation(toGlm(lookAt.clone().sub(position).normalize()), toGlm(up));
 }
 
-void StatePlayTungstenMonoxide::updatePostEntities(float frameTime)
-{
-	VAR_UNUSED(frameTime);
+void StatePlayTungstenMonoxide::updateCamera(float frameTime) { updateChaseCamera(frameTime); }
+void StatePlayTungstenMonoxide::updatePreRenderers(float frameTime) { VAR_UNUSED(frameTime); }
+void StatePlayTungstenMonoxide::suspendImpl(void* args) { VAR_UNUSED(args); }
 
-	if (mwAudioSystem)
-	{
-		updateAudio(frameTime);
-	}
+void StatePlayTungstenMonoxide::resumeImpl(void* args) {
+  if (args) mExitScheduled = *static_cast<bool const*>(args);
 }
 
-void StatePlayTungstenMonoxide::exit()
-{
-	throw wp::application::ReturnFromStateException(&mTransitionData);
+void StatePlayTungstenMonoxide::updateImpl(float frameTime) {
+  mGlobalTime += frameTime;
+  if (mExitScheduled) exit();
+  updatePreInput(frameTime);
+  updateInput(frameTime);
+  updatePreEntities(frameTime);
+  updateEntityManagement(frameTime);
+  updatePostEntities(frameTime);
+  updateCamera(frameTime);
+  updatePreRenderers(frameTime);
+  updateScreenFxManagement(frameTime);
+  updateRenderers(frameTime);
 }
 
-void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates, float frameTime)
-{
-	VAR_UNUSED(activeStates);
-	VAR_UNUSED(frameTime);
-
-	for (auto const& state : activeStates)
-	{
-		if (state == "Exit")
-		{
-			exit();
-		}
-	}
-
-	mEntityMgr->setRenderersVisible(false);
+void StatePlayTungstenMonoxide::renderHud(mpp::RenderSystem* renderSystem) const {
+  if (!mGameSession || mGameSession->ships().empty()) return;
+  auto const& ship = mGameSession->ships()[0];
+  bool flashing = mGameSession->sessionTime() < mLapFlashUntil;
+  string checkpoints = "Checkpoints ";
+  for (auto const& id : ship.race.intermediateIds) checkpoints += (flashing || ship.race.hit.count(id)) ? "[X] " : "[ ] ";
+  vector<string> raceText{
+      checkpoints,
+      "Laps  " + to_string(ship.race.laps),
+      "Lap   " + formatTime(mGameSession->sessionTime() - ship.race.lapStartedAt),
+      "Total " + formatTime(mGameSession->sessionTime() - ship.race.totalStartedAt)};
+  renderSystem->renderText(raceText, 16, 16, mpp::Colour::White);
+  string speed = to_string(static_cast<int>(round(abs(ship.physics.speed) * 3.6))) + " km/h";
+  if (ship.physics.boostActive) speed += "  BOOST";
+  int speedX = max(16, static_cast<int>(renderSystem->getWindowWidth()) - 180);
+  int speedY = max(16, static_cast<int>(renderSystem->getWindowHeight()) - 40);
+  renderSystem->renderText(speed, speedX, speedY,
+                           ship.physics.boostActive ? mpp::Colour::Yellow : mpp::Colour::White);
 }
 
-void StatePlayTungstenMonoxide::updatePreRenderers(float frameTime)
-{
-}
-
-void StatePlayTungstenMonoxide::suspendImpl(void* args)
-{
-	VAR_UNUSED(args);
-}
-
-void StatePlayTungstenMonoxide::resumeImpl(void* args)
-{
-	if (args)
-	{
-		bool const* shouldExit = static_cast<bool const*>(args);
-		mExitScheduled = *shouldExit;
-	}
-}
-
-void StatePlayTungstenMonoxide::updateImpl(float frameTime)
-{
-	mGlobalTime += frameTime;
-
-	if (mExitScheduled)
-	{
-		exit();
-	}
-
-	updatePreInput(frameTime);
-	updateInput(frameTime);
-	updatePreEntities(frameTime);
-	updateEntityManagement(frameTime);
-	updatePostEntities(frameTime);
-	updateCamera(frameTime);
-	updatePreRenderers(frameTime);
-	updateScreenFxManagement(frameTime);
-	updateRenderers(frameTime);
-}
-
-void StatePlayTungstenMonoxide::renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
-{
-	WP_UNUSED(resourceMgr);
-
-	// Screen FX setup
-	//mScreenFxMgr->preRender(getViewCentreWorldPosition());
-
-	renderSystem->setAmbientColour(mpp::Colour::Grey25);
-    renderSystem->setLightCount(1);
-    renderSystem->setLight1Colour(mpp::Colour::White);
-
-	renderSystem->renderScene(mScene, mCamera3d, { 0.0f, 0.0f }, getName());
-
-	// Render post-effects
-	//mScreenFxMgr->postRender(renderSystem);
+void StatePlayTungstenMonoxide::renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
+  WP_UNUSED(resourceMgr);
+  renderSystem->setAmbientColour(mpp::Colour::Grey25);
+  renderSystem->setLightCount(1);
+  renderSystem->setLight1Colour(mpp::Colour::White);
+  renderSystem->renderScene(mScene, mCamera3d, {0.0f, 0.0f}, getName());
+  renderHud(renderSystem);
 }

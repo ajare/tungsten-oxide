@@ -130,6 +130,19 @@ if (MSVC)
 endif()
 if (WIN32)
   target_compile_definitions(TungstenMonoxide PRIVATE UNICODE _UNICODE)
+
+  # Launcher loads this application DLL dynamically, so CMake cannot discover
+  # its runtime dependencies from Launcher's link graph. Keep the runnable
+  # launcher directory complete after every application build.
+  if (TARGET Launcher)
+    add_custom_command(TARGET TungstenMonoxide POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Launcher>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:TungstenMonoxide>"
+        $<TARGET_RUNTIME_DLLS:TungstenMonoxide>
+        "$<TARGET_FILE_DIR:Launcher>"
+      COMMAND_EXPAND_LISTS)
+  endif()
 else()
   message(WARNING "TungstenMonoxide is a Windows application DLL and has not been ported off Windows.")
 endif()

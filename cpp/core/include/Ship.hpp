@@ -1,7 +1,6 @@
-// Ship.hpp — the stateful physics struct (Ship) with the full state a golden
-// trace serializes: every createPhysicsState() field plus the per-ship detection
-// bookkeeping. Field names match web/js/track-physics.js and test/parity/state.js so
-// the transliteration reads 1:1 and the harness can compare field-for-field.
+// Ship.hpp — behavior-owning ship plus the complete state serialized by golden
+// traces. Ship::step performs integration/collision; Simulation supplies shared
+// immutable track queries and keeps a compatibility facade for existing callers.
 #pragma once
 #include <map>
 #include <set>
@@ -10,6 +9,9 @@
 #include "Vec3.hpp"
 
 namespace tox {
+
+class Simulation;
+struct StepResult;
 
 struct Physics {
   double heading{0.0};
@@ -82,6 +84,12 @@ struct Pose {
 };
 
 struct Ship {
+  // Canonical per-ship behavior entry points. Simulation remains a shared
+  // track-query/compatibility facade for existing parity consumers.
+  StepResult step(const Simulation& simulation, double dt, double throttle, double brake, double steer);
+  void respawn(const Simulation& simulation);
+  void placeAt(const Simulation& simulation, const Pose& pose, const std::string& disarmedId = {});
+
   Physics physics;
   Vec3 prevTriggerPos;
   std::map<std::string, bool> zoneInside;

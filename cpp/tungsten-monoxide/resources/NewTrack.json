@@ -1,0 +1,37 @@
+{
+  "version": 10,
+  "name": "New Track",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": {"maxSpeed":140,"accel":71,"turnSpeed":137.5,"weight":1000},
+  "zones": [],
+  "triggers": [{"id":"starter-finish","type":"checkpoint","role":"finish","host":{"kind":"path","pathId":"starter-path","t":0.0025},"width":36,"height":12,"rotation":0,"direction":"forward"},{"id":"starter-cp1","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.2525},"width":36,"height":12,"rotation":0,"direction":"both"},{"id":"starter-cp2","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.5025},"width":36,"height":12,"rotation":0,"direction":"both"},{"id":"starter-cp3","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.7525},"width":36,"height":12,"rotation":0,"direction":"both"}],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "meshAssets": {},
+  "meshes": [],
+  "textureAssets": {},
+  "paths": [
+    { "id": "starter-path", "closed": true, "points": [
+      { "type": "position", "id": "", "pos": [1332.907, 0, 0], "weight": 1 },
+      { "type": "position", "id": "", "pos": [1154.331, 0, 666.453], "weight": 1 },
+      { "type": "position", "id": "", "pos": [666.453, 0, 1154.331], "weight": 1 },
+      { "type": "position", "id": "", "pos": [0, 0, 1332.907], "weight": 1 },
+      { "type": "position", "id": "", "pos": [-666.453, 0, 1154.331], "weight": 1 },
+      { "type": "position", "id": "", "pos": [-1154.331, 0, 666.453], "weight": 1 },
+      { "type": "position", "id": "", "pos": [-1332.907, 0, 0], "weight": 1 },
+      { "type": "position", "id": "", "pos": [-1154.331, 0, -666.453], "weight": 1 },
+      { "type": "position", "id": "", "pos": [-666.453, 0, -1154.331], "weight": 1 },
+      { "type": "position", "id": "", "pos": [0, 0, -1332.907], "weight": 1 },
+      { "type": "position", "id": "", "pos": [666.453, 0, -1154.331], "weight": 1 },
+      { "type": "position", "id": "", "pos": [1154.331, 0, -666.453], "weight": 1 },
+      { "type": "roll", "t": 0, "roll": 0 },
+      { "type": "roll", "t": 0.5, "roll": 0 },
+      { "type": "width", "t": 0, "width": 36 },
+      { "type": "width", "t": 0.5, "width": 36 },
+      { "type": "crossSection", "t": 0, "curvature": 0, "tightness": 1, "thickness": 4 },
+      { "type": "crossSection", "t": 0.5, "curvature": 0, "tightness": 1, "thickness": 4 }
+    ] }
+  ]
+}
+

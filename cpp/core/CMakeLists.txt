@@ -36,6 +36,7 @@ set(CORE_HEADERS
   include/TrackCore.hpp
   include/TrackDefinition.hpp
   include/TrackGeometry.hpp
+  include/TrackCollision.hpp
   include/TrackMesh.hpp
   include/Track.hpp
   include/Ship.hpp
@@ -49,9 +50,11 @@ add_library(core STATIC
   src/TrackCore.cpp
   src/Track.cpp
   src/TrackBake.cpp
+  src/TrackCollision.cpp
   src/TrackMesh.cpp
   src/TrackLoader.cpp
   src/Simulation.cpp
+  src/Ship.cpp
   src/StartGrid.cpp
   src/ShipFactory.cpp
   src/GameSession.cpp

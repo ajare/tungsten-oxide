@@ -61,7 +61,7 @@ struct MppModelExportResult {
 // old behavior) so existing self-check call sites that don't have a MaterialCatalog handy still
 // compile unchanged.
 MppModelExportResult exportTrackToMppModel(const tox::Track& track,
-                                            const std::map<std::string, std::string>& trackMaterialToMaterial = {});
+                                           const std::map<std::string, std::string>& trackMaterialToMaterial = {});
 
 // Builds a standalone Willpower <Resources> XML document (same schema as
 // cpp/tungsten-monoxide/resources/Resources.xml) declaring this track as a `type="Track"`
@@ -78,27 +78,13 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track,
 // -- this file only ever emits <DependentResource ref="..."> entries, never full material/program/
 // texture definitions.
 //
-// mppModelFileName is carried as <Definitions><Definition factory="Track"><File>...</File>
-// </Definitions>, NOT a `location=` attribute on the Resource element: this Track resource is
-// always composite (it lists TrackMaterial dependents), and
-// ResourceManager::instantiateResource() (cpp/willpower/willpower.application) unconditionally
-// discards a composite resource's own `location`/source, so `location=` would be silently ignored.
-// MapTungstenMonoxideDefinitionFactory::create() (cpp/tungsten-monoxide) reads <File> back out
-// into Map::mModelFileName. The (Map, "Track") definition factory it's registered under
-// (cpp/tungsten-monoxide/src/DLL.cpp) is also mandatory for a different reason: a resource with no
-// <Definitions> at all still gets an implicit factory="" one synthesized by
-// ResourceLocation::scanResourceElement(), and no (Map, "") factory is registered -- omitting
-// <Definitions> entirely throws "could not find a definition factory" at load time.
-//
-// startGridPoses is also carried inside <Definition factory="Track">, as a sibling <StartGrid>
-// element holding one <Pose> per slot (index, position, forward, and surface-up/normal as
-// px/py/pz, fx/fy/fz, nx/ny/nz attributes) -- the caller computes these once via
-// tox::StartGrid::startingGridPoses(sim, bakedTrack, ...) (see StartGrid.hpp) and passes the
-// settled result in, so this function stays a pure XML-string-builder with no tox::Simulation
-// dependency of its own. MapTungstenMonoxideDefinitionFactory::create() reads <StartGrid> back out
-// into Map::mStartGridPoses.
-std::string buildTrackResourceXml(const TrackDefinition& track, const std::string& mppModelFileName,
-                                   const std::vector<tox::Pose>& startGridPoses,
-                                   const std::map<std::string, std::string>& trackMaterialToMaterial = {});
+// Model and schema-10 JSON filenames are emitted as <ModelFile> and <TrackData>. <TrackMeshes>
+// contains every baked PathSurface/MeshSurface batch id exactly once; Map::load validates those
+// selected .mppmodel triangles against the JSON bake before making them authoritative collision.
+// All paths are resource-directory relative. Starting-grid poses are deliberately not duplicated
+// here: Map::load regenerates and triangle-settles the fixed eight-slot grid from TrackData.
+std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
+                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
+                                  const std::map<std::string, std::string>& trackMaterialToMaterial = {});
 
 }  // namespace editor
