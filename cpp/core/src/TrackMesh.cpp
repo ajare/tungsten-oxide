@@ -119,6 +119,9 @@ MeshRegion compilePlacement(const MeshAssetDefinition& asset, const AssetTopolog
   region.assetId = asset.id;
   region.elevation = placement.elevation;
   region.railHeight = asset.railHeight;
+  // Real placed mesh assets never had a separate jump-clearance height -- keep it identical to
+  // railHeight so nothing changes for them; only reservations set these two independently (M6).
+  region.railClearanceHeight = asset.railHeight;
   region.bounds = {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(),
                    std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
 
@@ -213,6 +216,13 @@ bool MeshRegion::withinBounds(double x, double z, double padding) const {
   return x >= bounds.minX - padding && x <= bounds.maxX + padding && z >= bounds.minZ - padding && z <= bounds.maxZ + padding;
 }
 
+bool MeshRegion::withinBounds(double x0, double z0, double x1, double z1, double padding) const {
+  const double minX = std::min(x0, x1), maxX = std::max(x0, x1);
+  const double minZ = std::min(z0, z1), maxZ = std::max(z0, z1);
+  return maxX >= bounds.minX - padding && minX <= bounds.maxX + padding && maxZ >= bounds.minZ - padding &&
+         minZ <= bounds.maxZ + padding;
+}
+
 std::optional<double> segmentCrossing(const Vec2d& a, const Vec2d& b, const Vec2d& c, const Vec2d& d) {
   const double rx = b.x - a.x, rz = b.y - a.y;
   const double sx = d.x - c.x, sz = d.y - c.y;
@@ -233,7 +243,15 @@ MeshMoveResult slideAlongRails(const MeshRegion& region, const Vec2d& from, cons
     double nearestT = 0;
     for (const auto& rail : region.rails) {
       const auto t = segmentCrossing(current, target, rail.a, rail.b);
-      if (t && (!nearest || *t < nearestT)) {
+      if (!t) continue;
+      // CENTRAL_RESERVATION_PLAN.md M6: a one-way rail only blocks a crossing heading along its
+      // own +normal direction -- the reverse direction (e.g. driving back off a Capped
+      // reservation's floor) passes through as if the rail weren't there at all.
+      if (region.oneWayRails) {
+        const double directionX = target.x - current.x, directionZ = target.y - current.y;
+        if (directionX * rail.nx + directionZ * rail.nz >= 0) continue;
+      }
+      if (!nearest || *t < nearestT) {
         nearest = &rail;
         nearestT = *t;
       }

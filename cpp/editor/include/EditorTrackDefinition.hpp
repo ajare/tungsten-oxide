@@ -64,16 +64,23 @@ struct ReservationEndCap {
 enum class ReservationWidthMode { Fixed,
                                   Percent };
 
+// Mirrors core's tox::ReservationInteriorMode.
+enum class ReservationInteriorMode { Capped,
+                                     Uncapped };
+
 // A central reservation: a void carved out of the road between t0 and t1, tapering from
 // `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint. `width`
 // is metres when `widthMode` is Fixed, or a percentage in [0,100] of the road's own width when
 // Percent. `wallHeight` <= 0 means "use the engine default" -- see core's
 // tox::ReservationDefinition, which this mirrors (CENTRAL_RESERVATION_PLAN.md).
+// `railClearanceHeight` <= 0 likewise means the engine default; independent of `wallHeight` (M6).
 struct Reservation {
   std::string id;
   double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
   ReservationWidthMode widthMode{ReservationWidthMode::Fixed};
   ReservationEndCap endCap0, endCap1;
+  ReservationInteriorMode interiorMode{ReservationInteriorMode::Capped};
+  double railClearanceHeight{0.0};
 };
 
 struct Path {

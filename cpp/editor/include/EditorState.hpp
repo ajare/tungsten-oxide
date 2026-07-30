@@ -1970,9 +1970,11 @@ private:
     // tox::ReservationWidthMode. The old floor of 1.0 only made sense as a minimum metres value;
     // Percent just needs a valid percentage.
     r.width = r.widthMode == ReservationWidthMode::Percent ? std::clamp(r.width, 0.0, 100.0) : std::max(1.0, r.width);
-    // wallHeight <= 0 means "use the engine default" (see tox::ReservationDefinition), so only
-    // clamp away negative values, not zero.
+    // wallHeight/railClearanceHeight <= 0 means "use the engine default" (see
+    // tox::ReservationDefinition), so only clamp away negative values, not zero. Independent of
+    // each other since CENTRAL_RESERVATION_PLAN.md M6.
     r.wallHeight = std::max(0.0, r.wallHeight);
+    r.railClearanceHeight = std::max(0.0, r.railClearanceHeight);
     // End-cap width never widens past the reservation's own midpoint width (a Mitred/Rounded end
     // narrower than the reservation makes a taper; wider would make it flare out instead). Only
     // enforceable here in Fixed mode, where `r.width` is metres -- in Percent mode it's a 0-100

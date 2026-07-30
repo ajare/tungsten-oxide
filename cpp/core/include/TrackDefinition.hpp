@@ -66,18 +66,28 @@ struct ReservationEndCap {
 enum class ReservationWidthMode { Fixed,
                                   Percent };
 
+// Whether a reservation's interior is sealed watertight (Capped) or a genuine open shaft through
+// the road slab (Uncapped) -- CENTRAL_RESERVATION_PLAN.md M6. Capped additionally gives the
+// reservation's synthetic MeshRegion a real, landable floor (polygons/triangles, not just rails);
+// Uncapped stays exactly as reservations have always behaved (no floor, a car falls through).
+enum class ReservationInteriorMode { Capped,
+                                     Uncapped };
+
 // A central reservation: a void carved out of the road between t0 and t1, tapering from
 // `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint
 // (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1]. endCap0 governs the t0 end, endCap1 the
 // t1 end. `wallHeight` <= 0 means "use TrackCore::DEFAULT_RAIL_HEIGHT" (also what a file predating
-// this field means) -- both the wall's render geometry and its collision height in Ship.cpp read
-// this same value (MeshRegion::railHeight), so one number is both the visual and physical barrier
-// height.
+// this field means) -- the wall's render geometry only; see `railClearanceHeight` for the physics
+// side, which used to read this same value but is now independent (M6).
 struct ReservationDefinition {
   std::string id;
   double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
   ReservationWidthMode widthMode{ReservationWidthMode::Fixed};
   ReservationEndCap endCap0, endCap1;
+  // M6: Capped/Uncapped interior, and the physics jump-clearance height (<= 0 means the engine
+  // default, same convention as wallHeight) -- decoupled from wallHeight's visual-only role.
+  ReservationInteriorMode interiorMode{ReservationInteriorMode::Capped};
+  double railClearanceHeight{0.0};
 };
 
 struct PathDefinition {

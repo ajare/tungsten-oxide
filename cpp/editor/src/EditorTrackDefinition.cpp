@@ -154,6 +154,8 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
       reservation.widthMode = stringOr(source, "widthMode") == "percent" ? ReservationWidthMode::Percent : ReservationWidthMode::Fixed;
       reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
       reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
+      reservation.interiorMode = stringOr(source, "interiorMode") == "uncapped" ? ReservationInteriorMode::Uncapped : ReservationInteriorMode::Capped;
+      reservation.railClearanceHeight = std::max(0.0, numberOr(source, "railClearanceHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
       reservation.endCap1 = parseEndCap(source, "endCap1");
       path.reservations.push_back(std::move(reservation));
@@ -435,6 +437,10 @@ json pathToJson(const Path& path) {
       // Omitted (rather than always writing 0) when unset, matching the loader's "<= 0 means
       // engine default" reading and every pre-existing reservation's file shape.
       if (reservation.wallHeight > 0.0) entry["wallHeight"] = reservation.wallHeight;
+      // Omitted (rather than always writing "capped") when Capped, matching the loader's default.
+      // Every reservation authored before M6 means Capped now, not merely "unspecified."
+      if (reservation.interiorMode == ReservationInteriorMode::Uncapped) entry["interiorMode"] = "uncapped";
+      if (reservation.railClearanceHeight > 0.0) entry["railClearanceHeight"] = reservation.railClearanceHeight;
       // Omitted (rather than always writing style "joined") when Joined, matching the loader's
       // parseEndCap default and every pre-existing reservation's file shape.
       auto endCapJson = [](const ReservationEndCap& cap) {

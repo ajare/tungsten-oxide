@@ -209,9 +209,10 @@
             "width": 14.0
           },
           "id": "res1",
+          "railClearanceHeight": 8.0,
           "t0": 0.1,
           "t1": 0.13,
-          "wallHeight": 20.0,
+          "wallHeight": 4.0,
           "width": 24.0
         }
       ]

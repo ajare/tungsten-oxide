@@ -33,6 +33,18 @@ struct MeshRail {
 struct MeshRegion {
   std::string id, assetId;
   double elevation{0.0}, railHeight{0.0};
+  // The physics jump-clearance height Ship.cpp reads (a car above elevation + this has cleared the
+  // rails) -- historically the same value as `railHeight` (which also drives the rendered rail
+  // wall's extrusion height) for every region, real placed mesh assets included. Kept exactly equal
+  // to `railHeight` for them (see TrackMesh.cpp's compilePlacement) so nothing changes there;
+  // reservations are the only regions that set it independently (CENTRAL_RESERVATION_PLAN.md M6).
+  double railClearanceHeight{0.0};
+  // When true, `rails` only blocks a crossing whose movement direction has a positive component
+  // along the rail's own outward normal -- the opposite direction (e.g. a car already inside a
+  // Capped reservation's floor driving back out) passes through unobstructed. False (the default)
+  // for every real placed mesh asset, matching slideAlongRails' original bidirectional behavior;
+  // only reservations set it (M6) -- see TrackMesh.cpp's slideAlongRails.
+  bool oneWayRails{false};
   MeshBounds bounds;
   std::vector<MeshPolygon> polygons;
   std::vector<MeshTriangle> triangles;
@@ -40,6 +52,11 @@ struct MeshRegion {
 
   bool contains(double x, double z) const;
   bool withinBounds(double x, double z, double padding = 0.0) const;
+  // Segment form: true if the swept move from (x0,z0) to (x1,z1) could touch the padded box, even
+  // when neither endpoint alone lies inside it (a fast-moving point can cross clean through a
+  // region's bounds within a single frame). Use this to gate any collision check driven by a
+  // per-frame displacement rather than a single sampled point.
+  bool withinBounds(double x0, double z0, double x1, double z1, double padding = 0.0) const;
 };
 
 struct MeshMoveResult {

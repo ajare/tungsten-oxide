@@ -282,6 +282,206 @@ lane for that span.
   on this pass (this machine is memory-constrained for parallel MSVC builds
   — full-solution builds must run target-by-target, not `-m` all-core).
 
+- [x] **M6 — Interior cap mode (Capped/Uncapped), from a 2026-07-30 grilling
+  session.** Today a reservation's void is a half-measure: the top surface has
+  a hole (M1), but the underside/`PathShell` mesh (built in `pathGeometry`
+  whenever any frame has `crossSectionThickness > 0`) stays solid and
+  uncarved underneath it, with no wall connecting the two — a naked,
+  unintentionally non-manifold seam. This milestone makes the choice
+  explicit and deliberate instead.
+
+  **Data model.** New `ReservationInteriorMode { Capped, Uncapped }` and
+  `interiorMode` field on `ReservationDefinition`/editor's `Reservation`.
+  JSON key `"interiorMode"`, values `"capped"`/`"uncapped"`; missing/malformed
+  defaults to **Capped** (the user's explicit call, not the safer-seeming
+  Uncapped, despite Capped being the bigger behavior change for every
+  existing track — see Testing below for the fallout). Also new
+  `railClearanceHeight` (double, `<=0` means engine default, same convention
+  as `wallHeight`): decouples the *visual* wall height (`wallHeight`, already
+  shipped) from the *physics* jump-clearance height (today both read the one
+  `wallHeight` value baked into `MeshRegion::railHeight`) — a tall visible
+  wall with an easy clearance, or an invisible wall with a strict one, are
+  both now expressible.
+
+  **Render geometry (`TrackBake.cpp`).**
+  - *Capped*: add a wall from the void's rim (the same tapered boundary
+    curve `reservationGeometry` already builds for the above-road barrier)
+    down to the shell's underside depth (`under(frame, point)`, i.e. offset
+    by `-crossSectionThickness` along the frame's normal) at the same
+    footprint, sealing the pit's sides. Material: `Tracks/DefaultShellMaterial`
+    (the shell's own, not the reservation wall's `DefaultRailMaterial`) — the
+    user's explicit requirement. The shell's own underside surface is
+    *unchanged*: it's already solid and already serves as the floor once the
+    sides are sealed, so no new floor render geometry is needed.
+  - *Uncapped*: carve a matching hole in the shell's underside instead, using
+    the exact same corner-wise gap-band algorithm the top surface's strip
+    already uses (§4f) — mirrored in `v` and offset down by thickness. No
+    connecting wall between the top rim and this new bottom rim: a genuine
+    open shaft, deliberately non-manifold, per the user's own framing.
+  - No-op wherever the path has no shell at all (`crossSectionThickness`
+    zero everywhere in the reservation's span) — nothing to cap or carve.
+  - Multiple reservations can share one path's single shell mesh, so the
+    shell-building code becomes per-ring cap-mode-aware via the existing
+    `Frame::reservationIndex` (already how the top surface knows which
+    reservation, if any, owns a given ring).
+
+  **Physics (`TrackBake.cpp`'s `reservationGeometry`, `TrackMesh.cpp`,
+  `Ship.cpp`).**
+  - *Uncapped*: unchanged from today — rails-only synthetic `MeshRegion`
+    (`polygons` empty), no floor, a car falls through exactly as it does now.
+  - *Capped*: the synthetic region additionally gets real `polygons`/
+    `triangles` — a flat floor matching the void's tapered footprint
+    (reusing the same boundary curve again), at **one** elevation (every
+    `MeshRegion` carries a single scalar `elevation`; this isn't a
+    reservation-specific limitation) sampled at the reservation's own
+    midpoint t, mirroring the precedent the width-mode feature's editor
+    preview already set for "the one representative point on a reservation."
+    This makes a Capped region behave like a real placed mesh region for
+    landing/ownership purposes, reusing Ship.cpp's existing landing code
+    paths rather than adding new ones.
+  - **Rails become one-directional for every reservation, Capped or
+    Uncapped** (harmless for Uncapped, since nothing can ever be "inside"
+    one to notice the asymmetry): block a car crossing from the track into
+    the void, never the reverse. Needed so a car that has landed on a Capped
+    floor can still drive back off it — today's bidirectional
+    `slideAlongRails` would trap it there permanently. Implemented as an
+    opt-in (a new `slideAlongRails` parameter, or a `MeshRegion` flag) that
+    only reservations set; real placed mesh assets (ramps, platforms) keep
+    today's bidirectional collision unchanged. Scoped to "is this a
+    reservation" via the existing stable `region.id.rfind("reservation-", 0)`
+    prefix match, **not** `polygons.empty()` — that trait stops reliably
+    identifying every reservation the moment Capped ones carry polygons too,
+    so Ship.cpp's existing `polygons.empty()` gate (the M2 "no floor, skip
+    ownership/airborne checks" branch) needs to switch to checking
+    `interiorMode`/floor-presence directly rather than emptiness once this
+    ships.
+
+  **Editor UI (`ReservationsPanel.cpp`).** A Capped/Uncapped combo (same
+  pattern as the end-cap style combo) and a "Rail clearance height (0 =
+  default)" field alongside the existing "Wall height (0 = default)" field.
+
+  **Implementation notes (what actually shipped, vs. the plan above).**
+  - The render/physics/UI plan above was built essentially as written: a
+    shared `carveQuad` helper was pulled out of the top surface's existing
+    corner-wise carve so the shell's new Uncapped carve (mirrored `v`,
+    reversed triangle winding to face downward) could reuse the identical
+    rule rather than risk the two hole shapes drifting apart. The Capped
+    seal and physics floor both live in `reservationGeometry`, reusing the
+    same `bounds` array (now carrying each ring's `crossSectionThickness`
+    too) the above-road wall already builds from.
+  - `MeshRegion` gained `railClearanceHeight` and `oneWayRails`.
+    `compilePlacement` (real placed mesh assets) sets
+    `railClearanceHeight = railHeight` unconditionally, so nothing changes
+    for them; only `reservationGeometry` sets the two independently.
+    `oneWayRails` defaults `false` everywhere except reservations. Ship.cpp's
+    airborne-wall-clearance check now reads `railClearanceHeight` instead of
+    `railHeight`, and its M2 corridor-wall loop's gate switched from
+    `!region.polygons.empty()` to `!region.oneWayRails`, exactly as planned.
+  - `slideAlongRails` (`TrackMesh.cpp`) gained the one-directional check: a
+    crossing is only a "hit" when the movement direction's dot product with
+    the rail's own normal has a particular sign. *Which* sign blocks entry
+    vs. exit isn't derivable from reading the code — `MeshRail::nx/nz` is
+    built per-boundary-curve, direction-of-travel-relative, with no obvious
+    a-priori "into the void" convention. Resolved empirically: implemented
+    one sign, ran the full suite (which already includes two physics
+    diagnostics that drive straight at a reservation wall from the track
+    side and assert a bounce), got a passing landing but a failing "drive
+    back off the floor" case, flipped the comparison, reran — both the new
+    exit case and the two pre-existing entry-blocking diagnostics passed.
+    Recorded as `>= 0` skip (not `<= 0`) in the final code; treat that sign
+    as load-bearing, not incidental, if this is ever touched again.
+  - **A real, previously-latent gap surfaced while writing the landing
+    test, not anticipated in the plan above**: the analytical corridor
+    surface (`curvedSurfaceFrame`/`corridorContains`, Ship.cpp's airborne-
+    landing fallback) is built purely from the road's lateral `sLeft`/
+    `sRight` and has no notion of a reservation's void at all — it reads as
+    solid ground running straight through the middle of one. Previously
+    harmless (a reservation never had a floor to prefer over it), this
+    directly broke a Capped floor: a ship falling toward it got caught by
+    the phantom corridor surface first, since that surface sits *above*
+    the Capped floor (which is lower by `crossSectionThickness`) and the
+    landing code fell back to the corridor whenever `meshRegionAt` found
+    the reservation's region but the ship hadn't yet reached its exact
+    elevation *this frame*. Fixed by changing that fallback's condition
+    from `else` to `else if (!landing)` — only ever consider the analytical
+    corridor when no mesh region's footprint claims this (x,z) at all,
+    letting gravity keep pulling the ship toward the region it's already
+    over instead of snapping it to the wrong, higher surface. Verified via
+    the new landing test *and* the full parity/raw_parity suites (this
+    touches every `MeshRegion`'s airborne landing path, not just
+    reservations) — both still pass, so real placed mesh assets are
+    unaffected.
+  - Tests: `track_tests.cpp`'s pre-existing M1 bake-correctness fixture
+    (asserting a reservation region has no floor) got an explicit
+    `"interiorMode": "uncapped"` added, since that assertion is now only
+    true for Uncapped. New: a bake-level block checking a Capped region has
+    non-empty `polygons`, `oneWayRails` true, `wallHeight`/
+    `railClearanceHeight` independently readable, an `-interior-seal` batch
+    present; and the matching Uncapped region has none of those (still no
+    floor, no seal batch) plus confirms the shell batch exists to have been
+    carved from. A physics block drops a ship onto a Capped floor, confirms
+    it lands at the region's own (lower) elevation rather than the road's,
+    then drives it sideways back out past the reservation's half-width and
+    confirms it isn't trapped. The pre-existing M2/reverse-gear physics
+    diagnostics (drive-into-wall-from-outside) needed no changes and still
+    pass unmodified, confirming one-directional rails didn't disturb the
+    entry-blocking behavior they test.
+
+## 3b. Bugfix: half the reservation wall was non-collidable (post-M6)
+
+**Report:** "central reservation collisions sometimes fail, especially when
+the ship is travelling fast."
+
+**Cause — a direct regression from M6's one-directional rails.** M6 made
+`slideAlongRails` skip any rail whose normal doesn't oppose the direction of
+travel. That promoted rail normal *orientation* from cosmetic to load-bearing:
+before M6 rails blocked both ways, so which side a normal faced never mattered.
+`reservationGeometry` (TrackBake.cpp) was deriving each rail normal as a bare
+90° rotation of its own segment direction, `(dz, -dx)`. Both flanks of the void
+are emitted in the same along-path direction (`addRail(bi.left, bj.left)` and
+`addRail(bi.right, bj.right)` in one loop), so the identical rotation lands
+*outward* on one flank and *inward* on the other. Measured on a straight test
+track: right flank 92 outward / 0 inward, left flank 0 outward / 92 inward. The
+one-way test therefore skipped every left-flank rail, and the entire left wall
+was non-collidable — a car could drive straight into the median from that side
+and keep going. The two end caps had the same defect against the path axis (both
+emitted `left -> right`, so one of the pair faced inward).
+
+The "at high speed" framing in the report is a symptom, not the mechanism: the
+dead flank is always dead. Speed just governs how far across the road a car
+travels, and so whether it reaches the median at all. Shallow approach angles
+(tracking nearly parallel to the taper, which is how a car actually clips a
+median at racing speed) were the first to expose it.
+
+**Fix.** `addRail` now takes an explicit outward reference and flips the
+computed normal to agree with it, rather than trusting segment direction:
+flanks pass the across-void vector (negated for the left), and each end cap
+passes the along-path vector away from its neighbouring interior ring. This is
+orientation-, winding- and path-direction-independent.
+
+**Note on a false start.** The first hypothesis was broad-phase tunnelling, and
+`MeshRegion::withinBounds` was given a swept-segment overload (both Ship.cpp
+collision gates passed only the destination point, so a fast enough ship could
+in principle straddle a region's bounds in one frame without either endpoint
+testing inside). That is a genuine latent bug and the overload was kept, but it
+is *not* this report's cause and could not have been: a reservation's bounds
+span tens to hundreds of metres while one frame at 140 m/s is ~2.3 m. The
+narrow phase was being called all along and, once measured directly, was found
+to block correctly — from the right flank only. Measuring the two phases
+separately is what turned this up.
+
+**Tests.** A new `track_tests` block asserts, on a Capped reservation: no rail
+normal faces into the void (probing either side of each rail midpoint against
+the region's own floor polygon — flank-agnostic, with a coverage assertion so
+taper-tip rails that legitimately can't resolve don't hollow the check out);
+`slideAlongRails` blocks a boundary crossing from *both* flanks and leaves the
+ship outside; and a 32-case full-physics sweep (both sides × 8 approach angles ×
+2 speeds, 400 steps each) never enters the void footprint. Verified to have
+teeth by disabling only the orientation flip: 4 assertions fail, including 593
+frames inside the void. The pre-existing M6 drive-off-the-floor test still
+passes, confirming rails remain one-directional rather than silently reverted
+to bidirectional blocking.
+
 ## 4. Bugfix: wall/hole alignment (post-M5)
 
 **Report:** "ship physics breaks when near the central reservation."

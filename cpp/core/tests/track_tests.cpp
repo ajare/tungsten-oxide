@@ -257,6 +257,8 @@ int main(int argc, char** argv) {
     check(!region.contains(0, 0), "polygon hole excludes its world point");
     check(!region.contains(40, 0), "outside point is not contained");
     check(region.withinBounds(30.5, 0, 0.5) && !region.withinBounds(30.5, 0), "bounds query honors padding");
+    check(region.withinBounds(-100, 0, 100, 0), "segment bounds query catches a fast sweep tunneling clean through the box");
+    check(!region.withinBounds(-100, 100, 100, 100), "segment bounds query still rejects a sweep that misses the box entirely");
   }
   const auto concaveTrack = Track::fromFile(fixtureDir / "concave-railed-pad.json");
   if (concaveTrack && !concaveTrack.track->meshRegions.empty()) {
@@ -688,9 +690,13 @@ int main(int argc, char** argv) {
   {
     // CENTRAL_RESERVATION_PLAN.md M1: baking a reservation carves a gap out of the path surface
     // and produces a synthetic rails-only MeshRegion plus ReservationWall geometry.
+    // "interiorMode": "uncapped" explicit here (M6 defaults an unspecified reservation to Capped,
+    // which gets a real landable floor -- see the M6 block below) so this keeps testing the
+    // rails-only, no-floor case its own assertion names.
     json input = base;
     input["version"] = 11;
-    input["paths"][0]["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 8.0}}});
+    input["paths"][0]["reservations"] =
+        json::array({{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 8.0}, {"interiorMode", "uncapped"}}});
     const auto loaded = Track::fromJson(input.dump());
     check(static_cast<bool>(loaded), "a track with a reservation bakes: " + loaded.error);
     if (loaded) {
@@ -728,6 +734,61 @@ int main(int argc, char** argv) {
       }
     }
   }
+
+  {
+    // CENTRAL_RESERVATION_PLAN.md M6: an unspecified reservation now defaults to Capped -- a real,
+    // landable floor (polygons non-empty) and a sealed shell underside -- while an explicit
+    // Uncapped one keeps the original rails-only, no-floor behavior and instead carves a matching
+    // hole in the shell.
+    json input = base;
+    input["version"] = 11;
+    input["paths"][0]["reservations"] = json::array(
+        {{{"id", "capped"}, {"t0", 0.1}, {"t1", 0.3}, {"width", 8.0}},
+         {{"id", "uncapped"}, {"t0", 0.5}, {"t1", 0.7}, {"width", 8.0}, {"interiorMode", "uncapped"}, {"wallHeight", 3.0}, {"railClearanceHeight", 9.0}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "M6 mixed capped/uncapped track bakes: " + loaded.error);
+    if (loaded) {
+      const Track& track = *loaded.track;
+      const auto findRegion = [&](const char* prefix) {
+        return std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
+                            [&](const MeshRegion& r) { return r.id.rfind(prefix, 0) == 0; });
+      };
+      const auto cappedRegion = findRegion("reservation-capped");
+      check(cappedRegion != track.meshRegions.end(), "the capped reservation gets a synthetic MeshRegion");
+      if (cappedRegion != track.meshRegions.end()) {
+        check(!cappedRegion->polygons.empty(), "a Capped reservation's region has a real, landable floor polygon");
+        check(cappedRegion->oneWayRails, "a Capped reservation's rails are one-directional");
+        check(cappedRegion->railHeight > 0.0, "a Capped reservation's visual wall height is set");
+      }
+      const auto uncappedRegion = findRegion("reservation-uncapped");
+      check(uncappedRegion != track.meshRegions.end(), "the uncapped reservation gets a synthetic MeshRegion");
+      if (uncappedRegion != track.meshRegions.end()) {
+        check(uncappedRegion->polygons.empty() && uncappedRegion->triangles.empty(),
+              "an Uncapped reservation's region still has no floor");
+        check(uncappedRegion->oneWayRails, "an Uncapped reservation's rails are one-directional too (harmless with no floor to exit)");
+        check(std::fabs(uncappedRegion->railHeight - 3.0) < 1e-9, "wallHeight (visual) reads back independently");
+        check(std::fabs(uncappedRegion->railClearanceHeight - 9.0) < 1e-9,
+              "railClearanceHeight (physics) is independent of wallHeight, not the same value (M6)");
+      }
+
+      // The Capped reservation seals the shell's underside with new geometry; the Uncapped one
+      // instead carves a matching hole in it and adds no seal.
+      const bool hasCappedSeal = cappedRegion != track.meshRegions.end() &&
+                                 std::any_of(track.geometry.begin(), track.geometry.end(),
+                                             [&](const GeometryBatch& b) { return b.id == cappedRegion->id + "-interior-seal"; });
+      check(hasCappedSeal, "a Capped reservation gets an interior-seal geometry batch closing the pit's sides");
+      const bool hasUncappedSeal = uncappedRegion != track.meshRegions.end() &&
+                                   std::any_of(track.geometry.begin(), track.geometry.end(),
+                                               [&](const GeometryBatch& b) { return b.id == uncappedRegion->id + "-interior-seal"; });
+      check(!hasUncappedSeal, "an Uncapped reservation gets no interior-seal batch -- the shaft is left open");
+
+      const auto shell = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                      [](const GeometryBatch& b) { return b.id == "path-0-shell"; });
+      check(shell != track.geometry.end() && !shell->vertices.empty(),
+            "the path's shell batch exists (default cross-section thickness) so Uncapped had something to carve");
+    }
+  }
+
   {
     // The carved hole's *resolution and accuracy*, as opposed to its mere existence above. The
     // render bake used to force a fixed 8 subdivisions across a reservation's span, snapped to the
@@ -1037,6 +1098,155 @@ int main(int argc, char** argv) {
               "wall closely enough that the ship doesn't repeatedly toggle airborne near the gap edge (got " +
                   std::to_string(togglesC) + " toggles)");
         check(finalSpeedC > 100.0, "reservation-wall diag (with collisionSurface): speed recovers after the bounce");
+      }
+    }
+  }
+
+  {
+    // CENTRAL_RESERVATION_PLAN.md M6: a Capped reservation must have a real, landable floor -- a
+    // ship falling onto it lands (mirrors the existing "falls onto an external triangle" pattern
+    // above) at the region's own elevation, not the main corridor's -- and its one-directional
+    // rails must let the ship drive back off it afterward rather than trapping it there forever
+    // (bidirectional rails, as every other MeshRegion still has, would).
+    json input;
+    input["version"] = 11;
+    input["name"] = "m6-capped-landing-diag";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    path["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.45}, {"t1", 0.55}, {"width", 16.0}}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "M6 capped-landing diag track loads: " + loaded.error);
+    if (loaded) {
+      auto trackPtr = std::make_shared<Track>(*loaded.track);
+      const auto region = std::find_if(trackPtr->meshRegions.begin(), trackPtr->meshRegions.end(),
+                                       [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+      check(region != trackPtr->meshRegions.end() && !region->polygons.empty(),
+            "M6 capped-landing diag: the reservation region has a floor to land on");
+      if (region != trackPtr->meshRegions.end() && !region->polygons.empty()) {
+        Simulation sim(*trackPtr);
+        // Straight down the middle of the void's footprint (centerline x=0), at the reservation's
+        // own midpoint distance along z -- squarely over the floor, not near an edge.
+        Ship ship = shipAt(sim, *trackPtr, Vec3(0.0, region->elevation + 5.0, 700.0), Vec3(0, 0, 1));
+        ship.physics.airborne = true;
+        ship.physics.verticalVel = -10.0;
+        bool landed = false;
+        for (int i = 0; i < 60 && !landed; i++) {
+          ship.step(sim, 1.0 / 60.0, 0.0, 0.0, 0.0);
+          landed = !ship.physics.airborne;
+        }
+        check(landed, "M6 capped-landing diag: the ship lands rather than falling through");
+        check(landed && std::fabs(ship.physics.groundPos.y - region->elevation) < 0.5,
+              "M6 capped-landing diag: it lands at the reservation's own (lower) floor elevation, not the road's");
+
+        // Drive it sideways, off the floor and out through the boundary -- the one-directional
+        // rail must not block this (only the reverse, track-into-void direction is blocked).
+        ship.physics.forward.set(1, 0, 0);
+        ship.physics.moveDir.set(1, 0, 0);
+        ship.physics.speed = 40.0;
+        const double startX = ship.physics.groundPos.x;
+        bool finite = true;
+        for (int i = 0; i < 90 && finite; i++) {
+          ship.step(sim, 1.0 / 60.0, 1.0, 0.0, 0.0);
+          finite = std::isfinite(ship.physics.groundPos.x) && std::isfinite(ship.physics.groundPos.z);
+        }
+        check(finite, "M6 capped-landing diag: position stays finite while driving off the floor");
+        check(finite && ship.physics.groundPos.x > startX + 8.0,
+              "M6 capped-landing diag: the ship actually crosses back out past the reservation's half-width, not "
+              "trapped inside by its own rails");
+      }
+    }
+  }
+
+  {
+    // CENTRAL_RESERVATION_PLAN.md M6 regression: every reservation rail's normal must point OUT of
+    // the void. M6 made rails one-directional (slideAlongRails only blocks travel opposing a rail's
+    // own normal), which turned normal orientation from cosmetic into load-bearing -- and the bake
+    // was deriving each normal as a bare 90-degree rotation of the segment direction. Both flanks
+    // are emitted in the same along-path direction, so that rotation landed outward on one flank
+    // and inward on the other: every left-flank rail (and one of the two end caps) was silently
+    // non-collidable, and a car could drive straight into the median from that side. It showed up
+    // mainly at speed simply because that's when a car crosses the road far enough to reach it.
+    json input;
+    input["version"] = 11;
+    input["name"] = "reservation-wall-orientation";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    path["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.45}, {"t1", 0.55}, {"width", 16.0}}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "reservation wall-orientation track loads: " + loaded.error);
+    if (loaded) {
+      auto trackPtr = std::make_shared<Track>(*loaded.track);
+      Simulation sim(*trackPtr);
+      const auto reg = std::find_if(trackPtr->meshRegions.begin(), trackPtr->meshRegions.end(),
+                                    [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+      check(reg != trackPtr->meshRegions.end() && !reg->rails.empty() && !reg->polygons.empty(),
+            "wall-orientation: the Capped reservation region has rails and a floor polygon to test against");
+      if (reg != trackPtr->meshRegions.end() && !reg->rails.empty() && !reg->polygons.empty()) {
+        // Geometric, flank-agnostic orientation check: probing just off a rail's midpoint should
+        // land inside the void on the -normal side and outside it on the +normal side. Rails right
+        // at a taper tip are legitimately too thin to resolve either way, so only unambiguous ones
+        // (exactly one probe inside) are graded -- there must be no inward-facing rail among them.
+        int outward = 0, inward = 0, ambiguous = 0;
+        for (const auto& rail : reg->rails) {
+          const double mx = (rail.a.x + rail.b.x) * 0.5, mz = (rail.a.y + rail.b.y) * 0.5;
+          const double probe = 0.25;
+          const bool posInside = reg->contains(mx + rail.nx * probe, mz + rail.nz * probe);
+          const bool negInside = reg->contains(mx - rail.nx * probe, mz - rail.nz * probe);
+          if (posInside == negInside)
+            ++ambiguous;
+          else if (negInside)
+            ++outward;
+          else
+            ++inward;
+        }
+        check(inward == 0, "wall-orientation: no reservation rail faces into the void (got " + std::to_string(inward) +
+                               " inward of " + std::to_string(outward + inward) + " resolvable)");
+        check(outward > reg->rails.size() / 2,
+              "wall-orientation: most rails resolve unambiguously, so the check above has real coverage (" +
+                  std::to_string(outward) + " outward, " + std::to_string(ambiguous) + " ambiguous)");
+
+        // Narrow phase must block a boundary crossing from BOTH flanks, not just one.
+        for (const double fromX : {9.0, -9.0}) {
+          const double toX = -fromX * 0.2;
+          Vec2d velocity{toX - fromX, 0.0};
+          const MeshMoveResult moved = slideAlongRails(*reg, {fromX, 700.0}, {toX, 700.0}, velocity,
+                                                       TrackCore::COLLISION_WALL_MARGIN, 0.0);
+          check(moved.hit && !reg->contains(moved.x, moved.z),
+                "wall-orientation: a crossing from x=" + std::to_string(static_cast<int>(fromX)) +
+                    " is blocked and ends outside the void");
+        }
+      }
+
+      // Full-physics sweep: drive at the median from both sides, at a range of approach angles and
+      // at racing speed, and require the ship never enters the void's footprint. The shallow angles
+      // matter most -- they track nearly parallel to the taper, which is how a car actually clips a
+      // median at speed, and they were what first exposed the dead flank.
+      if (reg != trackPtr->meshRegions.end() && !reg->polygons.empty()) {
+        int breaches = 0;
+        for (const double side : {1.0, -1.0}) {
+          for (const double dirZ : {0.0, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 20.0}) {
+            for (const double speed : {40.0, 140.0}) {
+              Ship ship = shipAt(sim, *trackPtr, Vec3(14.0 * side, 0.0, 500.0), Vec3(-side, 0, 0));
+              Vec3 direction(-side, 0, dirZ);
+              direction.normalize();
+              ship.physics.moveDir.copy(direction);
+              ship.physics.forward.copy(direction);
+              ship.physics.speed = speed;
+              for (int i = 0; i < 400; i++) {
+                ship.step(sim, 1.0 / 60.0, 0.0, 0.0, 0.0);
+                if (reg->contains(ship.physics.groundPos.x, ship.physics.groundPos.z)) ++breaches;
+              }
+            }
+          }
+        }
+        check(breaches == 0,
+              "wall-orientation: driving into the median from either side at any approach angle never "
+              "breaches the void (got " +
+                  std::to_string(breaches) + " frames inside)");
       }
     }
   }

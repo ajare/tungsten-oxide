@@ -212,6 +212,8 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
       reservation.t0 = t0;
       reservation.t1 = t1;
       reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
+      reservation.interiorMode = stringOr(source, "interiorMode") == "uncapped" ? ReservationInteriorMode::Uncapped : ReservationInteriorMode::Capped;
+      reservation.railClearanceHeight = std::max(0.0, numberOr(source, "railClearanceHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
       reservation.endCap1 = parseEndCap(source, "endCap1");
       // End-cap width is always metres, so it's only clamped against the reservation's own peak

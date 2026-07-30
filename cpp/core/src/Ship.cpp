@@ -63,8 +63,8 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
     double px = p.groundPos.x + ax * dt;
     double pz = p.groundPos.z + az * dt;
     for (const auto& region : simulation.track().meshRegions) {
-      if (p.groundPos.y >= region.elevation + region.railHeight) continue;
-      if (!region.withinBounds(px, pz, TrackCore::COLLISION_WALL_MARGIN)) continue;
+      if (p.groundPos.y >= region.elevation + region.railClearanceHeight) continue;
+      if (!region.withinBounds(p.groundPos.x, p.groundPos.z, px, pz, TrackCore::COLLISION_WALL_MARGIN)) continue;
       Vec2d velocity{ax, az};
       const double before = std::hypot(ax, az);
       const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {px, pz},
@@ -93,7 +93,14 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       p.groundPos.set(px, landing->elevation, pz);
       surfaceRenderPos = p.groundPos;
       surfaceNormal = UP;
-    } else {
+    } else if (!landing) {
+      // Only falls back to the analytical corridor surface when no mesh region's footprint claims
+      // this (x,z) at all. The corridor is built from the road's lateral sLeft/sRight alone and has
+      // no notion of a reservation's void (CENTRAL_RESERVATION_PLAN.md M6) -- it reads as solid
+      // ground running straight through the middle of one. A Capped reservation's floor sits lower
+      // than that phantom surface, so if `landing` is non-null here (its footprint claims (x,z),
+      // just not reached its elevation yet this frame), falling through to the corridor would catch
+      // the ship on the wrong, too-high surface before it ever reaches the real floor beneath it.
       c = simulation.sampleTrack(px, p.groundPos.y, pz);
       const Projection proj = projectToSurface(c, px, p.groundPos.y, pz);
       const SurfaceFrame surface = curvedSurfaceFrame(c, proj.s);
@@ -150,17 +157,19 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   } else if (hasTranslation) {
     Vec3 newPos = p.groundPos.clone().addScaledVector(vel, dt);
 
-    // Central-reservation walls (CENTRAL_RESERVATION_PLAN.md M2): a car driving the main corridor
-    // is never "on" one of these regions (they have no floor -- see reservationGeometry in
-    // TrackBake.cpp) and isn't airborne, so neither of this function's other mesh-region checks
-    // (the ownership branch above, the airborne-loop below) ever runs for it here. `polygons.empty()`
-    // is what distinguishes a reservation's rails-only synthetic MeshRegion from a real placed mesh
-    // asset's region (which always has compiled polygons/triangles) -- only the former gatekeeps the
-    // corridor this way; a real platform's edge still only collides via ownership/airborne-proximity,
-    // unchanged from before this feature.
+    // Central-reservation walls (CENTRAL_RESERVATION_PLAN.md M2, M6): a car driving the main
+    // corridor isn't "on" any mesh region yet (an Uncapped reservation never is -- no floor at all;
+    // a Capped one only becomes ownable once the car's actually inside its footprint) and isn't
+    // airborne, so neither of this function's other mesh-region checks (the ownership branch above,
+    // the airborne-loop below) ever runs for it here. `oneWayRails` is what identifies a
+    // reservation's synthetic MeshRegion now (M6 gives a Capped one real polygons too, so
+    // `polygons.empty()` alone stopped reliably telling reservations apart from real placed mesh
+    // regions) -- only reservations gatekeep the corridor this way; a real platform's edge still
+    // only collides via ownership/airborne-proximity, unchanged from before this feature.
     for (const auto& region : simulation.track().meshRegions) {
-      if (!region.polygons.empty()) continue;
-      if (!region.withinBounds(newPos.x, newPos.z, TrackCore::COLLISION_WALL_MARGIN)) continue;
+      if (!region.oneWayRails) continue;
+      if (!region.withinBounds(p.groundPos.x, p.groundPos.z, newPos.x, newPos.z, TrackCore::COLLISION_WALL_MARGIN))
+        continue;
       Vec2d velocity{vel.x, vel.z};
       const double before = std::hypot(vel.x, vel.z);
       const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {newPos.x, newPos.z},
