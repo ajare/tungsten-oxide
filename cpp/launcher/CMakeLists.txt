@@ -160,6 +160,14 @@ foreach(_runtime_root IN LISTS _runtime_roots)
     endif()
   endif()
 endforeach()
+
+# One checked-in TungstenMonoxide launcher config per build type (support/), deployed under the
+# name Main.cpp actually looks for -- see CMakeLists.txt's VS_DEBUGGER_COMMAND_ARGUMENTS, which
+# passes "TungstenMonoxide.cfg" explicitly when debugging the Debug configuration.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    "@CMAKE_CURRENT_SOURCE_DIR@/support/TungstenMonoxide.${CONFIG}.cfg" "${OUTPUT_DIR}/TungstenMonoxide.cfg"
+  COMMAND_ERROR_IS_FATAL ANY)
 ]=])
 file(CONFIGURE
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CopyLauncherRuntime.cmake"
