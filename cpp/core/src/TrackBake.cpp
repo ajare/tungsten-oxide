@@ -953,14 +953,15 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
     // stretch as the wall lengthens). `uvTile` is therefore the wall's own height: one texture
     // repeat per railHeight metres of run.
     //
-    // `wallUv` then turns that pair a quarter turn before it becomes the actual UV, so U runs
-    // along the wall and V spans its height -- the upright orientation for a barrier texture,
-    // rather than the road surface's own across-first convention this started from. It is a
-    // *rotation*, not a transpose: (across, along) -> (along, 1 - across) has a positive
-    // determinant, so an asymmetric texture turns rather than mirroring. To pick a different
+    // `wallUv` then turns that pair three-quarters of a turn before it becomes the actual UV, so U
+    // runs *against* the wall's run direction and V spans its height top-to-bottom -- 180 degrees
+    // past the quarter turn this started from, which put U along the wall and V rim-to-top. It is
+    // still a *rotation*, not a transpose: (across, along) -> (1 - along, across) is the quarter
+    // turn's output run back through the same (u,v) -> (1-u, 1-v) half turn, so the determinant
+    // stays positive and an asymmetric texture turns rather than mirroring. To pick a different
     // quarter turn, this one line is the only thing to change.
     const double uvTile = std::max(1e-6, region.railHeight);
-    auto wallUv = [](double across, double along) { return Vec2d{along, 1.0 - across}; };
+    auto wallUv = [](double across, double along) { return Vec2d{1.0 - along, across}; };
     // Per-flank, because the two flanks of a tapered void are different lengths -- sharing one
     // accumulator would slide the texture out of step between them.
     double run[2] = {0.0, 0.0};
