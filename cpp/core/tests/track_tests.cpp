@@ -729,6 +729,84 @@ int main(int argc, char** argv) {
     }
   }
   {
+    // The carved hole's *resolution and accuracy*, as opposed to its mere existence above. The
+    // render bake used to force a fixed 8 subdivisions across a reservation's span, snapped to the
+    // nearest raw physics sample -- so the hole's shape was quantized to a handful of rings however
+    // long the span was, and its ends landed wherever a raw sample happened to be rather than on
+    // t0/t1, starting the void at a blunt notch instead of closing to a point.
+    //
+    // Reconstruct each ring's lane-boundary pair from the ReservationWall batch, which Builder::tri
+    // emits without vertex reuse as 12 vertices per ring-to-ring segment -- left(a,b,at),
+    // left(at,b,bt), right(a,b,at), right(at,b,bt) -- so vertex[12k+0]/[12k+6] are ring k's
+    // left/right boundary and [12k+1]/[12k+7] are ring k+1's.
+    // A straight, flat, default-cross-section path so a ring's surface vertices are exactly
+    // collinear with that ring's wall boundary pair, and no other part of the track can lie on that
+    // line -- which makes the containment check below exact rather than a tolerance judgement.
+    json input;
+    input["version"] = 11;
+    input["name"] = "reservation-hole-fidelity";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    const double reservationWidth = 16.0;
+    path["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", reservationWidth}}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a track with a wide reservation bakes: " + loaded.error);
+    const auto end = loaded ? loaded.track->geometry.end() : std::vector<GeometryBatch>::const_iterator{};
+    const auto wall = loaded ? std::find_if(loaded.track->geometry.begin(), end,
+                                            [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; })
+                             : end;
+    const auto surface = loaded ? std::find_if(loaded.track->geometry.begin(), end,
+                                               [](const GeometryBatch& b) { return b.kind == GeometryKind::PathSurface; })
+                                : end;
+    if (loaded && wall != end && surface != end && wall->vertices.size() >= 12) {
+      const auto& v = wall->vertices;
+      const std::size_t segments = v.size() / 12;
+      // Ring k's left/right gap boundary. Builder::tri emits without vertex reuse, 12 vertices per
+      // ring-to-ring segment -- left(a,b,at), left(at,b,bt), right(a,b,at), right(at,b,bt) -- so
+      // [12k+0]/[12k+6] are ring k's pair and [12k+1]/[12k+7] are ring k+1's.
+      std::vector<std::pair<Vec3, Vec3>> ring;
+      for (std::size_t k = 0; k < segments; ++k) ring.emplace_back(v[12 * k + 0].position, v[12 * k + 6].position);
+      ring.emplace_back(v[12 * (segments - 1) + 1].position, v[12 * (segments - 1) + 7].position);
+
+      std::vector<double> halfGap;
+      for (const auto& r : ring) halfGap.push_back(r.first.distanceTo(r.second) / 2);
+      double peak = 0;
+      for (double h : halfGap) peak = std::max(peak, h);
+
+      check(halfGap.front() < 1e-6 && halfGap.back() < 1e-6,
+            "the reservation's taper closes to a point at the authored t0/t1, not a blunt notch at the nearest raw sample");
+      check(std::fabs(peak - reservationWidth / 2) < 0.05, "the taper still reaches the authored full width at mid-span");
+      check(halfGap.size() > 40, "ring count follows the taper rather than a fixed subdivision count");
+
+      // The void's edge must be the per-ring boundary polyline itself -- the same kind of edge the
+      // road's own sides are -- not a staircase quantized to the ring spacing. The strip used to
+      // drop a sub-quad only where it was inside the gap at BOTH of a segment's rings, which left
+      // the corner vertex at the *narrower* ring's gap edge sitting inside the *wider* ring's gap:
+      // a step of solid road jutting into the void. So: no surface vertex may lie strictly between
+      // a ring's two boundary points. Exact here because the cross-section is flat, making every
+      // one of ring k's surface vertices collinear with its wall pair.
+      double deepest = 0;
+      for (std::size_t k = 0; k < ring.size(); ++k) {
+        if (halfGap[k] < 1e-3) continue;
+        const Vec3 l = ring[k].first, span = ring[k].second.clone().sub(l);
+        const double lengthSq = span.lengthSq();
+        for (const RenderVertex& vertex : surface->vertices) {
+          const Vec3 rel = vertex.position.clone().sub(l);
+          const double s = rel.dot(span) / lengthSq;
+          if (s <= 0 || s >= 1) continue;
+          if (rel.distanceTo(span.clone().multiplyScalar(s)) > 1e-6) continue;  // not on this ring
+          deepest = std::max(deepest, std::min(s, 1 - s) * 2 * halfGap[k]);
+        }
+      }
+      check(deepest < 1e-3,
+            "no surface vertex lands inside a ring's gap -- the void's edge is a per-ring polyline, not a "
+            "staircase (deepest intrusion " +
+                std::to_string(deepest) + "m)");
+    }
+  }
+  {
     json input = base;
     input["paths"] = json::array();
     check(!Track::fromJson(input.dump()), "a track with no paths is fatal");

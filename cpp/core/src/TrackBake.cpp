@@ -397,21 +397,69 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     Vec3 right = raw[i].pos.clone().addScaledVector(raw[i].edgeRight, raw[i].halfW);
     affected[i] = left.distanceTo(sourceEdges.left[i]) > 1e-6 || right.distanceTo(sourceEdges.right[i]) > 1e-6;
   }
-  // A reservation's gap is invisible to the chord-tolerance `breaks()` below (it only looks at
-  // centerline position, not cross-section carving), so a straight span containing one would
-  // otherwise get compressed to its two raw endpoints with nothing in between to carve. Force a
-  // fixed, small number of evenly-spaced anchors across each reservation's span instead of every
-  // raw sample in it (which, at physics sampling density, would massively over-tessellate a long
-  // reservation) -- CENTRAL_RESERVATION_PLAN.md M1.
-  for (const auto& reservation : definition.reservations) {
-    constexpr int kSubdivisions = 8;
-    for (int s = 0; s <= kSubdivisions; ++s) {
-      const double t = reservation.t0 + (reservation.t1 - reservation.t0) * s / kSubdivisions;
-      const double idx = definition.closed ? t * n : t * (n - 1);
-      affected[std::clamp(static_cast<int>(std::lround(idx)), 0, n - 1)] = true;
-    }
-  }
   Evaluator evaluator(definition);
+  const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
+
+  // A reservation's gap is invisible to the chord-tolerance `breaks()` below (it only looks at
+  // centerline position, not cross-section carving), so left to itself a span gets rings wherever
+  // the *centerline* needs them and none where the *gap boundary* does -- a straight reservation
+  // collapses to its two raw endpoints with nothing in between to carve at all.
+  //
+  // Resolve each span on its own terms instead, into `forced`: parameters the walker below emits
+  // in addition to whatever `breaks()` asks for. Subdivide until consecutive rings differ by at
+  // most kGapStep in half-gap, and the lane-boundary curve is within kBoundaryTolerance of its
+  // chord. The half-gap test is the one that shapes the hole: the surface strip emits sub-quads
+  // spanning ring i to ring i+1 at fixed cross-section v, and skips one only where it is inside
+  // the gap at BOTH rings, so the void's edge is a staircase whose tread is exactly the
+  // per-segment half-gap change. kGapStep is therefore a direct bound, in metres, on how far
+  // solid road juts into the void -- and on how blunt the lens's tips are, since that same
+  // "BOTH rings" rule leaves the first segment inside [t0,t1] fully solid.
+  //
+  // Sampled at exact `t`, not snapped to the nearest raw physics sample as this once did: t0/t1
+  // have to land on a ring exactly for the taper to close on a point, rather than starting at
+  // whatever width the nearest interior sample happened to carry.
+  std::vector<double> forced;
+  {
+    struct Anchor {
+      Vec3 boundary;
+      double halfGap;
+    };
+    auto anchorAt = [&](double t) {
+      Frame f = frame(evaluator.eval(t * gmax));
+      applyReservationGap(f, definition, t);
+      const Vec3 left = f.pos.clone().addScaledVector(f.edgeRight, -f.halfW);
+      const Vec3 right = f.pos.clone().addScaledVector(f.edgeRight, f.halfW);
+      const double w = std::max(1.0, f.width);
+      return Anchor{surface(f, left, right, 0.5 + f.reservationHalfGap / w), f.reservationHalfGap};
+    };
+    constexpr double kGapStep = 0.25;
+    // Matching breaks()'s own centerline deviation tolerance and maximum chord.
+    constexpr double kBoundaryTolerance = 0.1, kMaxChord = 40.0;
+    std::function<void(double, double, const Anchor&, const Anchor&, int)> splitSpan =
+        [&](double ta, double tb, const Anchor& a, const Anchor& b, int depth) {
+          if (depth >= 10) return;
+          const double tm = (ta + tb) / 2;
+          const Anchor m = anchorAt(tm);
+          const Vec3 chordMiddle = a.boundary.clone().add(b.boundary).multiplyScalar(0.5);
+          if (std::fabs(a.halfGap - b.halfGap) <= kGapStep &&
+              m.boundary.distanceTo(chordMiddle) <= kBoundaryTolerance &&
+              a.boundary.distanceTo(b.boundary) <= kMaxChord)
+            return;
+          splitSpan(ta, tm, a, m, depth + 1);
+          forced.push_back(tm * gmax);
+          splitSpan(tm, tb, m, b, depth + 1);
+        };
+    for (const auto& reservation : definition.reservations) {
+      if (reservation.t1 - reservation.t0 <= 0 || reservation.width <= 0) continue;
+      const Anchor a = anchorAt(reservation.t0), b = anchorAt(reservation.t1);
+      forced.push_back(reservation.t0 * gmax);
+      splitSpan(reservation.t0, reservation.t1, a, b, 0);
+      forced.push_back(reservation.t1 * gmax);
+    }
+    // Authored order is not guaranteed to be ascending in t; the walker consumes this in order.
+    std::sort(forced.begin(), forced.end());
+  }
+
   auto gAt = [&](int i) {
     return definition.closed ? static_cast<double>(i) / n * evaluator.n
                              : static_cast<double>(i) / (n - 1) * (evaluator.n - 1);
@@ -432,19 +480,32 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     return std::vector<double>(values.begin(), values.end());
   };
   RenderBake out;
-  auto pushExact = [&](int i) { out.frames.push_back(raw[i]); out.edges.left.push_back(sourceEdges.left[i]); out.edges.right.push_back(sourceEdges.right[i]); };
-  const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
+  double lastG = -INFINITY;
+  auto pushExact = [&](int i) { out.frames.push_back(raw[i]); out.edges.left.push_back(sourceEdges.left[i]); out.edges.right.push_back(sourceEdges.right[i]); lastG = gAt(i); };
   auto pushAdaptive = [&](double g) {
     Frame f = frame(evaluator.eval(g));
     applyReservationGap(f, definition, g / gmax);
     out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight, -f.halfW));
     out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight, f.halfW));
     out.frames.push_back(std::move(f));
+    lastG = g;
+  };
+  // Reservation rings, merged into the walk so the output stays ascending in path parameter. One
+  // that coincides with a ring the walk was going to emit anyway is dropped rather than
+  // duplicated -- a zero-length segment would give the strip degenerate quads and a rail of
+  // undefined normal.
+  const double gEpsilon = 1e-9 * std::max(1.0, gmax);
+  std::size_t nextForced = 0;
+  auto flushForced = [&](double g) {
+    for (; nextForced < forced.size() && forced[nextForced] < g - gEpsilon; ++nextForced)
+      if (forced[nextForced] > lastG + gEpsilon) pushAdaptive(forced[nextForced]);
+    for (; nextForced < forced.size() && forced[nextForced] <= g + gEpsilon; ++nextForced) {}
   };
   pushExact(0);
   int i = 0, last = n - 1;
   while (i < last) {
     if (affected[i] || affected[i + 1]) {
+      flushForced(gAt(i + 1));
       pushExact(i + 1);
       ++i;
       continue;
@@ -452,10 +513,17 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     int j = i + 1;
     while (j < last && !affected[j] && !affected[j + 1]) ++j;
     auto partition = breaks(gAt(i), gAt(j));
-    for (std::size_t k = 1; k + 1 < partition.size(); ++k) pushAdaptive(partition[k]);
+    for (std::size_t k = 1; k + 1 < partition.size(); ++k) {
+      flushForced(partition[k]);
+      pushAdaptive(partition[k]);
+    }
+    flushForced(gAt(j));
     pushExact(j);
     i = j;
   }
+  // A closed path's strip wraps from the last raw ring back to ring 0, so a reservation running
+  // past gAt(n-1) still has rings left after every pushExact above has run.
+  flushForced(gmax);
   return out;
 }
 
@@ -492,11 +560,10 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   // Central-reservation gap band per ring, in cross-section v-space (0=left edge, 1=right edge,
   // 0.5=center) -- {0.5,0.5} (a zero-width band) where no reservation is active, matching
   // reservationHalfGap's own "0 outside a reservation's span" convention. Fed into `br` as extra
-  // breakpoints so the strip below subdivides exactly at the gap's edges, and used to skip the
-  // sub-quad whose v-range falls inside the gap at BOTH rings of a segment -- CENTRAL_RESERVATION_
-  // PLAN.md M1: leaving the "both" requirement (rather than "either") is what makes the taper close
-  // to a point at t0/t1 instead of leaving a hard-edged notch, since one ring's band degenerates to
-  // a single point there.
+  // breakpoints so the strip below subdivides exactly at the gap's edges, then used per *corner*
+  // (not per sub-quad) to cut each boundary quad along the gap edge itself -- see the strip loop.
+  // A band stays degenerate at t0/t1, where the taper closes on a point; the strict-interior test
+  // there is unsatisfiable, so those rings are wholly solid and the void starts as a true point.
   std::vector<std::pair<double, double>> gapV(n, {0.5, 0.5});
   for (int i = 0; i < n; i++) {
     br.push_back(crossBreak(frames[i].crossSectionCurvature, frames[i].crossSectionTightness, e.left[i].distanceTo(e.right[i])));
@@ -525,12 +592,38 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + frames[i].pos.distanceTo(frames[j].pos)) / avg : dist[j] / avg);
     for (size_t k = 0; k + 1 < v.size(); k++) {
       double a = v[k], z = v[k + 1];
-      const bool gapAtI = a >= gapV[i].first - 1e-9 && z <= gapV[i].second + 1e-9;
-      const bool gapAtJ = a >= gapV[j].first - 1e-9 && z <= gapV[j].second + 1e-9;
-      if (gapAtI && gapAtJ) continue;
-      Vec3 p0 = ringPoint(i, a), p1 = ringPoint(i, z), q0 = ringPoint(j, a), q1 = ringPoint(j, z);
-      top.tri(p0, p1, q0, {a, t0}, {z, t0}, {a, t1});
-      top.tri(p1, q1, q0, {z, t0}, {z, t1}, {a, t1});
+      // The sub-quad's four corners, listed as a positively-oriented cycle -- the same winding the
+      // two-triangle split below has always produced, so dropping one corner leaves the remaining
+      // three already correctly wound.
+      const int ringOf[4] = {i, i, j, j};
+      const double vOf[4] = {a, z, z, a}, uvT[4] = {t0, t0, t1, t1};
+      // A corner counts as void only when *strictly* inside its own ring's gap band: one sitting
+      // exactly on a gap edge is a boundary vertex the solid triangle has to keep. Every gap edge
+      // is itself a breakpoint in `v`, so no sub-quad ever straddles one -- which makes "exactly
+      // one strictly-void corner" precisely the case where the gap boundary cuts this quad
+      // diagonally, and the three surviving corners are the solid triangle either side of it.
+      // Splitting there (rather than dropping the quad only when it was void at BOTH rings, which
+      // is what this did) is what makes the void's edge the same per-ring polyline the road's own
+      // outer edges are, instead of a staircase quantized to the ring spacing.
+      int solidIdx[4], solidCount = 0;
+      for (int c = 0; c < 4; ++c) {
+        const auto& band = gapV[ringOf[c]];
+        if (vOf[c] > band.first + 1e-9 && vOf[c] < band.second - 1e-9) continue;
+        solidIdx[solidCount++] = c;
+      }
+      // Two or fewer solid corners leaves no solid area: either the whole sub-quad is inside the
+      // gap at both rings, or it is inside at one and exactly spans the band at the other.
+      if (solidCount <= 2) continue;
+      auto emit = [&](int c0, int c1, int c2) {
+        top.tri(ringPoint(ringOf[c0], vOf[c0]), ringPoint(ringOf[c1], vOf[c1]), ringPoint(ringOf[c2], vOf[c2]),
+                {vOf[c0], uvT[c0]}, {vOf[c1], uvT[c1]}, {vOf[c2], uvT[c2]});
+      };
+      if (solidCount == 3) {
+        emit(solidIdx[0], solidIdx[1], solidIdx[2]);
+      } else {
+        emit(0, 1, 3);
+        emit(1, 2, 3);
+      }
     }
   }
   track.geometry.push_back(std::move(top.b));

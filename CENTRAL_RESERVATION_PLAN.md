@@ -1,9 +1,10 @@
 # Central Reservation Plan — median strip on a track path
 
 Status: **M0-M4 complete, M5 partial (core tests done, editor tests
-deferred). Post-M5: fixed two bugs reported as "ship physics breaks near
-the central reservation" — a render/physics wall-alignment mismatch, and
-(the actual reported cause) a reverse-gear wall collision bug — see §4.**
+deferred). Post-M5 bugfixes in §4–§4e: wall/hole alignment, three separate
+reverse-gear/corridor-wall physics bugs (§4b–§4d, the last being the actual
+"ship gets blocked" cause), and the carved hole's resolution (§4e) and edge
+smoothness (§4f).**
 This document is updated after each milestone lands.
 Native C++ only (`cpp/core` + `cpp/editor`); the JS reference oracle (`web/`) is
 deliberately NOT touched — JS is slated for retirement and is allowed to diverge.
@@ -96,7 +97,10 @@ lane for that span.
     containing one would otherwise collapse to its two endpoints with
     nothing to carve. Fixed by forcing a fixed 9-point (not the full physics
     sample density — that over-tessellated badly) evenly-spaced anchor set
-    across each reservation's span into the render mesh.
+    across each reservation's span into the render mesh. **Superseded by §4e:**
+    a fixed count snapped to the nearest raw sample was both too coarse and
+    never landed on t0/t1; the span is now subdivided against the taper itself,
+    at exact `t`.
   - The synthetic `MeshRegion` has **no `polygons`/`triangles`** — only
     `bounds` + `rails` — so `meshRegionAt`/`surfaceOwnerAt` (which gate on
     `region.contains()`) can never treat it as a standing surface. This is
@@ -395,6 +399,126 @@ unchanged at `7.322e-5`; raw-track worst moved `0.01051` → `0.01129` against a
 `0.1` gate (same `1.42e-14` absolute delta) — CLAUDE.md updated. The browser
 smoke suite's mesh-free lap now reaches 140 m/s / 504 km/h where it previously
 read 138 / 493, a visible consequence of no longer bleeding speed against walls.
+
+## 4e. Bugfix: the carved hole is low-resolution and inaccurate
+
+**Report:** "the hole created in the middle of the central reservation is low
+resolution and not accurate."
+
+**Root cause:** M1's over-tessellation guard, quoted verbatim in §4's root
+cause above as "~9 forced anchor points across a reservation's span". It was
+wrong in two independent ways:
+
+1. **Fixed count.** `kSubdivisions = 8` gave nine anchors across the span
+   *regardless of how long the span was*. The gap boundary is a Catmull-Rom
+   taper, so its shape needs rings where the *taper* varies, not a constant
+   number of them. On `NewTrack.json`'s own `res1` (t 0.10→0.13, width 24 —
+   240 m of arc) that worked out to 18 m between rings.
+2. **Snapping.** Each anchor's exact `t` was immediately thrown away —
+   `affected[lround(t * n)] = true` marked the nearest *raw physics sample*
+   instead. So no ring ever landed on `t0`/`t1`, and the taper could not close
+   on a point: the void began at whatever half-gap the nearest interior sample
+   happened to carry, and the hole came out shorter than authored.
+
+Both compound through the surface strip, which emits sub-quads spanning ring
+`i` to ring `i+1` at fixed cross-section `v` and skipped one only where it was
+inside the gap at *both* rings. The void's edge was therefore a staircase whose
+tread is exactly the per-segment half-gap change — i.e. how far solid road
+juts into the hole. Coarse rings mean a coarse staircase. (§4f removes the
+staircase itself; this section only made its steps small.)
+
+**Fix:** `adaptiveRenderBake` now resolves each span on its own terms, into a
+`forced` list of path parameters that the walker emits *in addition to*
+whatever the existing chord-tolerance `breaks()` asks for (so centerline
+curvature is still handled by the code that already handled it). Subdivision
+recurses until consecutive rings differ by at most `kGapStep` = 0.25 m in
+half-gap, the lane-boundary curve is within 0.1 m of its chord, and the chord
+is at most 40 m — the latter two matching `breaks()`'s own tolerances, which is
+what gives the gap boundary the same fidelity standard the road's outer edges
+get. `kGapStep` covers what the deviation test structurally cannot: near the
+tips the boundary is nearly straight, so its chord deviation is ~0 while the
+gap width still ramps fast. With `kGapStep` disabled, `res1`'s first rendered
+tip is a 2.6 m-wide blunt end 20 m from the true tip; at 0.25 m it is 0.38 m.
+Samples are taken at exact `t`, and `t0`/`t1` are always emitted, so the lens
+closes on a true point. `flushForced` merges them into the walk in ascending
+parameter order and drops any that coincide with a ring already being emitted
+(a zero-length segment would give degenerate strip quads and a rail of
+undefined normal). Reservations no longer set `affected[]` at all.
+
+Because §4 already made the wall and the hole share these exact frames, the
+physics wall, the render hole and any exported collision hole all gain the
+resolution together and stay aligned by construction.
+
+**Measured** on `cpp/tungsten-monoxide/resources/New_Track.json` (`res1`):
+
+| | before | after |
+| --- | --- | --- |
+| rings across the span | 24 | 123 |
+| hole length | 234.1 m (authored span 240.1 m) | 240.1 m |
+| max ring spacing | 18.12 m | 7.43 m |
+| max staircase tread | 2.387 m | 0.250 m |
+| half-gap at the lens tips | 0.434 m / 0.177 m | 0.000 m / 0.000 m |
+
+**Cost:** rings scale with total taper variation (`~2 × width / kGapStep`), so
+the synthetic region's rail count rose 46 → 244 here. `slideAlongRails` is only
+reached after an AABB reject, and a couple of hundred segment tests per frame
+is in line with a real placed mesh region.
+
+**Tests:** see §4f, which shares a `track_tests` block with this fix.
+
+## 4f. Bugfix: the hole's edges are jagged (the staircase itself)
+
+**Report:** "the edges are still jagged: they should match the track sides'
+smoothness." §4e was an incomplete fix — it made the staircase's steps small
+(2.387 m → 0.25 m) without removing the staircase.
+
+**Root cause:** the strip's skip rule, described in M1 and quoted in §4e.
+Sub-quads span ring `i` to ring `i+1` at *fixed* cross-section `v`, and one was
+dropped only when it fell inside the gap at **both** rings. Where the gap
+widens from `i` to `j`, the sub-quad between the two rings' gap edges is solid
+at `i` and void at `j` — under "both" it was emitted whole, so its corner at
+`(j, gapV[i].first)` sat inside ring `j`'s gap. That corner is the step. The
+road's own outer edges have no such problem because they *are* the per-ring
+`e.left`/`e.right` polyline: one vertex per ring, no quantization. Making the
+steps smaller could only ever approach that, never reach it.
+
+**Fix:** classify the sub-quad's four corners individually instead of the quad
+as a whole. A corner counts as void only when *strictly* inside its own ring's
+band — one exactly on a gap edge is a boundary vertex the solid triangle must
+keep. Because every gap edge is itself a breakpoint in the merged `v` list, no
+sub-quad ever straddles one, which makes "exactly one strictly-void corner"
+precisely the case where the boundary cuts the quad diagonally; the three
+surviving corners are the solid triangle. Corners are listed as a
+positively-oriented cycle `(i,a) (i,z) (j,z) (j,a)` — the same winding the
+existing two-triangle split produces — so dropping one leaves the other three
+already correctly wound, and both diagonals fall out of the same rule (the
+widening and narrowing sides need opposite ones). Two or fewer solid corners
+means no solid area, and is skipped.
+
+The result is that the void's edge is the polyline through each ring's gap
+boundary: exactly one vertex per ring, exactly like the road's outer edges, and
+exactly the points `reservationGeometry` already builds the wall and rails
+from — so hole, wall and rails now coincide vertex-for-vertex rather than
+being within a tread of each other.
+
+**No parity impact, by construction:** with no reservation active a ring's band
+is the degenerate `{0.5, 0.5}`, the strict-interior test is unsatisfiable, all
+four corners are solid, and emission is byte-identical to before. Confirmed by
+all four parity gates.
+
+This also fixes the tips independently of ring density: at a tip ring the band
+is degenerate, so that ring is wholly solid and the void opens as a true point.
+
+**Tests:** the §4e `track_tests` block was rebuilt on a straight, flat,
+default-cross-section path, which makes every one of a ring's surface vertices
+exactly collinear with that ring's wall boundary pair (and puts nothing else on
+that line). It asserts the tips close to a point, the peak reaches the authored
+width, ring count follows the taper — and that **no surface vertex lies
+strictly between a ring's two boundary points**, which is the exact structural
+property the corner-wise rule guarantees and the "both rings" rule violates.
+Under the old rule that check reports a 0.247 m intrusion, matching `kGapStep`
+as predicted. All 7 ctest targets pass; no trace moved (no fixture in the
+parity corpus is schema 11, and the JS oracle has no reservations by design).
 
 ## 5. Notes for implementers
 
