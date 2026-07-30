@@ -70,6 +70,25 @@ std::string stringOr(const json& object, const char* key, const std::string& fal
   return object.is_object() && object.contains(key) && object.at(key).is_string() ? object.at(key).get<std::string>() : fallback;
 }
 
+// Parses a reservation end cap (CENTRAL_RESERVATION_PLAN.md). Missing/malformed input -- including
+// every pre-existing authored track, which never had this field -- defaults to Joined, width 0:
+// byte-for-byte the taper-to-a-point behavior reservations always had before end caps existed.
+ReservationEndCap parseEndCap(const json& source, const char* key) {
+  ReservationEndCap cap;
+  if (!source.is_object() || !source.contains(key) || !source.at(key).is_object()) return cap;
+  const json& raw = source.at(key);
+  const std::string style = stringOr(raw, "style");
+  if (style == "mitred")
+    cap.style = ReservationEndCapStyle::Mitred;
+  else if (style == "rounded")
+    cap.style = ReservationEndCapStyle::Rounded;
+  else
+    cap.style = ReservationEndCapStyle::Joined;
+  cap.width = std::max(0.0, numberOr(raw, "width", 0.0));
+  cap.noseLength = std::max(0.0, numberOr(raw, "noseLength", 0.0));
+  return cap;
+}
+
 bool jsonTruthy(const json& value) {
   if (value.is_null()) return false;
   if (value.is_boolean()) return value.get<bool>();
@@ -190,6 +209,11 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
       if (t1 - t0 <= 1e-6 || reservation.width <= 1e-6) continue;
       reservation.t0 = t0;
       reservation.t1 = t1;
+      reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
+      reservation.endCap0 = parseEndCap(source, "endCap0");
+      reservation.endCap1 = parseEndCap(source, "endCap1");
+      reservation.endCap0.width = std::min(reservation.endCap0.width, reservation.width);
+      reservation.endCap1.width = std::min(reservation.endCap1.width, reservation.width);
       path.reservations.push_back(std::move(reservation));
     }
   }
@@ -274,11 +298,11 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
   if (!data.is_object()) throw std::runtime_error("track JSON must be an object");
   if (!data.contains("version"))
     throw std::runtime_error("track version is required; only schema " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED) +
-                              "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION) + " is supported");
+                             "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION) + " is supported");
   if (!data.at("version").is_number_integer() || data.at("version").get<int>() < TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED ||
       data.at("version").get<int>() > TrackCore::TRACK_SCHEMA_VERSION)
     throw std::runtime_error("unsupported track schema version; expected " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED) +
-                              "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
+                             "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
   if (!data.contains("paths") || !data.at("paths").is_array() || data.at("paths").empty())
     throw std::runtime_error("a current-schema track needs at least one path");
 

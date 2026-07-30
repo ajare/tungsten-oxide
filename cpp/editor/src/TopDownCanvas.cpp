@@ -6,6 +6,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,9 @@ const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
 const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
+// Distinct from kRailEdgeColor (a real placed-mesh rail) so a central-reservation's boundary reads
+// as its own kind of wall at a glance -- cool violet against the warm rail orange.
+const ImU32 kReservationWallColor = IM_COL32(150, 130, 255, 255);
 // Disjoint-seam node ring + X cross ('#ffcc44' styling) -- unlike ElevationView.cpp's own disjoint
 // styling, which is ring-only, this view also draws the X cross.
 const ImU32 kDisjointColor = IM_COL32(255, 204, 68, 255);
@@ -88,8 +92,11 @@ constexpr float kMeshEdgePickPx = 8.0f;
 // Self-intersection crossing markers: grey/amber for the automatic decision, red/green
 // once a user override forces the opposite. kCrossingHaloColor is the dark contrast halo drawn
 // behind every marker so it stays visible over any ribbon/centerline color.
-enum class CrossingState { AutoCollapse, AutoKeep, ForcedCollapse, ForcedKeep };
-const ImU32 kCrossingAutoCollapseColor = IM_COL32(185, 194, 208, 255);   // #b9c2d0
+enum class CrossingState { AutoCollapse,
+                           AutoKeep,
+                           ForcedCollapse,
+                           ForcedKeep };
+const ImU32 kCrossingAutoCollapseColor = IM_COL32(185, 194, 208, 255);  // #b9c2d0
 const ImU32 kCrossingAutoKeepColor = IM_COL32(255, 176, 32, 255);       // #ffb020
 const ImU32 kCrossingForcedCollapseColor = IM_COL32(255, 51, 85, 255);  // #ff3355
 const ImU32 kCrossingForcedKeepColor = IM_COL32(55, 209, 122, 255);     // #37d17a
@@ -203,6 +210,21 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
   if (n < 2) return;
   const bool flatEdges = mode != TopDownView::RenderMode::Banked;
 
+  // Local cross-track parameter u in [-1, +1] (left edge .. centerline .. right edge), normalized
+  // by each ring's own halfW so a gap band from two different-width rings is directly comparable --
+  // the same normalization TrackBake.cpp's pathGeometry uses for its own v in [0, 1], just
+  // recentred here to match this quad's existing -halfW..+halfW convention.
+  auto ringPoint = [&](const tox::Frame& f, const tox::Vec3& axis, double u) {
+    return f.pos.clone().addScaledVector(axis, u * f.halfW);
+  };
+  // A reservation's gap band in u-space for one ring, degenerating to the zero-width point {0,0}
+  // when no reservation is active there (reservationHalfGap defaults to 0), so the corner-wise
+  // test below never fires and an untouched segment draws exactly as before.
+  auto gapBand = [](const tox::Frame& f) {
+    const double u = std::min(1.0, f.reservationHalfGap / std::max(f.halfW, 1e-6));
+    return std::make_pair(-u, u);
+  };
+
   const std::size_t segmentCount = path.closed ? n : n - 1;
   for (std::size_t i = 0; i < segmentCount; ++i) {
     const std::size_t j = (i + 1) % n;
@@ -210,23 +232,69 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
     const tox::Frame& fj = path.centerline[j];
     const tox::Vec3& axisI = flatEdges ? fi.h : fi.edgeRight;
     const tox::Vec3& axisJ = flatEdges ? fj.h : fj.edgeRight;
-    const tox::Vec3 leftI = fi.pos.clone().addScaledVector(axisI, -fi.halfW);
-    const tox::Vec3 rightI = fi.pos.clone().addScaledVector(axisI, fi.halfW);
-    const tox::Vec3 leftJ = fj.pos.clone().addScaledVector(axisJ, -fj.halfW);
-    const tox::Vec3 rightJ = fj.pos.clone().addScaledVector(axisJ, fj.halfW);
-    const ImVec2 quad[4] = {
-        toAbsolute(canvasOrigin, view.worldToScreen(leftI.x, leftI.z)),
-        toAbsolute(canvasOrigin, view.worldToScreen(leftJ.x, leftJ.z)),
-        toAbsolute(canvasOrigin, view.worldToScreen(rightJ.x, rightJ.z)),
-        toAbsolute(canvasOrigin, view.worldToScreen(rightI.x, rightI.z)),
-    };
+
     ImU32 fillColor = kRoadColor;
     if (mode == TopDownView::RenderMode::Flat) {
       fillColor = rollFillColor((fi.roll + fj.roll) * 0.5 * 180.0 / std::numbers::pi);
     } else if (mode == TopDownView::RenderMode::Elevation) {
       fillColor = elevationFillColor((fi.pos.y + fj.pos.y) * 0.5, minElev, maxElev);
     }
-    drawList->AddConvexPolyFilled(quad, 4, fillColor);
+
+    if (fi.reservationHalfGap <= 1e-9 && fj.reservationHalfGap <= 1e-9) {
+      // No reservation on this segment: the plain full-width quad, exactly as before.
+      const tox::Vec3 leftI = ringPoint(fi, axisI, -1.0), rightI = ringPoint(fi, axisI, 1.0);
+      const tox::Vec3 leftJ = ringPoint(fj, axisJ, -1.0), rightJ = ringPoint(fj, axisJ, 1.0);
+      const ImVec2 quad[4] = {
+          toAbsolute(canvasOrigin, view.worldToScreen(leftI.x, leftI.z)),
+          toAbsolute(canvasOrigin, view.worldToScreen(leftJ.x, leftJ.z)),
+          toAbsolute(canvasOrigin, view.worldToScreen(rightJ.x, rightJ.z)),
+          toAbsolute(canvasOrigin, view.worldToScreen(rightI.x, rightI.z)),
+      };
+      drawList->AddConvexPolyFilled(quad, 4, fillColor);
+      continue;
+    }
+
+    // A reservation is active on at least one ring of this segment: carve the gap out the same way
+    // TrackBake.cpp's pathGeometry does (CENTRAL_RESERVATION_PLAN.md §4f) -- classify each
+    // sub-quad's four corners individually against their OWN ring's gap band (breakpoints merged
+    // from both rings, so no sub-quad straddles a gap edge), rather than dropping a sub-quad only
+    // when both rings agree it's inside the gap, which would draw a staircase instead of the
+    // tapered lens the game actually bakes. Coarser than the game's own render mesh (this walks
+    // physics-sample rings, ~6m apart, not the finely-subdivided render mesh), but this file already
+    // treats its ribbon as an approximation "close enough" for editing at editor zoom levels (see
+    // the zone-outline note above).
+    const auto [giLo, giHi] = gapBand(fi);
+    const auto [gjLo, gjHi] = gapBand(fj);
+    const std::set<double> breakSet{-1.0, 1.0, giLo, giHi, gjLo, gjHi};
+    const std::vector<double> us(breakSet.begin(), breakSet.end());
+    for (std::size_t k = 0; k + 1 < us.size(); ++k) {
+      const double a = us[k], z = us[k + 1];
+      // Corners in a positively-oriented cycle -- (i,a) (i,z) (j,z) (j,a) -- matching this
+      // function's original quad winding (leftI, leftJ, rightJ, rightI) when a=-1, z=1.
+      const tox::Frame* ringOf[4] = {&fi, &fi, &fj, &fj};
+      const tox::Vec3* axisOf[4] = {&axisI, &axisI, &axisJ, &axisJ};
+      const double uOf[4] = {a, z, z, a};
+      const std::pair<double, double> bandOf[4] = {{giLo, giHi}, {giLo, giHi}, {gjLo, gjHi}, {gjLo, gjHi}};
+      int solidIdx[4], solidCount = 0;
+      for (int c = 0; c < 4; ++c) {
+        if (uOf[c] > bandOf[c].first + 1e-9 && uOf[c] < bandOf[c].second - 1e-9) continue;  // strictly inside its own ring's gap
+        solidIdx[solidCount++] = c;
+      }
+      // Two or fewer solid corners leaves no solid area: either the whole sub-quad is inside the
+      // gap at both rings, or it is inside at one and exactly spans the band at the other.
+      if (solidCount <= 2) continue;
+      auto pointAt = [&](int c) {
+        const tox::Vec3 p = ringPoint(*ringOf[c], *axisOf[c], uOf[c]);
+        return toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z));
+      };
+      if (solidCount == 4) {
+        const ImVec2 quad[4] = {pointAt(0), pointAt(1), pointAt(2), pointAt(3)};
+        drawList->AddConvexPolyFilled(quad, 4, fillColor);
+      } else {
+        const ImVec2 tri[3] = {pointAt(solidIdx[0]), pointAt(solidIdx[1]), pointAt(solidIdx[2])};
+        drawList->AddConvexPolyFilled(tri, 3, fillColor);
+      }
+    }
   }
 
   std::vector<ImVec2> centerline;
@@ -276,6 +344,30 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   }
 }
 
+// A central reservation compiles to a synthetic MeshRegion with rails but no polygons/triangles --
+// the trait TrackBake.cpp/Ship.cpp use to tell it apart from a real placed mesh region's (always-
+// populated) one -- so it draws nothing via drawMeshRegions above; this is its own preview instead.
+// `rails` already form the two tapered lane-boundary polylines in world space (baked, no placement
+// transform needed, unlike drawMeshRails' authored mesh edges below): consecutive rails share an
+// endpoint, so drawing each one as its own line segment reconstructs both boundaries. A Joined end
+// tapers to zero width so the two curves already meet at t0/t1 with nothing left to draw there;
+// Mitred/Rounded ends leave a gap at nonzero width, which reservationGeometry closes with its own
+// extra rail across the cap -- already present in `rails` like any other, so no special-casing is
+// needed here either way.
+void drawReservationWalls(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view,
+                          const std::vector<tox::MeshRegion>& regions, const std::optional<std::string>& selectedReservationId) {
+  for (const auto& region : regions) {
+    if (!region.polygons.empty() || region.rails.empty()) continue;
+    // Reservation ids are unique across the whole track (EditorState::newReservationId's single
+    // flat namespace), so a prefix match on TrackBake.cpp's "reservation-<id>-path-<n>" naming
+    // unambiguously identifies which baked region belongs to the selected reservation.
+    const bool isSelected = selectedReservationId.has_value() && region.id.rfind("reservation-" + *selectedReservationId + "-path-", 0) == 0;
+    for (const auto& rail : region.rails)
+      drawList->AddLine(toAbsolute(canvasOrigin, view.worldToScreen(rail.a.x, rail.a.y)),
+                        toAbsolute(canvasOrigin, view.worldToScreen(rail.b.x, rail.b.y)), kReservationWallColor, isSelected ? 3.5f : 2.0f);
+  }
+}
+
 // ---- Zones --------------------------------------------------
 //
 // core bakes zones into tox::Track::zones (a mesh-hosted rotated rectangle, or a path-hosted strip
@@ -306,9 +398,9 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
   if (n == 0) return {};
   if (n == 1) {
     const tox::Frame& only = centerline[0];
-    return {only.pos.x,       only.pos.z,       only.edgeRight.x, only.edgeRight.z,
-            only.h.x,         only.h.z,         only.width,       only.roll,
-            only.tangent.x,   only.tangent.z};
+    return {only.pos.x, only.pos.z, only.edgeRight.x, only.edgeRight.z,
+            only.h.x, only.h.z, only.width, only.roll,
+            only.tangent.x, only.tangent.z};
   }
   const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
   const double indexF = frac * static_cast<double>(closed ? n : n - 1);
@@ -383,7 +475,7 @@ void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
 // this file's existing "approximate but imperceptible at editor zoom" ethos (see this file's header
 // comment above WorldFrame2D).
 double dragAuxTAlongTangent(const std::vector<tox::Frame>& centerline, bool closed, double currentT, double worldX, double worldZ,
-                           const WorldFrame2D& f) {
+                            const WorldFrame2D& f) {
   constexpr double kEps = 1e-4;
   double tMinus = currentT - kEps, tPlus = currentT + kEps;
   if (closed) {
@@ -533,7 +625,7 @@ std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked
 
 // Nearest baked centerline frame (across all paths) to a world point, within `pickRadiusWorld`.
 std::optional<TopDownView::PhysicsSampleRef> physicsPointAtWorld(const tox::Track* baked, double worldX, double worldZ,
-                                                                  double pickRadiusWorld) {
+                                                                 double pickRadiusWorld) {
   if (baked == nullptr) return std::nullopt;
   std::optional<TopDownView::PhysicsSampleRef> best;
   double bestDistSq = pickRadiusWorld * pickRadiusWorld;
@@ -1686,7 +1778,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
           const double gMax = authoredPath.closed ? n : n - 1;
           const double g = nearPlacement->t * gMax;
           const int insertAt = authoredPath.closed ? (static_cast<int>(std::floor(g)) + 1) % (n + 1)
-                                                    : std::min(n, static_cast<int>(std::floor(g)) + 1);
+                                                   : std::min(n, static_cast<int>(std::floor(g)) + 1);
           if (state
                   .insertPositionOnSegment(nearPlacement->pathIndex, insertAt, contextMenuWorld.x, nearPlacement->frame->pos.y,
                                            contextMenuWorld.z)
@@ -1791,6 +1883,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       drawBakedPath(drawList, canvasOrigin, view, baked->paths[i], view.renderMode(), minElev, maxElev,
                     static_cast<int>(i) == state.currentPathIndex());
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
+    drawReservationWalls(drawList, canvasOrigin, view, baked->meshRegions, state.selectedReservationId());
     drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId());
     // Hover highlight (distinct from click-driven selection, new functionality -- triggers
     // previously only ever showed a selected/unselected state): only meaningful in Edit mode, the

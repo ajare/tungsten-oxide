@@ -9,6 +9,48 @@ namespace {
 
 constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
 
+constexpr const char* kEndCapStyleNames[] = {"Joined", "Mitred", "Rounded"};
+
+// Seeded into `noseLength` the first time an end is switched to Rounded. The bake's own fallback
+// for an unset nose is the geometric one, a half-circle of `width / 2` -- correct, but only a
+// couple of metres long on a reservation running hundreds, so a freshly-picked Rounded end would
+// look identical to Mitred until the length was raised by hand. This starts it somewhere visible
+// at the zoom people actually author at.
+constexpr double kDefaultNoseLength = 40.0;
+
+// One end's style combo, cap-width field, and (Rounded only) nose-length field. Returns true if
+// `cap` was mutated; caller re-clamps via editReservation same as t0/t1/width above.
+bool DrawEndCapControls(const char* label, ReservationEndCap& cap) {
+  bool changed = false;
+  int styleIndex = static_cast<int>(cap.style);
+  ImGui::SetNextItemWidth(120);
+  char comboId[64];
+  std::snprintf(comboId, sizeof(comboId), "%s##style", label);
+  if (ImGui::Combo(comboId, &styleIndex, kEndCapStyleNames, IM_ARRAYSIZE(kEndCapStyleNames))) {
+    cap.style = static_cast<ReservationEndCapStyle>(styleIndex);
+    if (cap.style == ReservationEndCapStyle::Rounded && cap.noseLength <= 0.0) cap.noseLength = kDefaultNoseLength;
+    changed = true;
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled(cap.style == ReservationEndCapStyle::Joined);
+  ImGui::SetNextItemWidth(100);
+  char widthId[64];
+  std::snprintf(widthId, sizeof(widthId), "Cap width##%s", label);
+  bool fieldChanged = ImGui::InputDouble(widthId, &cap.width, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  fieldChanged |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::EndDisabled();
+
+  ImGui::BeginDisabled(cap.style != ReservationEndCapStyle::Rounded);
+  ImGui::SetNextItemWidth(100);
+  char noseId[64];
+  std::snprintf(noseId, sizeof(noseId), "Nose length (m)##%s", label);
+  fieldChanged |= ImGui::InputDouble(noseId, &cap.noseLength, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  fieldChanged |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::EndDisabled();
+
+  return changed || (fieldChanged && cap.style != ReservationEndCapStyle::Joined);
+}
+
 }  // namespace
 
 bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
@@ -21,6 +63,8 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
     ImGui::Text("Reservation: %s", id.c_str());
 
     double t0 = reservation->t0 * 100.0, t1 = reservation->t1 * 100.0, width = reservation->width;
+    double wallHeight = reservation->wallHeight;
+    ReservationEndCap endCap0 = reservation->endCap0, endCap1 = reservation->endCap1;
     bool changed = false;
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("t0 (%)", &t0, 0.0, 0.0, "%.1f", kCommitOnEnter);
@@ -31,12 +75,23 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
     changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(120);
+    // <= 0 means "use the engine default" (TrackCore::DEFAULT_RAIL_HEIGHT) -- this is both the
+    // wall's render height and its physical height (Ship.cpp reads the same MeshRegion::railHeight
+    // a car can clear once above), not a purely cosmetic knob.
+    changed |= ImGui::InputDouble("Wall height (0 = default)", &wallHeight, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    changed |= DrawEndCapControls("t0 end", endCap0);
+    changed |= DrawEndCapControls("t1 end", endCap1);
 
     if (changed) {
       mutated |= state.editReservation(id, [&](Reservation& target) {
         target.t0 = t0 / 100.0;
         target.t1 = t1 / 100.0;
         target.width = width;
+        target.wallHeight = wallHeight;
+        target.endCap0 = endCap0;
+        target.endCap1 = endCap1;
       });
     }
     if (ImGui::Button("Delete Reservation")) {

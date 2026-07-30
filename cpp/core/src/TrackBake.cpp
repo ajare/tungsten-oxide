@@ -152,58 +152,123 @@ Frame frame(const Sample0& s) {
   f.crossSectionThickness = s.thick;
   return f;
 }
+// Two-segment cubic Hermite through (t0,v0)-(mid,vMid)-(t1,v1), with explicit derivatives (true
+// dv/dt, not pre-scaled) at each of the three points shared by both segments. Used below only to
+// build the *base* taper (0 at both ends), so it reproduces the original shared `scalar()`
+// helper's three-point Catmull-Rom output bit-for-bit -- the boundary derivative it passes is
+// exactly `scalar()`'s own duplicated-endpoint one-sided secant, and the interior derivative is
+// the same central-difference secant across the whole span.
+double hermitePair(double t, double t0, double v0, double m0, double mid, double vMid, double mMid, double t1, double v1, double m1) {
+  auto segment = [](double u0, double v0, double m0, double u1, double v1, double m1, double t) {
+    const double dt = u1 - u0;
+    if (dt < 1e-9) return v0;
+    const double u = (t - u0) / dt, u2 = u * u, u3 = u2 * u;
+    return (2 * u3 - 3 * u2 + 1) * v0 + (u3 - 2 * u2 + u) * dt * m0 + (-2 * u3 + 3 * u2) * v1 + (u3 - u2) * dt * m1;
+  };
+  return t <= mid ? segment(t0, v0, m0, mid, vMid, mMid, t) : segment(mid, vMid, mMid, t1, v1, m1, t);
+}
+// A Rounded end's profile: the void's boundary sweeps a half-ellipse, `capWidth` across and
+// `noseLength` along the path, so the end closes as a dome rather than a flat cut. `d` is distance
+// in METRES back along the path from the end -- shaping this in world units rather than in t is
+// what makes it an actual dome instead of a t-space lookalike, since a reservation's length and
+// its nose are nowhere near proportional.
+//
+// The vertical tangent at d = 0 is the whole point: it's what a rounded nose looks like, and what
+// distinguishes this from Mitred. (Two earlier attempts failed here -- forcing a zero *slope* at
+// the tip via Hermite tangents, then a smoothstep crossfade across the half-span. Both left the
+// profile flat at the tip, which is exactly what Mitred's shelf looks like, so the two styles were
+// indistinguishable.) At d = noseLength it reaches capWidth with a horizontal tangent, blending
+// into the flat run without a corner.
+//
+// noseLength defaults to capWidth/2 (a true half-circle) when unset, but is otherwise independent:
+// see tox::ReservationEndCap for why a circle alone is too small to see at track zoom.
+double roundedNoseLength(const ReservationEndCap& cap, double capWidth) {
+  return cap.noseLength > 0.0 ? cap.noseLength : capWidth / 2.0;
+}
+double roundedNoseWidth(double d, double capWidth, double noseLength) {
+  if (capWidth <= 1e-9 || noseLength <= 1e-9) return 0.0;
+  if (d >= noseLength) return capWidth;
+  const double x = 1.0 - std::max(0.0, d) / noseLength;  // 1 at the tip, 0 at the dome's base
+  return capWidth * std::sqrt(std::max(0.0, 1.0 - x * x));
+}
 // Half-width of the central-reservation void at `t` (path-fraction domain, same as width/roll/
 // cross-section points), clamped so at least a sliver of each lane always remains. Reservations
 // are authored non-overlapping (EditorState's job, CENTRAL_RESERVATION_PLAN.md M3), so the first
-// span containing `t` is authoritative. Ramps 0 -> width -> 0 across [t0,t1] via the same
-// Catmull-Rom `scalar()` every other t-based point already uses, from three synthetic control
-// points at t0/mid/t1 -- CENTRAL_RESERVATION_PLAN.md's "ramp inside [t0,t1]" decision.
+// span containing `t` is authoritative. `pathLength` is the path's driven length in metres, needed
+// only to size a Rounded end's nose (see above).
+//
+// Built in two steps -- CENTRAL_RESERVATION_PLAN.md's Mitred-vs-Rounded end-cap decision:
+// 1. `baseWidth`: the plain 0 -> width -> 0 taper, same shape regardless of end-cap style (and
+//    identical to the reservation's original, single-`width`-only behavior when both ends are
+//    Joined).
+// 2. Each end whose style isn't Joined floors its half of the span against that end's cap:
+//    - Mitred with a hard max(baseWidth, capWidth) -- a flat shelf wherever baseWidth would have
+//      gone narrower than the cap, ending in a blunt cut of exactly capWidth at the end itself.
+//    - Rounded with that same shelf, except its last `noseLength` metres are replaced by the
+//      elliptical dome above, closing the void to a point instead of cutting it off square.
 struct ReservationGap {
   double halfWidth{0.0};
   int index{-1};
 };
-ReservationGap reservationHalfGapAt(const PathDefinition& def, double t, double roadWidth) {
+ReservationGap reservationHalfGapAt(const PathDefinition& def, double t, double roadWidth, double pathLength) {
   for (int i = 0; i < static_cast<int>(def.reservations.size()); ++i) {
     const auto& r = def.reservations[i];
     if (t < r.t0 || t > r.t1) continue;
-    TrackPointDefinition a, b, c;
-    a.t = r.t0;
-    a.width = 0.0;
-    b.t = (r.t0 + r.t1) / 2;
-    b.width = r.width;
-    c.t = r.t1;
-    c.width = 0.0;
-    const std::vector<const TrackPointDefinition*> points{&a, &b, &c};
-    const double gapWidth = std::max(0.0, scalar(points, false, t, [](auto& x) { return x.width; }));
+    const double mid = (r.t0 + r.t1) / 2;
+    const double dt = std::max(1e-9, mid - r.t0);
+    const double baseWidth = std::max(0.0, hermitePair(t, r.t0, 0.0, r.width / dt, mid, r.width, 0.0, r.t1, 0.0, -r.width / dt));
+
+    const bool firstHalf = t <= mid;
+    const ReservationEndCap& cap = firstHalf ? r.endCap0 : r.endCap1;
+    const double capWidth = std::min(cap.width, r.width);
+    double gapWidth = baseWidth;
+    if (cap.style == ReservationEndCapStyle::Mitred) {
+      gapWidth = std::max(baseWidth, capWidth);
+    } else if (cap.style == ReservationEndCapStyle::Rounded) {
+      const double d = (firstHalf ? t - r.t0 : r.t1 - t) * std::max(0.0, pathLength);
+      gapWidth = std::max(baseWidth, roundedNoseWidth(d, capWidth, roundedNoseLength(cap, capWidth)));
+    }
+
     constexpr double kMinLaneWidth = 1.0;
     return {std::max(0.0, std::min(gapWidth / 2.0, roadWidth / 2.0 - kMinLaneWidth)), i};
   }
   return {};
 }
-void applyReservationGap(Frame& f, const PathDefinition& p, double t) {
-  const ReservationGap gap = reservationHalfGapAt(p, t, f.width);
+void applyReservationGap(Frame& f, const PathDefinition& p, double t, double pathLength) {
+  const ReservationGap gap = reservationHalfGapAt(p, t, f.width, pathLength);
   f.reservationHalfGap = gap.halfWidth;
   f.reservationIndex = gap.index;
 }
-std::vector<Frame> center(const PathDefinition& p, int N) {
+// The centerline without any reservation carving applied. Split out from center() below purely to
+// break a cycle: sizing a Rounded end's nose needs the path's length in metres, and length() is
+// itself measured off the centerline. Positions don't depend on the carving at all
+// (applyReservationGap only writes reservationHalfGap/reservationIndex), so measuring from this is
+// identical to measuring from a fully-carved centerline.
+std::vector<Frame> centerRaw(const PathDefinition& p, int N) {
   Evaluator e(p);
   std::vector<Frame> o;
   o.reserve(N);
   for (int i = 0; i < N; i++) {
     double g = p.closed ? (double(i) / N) * e.n : (N > 1 ? (double(i) / (N - 1)) * (e.n - 1) : 0);
-    Frame f = frame(e.eval(g));
-    const double t = p.closed ? double(i) / N : (N > 1 ? double(i) / (N - 1) : 0);
-    applyReservationGap(f, p, t);
-    o.push_back(std::move(f));
+    o.push_back(frame(e.eval(g)));
   }
   return o;
 }
 double length(const PathDefinition& p) {
-  auto f = center(p, 200);
+  auto f = centerRaw(p, 200);
   double n = 0;
   for (size_t i = 1; i < f.size(); i++) n += f[i].pos.distanceTo(f[i - 1].pos);
   if (p.closed) n += f.front().pos.distanceTo(f.back().pos);
   return n;
+}
+std::vector<Frame> center(const PathDefinition& p, int N) {
+  std::vector<Frame> o = centerRaw(p, N);
+  const double pathLength = length(p);
+  for (int i = 0; i < N; i++) {
+    const double t = p.closed ? double(i) / N : (N > 1 ? double(i) / (N - 1) : 0);
+    applyReservationGap(o[i], p, t, pathLength);
+  }
+  return o;
 }
 int sampleCount(const PathDefinition& p) { return std::max(400, std::min(2000, (int)std::round(length(p) / 6))); }
 struct Edges {
@@ -398,6 +463,7 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   }
   Evaluator evaluator(definition);
   const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
+  const double pathLength = length(definition);
 
   // A reservation's gap is invisible to the chord-tolerance `breaks()` below (it only looks at
   // centerline position, not cross-section carving), so left to itself a span gets rings wherever
@@ -425,7 +491,7 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     };
     auto anchorAt = [&](double t) {
       Frame f = frame(evaluator.eval(t * gmax));
-      applyReservationGap(f, definition, t);
+      applyReservationGap(f, definition, t, pathLength);
       const Vec3 left = f.pos.clone().addScaledVector(f.edgeRight, -f.halfW);
       const Vec3 right = f.pos.clone().addScaledVector(f.edgeRight, f.halfW);
       const double w = std::max(1.0, f.width);
@@ -454,6 +520,28 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
       forced.push_back(reservation.t0 * gmax);
       splitSpan(reservation.t0, reservation.t1, a, b, 0);
       forced.push_back(reservation.t1 * gmax);
+      // A Rounded end's dome can be far shorter than the reservation that carries it (a couple of
+      // metres out of hundreds, at the circular default), so splitSpan's bisection would burn its
+      // whole depth budget before it ever resolved one -- it would round off to the same blunt cut
+      // as Mitred. Place rings across each dome explicitly instead.
+      //
+      // Spaced by the ellipse's own parameter rather than uniformly in distance: the dome turns
+      // hardest at the tip (vertical tangent there), so d = noseLength * (1 - cos(theta)) puts most
+      // of the rings exactly where the curvature is, and none are wasted along the near-flat run
+      // where it meets the shelf.
+      for (int end = 0; end < 2; ++end) {
+        const ReservationEndCap& cap = end == 0 ? reservation.endCap0 : reservation.endCap1;
+        if (cap.style != ReservationEndCapStyle::Rounded) continue;
+        const double capWidth = std::min(cap.width, reservation.width);
+        const double noseT = roundedNoseLength(cap, capWidth) / std::max(1.0, pathLength);
+        if (capWidth <= 0 || noseT <= 0) continue;
+        constexpr int kNoseRings = 16;
+        for (int k = 1; k <= kNoseRings; ++k) {
+          const double offset = noseT * (1.0 - std::cos(PI / 2 * k / kNoseRings));
+          const double t = end == 0 ? reservation.t0 + offset : reservation.t1 - offset;
+          if (t > reservation.t0 && t < reservation.t1) forced.push_back(t * gmax);
+        }
+      }
     }
     // Authored order is not guaranteed to be ascending in t; the walker consumes this in order.
     std::sort(forced.begin(), forced.end());
@@ -483,7 +571,7 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   auto pushExact = [&](int i) { out.frames.push_back(raw[i]); out.edges.left.push_back(sourceEdges.left[i]); out.edges.right.push_back(sourceEdges.right[i]); lastG = gAt(i); };
   auto pushAdaptive = [&](double g) {
     Frame f = frame(evaluator.eval(g));
-    applyReservationGap(f, definition, g / gmax);
+    applyReservationGap(f, definition, g / gmax, pathLength);
     out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight, -f.halfW));
     out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight, f.halfW));
     out.frames.push_back(std::move(f));
@@ -709,8 +797,11 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
 // Builds a reservation's synthetic MeshRegion (rails only -- no polygons/triangles, so
 // meshRegionAt/surfaceOwnerAt never treat it as a standing surface: CENTRAL_RESERVATION_PLAN.md's
 // "true void" decision) plus its ReservationWall render geometry, from the two tapered inner-lane
-// boundary curves. Mirrors PathRail's own triangle winding (a, b, at), (at, b, bt) exactly, and
-// DEFAULT_RAIL_HEIGHT rather than PathRail's fixed low decorative height, per M1's design.
+// boundary curves. Mirrors PathRail's own triangle winding (a, b, at), (at, b, bt) exactly, at
+// `reservation.wallHeight` (falling back to DEFAULT_RAIL_HEIGHT, rather than PathRail's fixed low
+// decorative height, when unset) -- one number that is both the wall's visual height (this
+// function's own triangles) and its physical height, since Ship.cpp's ground-clearance check reads
+// the very same MeshRegion::railHeight this sets.
 //
 // Deliberately built from the SAME `frames`/`e` arrays `pathGeometry` just carved the visible
 // surface hole from (the adaptive render bake), not the fine physics centerline: a wall built from
@@ -745,7 +836,7 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
     MeshRegion region;
     region.id = "reservation-" + reservation.id + "-path-" + std::to_string(pi);
     region.elevation = bounds.front().left.y;
-    region.railHeight = TrackCore::DEFAULT_RAIL_HEIGHT;
+    region.railHeight = reservation.wallHeight > 0.0 ? reservation.wallHeight : TrackCore::DEFAULT_RAIL_HEIGHT;
     region.bounds = MeshBounds{INFINITY, -INFINITY, INFINITY, -INFINITY};
     auto extend = [&](const Vec3& p) {
       region.bounds.minX = std::min(region.bounds.minX, p.x);
@@ -782,6 +873,21 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
     }
     extend(bounds.back().left);
     extend(bounds.back().right);
+
+    // Closes the void at any end whose left/right boundary points don't already coincide -- a
+    // Joined end tapers to zero width and self-seals, but a Mitred/Rounded end leaves the void
+    // open at a nonzero width unless capped here (CENTRAL_RESERVATION_PLAN.md end-cap closure).
+    auto capWall = [&](const Bound& b) {
+      const double dx = b.right.x - b.left.x, dz = b.right.z - b.left.z;
+      if (std::hypot(dx, dz) < 1e-9) return;
+      addRail(b.left, b.right);
+      Vec3 lt = b.left.clone().addScaledVector(b.normal, region.railHeight);
+      Vec3 rt = b.right.clone().addScaledVector(b.normal, region.railHeight);
+      wall.tri(b.left, b.right, lt);
+      wall.tri(lt, b.right, rt);
+    };
+    capWall(bounds.front());
+    capWall(bounds.back());
 
     track.meshRegions.push_back(std::move(region));
     track.geometry.push_back(std::move(wall.b));

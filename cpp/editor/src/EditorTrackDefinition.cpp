@@ -44,6 +44,34 @@ std::string stringOr(const json& object, const char* key, const std::string& fal
   return object.is_object() && object.contains(key) && object.at(key).is_string() ? object.at(key).get<std::string>() : fallback;
 }
 
+// Mirrors core's TrackLoader.cpp parseEndCap: missing/malformed input defaults to Joined, width 0.
+ReservationEndCap parseEndCap(const json& source, const char* key) {
+  ReservationEndCap cap;
+  if (!source.is_object() || !source.contains(key) || !source.at(key).is_object()) return cap;
+  const json& raw = source.at(key);
+  const std::string style = stringOr(raw, "style");
+  if (style == "mitred")
+    cap.style = ReservationEndCapStyle::Mitred;
+  else if (style == "rounded")
+    cap.style = ReservationEndCapStyle::Rounded;
+  else
+    cap.style = ReservationEndCapStyle::Joined;
+  cap.width = std::max(0.0, numberOr(raw, "width", 0.0));
+  cap.noseLength = std::max(0.0, numberOr(raw, "noseLength", 0.0));
+  return cap;
+}
+
+const char* endCapStyleName(ReservationEndCapStyle style) {
+  switch (style) {
+    case ReservationEndCapStyle::Mitred:
+      return "mitred";
+    case ReservationEndCapStyle::Rounded:
+      return "rounded";
+    default:
+      return "joined";
+  }
+}
+
 bool jsonTruthy(const json& value) {
   if (value.is_null()) return false;
   if (value.is_boolean()) return value.get<bool>();
@@ -124,6 +152,9 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
       reservation.t0 = clampNumber(numberOr(source, "t0", 0.0), 0.0, 1.0);
       reservation.t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
       reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
+      reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
+      reservation.endCap0 = parseEndCap(source, "endCap0");
+      reservation.endCap1 = parseEndCap(source, "endCap1");
       path.reservations.push_back(std::move(reservation));
     }
   }
@@ -215,7 +246,7 @@ TrackDefinition normalize(const json& data) {
   if (data.contains("version") && data.at("version").is_number_integer() &&
       (data.at("version").get<int>() < kSchemaVersionMinSupported || data.at("version").get<int>() > kSchemaVersion))
     throw std::runtime_error("unsupported track schema version; the editor only reads schema " + std::to_string(kSchemaVersionMinSupported) +
-                              "-" + std::to_string(kSchemaVersion) + " and writes schema " + std::to_string(kSchemaVersion));
+                             "-" + std::to_string(kSchemaVersion) + " and writes schema " + std::to_string(kSchemaVersion));
 
   TrackDefinition out;
   out.version = kSchemaVersion;
@@ -395,8 +426,20 @@ json pathToJson(const Path& path) {
   if (!path.material.empty()) out["material"] = path.material;
   if (!path.reservations.empty()) {
     json reservations = json::array();
-    for (const auto& reservation : path.reservations)
-      reservations.push_back(json{{"id", reservation.id}, {"t0", reservation.t0}, {"t1", reservation.t1}, {"width", reservation.width}});
+    for (const auto& reservation : path.reservations) {
+      json entry = {{"id", reservation.id}, {"t0", reservation.t0}, {"t1", reservation.t1}, {"width", reservation.width}};
+      // Omitted (rather than always writing 0) when unset, matching the loader's "<= 0 means
+      // engine default" reading and every pre-existing reservation's file shape.
+      if (reservation.wallHeight > 0.0) entry["wallHeight"] = reservation.wallHeight;
+      // Omitted (rather than always writing style "joined") when Joined, matching the loader's
+      // parseEndCap default and every pre-existing reservation's file shape.
+      auto endCapJson = [](const ReservationEndCap& cap) {
+        return json{{"style", endCapStyleName(cap.style)}, {"width", cap.width}, {"noseLength", cap.noseLength}};
+      };
+      if (reservation.endCap0.style != ReservationEndCapStyle::Joined) entry["endCap0"] = endCapJson(reservation.endCap0);
+      if (reservation.endCap1.style != ReservationEndCapStyle::Joined) entry["endCap1"] = endCapJson(reservation.endCap1);
+      reservations.push_back(std::move(entry));
+    }
     out["reservations"] = std::move(reservations);
   }
   return out;

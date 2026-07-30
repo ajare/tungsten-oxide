@@ -36,11 +36,39 @@ struct TextureBindingDefinition {
   int tile{0};
 };
 
-// A central reservation: a void carved out of the road between t0 and t1, tapering from zero width
-// at each end to `width` at the midpoint (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1].
+// How a reservation's void meets the road surface at one end. Joined ramps all the way to zero
+// width there (a point), matching the original single-`width` taper. Mitred and Rounded instead
+// hold the taper at `ReservationEndCap::width` (a full cross-track width, clamped to at most the
+// reservation's own `width`): Mitred cuts off square at exactly that width, Rounded closes the last
+// `noseLength` metres as an elliptical dome instead -- `width` across, `noseLength` along the path
+// -- leaving the tip with the vertical tangent that makes a rounded end read as rounded.
+//
+// `noseLength` is deliberately independent of `width`. Tying the two together (a true half-circle,
+// `width / 2` long) makes the dome a couple of metres long on a reservation running hundreds of
+// them -- geometrically honest, but far too small to see at track zoom. `noseLength <= 0` falls
+// back to that circular `width / 2`, which is also what a file written before this field existed
+// means.
+enum class ReservationEndCapStyle { Joined,
+                                    Mitred,
+                                    Rounded };
+
+struct ReservationEndCap {
+  ReservationEndCapStyle style{ReservationEndCapStyle::Joined};
+  double width{0.0};
+  double noseLength{0.0};
+};
+
+// A central reservation: a void carved out of the road between t0 and t1, tapering from
+// `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint
+// (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1]. endCap0 governs the t0 end, endCap1 the
+// t1 end. `wallHeight` <= 0 means "use TrackCore::DEFAULT_RAIL_HEIGHT" (also what a file predating
+// this field means) -- both the wall's render geometry and its collision height in Ship.cpp read
+// this same value (MeshRegion::railHeight), so one number is both the visual and physical barrier
+// height.
 struct ReservationDefinition {
   std::string id;
-  double t0{0.0}, t1{0.0}, width{0.0};
+  double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
+  ReservationEndCap endCap0, endCap1;
 };
 
 struct PathDefinition {

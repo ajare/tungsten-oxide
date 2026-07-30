@@ -47,12 +47,27 @@ struct TextureBinding {
   int tile{0};
 };
 
-// A central reservation: a void carved out of the road between t0 and t1, tapering from zero width
-// at each end to `width` at the midpoint. Mirrors core's tox::ReservationDefinition
-// (CENTRAL_RESERVATION_PLAN.md).
+// Mirrors core's tox::ReservationEndCapStyle/tox::ReservationEndCap (CENTRAL_RESERVATION_PLAN.md).
+enum class ReservationEndCapStyle { Joined,
+                                    Mitred,
+                                    Rounded };
+
+struct ReservationEndCap {
+  ReservationEndCapStyle style{ReservationEndCapStyle::Joined};
+  double width{0.0};
+  // Rounded only: how far along the path the dome runs, in metres, independent of `width`.
+  // <= 0 means the circular default (`width / 2`) -- see core's tox::ReservationEndCap.
+  double noseLength{0.0};
+};
+
+// A central reservation: a void carved out of the road between t0 and t1, tapering from
+// `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint.
+// `wallHeight` <= 0 means "use the engine default" -- see core's tox::ReservationDefinition, which
+// this mirrors (CENTRAL_RESERVATION_PLAN.md).
 struct Reservation {
   std::string id;
-  double t0{0.0}, t1{0.0}, width{0.0};
+  double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
+  ReservationEndCap endCap0, endCap1;
 };
 
 struct Path {

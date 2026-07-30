@@ -123,16 +123,109 @@ lane for that span.
   (add/remove/update with clamp + non-overlap validation — undo/redo is free
   via existing whole-document snapshots); new `ReservationsPanel` (list +
   t0/t1/width fields, mirrors `TriggersPanel`); wired into `main.cpp`.
-  - `TopDownCanvas` on-canvas preview of the gap/wall footprint is **not yet
-    done** — deferred, since it's cosmetic (the panel/table already show
-    every reservation's exact t0/t1/width) and every other file this
-    milestone touches (`EditorState.hpp`, `main.cpp`, `CMakeLists.txt`) had
-    substantial pre-existing uncommitted work in it, making an additional
-    non-essential change riskier to land cleanly.
+  - `TopDownCanvas`'s on-canvas preview of the gap/wall footprint (deferred at
+    the time) is now done, in `drawBakedPath`/`drawReservationWalls`: the
+    road ribbon carves the gap out of its own quads per centerline segment
+    (reusing `Frame::reservationHalfGap`, corner-wise per sub-quad exactly
+    like `TrackBake.cpp`'s §4f fix, just at physics-sample density rather
+    than the render mesh's finer subdivision), and the two tapered boundary
+    curves draw from the synthetic region's own baked `rails` — no separate
+    evaluator or placement transform needed, since both are already in world
+    space. Still read-only, matching every other aux-point/zone/trigger
+    preview in this file: no on-canvas click-to-place or drag, values are
+    still authored through the panel only.
   - `clampReservation`'s non-overlap logic clamps into the free `[lo,hi]` gap
     around the edited entry's own midpoint (bounded by whichever other
     reservations are nearest on each side) — guarantees non-overlap without
     ever touching another entry.
+  - **Per-end cap style (Joined/Mitred/Rounded).** Each end (t0, t1) now picks
+    independently between the original taper-to-a-point (Joined), a taper
+    that flattens into a given full-width cap with a visible corner (Mitred),
+    or the same cap with that corner smoothed off instead (Rounded).
+    `ReservationEndCap{style, width}` lives on `ReservationDefinition`/
+    editor's `Reservation` as `endCap0`/`endCap1`; JSON keys of the same name,
+    omitted (defaulting to Joined/0) for backward compatibility with every
+    track authored before this existed. `TrackBake.cpp`'s
+    `reservationHalfGapAt` first bakes `baseWidth`, the original 0 → width →
+    0 taper (via `hermitePair`, a two-segment cubic Hermite reproducing the
+    old three-point `scalar()`/Catmull-Rom output bit-for-bit — so an
+    all-Joined reservation still bakes identically to before), then floors
+    each half of the span against that end's cap. Mitred uses a hard
+    `max(baseWidth, capWidth)`: a flat shelf ending in a blunt cut of exactly
+    `capWidth`. Rounded uses that same shelf, except its last `noseLength`
+    **metres** are replaced by `roundedNoseWidth`, a half-ellipse (`capWidth`
+    across, `noseLength` along the path) closing the void to a point.
+  - **Why the nose is measured in metres, and why that matters.** The
+    vertical tangent at the tip is the entire visual signature of a rounded
+    end — it is what makes the boundary flare outward like a dome instead of
+    stopping square. Two earlier attempts got this wrong by shaping the
+    profile in *t*-space: forcing a zero slope at the cap via Hermite
+    tangents, then a `smoothstep` crossfade across the whole half-span. Both
+    were measured (scratch script replicating the bake) and both produced a
+    profile that was **flat at the tip with exactly zero slope** — which is
+    precisely what Mitred's shelf looks like, so the two styles were
+    indistinguishable; their peak difference was ~0.7 m of width nearly
+    1 km from the end, nowhere near the cap. Sizing the dome in world metres
+    is what actually separates them: at `capWidth` = 4 m, Mitred is 4.000 m
+    wide at the tip with zero slope, Rounded is 0.000 m flaring at ~18 m per
+    metre.
+  - **`noseLength` is decoupled from `capWidth`.** A geometrically-honest
+    dome is a half-*circle* of radius `capWidth/2` — only ~2 m long on a
+    reservation running hundreds, which is below the ~6 m physics-centerline
+    spacing the editor preview's road fill walks. Measured: at a 2 m nose
+    exactly one sample lands inside the dome, so the fill jumps straight to
+    the full cap width and renders identically to Mitred; at 40 m, seven
+    samples land inside it and the curve shows. So the dome is a half-
+    *ellipse* — `capWidth` across, `noseLength` along the path — with
+    `noseLength` authored per end. `noseLength <= 0` falls back to the
+    circular `capWidth/2` (also what a file predating the field means), and
+    `ReservationsPanel` seeds `kDefaultNoseLength` = 40 m the first time an
+    end is switched to Rounded so it is visible without hand-tuning. No upper
+    clamp is needed: the bake maxes the dome against the base taper, so an
+    over-long nose is simply swallowed by it.
+  - Sizing the nose in metres means the bake needs the path's driven length,
+    which `length()` measures off the centerline that `center()` produces —
+    a cycle. Broken by splitting out `centerRaw()` (centerline without the
+    reservation carve applied); positions never depended on the carve
+    (`applyReservationGap` only writes `reservationHalfGap`/
+    `reservationIndex`), so this is bit-identical, as the parity corpus
+    confirms.
+  - `adaptiveRenderBake` also places `kNoseRings` forced rings across each
+    Rounded dome explicitly. Its `splitSpan` bisects the whole reservation,
+    so a short dome inside a 1600 m half-span would exhaust the depth-10
+    budget before resolving one and round off to the same blunt cut as
+    Mitred. The rings are spaced by the ellipse's own parameter
+    (`d = noseLength * (1 - cos θ)`) rather than uniformly, putting most of
+    them at the tip where it turns hardest and none along the near-flat run
+    where it meets the shelf.
+  - Cap width is clamped to at most the reservation's own midpoint `width`.
+    `reservationGeometry` gained a `capWall` closer: a Joined end's
+    zero-width taper self-seals as before, and so does a Rounded end (its
+    dome closes to a point), but a Mitred end leaves the void open at its
+    cap's full width, so a rail + wall triangle pair is added across any end
+    whose left/right boundary points don't already coincide. No
+    `TopDownCanvas` changes needed — its preview reads purely off
+    `Frame::reservationHalfGap` and the region's baked `rails`, so the cap
+    shapes render automatically. The preview's *road fill* walks the physics
+    centerline (~6 m spacing) and so only resolves a dome longer than that —
+    the reason `noseLength` defaults to 40 m rather than the circular
+    `capWidth/2`; the violet boundary drawn from the region's `rails` comes
+    from the fine render bake and shows the dome at any length.
+    `ReservationsPanel` gained a style combo, a cap-width field, and a
+    nose-length field (Rounded only) per end.
+  - **`wallHeight` — configurable visual and physical barrier height.**
+    `ReservationDefinition`/editor's `Reservation` gained `wallHeight`
+    (metres, `<= 0` means "use `TrackCore::DEFAULT_RAIL_HEIGHT`", also what a
+    file predating the field means — same convention as the end-cap fields
+    above). `reservationGeometry` sets the synthetic region's
+    `MeshRegion::railHeight` from it instead of the hardcoded default, which
+    is enough on its own to make it both a visual and a physical setting: the
+    wall's render triangles are already extruded by `region.railHeight`
+    (unchanged), and Ship.cpp's ground-clearance check
+    (`p.groundPos.y >= region.elevation + region.railHeight`) already reads
+    the same field for every `MeshRegion` including this one — no separate
+    physics wiring needed. `ReservationsPanel` gained a "Wall height (0 =
+    default)" field alongside Width.
 - [x] **M4 — Debug overlay.** F1 overlay toggle for
   `GeometryKind::ReservationWall` in `StatePlayTungstenMonoxide.cpp`,
   alongside the existing `TriggerSurface`/`PathRail`/`MeshRail` toggles.

@@ -1967,6 +1967,17 @@ private:
   static void clampReservation(std::vector<Reservation>& list, int justEdited) {
     Reservation& r = list[justEdited];
     r.width = std::max(1.0, r.width);
+    // wallHeight <= 0 means "use the engine default" (see tox::ReservationDefinition), so only
+    // clamp away negative values, not zero.
+    r.wallHeight = std::max(0.0, r.wallHeight);
+    // End-cap width never widens past the reservation's own midpoint width (a Mitred/Rounded end
+    // narrower than the reservation makes a taper; wider would make it flare out instead).
+    // `noseLength` needs no upper clamp -- the bake maxes the dome against the base taper, so an
+    // over-long nose is simply swallowed by it rather than producing anything invalid.
+    r.endCap0.width = std::clamp(r.endCap0.width, 0.0, r.width);
+    r.endCap1.width = std::clamp(r.endCap1.width, 0.0, r.width);
+    r.endCap0.noseLength = std::max(0.0, r.endCap0.noseLength);
+    r.endCap1.noseLength = std::max(0.0, r.endCap1.noseLength);
     r.t0 = std::clamp(r.t0, 0.0, 1.0);
     r.t1 = std::clamp(r.t1, 0.0, 1.0);
     if (r.t0 > r.t1) std::swap(r.t0, r.t1);
