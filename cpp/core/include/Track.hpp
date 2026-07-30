@@ -25,6 +25,10 @@ struct Frame {
   Vec3 pos, tangent, h, edgeRight, normal;
   double roll{0.0}, width{0.0}, halfW{0.0}, sLeft{0.0}, sRight{0.0};
   double crossSectionCurvature{0.0}, crossSectionTightness{1.0}, crossSectionThickness{0.0};
+  // Half-width of the central-reservation void at this frame (0 when none is active here); the gap
+  // spans [-reservationHalfGap, +reservationHalfGap] in cross-section v-space, centered on the
+  // path. CENTRAL_RESERVATION_PLAN.md M1.
+  double reservationHalfGap{0.0};
 };
 
 struct EndpointIds {

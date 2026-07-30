@@ -74,12 +74,30 @@ lane for that span.
     (mid-edit tolerance, same policy as its other fields) — non-overlap and
     "fits within the road width" validation is EditorState's job (M3), not
     the parser's.
-- [ ] **M1 — Baking.** Taper evaluation; carve the gap out of
+- [x] **M1 — Baking.** Taper evaluation; carve the gap out of
   `PathSurface`/`PathShell` (two lane strips instead of one, tapering to a
   point at `t0`/`t1`); synthetic `MeshRegion` (bounds + tapered-boundary
   rails) appended to `track.meshRegions`; `GeometryKind::ReservationWall`
   render batch (vertical quad strip along the same boundary,
   `DEFAULT_RAIL_HEIGHT` tall).
+  - `Frame::reservationHalfGap` (new field) carries the carved half-width per
+    baked centerline sample, computed once in `center()`/`adaptiveRenderBake`
+    via the existing Catmull-Rom `scalar()` helper against a synthetic
+    3-point `{t0:0, mid:width, t1:0}` control list.
+  - `PathShell` (the cross-section-thickness underside) is **not** carved —
+    scope-limited to `PathSurface`. Most tracks don't use cross-section
+    thickness; revisit if that turns out to matter.
+  - `adaptiveRenderBake`'s chord-tolerance subdivision doesn't know about
+    reservations (it only looks at centerline position), so a straight span
+    containing one would otherwise collapse to its two endpoints with
+    nothing to carve. Fixed by forcing a fixed 9-point (not the full physics
+    sample density — that over-tessellated badly) evenly-spaced anchor set
+    across each reservation's span into the render mesh.
+  - The synthetic `MeshRegion` has **no `polygons`/`triangles`** — only
+    `bounds` + `rails` — so `meshRegionAt`/`surfaceOwnerAt` (which gate on
+    `region.contains()`) can never treat it as a standing surface. This is
+    also how M2 tells a reservation's region apart from a real placed mesh
+    asset's (always-populated) region.
 - [ ] **M2 — Physics wiring.** `Ship.cpp`'s grounded-corridor branch checks
   reservation regions via `slideAlongRails` (new small loop; the existing
   mesh-region loops only fire while airborne-near or already "on" a mesh

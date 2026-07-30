@@ -23,7 +23,12 @@ enum class GeometryKind { PathSurface,
                           MeshSurface,
                           MeshRail,
                           ZoneSurface,
-                          TriggerSurface };
+                          TriggerSurface,
+                          // Vertical wall around a central-reservation void carved out of a path's
+                          // road surface (CENTRAL_RESERVATION_PLAN.md). A dedicated kind (not folded
+                          // into PathRail) since, unlike PathRail, this one is actually collidable --
+                          // see its own synthetic MeshRegion in Track::meshRegions.
+                          ReservationWall };
 struct TextureBinding {
   std::string assetId;
   int tile{0};

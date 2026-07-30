@@ -153,13 +153,39 @@ Frame frame(const Sample0& s) {
   f.crossSectionThickness = s.thick;
   return f;
 }
+// Half-width of the central-reservation void at `t` (path-fraction domain, same as width/roll/
+// cross-section points), clamped so at least a sliver of each lane always remains. Reservations
+// are authored non-overlapping (EditorState's job, CENTRAL_RESERVATION_PLAN.md M3), so the first
+// span containing `t` is authoritative. Ramps 0 -> width -> 0 across [t0,t1] via the same
+// Catmull-Rom `scalar()` every other t-based point already uses, from three synthetic control
+// points at t0/mid/t1 -- CENTRAL_RESERVATION_PLAN.md's "ramp inside [t0,t1]" decision.
+double reservationHalfGapAt(const PathDefinition& def, double t, double roadWidth) {
+  for (const auto& r : def.reservations) {
+    if (t < r.t0 || t > r.t1) continue;
+    TrackPointDefinition a, b, c;
+    a.t = r.t0;
+    a.width = 0.0;
+    b.t = (r.t0 + r.t1) / 2;
+    b.width = r.width;
+    c.t = r.t1;
+    c.width = 0.0;
+    const std::vector<const TrackPointDefinition*> points{&a, &b, &c};
+    const double gapWidth = std::max(0.0, scalar(points, false, t, [](auto& x) { return x.width; }));
+    constexpr double kMinLaneWidth = 1.0;
+    return std::max(0.0, std::min(gapWidth / 2.0, roadWidth / 2.0 - kMinLaneWidth));
+  }
+  return 0.0;
+}
 std::vector<Frame> center(const PathDefinition& p, int N) {
   Evaluator e(p);
   std::vector<Frame> o;
   o.reserve(N);
   for (int i = 0; i < N; i++) {
     double g = p.closed ? (double(i) / N) * e.n : (N > 1 ? (double(i) / (N - 1)) * (e.n - 1) : 0);
-    o.push_back(frame(e.eval(g)));
+    Frame f = frame(e.eval(g));
+    const double t = p.closed ? double(i) / N : (N > 1 ? double(i) / (N - 1) : 0);
+    f.reservationHalfGap = reservationHalfGapAt(p, t, f.width);
+    o.push_back(std::move(f));
   }
   return o;
 }
@@ -361,6 +387,20 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     Vec3 right = raw[i].pos.clone().addScaledVector(raw[i].edgeRight, raw[i].halfW);
     affected[i] = left.distanceTo(sourceEdges.left[i]) > 1e-6 || right.distanceTo(sourceEdges.right[i]) > 1e-6;
   }
+  // A reservation's gap is invisible to the chord-tolerance `breaks()` below (it only looks at
+  // centerline position, not cross-section carving), so a straight span containing one would
+  // otherwise get compressed to its two raw endpoints with nothing in between to carve. Force a
+  // fixed, small number of evenly-spaced anchors across each reservation's span instead of every
+  // raw sample in it (which, at physics sampling density, would massively over-tessellate a long
+  // reservation) -- CENTRAL_RESERVATION_PLAN.md M1.
+  for (const auto& reservation : definition.reservations) {
+    constexpr int kSubdivisions = 8;
+    for (int s = 0; s <= kSubdivisions; ++s) {
+      const double t = reservation.t0 + (reservation.t1 - reservation.t0) * s / kSubdivisions;
+      const double idx = definition.closed ? t * n : t * (n - 1);
+      affected[std::clamp(static_cast<int>(std::lround(idx)), 0, n - 1)] = true;
+    }
+  }
   Evaluator evaluator(definition);
   auto gAt = [&](int i) {
     return definition.closed ? static_cast<double>(i) / n * evaluator.n
@@ -383,7 +423,14 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   };
   RenderBake out;
   auto pushExact = [&](int i) { out.frames.push_back(raw[i]); out.edges.left.push_back(sourceEdges.left[i]); out.edges.right.push_back(sourceEdges.right[i]); };
-  auto pushAdaptive = [&](double g) { Frame f = frame(evaluator.eval(g)); out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight,-f.halfW)); out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight,f.halfW)); out.frames.push_back(std::move(f)); };
+  const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
+  auto pushAdaptive = [&](double g) {
+    Frame f = frame(evaluator.eval(g));
+    f.reservationHalfGap = reservationHalfGapAt(definition, g / gmax, f.width);
+    out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight, -f.halfW));
+    out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight, f.halfW));
+    out.frames.push_back(std::move(f));
+  };
   pushExact(0);
   int i = 0, last = n - 1;
   while (i < last) {
@@ -431,7 +478,26 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   top.b.hasUv = true;
   if (def.texture) top.b.texture = TextureBinding{def.texture->assetId, def.texture->tile};
   std::vector<std::vector<double>> br;
-  for (int i = 0; i < n; i++) br.push_back(crossBreak(frames[i].crossSectionCurvature, frames[i].crossSectionTightness, e.left[i].distanceTo(e.right[i])));
+  // Central-reservation gap band per ring, in cross-section v-space (0=left edge, 1=right edge,
+  // 0.5=center) -- {0.5,0.5} (a zero-width band) where no reservation is active, matching
+  // reservationHalfGap's own "0 outside a reservation's span" convention. Fed into `br` as extra
+  // breakpoints so the strip below subdivides exactly at the gap's edges, and used to skip the
+  // sub-quad whose v-range falls inside the gap at BOTH rings of a segment -- CENTRAL_RESERVATION_
+  // PLAN.md M1: leaving the "both" requirement (rather than "either") is what makes the taper close
+  // to a point at t0/t1 instead of leaving a hard-edged notch, since one ring's band degenerates to
+  // a single point there.
+  std::vector<std::pair<double, double>> gapV(n, {0.5, 0.5});
+  for (int i = 0; i < n; i++) {
+    br.push_back(crossBreak(frames[i].crossSectionCurvature, frames[i].crossSectionTightness, e.left[i].distanceTo(e.right[i])));
+    if (frames[i].reservationHalfGap > 1e-9) {
+      const double w = std::max(1.0, frames[i].width);
+      gapV[i] = {0.5 - frames[i].reservationHalfGap / w, 0.5 + frames[i].reservationHalfGap / w};
+      br.back().push_back(gapV[i].first);
+      br.back().push_back(gapV[i].second);
+      std::sort(br.back().begin(), br.back().end());
+      br.back().erase(std::unique(br.back().begin(), br.back().end()), br.back().end());
+    }
+  }
   auto ringPoint = [&](int ring, double v) {
     const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
     if (exact != br[ring].end()) return surface(frames[ring], e.left[ring], e.right[ring], v);
@@ -448,6 +514,9 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + frames[i].pos.distanceTo(frames[j].pos)) / avg : dist[j] / avg);
     for (size_t k = 0; k + 1 < v.size(); k++) {
       double a = v[k], z = v[k + 1];
+      const bool gapAtI = a >= gapV[i].first - 1e-9 && z <= gapV[i].second + 1e-9;
+      const bool gapAtJ = a >= gapV[j].first - 1e-9 && z <= gapV[j].second + 1e-9;
+      if (gapAtI && gapAtJ) continue;
       Vec3 p0 = ringPoint(i, a), p1 = ringPoint(i, z), q0 = ringPoint(j, a), q1 = ringPoint(j, z);
       top.tri(p0, p1, q0, {a, t0}, {z, t0}, {a, t1});
       top.tri(p1, q1, q0, {z, t0}, {z, t1}, {a, t1});
@@ -530,6 +599,77 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       r.tri(at, b, bt);
     }
     track.geometry.push_back(std::move(r.b));
+  }
+}
+
+// Builds a reservation's synthetic MeshRegion (rails only -- no polygons/triangles, so
+// meshRegionAt/surfaceOwnerAt never treat it as a standing surface: CENTRAL_RESERVATION_PLAN.md's
+// "true void" decision) plus its ReservationWall render geometry, from the two tapered inner-lane
+// boundary curves. Mirrors PathRail's own triangle winding (a, b, at), (at, b, bt) exactly, and
+// DEFAULT_RAIL_HEIGHT rather than PathRail's fixed low decorative height, per M1's design.
+void reservationGeometry(Track& track, const PathDefinition& def, const Path& path, const Edges& e, int pi) {
+  const int n = static_cast<int>(path.centerline.size());
+  if (n < 2) return;
+  for (const auto& reservation : def.reservations) {
+    struct Bound {
+      Vec3 left, right;
+      Vec3 normal;
+    };
+    std::vector<Bound> bounds;
+    for (int i = 0; i < n; i++) {
+      const double t = def.closed ? double(i) / n : (n > 1 ? double(i) / (n - 1) : 0.0);
+      if (t < reservation.t0 - 1e-9 || t > reservation.t1 + 1e-9) continue;
+      const Frame& f = path.centerline[i];
+      const double halfGap = f.reservationHalfGap;
+      const double w = std::max(1.0, f.width);
+      const double vLeft = 0.5 - halfGap / w, vRight = 0.5 + halfGap / w;
+      bounds.push_back({surface(f, e.left[i], e.right[i], vLeft), surface(f, e.left[i], e.right[i], vRight), f.normal});
+    }
+    if (bounds.size() < 2) continue;
+
+    MeshRegion region;
+    region.id = "reservation-" + reservation.id + "-path-" + std::to_string(pi);
+    region.elevation = bounds.front().left.y;
+    region.railHeight = TrackCore::DEFAULT_RAIL_HEIGHT;
+    region.bounds = MeshBounds{INFINITY, -INFINITY, INFINITY, -INFINITY};
+    auto extend = [&](const Vec3& p) {
+      region.bounds.minX = std::min(region.bounds.minX, p.x);
+      region.bounds.maxX = std::max(region.bounds.maxX, p.x);
+      region.bounds.minZ = std::min(region.bounds.minZ, p.z);
+      region.bounds.maxZ = std::max(region.bounds.maxZ, p.z);
+    };
+    auto addRail = [&](const Vec3& a, const Vec3& b) {
+      const double dx = b.x - a.x, dz = b.z - a.z, length = std::hypot(dx, dz);
+      if (length < 1e-9) return;
+      region.rails.push_back({static_cast<int>(region.rails.size()), {a.x, a.z}, {b.x, b.z}, dz / length, -dx / length, length});
+    };
+
+    Builder wall;
+    wall.b.id = region.id + "-wall";
+    wall.b.kind = GeometryKind::ReservationWall;
+    wall.b.materialKey = "Tracks/DefaultRailMaterial";
+
+    for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
+      const Bound& bi = bounds[k];
+      const Bound& bj = bounds[k + 1];
+      extend(bi.left);
+      extend(bi.right);
+      addRail(bi.left, bj.left);
+      addRail(bi.right, bj.right);
+      for (const bool right : {false, true}) {
+        const Vec3& a = right ? bi.right : bi.left;
+        const Vec3& b = right ? bj.right : bj.left;
+        Vec3 at = a.clone().addScaledVector(bi.normal, region.railHeight);
+        Vec3 bt = b.clone().addScaledVector(bj.normal, region.railHeight);
+        wall.tri(a, b, at);
+        wall.tri(at, b, bt);
+      }
+    }
+    extend(bounds.back().left);
+    extend(bounds.back().right);
+
+    track.meshRegions.push_back(std::move(region));
+    track.geometry.push_back(std::move(wall.b));
   }
 }
 }  // namespace
@@ -656,6 +796,12 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
 
     compileTrackMeshes(track, warnings);
     for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
+    // Reservation regions are appended after compileTrackMeshes (which clears meshRegions) and are
+    // deliberately excluded from the `low`/trackFloorY computation above -- they carry no floor of
+    // their own (CENTRAL_RESERVATION_PLAN.md's "true void" decision), so their `elevation` (the road
+    // surface height, not a fall-through depth) must not raise the respawn floor.
+    for (std::size_t i = 0; i < track.definition.paths.size(); ++i)
+      reservationGeometry(track, track.definition.paths[i], track.paths[i], bakedEdges[i], static_cast<int>(i));
     std::map<std::string, int> regionIds;
     for (std::size_t i = 0; i < track.meshRegions.size(); ++i)
       regionIds.emplace(track.meshRegions[i].id, static_cast<int>(i));
@@ -902,8 +1048,10 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
           return trigger.center.clone().addScaledVector(trigger.right, sr * trigger.halfWidth).addScaledVector(trigger.up, su * trigger.height);
         };
         Vec3 c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
-        trig.tri(c0, c1, c2, {0, 0}, {1, 0}, {1, 1});
-        trig.tri(c0, c2, c3, {0, 0}, {1, 1}, {0, 1});
+        // In the editor's XZ track convention +right is the driver's left-hand side when looking
+        // along fwd. Start U there so trigger textures read left-to-right in the direction of travel.
+        trig.tri(c0, c1, c2, {1, 0}, {0, 0}, {0, 1});
+        trig.tri(c0, c2, c3, {1, 0}, {0, 1}, {1, 1});
         track.geometry.push_back(std::move(trig.b));
       }
       track.triggers.push_back(std::move(trigger));

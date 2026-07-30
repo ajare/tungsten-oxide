@@ -665,6 +665,49 @@ int main(int argc, char** argv) {
     }
   }
   {
+    // CENTRAL_RESERVATION_PLAN.md M1: baking a reservation carves a gap out of the path surface
+    // and produces a synthetic rails-only MeshRegion plus ReservationWall geometry.
+    json input = base;
+    input["version"] = 11;
+    input["paths"][0]["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 8.0}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a track with a reservation bakes: " + loaded.error);
+    if (loaded) {
+      const Track& track = *loaded.track;
+      const auto region = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
+                                        [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+      check(region != track.meshRegions.end(), "the reservation gets a synthetic MeshRegion");
+      if (region != track.meshRegions.end()) {
+        check(region->polygons.empty() && region->triangles.empty(),
+              "the reservation region has no floor -- meshRegionAt/surfaceOwnerAt can never pick it as a standing surface");
+        check(!region->rails.empty(), "the reservation region has boundary rails");
+        check(region->bounds.minX < region->bounds.maxX && region->bounds.minZ < region->bounds.maxZ,
+              "the reservation region has a non-degenerate bounds box");
+      }
+
+      const auto wall = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                      [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; });
+      check(wall != track.geometry.end() && !wall->vertices.empty(), "a ReservationWall geometry batch is emitted");
+
+      const auto surface = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                         [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
+      check(surface != track.geometry.end(), "the path surface batch still exists");
+      if (surface != track.geometry.end() && !track.paths[0].centerline.empty()) {
+        // Direct correctness check (a raw vertex-count comparison isn't meaningful here: the
+        // reservation also forces extra render-mesh subdivisions across its span, which can grow
+        // the surface batch even as it carves a hole out of it). At the reservation's midpoint
+        // (t=0.5, mid-span of its [0.3,0.7]), the gap is at full width, so no surface vertex should
+        // land near the path centerline there.
+        const auto& centerline = track.paths[0].centerline;
+        const Vec3& void_center = centerline[static_cast<std::size_t>(std::lround(0.5 * (centerline.size() - 1)))].pos;
+        const bool anyVertexInVoid = std::any_of(surface->vertices.begin(), surface->vertices.end(), [&](const RenderVertex& v) {
+          return std::hypot(v.position.x - void_center.x, v.position.z - void_center.z) < 1.5;
+        });
+        check(!anyVertexInVoid, "no surface vertex lands near the path centerline at the reservation's full-width midpoint");
+      }
+    }
+  }
+  {
     json input = base;
     input["paths"] = json::array();
     check(!Track::fromJson(input.dump()), "a track with no paths is fatal");
