@@ -169,31 +169,6 @@
           "thickness": 4.0,
           "tightness": 1.0,
           "type": "crossSection"
-        },
-        {
-          "t": 0.09,
-          "type": "width",
-          "width": 36.0
-        },
-        {
-          "t": 0.14,
-          "type": "width",
-          "width": 36.0
-        },
-        {
-          "t": 0.13129063147942047,
-          "type": "width",
-          "width": 69.6
-        },
-        {
-          "t": 0.09974341901552215,
-          "type": "width",
-          "width": 72.0
-        },
-        {
-          "t": 0.11537305597785927,
-          "type": "width",
-          "width": 138.6
         }
       ],
       "reservations": [
@@ -201,19 +176,20 @@
           "endCap0": {
             "noseLength": 0.0,
             "style": "mitred",
-            "width": 14.0
+            "width": 8.0
           },
           "endCap1": {
             "noseLength": 0.0,
-            "style": "rounded",
-            "width": 14.0
+            "style": "mitred",
+            "width": 8.0
           },
           "id": "res1",
-          "railClearanceHeight": 8.0,
-          "t0": 0.1,
+          "railClearanceHeight": 4.0,
+          "t0": 0.12,
           "t1": 0.13,
           "wallHeight": 4.0,
-          "width": 24.0
+          "width": 36.7,
+          "widthMode": "percent"
         }
       ]
     }

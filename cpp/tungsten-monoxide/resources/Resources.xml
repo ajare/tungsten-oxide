@@ -90,13 +90,13 @@
                 </Definition>
             </Definitions>
         </Resource>
-        <Resource type="Image" name="DefaultRailTexture" location="images/test.png"/>
+        <Resource type="Image" name="DefaultRailTexture" location="images/chevrons.png"/>
         <Resource type="Image" name="DefaultMeshTexture" location="images/test.png"/>
-        <Resource type="Image" name="DefaultShellTexture" location="images/test.png"/>
+        <Resource type="Image" name="DefaultShellTexture" location="images/tiled-metal.png"/>
         <Resource type="Image" name="DefaultZoneTexture" location="images/test.png"/>
         <Resource type="Image" name="DefaultTriggerTexture" location="images/test.png"/>
         <Resource type="Image" name="DefaultTrackTexture" location="images/test.png"/>
-        <Resource type="Image" name="TrackTexture" location="images/floor5.png"/>
+        <Resource type="Image" name="TrackTexture" location="images/wipeout_seamless_track_texture_512x512.png"/>
         <Resource type="Material" name="DefaultRailMaterial">
             <DependentResources>
                 <DependentResource id="Program" ref="TrackProgram"/>
@@ -215,8 +215,8 @@
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">
-                    <ModelFile>New_Track.mppmodel</ModelFile>
-                    <TrackData>New_Track.json</TrackData>
+                    <ModelFile>NewTrack.mppmodel</ModelFile>
+                    <TrackData>NewTrack.json</TrackData>
                     <TrackMeshes>
                         <Mesh>path-0-surface</Mesh>
                     </TrackMeshes>
