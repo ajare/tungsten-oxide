@@ -2567,7 +2567,7 @@ int main(int, char**) {
 
     // Toolbar: a fixed strip pinned directly under the menu bar (not part of the dockspace, not
     // movable/resizable) for the handful of controls used constantly regardless of which panel
-    // tab is focused -- mode and quick undo/redo. Everything else that used to live in the old
+    // tab is focused -- document actions, mode and quick undo/redo. Everything else that used to live in the old
     // single "track_editor — status" mega-window moved into the menu bar above, the Panels window's
     // sections (Track name/direction now in "Track Properties", first in the list), or the
     // Diagnostics panel.
@@ -2582,7 +2582,19 @@ int main(int, char**) {
                  ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                      ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextUnformatted("Mode (E/C/R):");
+    const ImVec2 documentButtonSize(ImGui::GetFrameHeight(), 0.0f);
+    if (ImGui::Button(ICON_FA_FILE "##NewTrackToolbar", documentButtonSize))
+      requestedAction = DocumentAction::New;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("New track");
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "##OpenTrackToolbar", documentButtonSize))
+      requestedAction = DocumentAction::OpenResources;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open Resources XML (Ctrl+O)");
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_SAVE "##SaveTrackToolbar", documentButtonSize)) beginSave(false);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save track (Ctrl+S)");
+    ImGui::SameLine(0.0f, 14.0f);
+    ImGui::TextUnformatted("Mode");
     ImGui::SameLine();
     int modeIndex = static_cast<int>(editorState.mode());
     const char* modeNames[] = {"Edit", "Create", "Rails"};
