@@ -63,8 +63,12 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
     double px = p.groundPos.x + ax * dt;
     double pz = p.groundPos.z + az * dt;
     for (const auto& region : simulation.track().meshRegions) {
-      if (p.groundPos.y >= region.elevation + region.railClearanceHeight) continue;
+      // Bounds first, then the height test: elevationAt is a triangle scan for a curved-floor region
+      // (a Capped reservation) and a plain read for every other, so this ordering keeps the common
+      // case free while letting the clearance test use the floor height under the ship rather than
+      // one scalar for a floor that can vary tens of metres across a single region.
       if (!region.withinBounds(p.groundPos.x, p.groundPos.z, px, pz, TrackCore::COLLISION_WALL_MARGIN)) continue;
+      if (p.groundPos.y >= region.elevationAt(p.groundPos.x, p.groundPos.z) + region.railClearanceHeight) continue;
       Vec2d velocity{ax, az};
       const double before = std::hypot(ax, az);
       const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {px, pz},
@@ -85,12 +89,13 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
     p.groundPos.set(px, p.groundPos.y + p.verticalVel * dt, pz);
 
     const MeshRegion* landing = simulation.meshRegionAt(px, pz, p.groundPos.y);
-    if (landing && p.groundPos.y <= landing->elevation) {
+    const double landingY = landing ? landing->elevationAt(px, pz) : 0.0;
+    if (landing && p.groundPos.y <= landingY) {
       const double impactSpeed = std::max(0.0, -p.verticalVel);
       landOnSurface(ship, UP);
       p.landingBounce += std::min(3.2, impactSpeed * 0.09);
       p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-      p.groundPos.set(px, landing->elevation, pz);
+      p.groundPos.set(px, landingY, pz);
       surfaceRenderPos = p.groundPos;
       surfaceNormal = UP;
     } else if (!landing) {
@@ -131,19 +136,22 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       addImpactJolt(p, before - after);
     }
 
+    // The height the ship is leaving from, sampled under its *destination* so a curved floor is
+    // followed across the move rather than snapped to one scalar for the whole region.
+    const double leavingY = meshRegion->elevationAt(moved.x, moved.z);
     const MeshRegion* stillOn = meshRegion->contains(moved.x, moved.z)
                                     ? meshRegion
-                                    : simulation.meshRegionAt(moved.x, moved.z, meshRegion->elevation);
+                                    : simulation.meshRegionAt(moved.x, moved.z, leavingY);
     if (stillOn) {
-      p.groundPos.set(moved.x, stillOn->elevation, moved.z);
+      p.groundPos.set(moved.x, stillOn->elevationAt(moved.x, moved.z), moved.z);
       surfaceRenderPos = p.groundPos;
       surfaceNormal = UP;
     } else {
-      c = simulation.sampleTrack(moved.x, meshRegion->elevation, moved.z);
-      const Projection projection = projectToSurface(c, moved.x, meshRegion->elevation, moved.z);
-      const bool overCorridor = corridorContains(c, moved.x, meshRegion->elevation, moved.z, projection);
+      c = simulation.sampleTrack(moved.x, leavingY, moved.z);
+      const Projection projection = projectToSurface(c, moved.x, leavingY, moved.z);
+      const bool overCorridor = corridorContains(c, moved.x, leavingY, moved.z, projection);
       const SurfaceFrame surface = curvedSurfaceFrame(c, projection.s);
-      if (overCorridor && std::fabs(surface.pos.y - meshRegion->elevation) <= Consts::SURFACE_SNAP_UP) {
+      if (overCorridor && std::fabs(surface.pos.y - leavingY) <= Consts::SURFACE_SNAP_UP) {
         p.groundPos.copy(surface.pos);
         tangentize(p.moveDir, surface.normal, p.forward);
         tangentize(p.forward, surface.normal, p.moveDir);
@@ -151,7 +159,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
         surfaceNormal = surface.normal;
       } else {
         beginAirborne(ship, p.moveDir.clone().multiplyScalar(p.speed));
-        p.groundPos.set(moved.x, meshRegion->elevation, moved.z);
+        p.groundPos.set(moved.x, leavingY, moved.z);
       }
     }
   } else if (hasTranslation) {
@@ -266,7 +274,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   }
 
   if (!p.airborne && !hasTranslation && meshRegion) {
-    p.groundPos.y = meshRegion->elevation;
+    p.groundPos.y = meshRegion->elevationAt(p.groundPos.x, p.groundPos.z);
     surfaceRenderPos = p.groundPos;
     surfaceNormal = UP;
   } else if (!p.airborne && !hasTranslation) {

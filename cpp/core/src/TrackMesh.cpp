@@ -212,6 +212,30 @@ bool MeshRegion::contains(double x, double z) const {
   return false;
 }
 
+double MeshRegion::elevationAt(double x, double z) const {
+  // Barycentric interpolation over whichever floor triangle covers (x,z). The scan is linear, but
+  // it only ever runs for a Capped reservation (every other region leaves `floor` empty and takes
+  // the first branch), and every caller already gates on contains()/withinBounds() first, so it
+  // costs nothing until a ship is actually standing inside a reservation's footprint.
+  if (floor.empty()) return elevation;
+  for (const auto& triangle : floor) {
+    if (x < triangle.bounds.minX || x > triangle.bounds.maxX || z < triangle.bounds.minZ || z > triangle.bounds.maxZ) continue;
+    const Vec2d &a = triangle.points[0], &b = triangle.points[1], &c = triangle.points[2];
+    const double v0x = b.x - a.x, v0z = b.y - a.y;
+    const double v1x = c.x - a.x, v1z = c.y - a.y;
+    const double den = v0x * v1z - v1x * v0z;
+    if (std::fabs(den) < 1e-12) continue;  // degenerate sliver (a taper tip); the next one covers it
+    const double v2x = x - a.x, v2z = z - a.y;
+    const double s = (v2x * v1z - v1x * v2z) / den;
+    const double t = (v0x * v2z - v2x * v0z) / den;
+    // A shared edge would otherwise fall through both neighbours on a floating-point tie.
+    constexpr double kEdge = 1e-9;
+    if (s < -kEdge || t < -kEdge || s + t > 1.0 + kEdge) continue;
+    return triangle.heights[0] + s * (triangle.heights[1] - triangle.heights[0]) + t * (triangle.heights[2] - triangle.heights[0]);
+  }
+  return elevation;
+}
+
 bool MeshRegion::withinBounds(double x, double z, double padding) const {
   return x >= bounds.minX - padding && x <= bounds.maxX + padding && z >= bounds.minZ - padding && z <= bounds.maxZ + padding;
 }

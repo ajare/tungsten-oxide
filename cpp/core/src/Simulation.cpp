@@ -264,7 +264,9 @@ const MeshRegion* Simulation::meshRegionAt(double x, double z, double shipY) con
   double bestScore = 0;
   for (const auto& region : track_.meshRegions) {
     if (!region.withinBounds(x, z) || !region.contains(x, z)) continue;
-    const double above = region.elevation - shipY;
+    // The floor height under (x,z), not the region's single scalar -- a Capped reservation's floor
+    // curves, so scoring it by one elevation would rank it by a point the ship isn't standing on.
+    const double above = region.elevationAt(x, z) - shipY;
     const double score = std::fabs(above) + (above > Consts::SURFACE_SNAP_UP ? 1e6 : 0);
     if (!best || score < bestScore) {
       best = &region;
@@ -281,7 +283,7 @@ const MeshRegion* Simulation::surfaceOwnerAt(double x, double z, double shipY,
   const Projection projection = projectToSurface(corridorSample, x, shipY, z);
   if (!corridorContains(corridorSample, x, shipY, z, projection)) return mesh;
   const double corridorY = curvedSurfaceFrame(corridorSample, projection.s).pos.y;
-  return std::fabs(mesh->elevation - shipY) <= std::fabs(corridorY - shipY) ? mesh : nullptr;
+  return std::fabs(mesh->elevationAt(x, z) - shipY) <= std::fabs(corridorY - shipY) ? mesh : nullptr;
 }
 
 void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample,

@@ -24,6 +24,18 @@ struct MeshTriangle {
   std::array<Vec2d, 3> points;
 };
 
+// One triangle of a region's *non-flat* floor: the (x,z) footprint plus a per-corner height, so
+// MeshRegion::elevationAt can interpolate a real surface instead of returning a single scalar.
+// Only ever populated for a Capped central reservation, whose floor is the road's own curved
+// cross-section underside and can vary by tens of metres along one reservation's span (the trough's
+// depth scales with the road's local chord width -- see CENTRAL_RESERVATION_PLAN.md 3d). `bounds`
+// is this triangle's own (x,z) box, purely a scan early-out.
+struct MeshFloorTriangle {
+  std::array<Vec2d, 3> points;
+  std::array<double, 3> heights{};
+  MeshBounds bounds;
+};
+
 struct MeshRail {
   int edgeId{-1};
   Vec2d a, b;
@@ -49,8 +61,16 @@ struct MeshRegion {
   std::vector<MeshPolygon> polygons;
   std::vector<MeshTriangle> triangles;
   std::vector<MeshRail> rails;
+  // Empty for every real placed mesh asset -- they are flat platforms by design, so `elevation`
+  // alone describes them and elevationAt() below is exactly `elevation` for them, unchanged.
+  // Populated only by a Capped reservation (CENTRAL_RESERVATION_PLAN.md 3d).
+  std::vector<MeshFloorTriangle> floor;
 
   bool contains(double x, double z) const;
+  // The floor height at (x,z). Returns the flat `elevation` when `floor` is empty (every real
+  // placed mesh asset) or when (x,z) falls outside every floor triangle, so callers can use this
+  // everywhere `elevation` was read without changing flat-region behavior at all.
+  double elevationAt(double x, double z) const;
   bool withinBounds(double x, double z, double padding = 0.0) const;
   // Segment form: true if the swept move from (x0,z0) to (x1,z1) could touch the padded box, even
   // when neither endpoint alone lies inside it (a fast-moving point can cross clean through a

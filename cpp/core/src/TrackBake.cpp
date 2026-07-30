@@ -876,6 +876,11 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       Vec3 left, right;
       Vec3 normal;
       double crossSectionThickness{0.0};
+      // Retained so the Capped floor below can re-sample the cross-section *across* the void, not
+      // just at its two rims -- the floor is the road's own curved underside, which dips between
+      // them rather than running flat from rim to rim.
+      int frame{-1};
+      double vLeft{0.5}, vRight{0.5};
     };
     std::vector<Bound> bounds;
     for (int i = 0; i < n; i++) {
@@ -884,7 +889,8 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       const double halfGap = f.reservationHalfGap;
       const double w = std::max(1.0, f.width);
       const double vLeft = 0.5 - halfGap / w, vRight = 0.5 + halfGap / w;
-      bounds.push_back({surface(f, e.left[i], e.right[i], vLeft), surface(f, e.left[i], e.right[i], vRight), f.normal, f.crossSectionThickness});
+      bounds.push_back({surface(f, e.left[i], e.right[i], vLeft), surface(f, e.left[i], e.right[i], vRight), f.normal,
+                        f.crossSectionThickness, i, vLeft, vRight});
     }
     if (bounds.size() < 2) continue;
 
@@ -1005,27 +1011,52 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       track.geometry.push_back(std::move(seal.b));
 
       // Physics floor: the void's own tapered footprint (left boundary forward, right boundary
-      // backward), landable at one elevation. MeshRegion carries only a single scalar elevation --
-      // true of every mesh region, not a reservation-specific limitation -- so this can't track a
-      // varying underside height the format structurally can't represent, and instead picks the
-      // single most defensible flat approximation: the *shallowest* (highest) point of the true
-      // curved underside anywhere across the span, found by scanning every ring rather than
-      // assuming the array's index-middle lands near the reservation's geometric midpoint --
-      // adaptive baking forces far denser rings wherever a tapering end (Joined, or a Mitred/Rounded
-      // shelf's own transition) makes the boundary curve change fastest, so `bounds.size() / 2` can
-      // land well off t=(t0+t1)/2, and did: with an asymmetric end-cap pairing (e.g. Joined at one
-      // end, Mitred at the other) that index-middle sample skewed toward the steeper, more-subdivided
-      // Joined side, picking a deeper (lower) elevation than the true floor beneath the shallower
-      // Mitred end -- the physics floor was flat *below* the visible curved floor there, so a car
-      // driving onto that end visibly sank into the render mesh before reaching the (too-low) actual
-      // ground. Every gap width in the span is <= the reservation's own peak width (end caps only
-      // narrow the taper, never widen past it), and peak width sits farthest from the cross-section's
-      // v=0.5 apex, so the shallowest true point is always present somewhere in `bounds` -- taking
-      // the max here makes the flat floor sit at or above the real curved underside everywhere,
-      // trading a small float at the deep end for never clipping through the visible floor.
+      // backward) for ownership, plus a real *curved* floor for height.
+      //
+      // A flat scalar cannot describe this floor. `crossSectionHeight` scales the trough's depth
+      // with the road's local chord width, so wherever a track's authored width varies across a
+      // reservation's span the underside beneath it rises and falls by the same proportion -- on the
+      // track that surfaced this (width ramping 36 -> 138.6 -> 36 across one reservation, curvature
+      // -0.5) the true floor runs -22.0 m at the t0 rim, -38.3 m at mid-span and -22.9 m at t1: a
+      // 16.2 m swing. Any single `elevation` is then tens of metres wrong somewhere in the same
+      // reservation -- which is exactly what the "one end sinks into the track floor" report was:
+      // the physics floor sitting far below the visible one at the shallow (Mitred) end, so a car
+      // driving in dropped straight through the rendered surface.
+      //
+      // So sample the true underside on a grid -- every ring along the span, kFloorSpan+1 stations
+      // across the void at each -- and hand MeshRegion real triangles to interpolate (elevationAt).
+      // Sampling *across* as well as along matters because the floor is the cross-section curve
+      // itself: it dips between the two rims rather than running flat across them. `elevation`
+      // stays set to the shallowest sample, purely as the out-of-footprint fallback elevationAt
+      // returns and as the reference meshRegionAt scores candidate regions by.
+      constexpr int kFloorSpan = 4;
+      auto floorPoint = [&](const Bound& b, double v) {
+        const Frame& f = frames[b.frame];
+        return under(b, surface(f, e.left[b.frame], e.right[b.frame], v));
+      };
       double elevation = -std::numeric_limits<double>::infinity();
-      for (const Bound& b : bounds) elevation = std::max(elevation, under(b, b.left).y);
+      for (const Bound& b : bounds) elevation = std::max(elevation, floorPoint(b, b.vLeft).y);
       region.elevation = elevation;
+      auto addFloorTri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
+        MeshFloorTriangle tri;
+        tri.points = {Vec2d{a.x, a.z}, Vec2d{b.x, b.z}, Vec2d{c.x, c.z}};
+        tri.heights = {a.y, b.y, c.y};
+        tri.bounds = {std::min({a.x, b.x, c.x}), std::max({a.x, b.x, c.x}), std::min({a.z, b.z, c.z}),
+                      std::max({a.z, b.z, c.z})};
+        region.floor.push_back(std::move(tri));
+      };
+      for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
+        const Bound &bi = bounds[k], &bj = bounds[k + 1];
+        for (int s = 0; s < kFloorSpan; ++s) {
+          const double f0 = static_cast<double>(s) / kFloorSpan, f1 = static_cast<double>(s + 1) / kFloorSpan;
+          const Vec3 a = floorPoint(bi, bi.vLeft + (bi.vRight - bi.vLeft) * f0);
+          const Vec3 b = floorPoint(bi, bi.vLeft + (bi.vRight - bi.vLeft) * f1);
+          const Vec3 c = floorPoint(bj, bj.vLeft + (bj.vRight - bj.vLeft) * f0);
+          const Vec3 d = floorPoint(bj, bj.vLeft + (bj.vRight - bj.vLeft) * f1);
+          addFloorTri(a, b, c);
+          addFloorTri(b, d, c);
+        }
+      }
       MeshPolygon floor;
       floor.polygonId = 0;
       for (const auto& b : bounds) floor.outer.push_back({b.left.x, b.left.z});

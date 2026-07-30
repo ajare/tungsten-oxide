@@ -515,16 +515,67 @@ sit at or above the real curved underside everywhere in the span -- trading a
 small float at the deep (Joined) end for never clipping through the visible
 floor, which is the direction that doesn't produce a visible bug.
 
-**Tests.** A new `track_tests` block bakes a curved (`curvature=-0.5`,
-`tightness=0.7`) reservation with an asymmetric Joined/Mitred end-cap pairing,
-then checks every shell-underside vertex inside the void's own tapered
-footprint (via `MeshRegion::contains`, not just its bounding box -- the same
-(x,z) neighbourhood continues past t0/t1 as ordinary uncarved road, which
-legitimately runs deeper than anything `region.elevation` claims to bound) sits
-at or below the region's chosen elevation. Verified to have teeth by reverting
-to the old index-middle sample: fails with a 0.126 m gap on this fixture (the
-original in-game report used stronger curvature over a longer span, which is
-consistent with a more dramatic sink).
+**Superseded by 3d.** This was a real defect and the reasoning above holds, but
+it was only ever a better choice of *flat* value, worth ~0.13 m on the fixture
+used. It did not fix the reported bug, which was two orders of magnitude
+larger and needed the floor to stop being flat at all. The regression test
+described here was replaced wholesale by 3d's.
+
+## 3d. Bugfix: a Capped reservation's floor cannot be flat (post-M6)
+
+**Report:** the same one as 3c, still reproducing after 3c shipped.
+
+**Cause -- measured, not inferred.** `crossSectionHeight` scales the trough's
+depth with the road's *local* chord width (`c * (chordWidth/2) * base^k`). So
+wherever a track's authored width varies across a reservation's span, the
+floor beneath that reservation rises and falls in proportion. On the reporting
+track the width ramps 36 -> 72 -> **138.6** -> 69.6 -> 36 across
+`t0=0.1 .. t1=0.13`, and baking it shows the true floor running:
+
+| ring | position | true floor |
+| --- | --- | --- |
+| 0 | Mitred end (t0) | -22.03 |
+| 36 | mid-span | -38.27 |
+| 93 | Rounded end (t1) | -22.86 |
+
+**a 16.2 m swing inside a single region.** `MeshRegion::elevation` is one
+scalar, so no value is right: 3c's max pinned it to -22.03 (exactly the Mitred
+rim, hence "one end"), leaving mid-span 16 m out; the original index-middle
+sample picked -36.71, putting the physics floor 14.7 m *below* the rendered
+one right where a car drives in -- which is precisely the reported sink. The
+`curvature=-0.5` in the report is load-bearing: at curvature 0 the trough is
+flat and the width ramp costs nothing, which is why this never showed up
+before.
+
+**Fix.** `MeshRegion` gains `std::vector<MeshFloorTriangle> floor` (an (x,z)
+triangle plus a per-corner height and its own bbox) and
+`double elevationAt(double x, double z)`. `elevationAt` barycentrically
+interpolates whichever floor triangle covers the point, and returns the flat
+`elevation` when `floor` is empty or the point is outside every triangle --
+so **every real placed mesh asset is bit-identically unchanged**, staying the
+flat platform it is by design. `reservationGeometry` populates `floor` for a
+Capped reservation by sampling the true underside on a grid: every ring along
+the span, `kFloorSpan+1` stations across the void at each. Sampling *across*
+as well as along matters because the floor is the cross-section curve itself
+-- it dips between the two rims rather than running flat across them. Every
+read of `region.elevation` in Ship.cpp and Simulation.cpp that has an (x,z) to
+hand became `elevationAt(x, z)`; `elevation` itself is kept as the
+out-of-footprint fallback and as the reference `meshRegionAt` scores by. One
+call-site ordering changed with it: Ship.cpp's airborne rail loop now does its
+`withinBounds` test *before* the clearance test, so the triangle scan only
+runs for a ship actually near the region.
+
+**Tests.** The 3c block was replaced by one that bakes curvature -0.5 /
+tightness 0.7 *plus a width ramp* across a Joined/Mitred reservation, and
+asserts `elevationAt` tracks the shell's true underside (excluding the
+`-interior-seal` batch, which shares `GeometryKind::PathShell` but sits one
+`crossSectionThickness` above it) everywhere inside the void footprint. It
+also guards its own premise -- the fixture's floor must span > 5 m, or the
+tolerance check would pass trivially -- and asserts a placed mesh region still
+has an empty `floor` and an `elevationAt` exactly equal to its `elevation`.
+Measured: worst error **0.023 m over a 16.58 m span**, against `crossBreak`'s
+own 0.1 m chord tolerance. Verified to have teeth by forcing `elevationAt` to
+return the flat scalar: fails at **18.39 m**.
 
 ## 4. Bugfix: wall/hole alignment (post-M5)
 

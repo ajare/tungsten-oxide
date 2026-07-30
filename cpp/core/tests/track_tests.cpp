@@ -627,52 +627,74 @@ int main(int argc, char** argv) {
   json base = readJson(basePath);
 
   {
-    // Post-M6 bugfix: a curved cross-section (nonzero crossSectionCurvature) makes a reservation's
-    // true underside height vary along its span, deepest where the void is narrowest. A Capped
-    // region can only carry one flat MeshRegion::elevation, so it has to pick a single representative
-    // point -- and picking the array's index-middle bound (rather than the true shallowest point)
-    // could land on a deeper sample than the reservation's actual shallowest point whenever adaptive
-    // baking put uneven ring density across an asymmetric end-cap pairing (e.g. Joined at one end,
-    // Mitred at the other), leaving the flat physics floor sitting *below* the visible curved floor
-    // at the shallow end -- a car driving onto it visibly sank into the render mesh before reaching
-    // the too-low actual ground. Every gap width in the span is <= the reservation's own peak width
-    // (t=(t0+t1)/2, where end caps never widen past the taper's own peak), so the peak-width point is
-    // always the shallowest true point -- this checks the region's chosen elevation is at or above
-    // every ring's own true underside height, i.e. it never sits below the visible floor anywhere.
+    // CENTRAL_RESERVATION_PLAN.md 3d: a Capped reservation's floor is the road's own curved
+    // cross-section underside, and `crossSectionHeight` scales the trough's depth with the road's
+    // *local* chord width -- so wherever a track's authored width varies across a reservation's
+    // span, the floor beneath it rises and falls by the same proportion. A single flat
+    // MeshRegion::elevation is then tens of metres wrong somewhere inside one region (the reported
+    // "one end sinks into the track floor": the physics floor far below the rendered one at the
+    // shallow end, so a car driving in dropped straight through it). The region now carries real
+    // floor triangles and MeshRegion::elevationAt interpolates them.
+    //
+    // This fixture reproduces the shape of the report: curvature -0.5 / tightness 0.7 plus a width
+    // ramp across the reservation, with an asymmetric Joined/Mitred end-cap pairing.
     json input = base;
     input["version"] = 11;
-    input["paths"][0]["points"][8]["curvature"] = -0.5;
-    input["paths"][0]["points"][8]["tightness"] = 0.7;
-    input["paths"][0]["points"][9]["curvature"] = -0.5;
-    input["paths"][0]["points"][9]["tightness"] = 0.7;
+    for (int i : {8, 9}) {
+      input["paths"][0]["points"][i]["curvature"] = -0.5;
+      input["paths"][0]["points"][i]["tightness"] = 0.7;
+    }
+    for (auto [t, w] : {std::pair{0.3, 24.0}, {0.5, 96.0}, {0.7, 24.0}})
+      input["paths"][0]["points"].push_back({{"type", "width"}, {"t", t}, {"width", w}});
     input["paths"][0]["reservations"] = json::array(
-        {{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 8.0}, {"endCap1", {{"style", "mitred"}, {"width", 6.0}}}}});
+        {{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 16.0}, {"endCap0", {{"style", "mitred"}, {"width", 10.0}}}}});
     const auto loaded = Track::fromJson(input.dump());
-    check(static_cast<bool>(loaded), "curved-cross-section asymmetric-endcap reservation bakes: " + loaded.error);
+    check(static_cast<bool>(loaded), "curved-cross-section varying-width reservation bakes: " + loaded.error);
     if (loaded) {
       const Track& track = *loaded.track;
       const auto region = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
                                        [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
       check(region != track.meshRegions.end(), "the reservation gets a synthetic MeshRegion");
-      const auto shell = std::find_if(track.geometry.begin(), track.geometry.end(),
-                                      [](const GeometryBatch& b) { return b.kind == GeometryKind::PathShell; });
+      // The shell's underside is the visible floor. Excludes the reservation's own -interior-seal
+      // batch, which shares GeometryKind::PathShell but whose rim vertices sit one
+      // crossSectionThickness *above* the underside by construction.
+      const auto shell = std::find_if(track.geometry.begin(), track.geometry.end(), [](const GeometryBatch& b) {
+        return b.kind == GeometryKind::PathShell && b.id.find("-interior-seal") == std::string::npos;
+      });
       check(shell != track.geometry.end(), "the shell batch exists to measure the true underside against");
       if (region != track.meshRegions.end() && shell != track.geometry.end()) {
+        check(!region->floor.empty(), "a Capped reservation carries real floor triangles, not just a flat elevation");
+        double worst = 0.0, lo = 1e30, hi = -1e30;
+        int samples = 0;
         // Point-in-polygon against the void's own tapered footprint, not just its bounding box --
-        // the same (x,z) neighbourhood continues past t0/t1 as ordinary (uncarved, full-width) road,
-        // where the same curvature dip legitimately runs deeper than anything region.elevation ever
-        // claimed to bound.
-        bool everBelow = false;
-        double worstBelow = 0.0;
+        // the same (x,z) neighbourhood continues past t0/t1 as ordinary uncarved road, which dips
+        // deeper still and is no part of this region's floor.
         for (const auto& v : shell->vertices) {
           if (!region->contains(v.position.x, v.position.z)) continue;
-          if (v.position.y > region->elevation + 1e-6) {
-            everBelow = true;
-            worstBelow = std::max(worstBelow, v.position.y - region->elevation);
-          }
+          lo = std::min(lo, v.position.y);
+          hi = std::max(hi, v.position.y);
+          worst = std::max(worst, std::fabs(region->elevationAt(v.position.x, v.position.z) - v.position.y));
+          ++samples;
         }
-        check(!everBelow, "the capped floor's flat elevation sits at or above every shell vertex inside the void's own footprint (no visible sink) -- worst gap " +
-                              std::to_string(worstBelow));
+        check(samples > 100, "enough shell samples land inside the void footprint to be meaningful");
+        // Guards the premise: if this fixture ever stops producing a strongly varying floor, the
+        // tolerance check below would pass trivially and stop testing anything.
+        check(hi - lo > 5.0, "the fixture's floor really does vary strongly along the span -- span " + std::to_string(hi - lo));
+        // Chord error from sampling the cross-section at a fixed number of stations across the void
+        // against the shell's own adaptive crossBreak breakpoints -- well inside crossBreak's own
+        // 0.1 m tolerance, and ~700x better than the flat elevation this replaced.
+        check(worst < 0.15, "elevationAt tracks the true curved floor everywhere inside the footprint -- worst error " +
+                                std::to_string(worst) + " over a " + std::to_string(hi - lo) + " m span");
+      }
+      // Real placed mesh assets stay flat platforms: no floor triangles, and elevationAt is exactly
+      // the scalar elevation, so nothing about their physics changes.
+      const auto placed = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
+                                       [](const MeshRegion& r) { return r.id.rfind("reservation-", 0) != 0; });
+      check(placed != track.meshRegions.end(), "the fixture's placed mesh region is still compiled");
+      if (placed != track.meshRegions.end()) {
+        check(placed->floor.empty(), "a real placed mesh asset carries no floor triangles");
+        check(placed->elevationAt(placed->bounds.minX, placed->bounds.minZ) == placed->elevation,
+              "a flat region's elevationAt is exactly its scalar elevation");
       }
     }
   }
