@@ -1,24 +1,43 @@
 <?xml version="1.0"?>
 <Resources>
-	<Namespace name="Tracks">
-		<Resource type="Track" name="NewTrack">
-			<DependentResources>
-				<DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial" />
-				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
-				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
-				<DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial" />
-				<DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial" />
-				<DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial" />
-			</DependentResources>
-			<Definitions>
-				<Definition factory="Track">
-					<ModelFile>NewTrack.mppmodel</ModelFile>
-					<TrackData>NewTrack.json</TrackData>
-					<TrackMeshes>
-						<Mesh>path-0-surface</Mesh>
-					</TrackMeshes>
-				</Definition>
-			</Definitions>
-		</Resource>
-	</Namespace>
+    <Namespace name="Tracks">
+        <Resource type="Track" name="NewTrack">
+            <DependentResources>
+                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
+                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
+                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
+                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
+                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
+                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
+            </DependentResources>
+            <Definitions>
+                <Definition factory="Track">
+                    <ModelFile>NewTrack.mppmodel</ModelFile>
+                    <TrackData>NewTrack.json</TrackData>
+                    <TrackMeshes>
+                        <Mesh>path-0-surface</Mesh>
+                    </TrackMeshes>
+                </Definition>
+            </Definitions>
+        </Resource>
+        <Resource type="Track" name="New Track">
+            <DependentResources>
+                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
+                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
+                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
+                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
+                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
+                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
+            </DependentResources>
+            <Definitions>
+                <Definition factory="Track">
+                    <ModelFile>New_Track.mppmodel</ModelFile>
+                    <TrackData>New_Track.json</TrackData>
+                    <TrackMeshes>
+                        <Mesh>path-0-surface</Mesh>
+                    </TrackMeshes>
+                </Definition>
+            </Definitions>
+        </Resource>
+    </Namespace>
 </Resources>
