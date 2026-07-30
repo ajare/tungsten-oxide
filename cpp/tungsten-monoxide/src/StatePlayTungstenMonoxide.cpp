@@ -32,14 +32,11 @@ namespace {
 constexpr double CAM_BACK = 13.0;
 constexpr double CAM_ZOOM_MIN = 0.4;
 constexpr double CAM_ZOOM_MAX = 3.0;
-constexpr double CAM_ZOOM_RATE = 1.2;
 constexpr double CAM_UP_MIN = 0.5;
 constexpr double CAM_UP_MAX = 25.0;
-constexpr double CAM_UP_RATE = 6.0;
 constexpr double LOOK_AT_FORWARD = 12.0;
 constexpr double LOOK_AT_UP_MIN = -6.0;
 constexpr double LOOK_AT_UP_MAX = 12.0;
-constexpr double LOOK_AT_UP_RATE = 4.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
 
 mpp::mesh::MeshSpecification shipMeshSpecification() {
@@ -117,25 +114,28 @@ void StatePlayTungstenMonoxide::createCamera() {
 
 void StatePlayTungstenMonoxide::registerInput() {
   using namespace application;
-  registerInputState("Exit", {Key::Escape}, {}, {}, {}, {}, {}, false, false, 0, false);
+  registerInputState("Exit", {Key::Escape}, {}, {}, {}, {}, {}, false, false, 0, true);
+  // disableInGui=false: F1 must keep toggling the debug overlay even while it's open, or
+  // there would be no way to close it again.
+  registerInputState("ToggleTriggersDebug", {Key::F1}, {}, {}, {}, {}, {}, false, false, 0, false);
   // InputStateManager treats every key in one definition as a chord (logical
   // AND), not alternatives. Register keyboard alternatives separately so W
   // works without also requiring UpArrow, and likewise for steering/braking.
-  registerInputState("Accelerate", {}, {}, {Key::W}, {}, {}, {}, false, false, 0, true);
-  registerInputState("AccelerateAlt", {}, {}, {Key::UpArrow}, {}, {}, {}, false, false, 0, true);
-  registerInputState("Brake", {}, {}, {Key::S}, {}, {}, {}, false, false, 0, true);
-  registerInputState("BrakeAlt", {}, {}, {Key::DownArrow}, {}, {}, {}, false, false, 0, true);
-  registerInputState("SteerLeft", {}, {}, {Key::A}, {}, {}, {}, false, false, 0, true);
-  registerInputState("SteerLeftAlt", {}, {}, {Key::LeftArrow}, {}, {}, {}, false, false, 0, true);
-  registerInputState("SteerRight", {}, {}, {Key::D}, {}, {}, {}, false, false, 0, true);
-  registerInputState("SteerRightAlt", {}, {}, {Key::RightArrow}, {}, {}, {}, false, false, 0, true);
-  registerInputState("Respawn", {Key::R}, {}, {}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraZoomIn", {}, {}, {Key::LeftBracket}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraZoomOut", {}, {}, {Key::RightBracket}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraUp", {}, {}, {Key::O}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraDown", {}, {}, {Key::K}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraAimUp", {}, {}, {Key::P}, {}, {}, {}, false, false, 0, true);
-  registerInputState("CameraAimDown", {}, {}, {Key::L}, {}, {}, {}, false, false, 0, true);
+  // disableInGui=false on every one of these: the framework's own guiActive gate only knows
+  // whether the debug window is *open*, not whether it currently has mouse/keyboard focus, so
+  // gating here would block driving any time the panel is open at all. Instead these stay live
+  // and updateActions() itself drops them only while ImGui is actually capturing input this
+  // frame (see guiCapturingInput there), so gameplay input bubbles through whenever the debug
+  // window is open but unfocused.
+  registerInputState("Accelerate", {}, {}, {Key::W}, {}, {}, {}, false, false, 0, false);
+  registerInputState("AccelerateAlt", {}, {}, {Key::UpArrow}, {}, {}, {}, false, false, 0, false);
+  registerInputState("Brake", {}, {}, {Key::S}, {}, {}, {}, false, false, 0, false);
+  registerInputState("BrakeAlt", {}, {}, {Key::DownArrow}, {}, {}, {}, false, false, 0, false);
+  registerInputState("SteerLeft", {}, {}, {Key::A}, {}, {}, {}, false, false, 0, false);
+  registerInputState("SteerLeftAlt", {}, {}, {Key::LeftArrow}, {}, {}, {}, false, false, 0, false);
+  registerInputState("SteerRight", {}, {}, {Key::D}, {}, {}, {}, false, false, 0, false);
+  registerInputState("SteerRightAlt", {}, {}, {Key::RightArrow}, {}, {}, {}, false, false, 0, false);
+  registerInputState("Respawn", {Key::R}, {}, {}, {}, {}, {}, false, false, 0, false);
 }
 
 mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
@@ -212,11 +212,14 @@ void StatePlayTungstenMonoxide::createGameObjects(
 
   if (!getMap()->getTrack())
     throw application::resourcesystem::ResourceException(trackResource.get(), "Track resource has no compiled TrackData.");
+  applyTriggersDebugVisibility();  // mShowTriggersDebug defaults to false: trigger quads start hidden.
+  applyRailsDebugVisibility();     // mShowRailsDebug defaults to false: rails start hidden too.
   mGameSession = make_unique<tox::GameSession>(getMap()->getTrack(), tox::StartGrid::DEFAULT_SHIP_COUNT);
   auto const& poses = getMap()->getStartGridPoses();
   if (poses.size() != mGameSession->ships().size())
     throw application::resourcesystem::ResourceException(trackResource.get(), "starting-grid pose count does not match the game roster.");
   for (size_t i = 0; i < poses.size(); ++i) mGameSession->ships()[i].placeAt(mGameSession->simulation(), poses[i]);
+  mInitialShipPhysics = mGameSession->ships()[0].physics;
 
   mShipModel = createShipModel(resourceMgr, renderResourceMgr);
   mShipSceneModels.reserve(mGameSession->ships().size());
@@ -286,11 +289,25 @@ void StatePlayTungstenMonoxide::exit() { throw wp::application::ReturnFromStateE
 
 void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates, float frameTime) {
   if (!mGameSession) return;
+  // Gameplay input states are registered with disableInGui=false (the framework's own gate only
+  // knows whether the debug window is open, not whether it currently has focus), so filter them
+  // here instead: only drop them while ImGui is actually capturing this frame's keyboard/mouse
+  // (a widget hovered or focused), letting driving input bubble through whenever the panel is
+  // open but unfocused. Guarded by mShowDebugUi since GetIO() needs a bound context, which is
+  // only set up (in _renderImGui) on frames the panel actually renders.
+  bool guiCapturingInput = mShowDebugUi && (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse);
   tox::ControlIntent player;
   for (auto const& state : activeStates) {
-    if (state == "Exit")
+    if (state == "Exit") {
       exit();
-    else if (state == "Accelerate" || state == "AccelerateAlt")
+      continue;
+    }
+    if (state == "ToggleTriggersDebug") {
+      mShowDebugUi = !mShowDebugUi;
+      continue;
+    }
+    if (guiCapturingInput) continue;
+    if (state == "Accelerate" || state == "AccelerateAlt")
       player.throttle = 1;
     else if (state == "Brake" || state == "BrakeAlt")
       player.brake = 1;
@@ -300,18 +317,6 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
       player.steer -= 1;
     else if (state == "Respawn")
       player.respawn = true;
-    else if (state == "CameraZoomIn")
-      mCameraZoom = max(CAM_ZOOM_MIN, mCameraZoom / (1 + CAM_ZOOM_RATE * frameTime));
-    else if (state == "CameraZoomOut")
-      mCameraZoom = min(CAM_ZOOM_MAX, mCameraZoom * (1 + CAM_ZOOM_RATE * frameTime));
-    else if (state == "CameraUp")
-      mCameraHeight = min(CAM_UP_MAX, mCameraHeight + CAM_UP_RATE * frameTime);
-    else if (state == "CameraDown")
-      mCameraHeight = max(CAM_UP_MIN, mCameraHeight - CAM_UP_RATE * frameTime);
-    else if (state == "CameraAimUp")
-      mLookAtHeight = min(LOOK_AT_UP_MAX, mLookAtHeight + LOOK_AT_UP_RATE * frameTime);
-    else if (state == "CameraAimDown")
-      mLookAtHeight = max(LOOK_AT_UP_MIN, mLookAtHeight - LOOK_AT_UP_RATE * frameTime);
   }
   vector<tox::ControlIntent> intents(mGameSession->ships().size());
   if (!intents.empty()) intents[0] = player;
@@ -422,4 +427,80 @@ void StatePlayTungstenMonoxide::renderImpl(mpp::RenderSystem* renderSystem, mpp:
   renderSystem->setLight1Colour(mpp::Colour::White);
   renderSystem->renderScene(mScene, mCamera3d, {0.0f, 0.0f}, getName());
   renderHud(renderSystem);
+}
+
+// Trigger quads and rail walls are baked into the track model as individually-named meshes
+// (TrackBake.cpp/TrackMesh.cpp's GeometryKind::TriggerSurface/PathRail/MeshRail, carried through
+// Map::load() with GeometryBatch::id preserved verbatim as the mesh name), so showing/hiding a
+// whole geometry kind is just a per-mesh render-flag toggle -- no separate geometry to draw.
+void StatePlayTungstenMonoxide::setGeometryKindVisible(tox::GeometryKind kind, bool visible) const {
+  if (!mTrackSceneModel || !getMap() || !getMap()->getTrack()) return;
+  auto params = mTrackSceneModel->getParams();
+  uint32_t flags = visible ? mpp::ModelRenderParams::Flag_Visible : 0;
+  for (auto const& batch : getMap()->getTrack()->geometry)
+    if (batch.kind == kind) params->setMeshFlags(batch.id, flags);
+}
+
+void StatePlayTungstenMonoxide::applyTriggersDebugVisibility() const {
+  setGeometryKindVisible(tox::GeometryKind::TriggerSurface, mShowTriggersDebug);
+}
+
+void StatePlayTungstenMonoxide::applyRailsDebugVisibility() const {
+  setGeometryKindVisible(tox::GeometryKind::PathRail, mShowRailsDebug);
+  setGeometryKindVisible(tox::GeometryKind::MeshRail, mShowRailsDebug);
+}
+
+// One slider + Reset button for a single physics field, ranged to +-20% of `initial` (the
+// value captured before any debug edits). initial may be negative (e.g. maxReverse), so the
+// smaller of the two scaled endpoints isn't necessarily the low end -- min/max sorts them.
+void StatePlayTungstenMonoxide::renderPhysicsSlider(char const* label, double& value, double initial) const {
+  double lo = std::min(initial * 0.8, initial * 1.2);
+  double hi = std::max(initial * 0.8, initial * 1.2);
+  ImGui::PushID(label);
+  ImGui::SliderScalar(label, ImGuiDataType_Double, &value, &lo, &hi, "%.2f");
+  ImGui::SameLine();
+  if (ImGui::Button("Reset")) value = initial;
+  ImGui::PopID();
+}
+
+void StatePlayTungstenMonoxide::renderShipPhysicsTab() const {
+  if (!mGameSession || mGameSession->ships().empty()) return;
+  tox::Physics& physics = mGameSession->ships()[0].physics;
+  renderPhysicsSlider("Max Speed", physics.maxSpeed, mInitialShipPhysics.maxSpeed);
+  renderPhysicsSlider("Max Reverse", physics.maxReverse, mInitialShipPhysics.maxReverse);
+  renderPhysicsSlider("Accel", physics.accel, mInitialShipPhysics.accel);
+  renderPhysicsSlider("Brake Decel", physics.brakeDecel, mInitialShipPhysics.brakeDecel);
+  renderPhysicsSlider("Friction", physics.friction, mInitialShipPhysics.friction);
+  renderPhysicsSlider("Turn Rate", physics.turnRate, mInitialShipPhysics.turnRate);
+  renderPhysicsSlider("Weight", physics.weight, mInitialShipPhysics.weight);
+}
+
+bool StatePlayTungstenMonoxide::_imGuiActive() const { return mShowDebugUi; }
+
+void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, void* imPlotCtx, void* allocFunc,
+                                              void* freeFunc, void* userData) {
+  VAR_UNUSED(frameTime);
+  VAR_UNUSED(imPlotCtx);
+  // ImGui statics aren't shared across the DLL boundary between this module and the launcher
+  // that owns the context, so both must be rebound before any ImGui:: call.
+  ImGui::SetCurrentContext(static_cast<ImGuiContext*>(imGuiCtx));
+  ImGui::SetAllocatorFunctions(reinterpret_cast<ImGuiMemAllocFunc>(allocFunc), reinterpret_cast<ImGuiMemFreeFunc>(freeFunc), userData);
+
+  ImGui::Begin("Debug");
+  if (ImGui::BeginTabBar("DebugTabs")) {
+    if (ImGui::BeginTabItem("Debug")) {
+      if (ImGui::Checkbox("Show Triggers", &mShowTriggersDebug)) applyTriggersDebugVisibility();
+      if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
+      ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
+      ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
+      ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Physics")) {
+      renderShipPhysicsTab();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  ImGui::End();
 }

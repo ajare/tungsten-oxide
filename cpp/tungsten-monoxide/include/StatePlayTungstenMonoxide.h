@@ -62,12 +62,25 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   double mLookAtHeight{1.6};
   double mLapFlashUntil{0.0};
 
+  bool mShowDebugUi{false};
+  bool mShowTriggersDebug{false};
+  bool mShowRailsDebug{false};
+  // Snapshot of ship 0's handling-applied physics, taken once in createGameObjects, so the
+  // Physics debug tab's slider ranges (+-20%) and Reset buttons have a stable baseline that
+  // isn't itself perturbed by earlier slider edits.
+  tox::Physics mInitialShipPhysics;
+
 private:
   mpp::ResourcePtr createShipModel(wp::application::resourcesystem::ResourceManager* resourceMgr,
                                    mpp::ResourceManager* renderResourceMgr);
   void updateShips(float frameTime);
   void updateChaseCamera(float frameTime);
   void renderHud(mpp::RenderSystem* renderSystem) const;
+  void setGeometryKindVisible(tox::GeometryKind kind, bool visible) const;
+  void applyTriggersDebugVisibility() const;
+  void applyRailsDebugVisibility() const;
+  void renderShipPhysicsTab() const;
+  void renderPhysicsSlider(char const* label, double& value, double initial) const;
 
   void createCamera();
 
@@ -113,6 +126,10 @@ protected:
   void updateImpl(float frameTime) override;
 
   void renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
+
+  bool _imGuiActive() const override;
+
+  void _renderImGui(float frameTime, void* imGuiCtx, void* imPlotCtx, void* allocFunc, void* freeFunc, void* userData) override;
 
 public:
   StatePlayTungstenMonoxide();
