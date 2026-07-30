@@ -787,6 +787,77 @@ int main(int argc, char** argv) {
     }
   }
 
+  {
+    // Reservation wall UVs. Convention mirrors the road surface's: component 0 across the ribbon
+    // normalized to [0,1] (bottom-to-top of the wall), component 1 along it in units of that same
+    // across-extent (the wall's own height), so tiles are square in world metres.
+    json input = base;
+    input["version"] = 11;
+    for (int i : {8, 9}) {
+      input["paths"][0]["points"][i]["curvature"] = -0.5;
+      input["paths"][0]["points"][i]["tightness"] = 0.7;
+    }
+    const double wallHeight = 6.0;
+    input["paths"][0]["reservations"] = json::array({{{"id", "res1"},
+                                                      {"t0", 0.3},
+                                                      {"t1", 0.7},
+                                                      {"width", 16.0},
+                                                      {"wallHeight", wallHeight},
+                                                      {"endCap0", {{"style", "mitred"}, {"width", 10.0}}}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a reservation with a wall height bakes: " + loaded.error);
+    if (loaded) {
+      const auto wall = std::find_if(loaded.track->geometry.begin(), loaded.track->geometry.end(),
+                                     [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; });
+      check(wall != loaded.track->geometry.end(), "the reservation wall batch exists");
+      if (wall != loaded.track->geometry.end()) {
+        check(wall->hasUv, "the reservation wall batch declares UVs");
+        check(!wall->vertices.empty(), "the reservation wall batch has vertices");
+        double maxAlong = 0.0;
+        bool acrossInRange = true, alongNonNegative = true;
+        for (const auto& v : wall->vertices) {
+          // The wall is a simple ribbon: every vertex is either on the rim or on the top edge.
+          if (v.uv.x < -1e-9 || v.uv.x > 1.0 + 1e-9 || (std::fabs(v.uv.x) > 1e-9 && std::fabs(v.uv.x - 1.0) > 1e-9))
+            acrossInRange = false;
+          if (v.uv.y < -1e-9) alongNonNegative = false;
+          maxAlong = std::max(maxAlong, v.uv.y);
+        }
+        check(acrossInRange, "every wall UV's across component is exactly 0 (rim) or 1 (top)");
+        check(alongNonNegative, "no wall UV runs negative along the wall");
+        check(maxAlong > 1.0, "the along component actually advances along the wall -- max " + std::to_string(maxAlong));
+        // No stretch: an edge spanning the wall's full height carries exactly one UV unit across,
+        // so its world length must be the authored wallHeight. This is what would break if the
+        // across component were tied to anything but the wall's own height.
+        double worstVertical = 0.0, worstHorizontal = 0.0;
+        int verticals = 0, horizontals = 0;
+        for (std::size_t i = 0; i + 2 < wall->indices.size(); i += 3) {
+          for (int k = 0; k < 3; ++k) {
+            const auto& p = wall->vertices[wall->indices[i + k]];
+            const auto& q = wall->vertices[wall->indices[i + (k + 1) % 3]];
+            const double world = std::hypot(std::hypot(p.position.x - q.position.x, p.position.y - q.position.y),
+                                            p.position.z - q.position.z);
+            const double du = std::fabs(p.uv.x - q.uv.x), dv = std::fabs(p.uv.y - q.uv.y);
+            if (du > 0.5 && dv < 1e-9) {  // spans the height at one station
+              // Scaled by du, so this pins the UV to the world rather than merely re-measuring the
+              // wall: an across component spanning 0..2 over the same height would fail here.
+              worstVertical = std::max(worstVertical, std::fabs(world - du * wallHeight));
+              ++verticals;
+            } else if (dv > 1e-9 && du < 1e-9) {  // runs along at one height
+              worstHorizontal = std::max(worstHorizontal, std::fabs(world - dv * wallHeight) / std::max(1.0, world));
+              ++horizontals;
+            }
+          }
+        }
+        check(verticals > 10 && horizontals > 10, "both edge families are actually present to measure");
+        check(worstVertical < 1e-6, "a full-height wall edge is exactly wallHeight long -- worst error " + std::to_string(worstVertical));
+        // Along-edges are measured relative: the rim and top edges of one quad differ slightly in
+        // length wherever the void tapers or the frame normals splay, and both share a u-range.
+        check(worstHorizontal < 1e-6, "along-wall UVs track world distance without stretching -- worst relative error " +
+                                          std::to_string(worstHorizontal));
+      }
+    }
+  }
+
   check(!Track::fromJson("{not json"), "malformed JSON is fatal");
   {
     json input = base;

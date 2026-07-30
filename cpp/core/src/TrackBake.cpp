@@ -946,6 +946,17 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
     wall.b.id = region.id + "-wall";
     wall.b.kind = GeometryKind::ReservationWall;
     wall.b.materialKey = "Tracks/DefaultRailMaterial";
+    wall.b.hasUv = true;
+    // UVs follow the road surface's own convention (see pathGeometry's `top`): component 0 runs
+    // *across* the ribbon normalized to [0,1] -- here bottom-to-top of the wall, so a barrier
+    // texture maps once over the wall's height whatever `wallHeight` is authored as -- and
+    // component 1 runs *along* it, measured in units of that same across-extent so tiles come out
+    // square in world metres and never stretch as the wall lengthens. `uvTile` is therefore the
+    // wall's own height: one texture repeat per railHeight metres of run.
+    const double uvTile = std::max(1e-6, region.railHeight);
+    // Per-flank, because the two flanks of a tapered void are different lengths -- sharing one
+    // accumulator would slide the texture out of step between them.
+    double run[2] = {0.0, 0.0};
 
     for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
       const Bound& bi = bounds[k];
@@ -961,8 +972,11 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
         const Vec3& b = right ? bj.right : bj.left;
         Vec3 at = a.clone().addScaledVector(bi.normal, region.railHeight);
         Vec3 bt = b.clone().addScaledVector(bj.normal, region.railHeight);
-        wall.tri(a, b, at);
-        wall.tri(at, b, bt);
+        double& flankRun = run[right ? 1 : 0];
+        const double u0 = flankRun / uvTile, u1 = (flankRun + a.distanceTo(b)) / uvTile;
+        wall.tri(a, b, at, {0.0, u0}, {0.0, u1}, {1.0, u0});
+        wall.tri(at, b, bt, {1.0, u0}, {0.0, u1}, {1.0, u1});
+        flankRun += a.distanceTo(b);
       }
     }
     extend(bounds.back().left);
@@ -977,8 +991,12 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       addRail(b.left, b.right, outX, outZ);
       Vec3 lt = b.left.clone().addScaledVector(b.normal, region.railHeight);
       Vec3 rt = b.right.clone().addScaledVector(b.normal, region.railHeight);
-      wall.tri(b.left, b.right, lt);
-      wall.tri(lt, b.right, rt);
+      // Same across/along convention as the flanks, but a cap is its own face rather than a
+      // continuation of either flank's run, so its `along` restarts at 0 and spans the void's width
+      // here. Keeping the same units means the texture reads at the same scale across the join.
+      const double capU = std::hypot(dx, dz) / uvTile;
+      wall.tri(b.left, b.right, lt, {0.0, 0.0}, {0.0, capU}, {1.0, 0.0});
+      wall.tri(lt, b.right, rt, {1.0, 0.0}, {0.0, capU}, {1.0, capU});
     };
     // A cap faces out along the path, away from the ring that neighbours it inside the span.
     auto midX = [](const Bound& b) { return (b.left.x + b.right.x) * 0.5; };
