@@ -238,7 +238,7 @@
     {
       "id": "path-0-rail-left",
       "kind": "PathRail",
-      "hasUv": false,
+      "hasUv": true,
       "texture": null,
       "vertexCount": 2400,
       "indexCount": 2400,
@@ -256,7 +256,7 @@
     {
       "id": "path-0-rail-right",
       "kind": "PathRail",
-      "hasUv": false,
+      "hasUv": true,
       "texture": null,
       "vertexCount": 2400,
       "indexCount": 2400,

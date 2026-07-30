@@ -90,7 +90,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -169.74206579825616,
@@ -114,12 +114,12 @@
           -62.60168802607478
         ],
         "uvMin": [
-          0,
-          0
+          -689.4292906175192,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -128,7 +128,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -202.79461497155765,
@@ -152,12 +152,12 @@
           32.30634365997153
         ],
         "uvMin": [
-          0,
-          0
+          -804.3948732773404,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -440,7 +440,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -215.89694901248544,
@@ -464,12 +464,12 @@
           164.5123742868813
         ],
         "uvMin": [
-          0,
-          0
+          -769.9297929887367,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -478,7 +478,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -249.8814518241164,
@@ -502,12 +502,12 @@
           96.16613972822663
         ],
         "uvMin": [
-          0,
-          0
+          -874.2162678338939,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -793,7 +793,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -203.92692562990712,
@@ -817,12 +817,12 @@
           413.4512358549961
         ],
         "uvMin": [
-          0,
-          0
+          -802.4435507223851,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -831,7 +831,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -236.41347433042503,
@@ -855,12 +855,12 @@
           779.2365279274176
         ],
         "uvMin": [
-          0,
-          0
+          -935.2579674559696,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -1222,7 +1222,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -275.76161547700843,
@@ -1246,12 +1246,12 @@
           -25.54364988243854
         ],
         "uvMin": [
-          0,
-          0
+          -952.9324602118651,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -1260,7 +1260,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -309.03859500973573,
@@ -1284,12 +1284,12 @@
           178.32278123046802
         ],
         "uvMin": [
-          0,
-          0
+          -1063.5900764071305,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -1648,7 +1648,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -277.79839988876415,
@@ -1672,12 +1672,12 @@
           304.43096989096716
         ],
         "uvMin": [
-          0,
-          0
+          -978.2829228845126,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {
@@ -1686,7 +1686,7 @@
         "materialKey": "Tracks/DefaultRailMaterial",
         "vertexCount": 2400,
         "indexCount": 2400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -318.0221253266261,
@@ -1710,12 +1710,12 @@
           218.32382573869106
         ],
         "uvMin": [
-          0,
-          0
+          -1121.1710661469785,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          1.0
         ]
       },
       {

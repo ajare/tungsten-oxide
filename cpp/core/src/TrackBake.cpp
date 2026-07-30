@@ -842,6 +842,13 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
     // "DefaultRailMaterial", and with MaterialCatalog's startup existence check for it.
     r.b.materialKey = "Tracks/DefaultRailMaterial";
+    r.b.hasUv = true;
+    // Same style as the reservation wall's `wallUv` (TrackBake.cpp's reservationGeometry): U runs
+    // along the rail, V spans its extrusion height in [0,1] (0 at the rim, 1 at the top), and U is
+    // measured in units of that same height so tiles stay square in world metres.
+    constexpr double kRailUvTile = 1.8 - .04;
+    auto railUv = [](double across, double along) { return Vec2d{1.0 - along, across}; };
+    double run = 0.0;
     const int railN = static_cast<int>(path.centerline.size());
     const int railSegments = def.closed ? railN : railN - 1;
     for (int i = 0; i < railSegments; i++) {
@@ -850,8 +857,10 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       auto fi = curvedSurfaceFrame(Sample{path.centerline[i].pos, path.centerline[i].tangent, path.centerline[i].edgeRight, path.centerline[i].normal, path.centerline[i].halfW, path.centerline[i].sLeft, path.centerline[i].sRight, path.centerline[i].crossSectionCurvature, path.centerline[i].crossSectionTightness}, si);
       auto fj = curvedSurfaceFrame(Sample{path.centerline[j].pos, path.centerline[j].tangent, path.centerline[j].edgeRight, path.centerline[j].normal, path.centerline[j].halfW, path.centerline[j].sLeft, path.centerline[j].sRight, path.centerline[j].crossSectionCurvature, path.centerline[j].crossSectionTightness}, sj);
       Vec3 a = fi.pos.clone().addScaledVector(fi.normal, .04), b = fj.pos.clone().addScaledVector(fj.normal, .04), at = a.clone().addScaledVector(fi.normal, 1.8), bt = b.clone().addScaledVector(fj.normal, 1.8);
-      r.tri(a, b, at);
-      r.tri(at, b, bt);
+      const double u0 = run / kRailUvTile, u1 = (run + a.distanceTo(b)) / kRailUvTile;
+      r.tri(a, b, at, railUv(0.0, u0), railUv(0.0, u1), railUv(1.0, u0));
+      r.tri(at, b, bt, railUv(1.0, u0), railUv(0.0, u1), railUv(1.0, u1));
+      run += a.distanceTo(b);
     }
     track.geometry.push_back(std::move(r.b));
   }
