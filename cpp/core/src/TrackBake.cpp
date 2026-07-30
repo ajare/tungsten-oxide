@@ -535,6 +535,22 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
       forced.push_back(reservation.t0 * gmax);
       splitSpan(reservation.t0, reservation.t1, a, b, 0);
       forced.push_back(reservation.t1 * gmax);
+      // An end that opens at a nonzero width (a Mitred cut, or a Rounded dome with no nose length)
+      // is a hard discontinuity: the road is solid right up to t0 and the void opens abruptly there.
+      // A triangle strip cannot express that between two rings, and the surface carve does not try
+      // to -- in the strip running from the last ring *outside* the span to the ring at t0, every
+      // sub-quad inside the void has both its t0-side corners in the gap band and both its outside
+      // corners solid, which is exactly carveQuad's "<= 2 solid corners" drop. The whole band goes,
+      // so the hole in the road ran a full ring spacing (11.9 m on the track that surfaced this)
+      // PAST the cap wall: an open, uncapped slot metres long at the end of the reservation.
+      //
+      // Forcing a ring a hair outside the span pins solid road right up against t0, shrinking that
+      // dropped band to kHardEdgeMetres. A Joined end needs none of this -- its gap is already zero
+      // at the boundary, so there is no jump to smear -- which is why only capped ends showed it.
+      constexpr double kHardEdgeMetres = 0.01;
+      const double edgeT = kHardEdgeMetres / std::max(1.0, pathLength);
+      if (a.halfGap > 0.0 && reservation.t0 - edgeT > 0.0) forced.push_back((reservation.t0 - edgeT) * gmax);
+      if (b.halfGap > 0.0 && reservation.t1 + edgeT < 1.0) forced.push_back((reservation.t1 + edgeT) * gmax);
       // A Rounded end's dome can be far shorter than the reservation that carries it (a couple of
       // metres out of hundreds, at the circular default), so splitSpan's bisection would burn its
       // whole depth budget before it ever resolved one -- it would round off to the same blunt cut

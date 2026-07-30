@@ -577,6 +577,51 @@ Measured: worst error **0.023 m over a 16.58 m span**, against `crossBreak`'s
 own 0.1 m chord tolerance. Verified to have teeth by forcing `elevationAt` to
 return the flat scalar: fails at **18.39 m**.
 
+## 3e. Bugfix: the ends of a reservation were not capped (post-M6)
+
+**Report:** "the ends of the reservation do not get capped."
+
+**Cause.** An end cap that opens the void at a nonzero width -- a Mitred cut,
+or a Rounded dome whose nose has already run out -- is a hard discontinuity:
+solid road right up to `t0`, void from `t0` on. A triangle strip cannot
+express that between two rings, and the surface carve does not try to. In the
+strip running from the last ring *outside* the span to the ring at `t0`, the
+sub-quads covering the void each have both their `t0`-side corners strictly
+inside the gap band and both their outside-ring corners solid -- exactly
+`carveQuad`'s "`<= 2` solid corners" drop. The whole band went, so the hole in
+the road ran a **full ring spacing past the cap wall** (11.9 m on the
+reporting track), leaving an open slot metres long where the reservation was
+supposed to be closed off. The cap wall itself was always emitted and always
+in the right place; the road around it was missing.
+
+**Why curvature is load-bearing.** With a flat cross-section `crossBreak`
+returns just `{0,1}`, so the void band is a single sub-quad whose corners land
+exactly *on* the band edges -- and the strict-interior test counts those as
+solid, so nothing is dropped and the bug does not appear at all. A curved
+cross-section adds breakpoints strictly inside the band, and those interior
+sub-quads are the ones that get culled. This is why the report carried
+`curvature = -0.5`, and why a flat-cross-section fixture could not reproduce
+it (the first attempt at a regression test passed against the unfixed code
+for precisely this reason).
+
+**Fix.** `adaptiveRenderBake` now forces an extra ring `kHardEdgeMetres`
+(1 cm) *outside* each end whose half-gap there is nonzero, pinning solid road
+right up against `t0`/`t1`. The dropped band still exists -- it is inherent to
+representing a discontinuity in a strip -- but shrinks from a whole ring
+spacing to 1 cm. A Joined end needs none of this: its gap is already zero at
+the boundary, so there is no jump to smear, which is why only capped ends
+showed it.
+
+**Tests.** A `track_tests` block bakes a reservation Mitred at *both* ends over
+a curved cross-section, then walks outward from each end along the void's
+centreline (recovered from the region footprint's own left-forward /
+right-backward ring pairing) and measures how far the road stays uncovered by
+any `PathSurface` triangle. It asserts that distance is under 0.1 m, reports
+the measured value on failure, and guards its own premise by asserting each
+end really does open at a nonzero width. Verified to have teeth by disabling
+only the forced rings: **11.8 m uncovered at both ends**, matching the 11.9 m
+measured on the reporting track.
+
 ## 4. Bugfix: wall/hole alignment (post-M5)
 
 **Report:** "ship physics breaks when near the central reservation."

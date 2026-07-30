@@ -699,6 +699,94 @@ int main(int argc, char** argv) {
     }
   }
 
+  {
+    // CENTRAL_RESERVATION_PLAN.md 3e: an end cap that opens the void at a nonzero width (Mitred, or
+    // a Rounded dome with no nose) is a hard discontinuity -- solid road right up to t0, void from
+    // t0 on. The surface carve cannot express that inside one strip, and drops the whole void band
+    // of the strip leading into t0 (both t0-side corners in the gap, both outside corners solid ==
+    // carveQuad's "<= 2 solid corners" case), so the hole used to run a full ring spacing PAST the
+    // cap wall -- the reservation's end read as simply not capped. A forced ring just outside the
+    // span shrinks that dropped band to ~1 cm.
+    json input = base;
+    input["version"] = 11;
+    // Curvature is load-bearing here, and is why the report carried it. With a flat cross-section
+    // `crossBreak` returns just {0,1}, so the void band is a single sub-quad whose corners land
+    // exactly *on* the band edges -- which count as solid -- and nothing is dropped. A curved
+    // cross-section adds breakpoints strictly inside the band, and those sub-quads are the ones
+    // with two solid corners on the outside ring and two void corners on the t0 ring.
+    for (int i : {8, 9}) {
+      input["paths"][0]["points"][i]["curvature"] = -0.5;
+      input["paths"][0]["points"][i]["tightness"] = 0.7;
+    }
+    input["paths"][0]["reservations"] = json::array({{{"id", "res1"},
+                                                      {"t0", 0.3},
+                                                      {"t1", 0.7},
+                                                      {"width", 16.0},
+                                                      {"endCap0", {{"style", "mitred"}, {"width", 10.0}}},
+                                                      {"endCap1", {{"style", "mitred"}, {"width", 10.0}}}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a Mitred-both-ends reservation bakes: " + loaded.error);
+    if (loaded) {
+      const Track& track = *loaded.track;
+      const auto region = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
+                                       [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+      const auto surf = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                     [](const GeometryBatch& b) { return b.kind == GeometryKind::PathSurface; });
+      check(region != track.meshRegions.end() && surf != track.geometry.end(), "the reservation region and road surface both exist");
+      if (region != track.meshRegions.end() && surf != track.geometry.end() && !region->polygons.empty()) {
+        // Is (x,z) covered by any road-surface triangle?
+        auto covered = [&](double x, double z) {
+          for (std::size_t i = 0; i + 2 < surf->indices.size(); i += 3) {
+            const auto& A = surf->vertices[surf->indices[i]].position;
+            const auto& B = surf->vertices[surf->indices[i + 1]].position;
+            const auto& C = surf->vertices[surf->indices[i + 2]].position;
+            const double d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+            if (std::fabs(d) < 1e-12) continue;
+            const double u = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d;
+            const double v = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d;
+            if (u >= -1e-9 && v >= -1e-9 && u + v <= 1.0 + 1e-9) return true;
+          }
+          return false;
+        };
+        // The footprint stores every ring's left point forward then every right point backward, so
+        // ring k's two rim points are outer[k] and outer[size-1-k] and their midpoint is the void's
+        // centreline there -- the deepest part of the hole, and so the strictest place to ask
+        // whether solid road has resumed.
+        const auto& o = region->polygons.front().outer;
+        const std::size_t rings = o.size() / 2;
+        auto mid = [&](std::size_t k) {
+          return Vec2d{(o[k].x + o[o.size() - 1 - k].x) * 0.5, (o[k].y + o[o.size() - 1 - k].y) * 0.5};
+        };
+        for (int endIdx = 0; endIdx < 2; ++endIdx) {
+          const std::size_t k0 = endIdx == 0 ? 0 : rings - 1, k1 = endIdx == 0 ? 1 : rings - 2;
+          const Vec2d m0 = mid(k0), m1 = mid(k1);
+          const double dx = m0.x - m1.x, dz = m0.y - m1.y, len = std::hypot(dx, dz);
+          const std::string end = "Mitred end " + std::to_string(endIdx);
+          const double voidWidth = std::hypot(o[k0].x - o[o.size() - 1 - k0].x, o[k0].y - o[o.size() - 1 - k0].y);
+          // Guards the premise: a Mitred end must actually open at a nonzero width, or there is no
+          // discontinuity here and the coverage check below proves nothing.
+          check(voidWidth > 1.0, end + " really does open the void at a nonzero width -- " + std::to_string(voidWidth));
+          check(len > 1e-9, end + " has a usable outward direction");
+          if (len > 1e-9) {
+            // How far the hole actually runs past the cap. Reported rather than just asserted so a
+            // regression says how bad it got: this was 11.8 m on this fixture before the fix, and
+            // 11.9 m on the track that surfaced it.
+            double uncovered = 0.0;
+            for (double s = 0.0; s <= 30.0; s += 0.01) {
+              if (covered(m0.x + dx / len * s, m0.y + dz / len * s)) break;
+              uncovered = s;
+            }
+            check(uncovered < 0.1, end + ": the road is solid just outside the cap, so the hole does not run past it -- it runs " +
+                                       std::to_string(uncovered) + " m past");
+          }
+        }
+      }
+      const auto wall = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                     [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; });
+      check(wall != track.geometry.end() && !wall->vertices.empty(), "the Mitred ends still emit their cap wall geometry");
+    }
+  }
+
   check(!Track::fromJson("{not json"), "malformed JSON is fatal");
   {
     json input = base;
