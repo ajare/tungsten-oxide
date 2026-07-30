@@ -107,6 +107,8 @@ constexpr float kCrossingHitRadiusPx = 11.0f;
 // pattern, which is cosmetic only -- a flat fill reads fine at editor zoom levels.
 const ImU32 kZoneBoostFillColor = IM_COL32(255, 165, 32, 107);         // rgba(255,165,32,0.42)
 const ImU32 kZoneBoostStrokeColor = IM_COL32(255, 176, 32, 255);       // #ffb020
+const ImU32 kZoneJumpFillColor = IM_COL32(83, 200, 255, 107);          // rgba(83,200,255,0.42)
+const ImU32 kZoneJumpStrokeColor = IM_COL32(83, 200, 255, 255);        // #53c8ff
 const ImU32 kZoneStartGridFillColor = IM_COL32(207, 214, 221, 97);     // rgba(207,214,221,0.38)
 const ImU32 kZoneStartGridStrokeColor = IM_COL32(207, 214, 221, 255);  // #cfd6dd
 const ImU32 kZoneSelectedStrokeColor = IM_COL32(255, 90, 90, 255);
@@ -557,10 +559,12 @@ void drawZones(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownVi
     screen.reserve(outline.size());
     for (const auto& p : outline) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z)));
     const bool isStartGrid = zone.effect == "startGrid";
-    drawList->AddConcavePolyFilled(screen.data(), static_cast<int>(screen.size()), isStartGrid ? kZoneStartGridFillColor : kZoneBoostFillColor);
+    const bool isJump = zone.effect == "jump";
+    const ImU32 fillColor = isStartGrid ? kZoneStartGridFillColor : isJump ? kZoneJumpFillColor : kZoneBoostFillColor;
+    const ImU32 strokeColor = isStartGrid ? kZoneStartGridStrokeColor : isJump ? kZoneJumpStrokeColor : kZoneBoostStrokeColor;
+    drawList->AddConcavePolyFilled(screen.data(), static_cast<int>(screen.size()), fillColor);
     const bool isSelected = selectedZoneId.has_value() && *selectedZoneId == zone.id;
-    drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()),
-                          isSelected ? kZoneSelectedStrokeColor : (isStartGrid ? kZoneStartGridStrokeColor : kZoneBoostStrokeColor),
+    drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), isSelected ? kZoneSelectedStrokeColor : strokeColor,
                           ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
   }
 }
@@ -1143,8 +1147,8 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // Decided once per gesture, at the mousedown that starts it, rather than re-deriving "what to
   // drag" from whatever happens to be selected on every
   // subsequent frame (which would let a stale selection from an earlier, unrelated click hijack a
-  // later empty-space pan drag). Left-drag-on-empty-space panning falls through to a plain pan
-  // when nothing else was hit.
+  // later pan drag). Left dragging any area that did not select a draggable object falls through
+  // to a plain pan.
   static bool panDragActive = false;
   // Live only during an open-endpoint drag (see selectedOpenEndpointEnd()'s comment); persists
   // across frames (unlike outWeldTarget, which is reset every call) so the release branch below --
@@ -1187,7 +1191,6 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // before a position-point check).
     const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx);
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    bool pathSelected = false;
     // Self-intersection crossing markers: a click cycles the
     // crossing's override instead of selecting/dragging anything -- checked before a position-point
     // hit, and skipped entirely while shift is held, since shift is reserved for the
@@ -1233,28 +1236,27 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
             } else {
               state.clearMeshSelection();
               // Nothing else was hit at this point (aux/position/physics/zone/trigger/mesh all
-              // missed) -- clear any stale point selection unconditionally, whether or not the
-              // road itself is hit below. Previously this only cleared on a road hit, so a
-              // leftover point selection from an earlier click stayed "valid" forever after a
-              // genuinely empty click, which in turn permanently blocked panDragActive below
-              // (it requires !state.selection().valid()) -- left-drag panning looked entirely
-              // broken once anything had ever been selected.
-              state.clearSelection();
+              // missed), so clear every object selection before checking the road. Leaving a
+              // stale zone or trigger selected here blocked panDragActive just as a stale point
+              // selection did, making left-drag panning appear broken after selecting one.
+              state.deselectAll();
               // Clicking the road itself (see pathAtWorld's
               // comment): picked last since it's the biggest, least-specific target on the
               // canvas. Selects that curve as "current" for the panels/dropdown.
               const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld);
               if (pathHit.has_value()) {
                 state.setCurrentPathIndex(*pathHit);
-                pathSelected = true;
               }
             }
           }
         }
       }
     }
-    panDragActive = !pathSelected && !state.selection().valid() && !state.selectedMeshId().has_value() &&
-                    !state.selectedZoneId().has_value() && !state.selectedTriggerId().has_value();
+    // A road click still selects the current path, but a path is not an object drag target. Let
+    // a subsequent left drag pan from the road as well as from empty background; only actual
+    // object selections reserve the gesture for their respective edit operation.
+    panDragActive = !state.selection().valid() && !state.selectedMeshId().has_value() && !state.selectedZoneId().has_value() &&
+                    !state.selectedTriggerId().has_value();
   }
 
   // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
@@ -1833,6 +1835,9 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         ImGui::BeginDisabled(!nearPlacement.has_value());
         if (ImGui::MenuItem("Boost")) {
           mutated = state.addPathZone(nearPlacement->pathIndex, "velocityChange", nearPlacement->t, nearPlacement->lateral).has_value() || mutated;
+        }
+        if (ImGui::MenuItem("Jump")) {
+          mutated = state.addPathZone(nearPlacement->pathIndex, "jump", nearPlacement->t, nearPlacement->lateral).has_value() || mutated;
         }
         if (ImGui::MenuItem("Start Grid")) {
           mutated = state.addPathZone(nearPlacement->pathIndex, "startGrid", nearPlacement->t, nearPlacement->lateral).has_value() || mutated;

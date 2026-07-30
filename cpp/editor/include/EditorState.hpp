@@ -243,15 +243,15 @@ public:
   // Adds a path-hosted zone at parameter `t` along `pathIndex` with schema defaults (width 24,
   // length 40, and factor 1.5/duration 2 if boost -- TrackDefinition.hpp's own field defaults,
   // which already match TrackCore.DEFAULT_ZONE_WIDTH/LENGTH/DEFAULT_BOOST_FACTOR/DURATION exactly).
-  // `effect` must be "velocityChange" (boost) or "startGrid"; anything else is treated as boost,
-  // mirroring addZoneAt's own `effect === 'startGrid' ? 'startGrid' : 'velocityChange'` coercion.
+  // `effect` may be "velocityChange" (boost), "jump", or "startGrid"; anything else is treated
+  // as boost, matching loader normalization.
   // Selects the new zone and returns its id, or nullopt if pathIndex is invalid.
   std::optional<std::string> addPathZone(int pathIndex, const std::string& effect, double t, double lateral) {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
     history_.push(track_);
     Zone zone;
     zone.id = newZoneId();
-    zone.effect = effect == "startGrid" ? "startGrid" : "velocityChange";
+    zone.effect = effect == "startGrid" ? "startGrid" : effect == "jump" ? "jump" : "velocityChange";
     zone.host.kind = "path";
     zone.host.pathId = track_.paths[pathIndex].id;
     zone.host.t = std::clamp(t, 0.0, 1.0);

@@ -154,6 +154,7 @@ struct ZoneHostDefinition {
 
 struct ZoneDefinition {
   std::string id;
+  // "velocityChange" (boost), "jump", or "startGrid".
   std::string effect{"velocityChange"};
   double width{24.0}, length{40.0};
   double factor{1.5}, duration{2.0};

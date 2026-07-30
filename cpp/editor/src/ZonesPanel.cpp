@@ -18,7 +18,8 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
 
   if (zone != nullptr) {
     const std::string id = zone->id;
-    ImGui::Text("Zone: %s (%s)", id.c_str(), zone->effect == "startGrid" ? "Start Grid" : "Boost");
+    const char* effectName = zone->effect == "startGrid" ? "Start Grid" : zone->effect == "jump" ? "Jump" : "Boost";
+    ImGui::Text("Zone: %s (%s)", id.c_str(), effectName);
 
     double width = zone->width, length = zone->length;
     bool changed = false;
@@ -89,18 +90,18 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
   }
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Add path zone (boost pad / start grid):");
+  ImGui::TextUnformatted("Add path zone:");
   const bool hasPath = currentPathIndex >= 0 && currentPathIndex < static_cast<int>(state.track().paths.size());
-  static int effectIndex = 0;  // 0 = Boost, 1 = Start Grid
-  const char* effectNames[] = {"Boost", "Start Grid"};
+  static int effectIndex = 0;  // 0 = Boost, 1 = Jump, 2 = Start Grid
+  const char* effectNames[] = {"Boost", "Jump", "Start Grid"};
   ImGui::SetNextItemWidth(120);
-  ImGui::Combo("Effect", &effectIndex, effectNames, 2);
+  ImGui::Combo("Effect", &effectIndex, effectNames, 3);
   static float addTPercent = 50.0f;
   ImGui::SetNextItemWidth(160);
   ImGui::SliderFloat("t (%)##addZoneT", &addTPercent, 0.0f, 100.0f);
   ImGui::BeginDisabled(!hasPath);
   if (ImGui::Button("Add Zone")) {
-    const std::string effect = effectIndex == 1 ? "startGrid" : "velocityChange";
+    const std::string effect = effectIndex == 1 ? "jump" : effectIndex == 2 ? "startGrid" : "velocityChange";
     if (state.addPathZone(currentPathIndex, effect, addTPercent / 100.0, 0.0).has_value()) mutated = true;
   }
   ImGui::EndDisabled();
@@ -126,7 +127,7 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
       ImGui::SameLine();
       ImGui::TextUnformatted(z.id.c_str());
       ImGui::TableNextColumn();
-      ImGui::TextUnformatted(z.effect == "startGrid" ? "Start Grid" : "Boost");
+      ImGui::TextUnformatted(z.effect == "startGrid" ? "Start Grid" : z.effect == "jump" ? "Jump" : "Boost");
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(z.host.kind.c_str());
       ImGui::TableNextColumn();

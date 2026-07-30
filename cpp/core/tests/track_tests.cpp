@@ -449,6 +449,26 @@ int main(int argc, char** argv) {
       check(ship.physics.boostActive && ship.zoneInside["mesh-boost"] &&
                 !otherShip.physics.boostActive && !otherShip.zoneInside["mesh-boost"],
             "mesh-hosted boost uses independent per-ship zone state");
+
+      json jumpSource = readJson(fixtureDir / "mesh-effects.json");
+      jumpSource["zones"] = json::array({{{"id", "mesh-jump"},
+                                          {"effect", "jump"},
+                                          {"width", 20.0},
+                                          {"length", 30.0},
+                                          {"host", {{"kind", "mesh"}, {"meshId", "arena-placed"}, {"x", 0.0}, {"z", 0.0}, {"rotation", 0.0}}}}});
+      const TrackLoadResult jumpTrack = Track::fromJson(jumpSource.dump());
+      check(static_cast<bool>(jumpTrack) && jumpTrack.track->definition.zones[0].effect == "jump" &&
+                jumpTrack.track->zones[0].effect == "jump",
+            "jump zone survives loading and baking");
+      if (jumpTrack) {
+        Simulation jumpSimulation(*jumpTrack.track);
+        Ship jumpingShip = shipAt(jumpSimulation, *jumpTrack.track, {0, 5, 0});
+        jumpSimulation.stepPhysics(jumpingShip, 1.0 / 120.0, 0, 0, 0);
+        check(jumpingShip.physics.airborne && jumpingShip.zoneInside["mesh-jump"] &&
+                  std::fabs(jumpingShip.physics.verticalVel - Consts::MIN_LAUNCH_UPWARD_SPEED) < 1e-12,
+              "jump zone launches a ship once on entry");
+      }
+
       ship.prevTriggerPos.set(0, 5, 19);
       ship.physics.groundPos.set(0, 5, 21);
       simulation.detectTriggers(ship, ship.prevTriggerPos, ship.physics.groundPos);

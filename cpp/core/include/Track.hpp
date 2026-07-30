@@ -52,7 +52,7 @@ struct Path {
 struct Zone {
   std::string id;
   std::string kind;
-  std::string effect;  // "velocityChange" | "startGrid"
+  std::string effect;  // "velocityChange" | "jump" | "startGrid"
   double factor{0.0}, duration{0.0};
   int hostPathIndex{0}, hostRegionIndex{-1};
   double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};

@@ -306,7 +306,12 @@ void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample,
       inside = std::fabs(localX) <= z.halfLength && std::fabs(localZ) <= z.halfWidth;
     }
     const bool wasInside = ship.zoneInside.count(z.id) ? ship.zoneInside[z.id] : false;
-    if (inside && !wasInside && z.effect == "velocityChange") triggerBoost(ship, z);
+    if (inside && !wasInside) {
+      if (z.effect == "velocityChange")
+        triggerBoost(ship, z);
+      else if (z.effect == "jump")
+        launchShip(ship, 0.0);
+    }
     ship.zoneInside[z.id] = inside;
   }
 }

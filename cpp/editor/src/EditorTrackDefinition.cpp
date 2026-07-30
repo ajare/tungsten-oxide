@@ -319,7 +319,8 @@ TrackDefinition normalize(const json& data) {
       Zone zone;
       zone.id = stringOr(raw, "id", "z" + std::to_string(i));
       if (zone.id.empty()) zone.id = "z" + std::to_string(i);
-      zone.effect = stringOr(raw, "effect") == "startGrid" ? "startGrid" : "velocityChange";
+      const std::string effect = stringOr(raw, "effect");
+      zone.effect = effect == "startGrid" ? "startGrid" : effect == "jump" ? "jump" : "velocityChange";
       zone.width = std::max(0.5, numberOr(raw, "width", 24.0));
       zone.length = std::max(0.5, numberOr(raw, "length", 40.0));
       if (stringOr(host, "kind") == "mesh") {
