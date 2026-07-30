@@ -125,9 +125,13 @@ lane for that span.
     around the edited entry's own midpoint (bounded by whichever other
     reservations are nearest on each side) — guarantees non-overlap without
     ever touching another entry.
-- [ ] **M4 — Debug overlay.** F1 overlay toggle for
+- [x] **M4 — Debug overlay.** F1 overlay toggle for
   `GeometryKind::ReservationWall` in `StatePlayTungstenMonoxide.cpp`,
   alongside the existing `TriggerSurface`/`PathRail`/`MeshRail` toggles.
+  - Unlike those (debug-only, default hidden), `mShowReservationWallsDebug`
+    defaults to **true** — the wall is real gameplay geometry a player must
+    see, not a debug aid; the checkbox exists to let it be hidden for
+    inspecting the physics wall's alignment without the mesh in the way.
 - [ ] **M5 — Tests.** `track_tests.cpp`: schema round-trip, baked gap/rail
   geometry shape, a physics scenario driving into the wall. Editor-side
   mutation/validation tests alongside the existing `cpp/editor/tests/`.

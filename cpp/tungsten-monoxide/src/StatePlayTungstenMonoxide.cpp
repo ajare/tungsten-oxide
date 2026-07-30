@@ -214,6 +214,7 @@ void StatePlayTungstenMonoxide::createGameObjects(
     throw application::resourcesystem::ResourceException(trackResource.get(), "Track resource has no compiled TrackData.");
   applyTriggersDebugVisibility();  // mShowTriggersDebug defaults to false: trigger quads start hidden.
   applyRailsDebugVisibility();     // mShowRailsDebug defaults to false: rails start hidden too.
+  applyReservationWallsDebugVisibility();  // mShowReservationWallsDebug defaults to true: real gameplay geometry, starts visible.
   mGameSession = make_unique<tox::GameSession>(getMap()->getTrack(), tox::StartGrid::DEFAULT_SHIP_COUNT);
   auto const& poses = getMap()->getStartGridPoses();
   if (poses.size() != mGameSession->ships().size())
@@ -450,6 +451,10 @@ void StatePlayTungstenMonoxide::applyRailsDebugVisibility() const {
   setGeometryKindVisible(tox::GeometryKind::MeshRail, mShowRailsDebug);
 }
 
+void StatePlayTungstenMonoxide::applyReservationWallsDebugVisibility() const {
+  setGeometryKindVisible(tox::GeometryKind::ReservationWall, mShowReservationWallsDebug);
+}
+
 // One slider + Reset button for a single physics field, ranged to +-20% of `initial` (the
 // value captured before any debug edits). initial may be negative (e.g. maxReverse), so the
 // smaller of the two scaled endpoints isn't necessarily the low end -- min/max sorts them.
@@ -491,6 +496,7 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
     if (ImGui::BeginTabItem("Debug")) {
       if (ImGui::Checkbox("Show Triggers", &mShowTriggersDebug)) applyTriggersDebugVisibility();
       if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
+      if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
       ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
       ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
       ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");
