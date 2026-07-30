@@ -143,6 +143,7 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
       point.kind = TrackPointKind::Width;
       point.t = clampNumber(numberOr(source, "t", 0.0), 0.0, 1.0);
       point.width = std::max(1.0, numberOr(source, "width", TrackCore::DEFAULT_WIDTH));
+      point.centerOffsetPercent = clampNumber(numberOr(source, "centerOffsetPercent", 0.0), -50.0, 50.0);
       hasWidth = true;
     } else if (type == "crossSection") {
       point.kind = TrackPointKind::CrossSection;

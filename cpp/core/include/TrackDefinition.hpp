@@ -26,6 +26,9 @@ struct TrackPointDefinition {
   double t{0.0};
   double roll{0.0};
   double width{36.0};
+  // Signed percentage of this Width node's width used to shift the baked road center toward
+  // edgeRight. Zero preserves the authored position spline as the road center.
+  double centerOffsetPercent{0.0};
   double curvature{0.0};
   double tightness{1.0};
   double thickness{4.0};

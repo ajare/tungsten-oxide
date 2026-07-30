@@ -469,6 +469,54 @@ int main(int argc, char** argv) {
               "jump zone launches a ship once on entry");
       }
 
+      json offsetSource = readJson(fixtureDir / "mesh-effects.json");
+      for (auto& point : offsetSource["paths"][0]["points"])
+        if (point["type"] == "width") point["centerOffsetPercent"] = 25.0;
+      offsetSource["zones"] = json::array({{{"id", "offset-path-zone"},
+                                            {"effect", "startGrid"},
+                                            {"width", 4.0},
+                                            {"length", 20.0},
+                                            {"host", {{"kind", "path"}, {"pathId", "path-main"}, {"t", 0.5}, {"lateral", 0.0}}}}});
+      offsetSource["triggers"] = json::array({{{"id", "offset-path-trigger"},
+                                               {"type", "dummy"},
+                                               {"width", 4.0},
+                                               {"height", 12.0},
+                                               {"rotation", 0.0},
+                                               {"direction", "both"},
+                                               {"host", {{"kind", "path"}, {"pathId", "path-main"}, {"t", 0.5}, {"lateral", 0.0}}}}});
+      const TrackLoadResult offsetTrack = Track::fromJson(offsetSource.dump());
+      check(static_cast<bool>(offsetTrack) && offsetTrack.track->definition.paths[0].points[4].centerOffsetPercent == 25.0 &&
+                offsetTrack.track->definition.paths[0].points[5].centerOffsetPercent == 25.0,
+            "width center-offset percentage loads");
+      if (offsetTrack) {
+        const Track& track = *offsetTrack.track;
+        const Frame& middle = track.paths[0].centerline[track.paths[0].centerline.size() / 2];
+        checkClose(middle.pos.x, 6.0, 1e-9, "constant width center offset shifts baked centerline");
+        checkClose(track.triggers[0].center.x, 6.0, 1e-9, "path-hosted trigger follows shifted centerline");
+        Simulation offsetSimulation(track);
+        Ship offsetShip = shipAt(offsetSimulation, track, {6, 0, 0});
+        const Sample offsetSample = offsetSimulation.sampleTrack(6, 0, 0);
+        offsetSimulation.detectZoneTriggers(offsetShip, offsetSample, nullptr);
+        check(offsetShip.zoneInside["offset-path-zone"], "path-hosted zone follows shifted centerline");
+      }
+
+      json clampedOffsetSource = offsetSource;
+      clampedOffsetSource["paths"][0]["points"][4]["centerOffsetPercent"] = 75.0;
+      clampedOffsetSource["paths"][0]["points"][5]["centerOffsetPercent"] = "invalid";
+      const TrackLoadResult clampedOffsetTrack = Track::fromJson(clampedOffsetSource.dump());
+      check(static_cast<bool>(clampedOffsetTrack) && clampedOffsetTrack.track->definition.paths[0].points[4].centerOffsetPercent == 50.0 &&
+                clampedOffsetTrack.track->definition.paths[0].points[5].centerOffsetPercent == 0.0,
+            "width center-offset percentage clamps and defaults during load");
+
+      json interpolatedOffsetSource = offsetSource;
+      interpolatedOffsetSource["paths"][0]["points"][4]["centerOffsetPercent"] = 50.0;
+      interpolatedOffsetSource["paths"][0]["points"][5]["centerOffsetPercent"] = -50.0;
+      const TrackLoadResult interpolatedOffsetTrack = Track::fromJson(interpolatedOffsetSource.dump());
+      check(static_cast<bool>(interpolatedOffsetTrack) &&
+                interpolatedOffsetTrack.track->paths[0].centerline[interpolatedOffsetTrack.track->paths[0].centerline.size() / 4].pos.x > 0.1 &&
+                interpolatedOffsetTrack.track->paths[0].centerline[interpolatedOffsetTrack.track->paths[0].centerline.size() * 3 / 4].pos.x < -0.1,
+            "width center-offset percentage interpolates across Width nodes");
+
       ship.prevTriggerPos.set(0, 5, 19);
       ship.physics.groundPos.set(0, 5, 21);
       simulation.detectTriggers(ship, ship.prevTriggerPos, ship.physics.groundPos);

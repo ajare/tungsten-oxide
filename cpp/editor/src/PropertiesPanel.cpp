@@ -278,6 +278,19 @@ void drawWidthFields(EditorState& state, const SelectedPoint& sel, const TrackPo
   ImGui::SetNextItemWidth(120);
   changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
   changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+  double centerOffsetPercent = point.centerOffsetPercent;
+  constexpr double kCenterOffsetMin = -50.0, kCenterOffsetMax = 50.0;
+  ImGui::SetNextItemWidth(200);
+  const bool offsetChanged = ImGui::SliderScalar("Center Offset (%)", ImGuiDataType_Double, &centerOffsetPercent, &kCenterOffsetMin,
+                                                 &kCenterOffsetMax, "%.1f");
+  if (ImGui::IsItemActivated()) state.beginDrag();
+  if (offsetChanged) {
+    state.dragSelectedWidthCenterOffsetTo(centerOffsetPercent);
+    mutated = true;
+  }
+  if (ImGui::IsItemDeactivatedAfterEdit()) state.endDrag();
+
   if (changed)
     mutated |= state.editAuxPoint(sel.pathIndex, sel.pointIndex, [&](TrackPoint& p) {
       p.t = tPercent / 100.0;
@@ -455,8 +468,12 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
         ImGui::TableNextColumn();
         if (p.kind == PointKind::Roll)
           ImGui::Text("roll=%.1f", p.roll);
-        else if (p.kind == PointKind::Width)
-          ImGui::Text("width=%.1f", p.width);
+        else if (p.kind == PointKind::Width) {
+          if (p.centerOffsetPercent == 0.0)
+            ImGui::Text("width=%.1f", p.width);
+          else
+            ImGui::Text("width=%.1f, offset=%+.1f%%", p.width, p.centerOffsetPercent);
+        }
         else
           ImGui::Text("curv=%.2f tight=%.1f thick=%.1f", p.curvature, p.tightness, p.thickness);
       }

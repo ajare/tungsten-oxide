@@ -125,6 +125,7 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
         point.kind = PointKind::Width;
         point.t = clampNumber(numberOr(source, "t", 0.0), 0.0, 1.0);
         point.width = std::max(1.0, numberOr(source, "width", 36.0));
+        point.centerOffsetPercent = clampNumber(numberOr(source, "centerOffsetPercent", 0.0), -50.0, 50.0);
       } else if (type == "crossSection") {
         point.kind = PointKind::CrossSection;
         point.t = clampNumber(numberOr(source, "t", 0.0), 0.0, 1.0);
@@ -412,8 +413,11 @@ json pointToJson(const TrackPoint& point) {
   switch (point.kind) {
     case PointKind::Roll:
       return json{{"type", "roll"}, {"t", point.t}, {"roll", point.roll}};
-    case PointKind::Width:
-      return json{{"type", "width"}, {"t", point.t}, {"width", point.width}};
+    case PointKind::Width: {
+      json out = {{"type", "width"}, {"t", point.t}, {"width", point.width}};
+      if (point.centerOffsetPercent != 0.0) out["centerOffsetPercent"] = point.centerOffsetPercent;
+      return out;
+    }
     case PointKind::CrossSection:
       return json{{"type", "crossSection"}, {"t", point.t}, {"curvature", point.curvature}, {"tightness", point.tightness}, {"thickness", point.thickness}};
     case PointKind::Position:

@@ -84,9 +84,15 @@ class Evaluator {
 public:
   Parts p;
   bool closed;
+  bool hasCenterOffset;
   int n;
-  Evaluator(const PathDefinition& d) : p(split(d)), closed(d.closed), n((int)p.cp.size()) {}
-  Sample0 eval(double g) const {
+  Evaluator(const PathDefinition& d)
+      : p(split(d)),
+        closed(d.closed),
+        hasCenterOffset(std::any_of(p.width.begin(), p.width.end(), [](const auto* point) { return point->centerOffsetPercent != 0.0; })),
+        n((int)p.cp.size()) {}
+
+  Sample0 baseEval(double g) const {
     auto roll = [&](double t) { return scalar(p.roll, closed, t, [](auto& x) { return x.roll; }) * DEG2RAD; };
     auto width = [&](double t) { return std::max(1.0, scalar(p.width, closed, t, [](auto& x) { return x.width; })); };
     auto xs = [&](double t) {
@@ -127,6 +133,48 @@ public:
     double t = g / gmax;
     auto q = xs(t);
     return {pos, tan, roll(t), width(t), q[0], q[1], q[2]};
+  }
+
+  double centerOffsetPercent(double t) const {
+    if (p.width.empty()) return 0.0;
+    return TrackCore::clamp(scalar(p.width, closed, t, [](auto& x) { return x.centerOffsetPercent; }), -50.0, 50.0);
+  }
+
+  Vec3 shiftedPosition(double g) const {
+    const Sample0 base = baseEval(g);
+    double gmax = closed ? n : n - 1;
+    if (gmax == 0) gmax = 1;
+    Vec3 h;
+    h.crossVectors(Vec3(0, 1, 0), base.tangent).normalize();
+    Vec3 bn;
+    bn.crossVectors(base.tangent, h).normalize();
+    if (bn.y < 0) bn.negate();
+    const double cosine = std::cos(-base.roll), sine = std::sin(-base.roll);
+    const Vec3 edgeRight = h.clone().multiplyScalar(cosine).addScaledVector(bn, sine);
+    return base.pos.clone().addScaledVector(edgeRight, base.width * centerOffsetPercent(g / gmax) / 100.0);
+  }
+
+  Sample0 eval(double g) const {
+    Sample0 result = baseEval(g);
+    // Preserve the exact historical evaluator path for all legacy/zero-offset tracks, whose
+    // golden parity traces pin its floating-point output.
+    if (!hasCenterOffset) return result;
+
+    result.pos = shiftedPosition(g);
+    const double gmax = std::max(1, closed ? n : n - 1);
+    constexpr double kTangentSampleStep = 1e-3;
+    double before = g - kTangentSampleStep, after = g + kTangentSampleStep;
+    if (!closed) {
+      before = std::max(0.0, before);
+      after = std::min(static_cast<double>(gmax), after);
+      if (after == before) {
+        before = std::max(0.0, g - 2.0 * kTangentSampleStep);
+        after = std::min(static_cast<double>(gmax), g + 2.0 * kTangentSampleStep);
+      }
+    }
+    const Vec3 tangent = shiftedPosition(after).sub(shiftedPosition(before));
+    if (tangent.lengthSq() > 1e-12) result.tangent.copy(tangent).normalize();
+    return result;
   }
 };
 Frame frame(const Sample0& s) {

@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 
+#include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
 #include "TrackResourceDocument.hpp"
@@ -37,6 +38,30 @@ int main(int argc, char** argv) {
   const tox::TrackLoadResult baked = tox::Track::fromFile(fixture);
   check(static_cast<bool>(baked), "fixture bakes");
   if (!baked) return 1;
+
+  editor::EditorState offsetState(authored);
+  int widthIndex = -1;
+  for (int i = 0; i < static_cast<int>(offsetState.track().paths[0].points.size()); ++i)
+    if (offsetState.track().paths[0].points[i].kind == editor::PointKind::Width) {
+      widthIndex = i;
+      break;
+    }
+  check(widthIndex >= 0, "fixture has a Width point for center-offset editing");
+  if (widthIndex >= 0) {
+    offsetState.selectPoint(0, widthIndex);
+    offsetState.beginDrag();
+    offsetState.dragSelectedWidthCenterOffsetTo(12.5);
+    offsetState.dragSelectedWidthCenterOffsetTo(25.0);
+    offsetState.endDrag();
+    check(offsetState.track().paths[0].points[widthIndex].centerOffsetPercent == 25.0,
+          "width center-offset slider updates the selected Width point");
+    check(editor::toJson(offsetState.track()).find("centerOffsetPercent") != std::string::npos,
+          "non-zero width center offset serializes");
+    check(offsetState.undo() && offsetState.track().paths[0].points[widthIndex].centerOffsetPercent == 0.0,
+          "one width center-offset slider gesture creates one undo step");
+    check(editor::toJson(offsetState.track()).find("centerOffsetPercent") == std::string::npos,
+          "zero width center offset is omitted from JSON");
+  }
 
   const std::filesystem::path temp =
       std::filesystem::temp_directory_path() / "tungsten-oxide-track-resource-tests";

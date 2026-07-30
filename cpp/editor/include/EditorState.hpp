@@ -1214,6 +1214,19 @@ public:
     point.width = std::max(1.0, width);
   }
 
+  // Properties-panel slider counterpart to dragSelectedWidthTo(). The shared drag lifecycle
+  // makes a continuous center-offset slider gesture a single undoable edit.
+  void dragSelectedWidthCenterOffsetTo(double centerOffsetPercent) {
+    if (!dragging_ || !selectionInRange()) return;
+    TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
+    if (point.kind != PointKind::Width) return;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    point.centerOffsetPercent = std::clamp(centerOffsetPercent, -50.0, 50.0);
+  }
+
   // On-canvas roll-handle drag: same drag lifecycle as dragSelectedWidthTo(), for a Roll point's
   // `roll` field. The caller computes the roll value itself from the baked frame (position/h
   // axis/width at the point's `t`), same THE-free split as dragSelectedWidthTo().
@@ -1509,7 +1522,10 @@ public:
     mutate(*point);
     point->t = std::clamp(point->t, 0.0, 1.0);
     if (point->kind == PointKind::Roll) point->roll = std::clamp(point->roll, -180.0, 180.0);
-    if (point->kind == PointKind::Width) point->width = std::max(1.0, point->width);
+    if (point->kind == PointKind::Width) {
+      point->width = std::max(1.0, point->width);
+      point->centerOffsetPercent = std::clamp(point->centerOffsetPercent, -50.0, 50.0);
+    }
     if (point->kind == PointKind::CrossSection) {
       point->curvature = std::clamp(point->curvature, -1.0, 1.0);
       point->tightness = std::clamp(point->tightness, 0.2, 4.0);
