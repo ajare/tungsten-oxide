@@ -220,7 +220,7 @@
     {
       "id": "path-0-shell",
       "kind": "PathShell",
-      "hasUv": false,
+      "hasUv": true,
       "texture": null,
       "vertexCount": 11208,
       "indexCount": 11208,

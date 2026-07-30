@@ -765,6 +765,15 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
     // "DefaultShellMaterial", and with MaterialCatalog's startup existence check for it.
     sh.b.materialKey = "Tracks/DefaultShellMaterial";
+    sh.b.hasUv = true;
+    // Same UV convention as the road surface's `top` above, reused as-is rather than inventing a
+    // separate one for the shell: component 0 is `v` (across, [0,1]) and component 1 is the ring's
+    // along-path tile position (`dist[ring] / avg`, the same units `top`'s t0/t1 tile in). A surface
+    // point and the `under()` point extruded straight down from it get the *same* UV -- there's no
+    // third (depth/thickness) axis in this parameterization, so the top and bottom of the shell
+    // align in UV space rather than one being invented. That degenerates the end-cap strip (a
+    // vertical face, where both corners of an edge would otherwise want the same v and t) to a
+    // zero-height texture line, which is a fair trade for staying literally "the same as the road".
     auto under = [](const Frame& f, Vec3 p) { return p.addScaledVector(f.normal, -f.crossSectionThickness); };
     auto ringUnderPoint = [&](int ring, double v) {
       const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
@@ -776,15 +785,18 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     };
     for (int i = 0; i < sc; i++) {
       int j = def.closed ? (i + 1) % n : i + 1;
+      // Same t0/t1 formula `top`'s own strip loop uses, including the closed-wrap correction at the
+      // seam (j == 0) -- so a shell ring's along-tile position matches the road surface's exactly.
+      double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + frames[i].pos.distanceTo(frames[j].pos)) / avg : dist[j] / avg);
       for (int side = 0; side < 2; side++) {
         double v = side;
         Vec3 a = surface(frames[i], e.left[i], e.right[i], v), c = surface(frames[j], e.left[j], e.right[j], v), au = under(frames[i], a.clone()), cu = under(frames[j], c.clone());
         if (side == 0) {
-          sh.tri(a, au, c);
-          sh.tri(au, cu, c);
+          sh.tri(a, au, c, {v, t0}, {v, t0}, {v, t1});
+          sh.tri(au, cu, c, {v, t0}, {v, t1}, {v, t1});
         } else {
-          sh.tri(au, a, cu);
-          sh.tri(a, c, cu);
+          sh.tri(au, a, cu, {v, t0}, {v, t0}, {v, t1});
+          sh.tri(a, c, cu, {v, t0}, {v, t1}, {v, t1});
         }
       }
       std::set<double> shellBreaks(br[i].begin(), br[i].end());
@@ -802,33 +814,39 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
         if (uncappedHere) {
           const int ringOf[4] = {i, i, j, j};
           const double vOf[4] = {lo, hi, hi, lo};
+          const double tOf[4] = {t0, t0, t1, t1};
           // Same corner-wise rule and the same `gapV` the top surface's carve uses, so the two
           // holes always agree exactly. Swapping each triangle's last two corners (vs. the top
           // surface's own emit) flips the winding to face downward, matching this loop's
           // un-carved case below.
           carveQuad(ringOf, vOf, gapV, [&](int c0, int c1, int c2) {
             auto pt = [&](int c) { return ringUnderPoint(ringOf[c], vOf[c]); };
-            sh.tri(pt(c0), pt(c2), pt(c1));
+            sh.tri(pt(c0), pt(c2), pt(c1), {vOf[c0], tOf[c0]}, {vOf[c2], tOf[c2]}, {vOf[c1], tOf[c1]});
           });
         } else {
           Vec3 a = ringUnderPoint(i, lo);
           Vec3 b = ringUnderPoint(i, hi);
           Vec3 c = ringUnderPoint(j, lo);
           Vec3 d = ringUnderPoint(j, hi);
-          sh.tri(a, c, b);
-          sh.tri(b, c, d);
+          sh.tri(a, c, b, {lo, t0}, {lo, t1}, {hi, t0});
+          sh.tri(b, c, d, {hi, t0}, {lo, t1}, {hi, t1});
         }
       }
     }
     if (!def.closed) {
       for (int end : {0, n - 1}) {
+        // Same UV convention as everywhere else in the shell: a surface point and its `under()`
+        // point share one UV (there's no third axis for depth), so this end cap's two v samples
+        // (br[end][k], br[end][k+1]) at the one fixed `dist[end] / avg` are all four UVs it needs.
+        const double t = dist[end] / avg;
         for (std::size_t k = 0; k + 1 < br[end].size(); ++k) {
           Vec3 a = surface(frames[end], e.left[end], e.right[end], br[end][k]);
           Vec3 b = under(frames[end], a.clone());
           Vec3 c = surface(frames[end], e.left[end], e.right[end], br[end][k + 1]);
           Vec3 d = under(frames[end], c.clone());
-          sh.tri(a, b, c);
-          sh.tri(b, d, c);
+          const double v0 = br[end][k], v1 = br[end][k + 1];
+          sh.tri(a, b, c, {v0, t}, {v0, t}, {v1, t});
+          sh.tri(b, d, c, {v0, t}, {v1, t}, {v1, t});
         }
       }
     }

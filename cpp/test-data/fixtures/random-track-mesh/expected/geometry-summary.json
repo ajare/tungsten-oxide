@@ -52,7 +52,7 @@
         "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 8400,
         "indexCount": 8400,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -202.76738020685355,
@@ -76,12 +76,12 @@
           2254.7451168403923
         ],
         "uvMin": [
-          0,
-          0
+          0.0,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          39.96092445366993
         ]
       },
       {
@@ -402,7 +402,7 @@
         "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 10644,
         "indexCount": 10644,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -249.8745670790066,
@@ -426,12 +426,12 @@
           -1827.8772346459823
         ],
         "uvMin": [
-          0,
-          0
+          0.0,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          47.70284576717964
         ]
       },
       {
@@ -755,7 +755,7 @@
         "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 13416,
         "indexCount": 13416,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -237.45299935677915,
@@ -779,12 +779,12 @@
           -208.5621209393971
         ],
         "uvMin": [
-          0,
-          0
+          0.0,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          39.29950941609643
         ]
       },
       {
@@ -1184,7 +1184,7 @@
         "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 9312,
         "indexCount": 9312,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -308.2817251075456,
@@ -1208,12 +1208,12 @@
           -7513.5000301276805
         ],
         "uvMin": [
-          0,
-          0
+          0.0,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          55.21155052464321
         ]
       },
       {
@@ -1610,7 +1610,7 @@
         "materialKey": "Tracks/DefaultShellMaterial",
         "vertexCount": 17412,
         "indexCount": 17412,
-        "hasUv": false,
+        "hasUv": true,
         "texture": null,
         "min": [
           -318.81141727766914,
@@ -1634,12 +1634,12 @@
           7455.670660736203
         ],
         "uvMin": [
-          0,
-          0
+          0.0,
+          0.0
         ],
         "uvMax": [
-          0,
-          0
+          1.0,
+          43.529645545805664
         ]
       },
       {
