@@ -788,9 +788,9 @@ int main(int argc, char** argv) {
   }
 
   {
-    // Reservation wall UVs. Convention mirrors the road surface's: component 0 across the ribbon
-    // normalized to [0,1] (bottom-to-top of the wall), component 1 along it in units of that same
-    // across-extent (the wall's own height), so tiles are square in world metres.
+    // Reservation wall UVs: U runs along the wall, V spans its height normalized to [0,1], with U
+    // measured in units of that same height so tiles are square in world metres. (The underlying
+    // parameterization is the road surface's across-first one, turned a quarter turn by `wallUv`.)
     json input = base;
     input["version"] = 11;
     for (int i : {8, 9}) {
@@ -813,23 +813,26 @@ int main(int argc, char** argv) {
       if (wall != loaded.track->geometry.end()) {
         check(wall->hasUv, "the reservation wall batch declares UVs");
         check(!wall->vertices.empty(), "the reservation wall batch has vertices");
-        double maxAlong = 0.0;
-        bool acrossInRange = true, alongNonNegative = true;
+        // Post-rotation the wall's height is V and its run is U (see `wallUv` in TrackBake.cpp), so
+        // V is the one pinned to [0,1] and U is the one that advances.
+        double maxRun = 0.0;
+        bool heightInRange = true, runNonNegative = true;
         for (const auto& v : wall->vertices) {
           // The wall is a simple ribbon: every vertex is either on the rim or on the top edge.
-          if (v.uv.x < -1e-9 || v.uv.x > 1.0 + 1e-9 || (std::fabs(v.uv.x) > 1e-9 && std::fabs(v.uv.x - 1.0) > 1e-9))
-            acrossInRange = false;
-          if (v.uv.y < -1e-9) alongNonNegative = false;
-          maxAlong = std::max(maxAlong, v.uv.y);
+          if (v.uv.y < -1e-9 || v.uv.y > 1.0 + 1e-9 || (std::fabs(v.uv.y) > 1e-9 && std::fabs(v.uv.y - 1.0) > 1e-9))
+            heightInRange = false;
+          if (v.uv.x < -1e-9) runNonNegative = false;
+          maxRun = std::max(maxRun, v.uv.x);
         }
-        check(acrossInRange, "every wall UV's across component is exactly 0 (rim) or 1 (top)");
-        check(alongNonNegative, "no wall UV runs negative along the wall");
-        check(maxAlong > 1.0, "the along component actually advances along the wall -- max " + std::to_string(maxAlong));
-        // No stretch: an edge spanning the wall's full height carries exactly one UV unit across,
-        // so its world length must be the authored wallHeight. This is what would break if the
-        // across component were tied to anything but the wall's own height.
+        check(heightInRange, "every wall UV's V spans the height and is exactly 0 (top) or 1 (rim)");
+        check(runNonNegative, "no wall UV runs negative along the wall");
+        check(maxRun > 1.0, "U actually advances along the wall -- max " + std::to_string(maxRun));
+        // No stretch: an edge spanning the wall's full height carries exactly one UV unit of V, so
+        // its world length must be the authored wallHeight. This is what would break if the height
+        // axis were tied to anything but the wall's own height.
         double worstVertical = 0.0, worstHorizontal = 0.0;
         int verticals = 0, horizontals = 0;
+        bool vOrientationConsistent = true;
         for (std::size_t i = 0; i + 2 < wall->indices.size(); i += 3) {
           for (int k = 0; k < 3; ++k) {
             const auto& p = wall->vertices[wall->indices[i + k]];
@@ -837,21 +840,27 @@ int main(int argc, char** argv) {
             const double world = std::hypot(std::hypot(p.position.x - q.position.x, p.position.y - q.position.y),
                                             p.position.z - q.position.z);
             const double du = std::fabs(p.uv.x - q.uv.x), dv = std::fabs(p.uv.y - q.uv.y);
-            if (du > 0.5 && dv < 1e-9) {  // spans the height at one station
-              // Scaled by du, so this pins the UV to the world rather than merely re-measuring the
-              // wall: an across component spanning 0..2 over the same height would fail here.
-              worstVertical = std::max(worstVertical, std::fabs(world - du * wallHeight));
+            if (dv > 0.5 && du < 1e-9) {  // spans the height at one station
+              // Scaled by dv, so this pins the UV to the world rather than merely re-measuring the
+              // wall: a height axis spanning 0..2 over the same height would fail here.
+              worstVertical = std::max(worstVertical, std::fabs(world - dv * wallHeight));
+              // V is 1 at the rim and 0 at the top, the same way round on every quad. This fixture
+              // is flat and unbanked, so the wall extrudes along +Y and world height orders the
+              // pair. Catches a per-quad flip, and pins which quarter turn `wallUv` applies -- the
+              // transpose that would also mirror an asymmetric texture fails here.
+              if ((p.position.y > q.position.y) != (p.uv.y < q.uv.y)) vOrientationConsistent = false;
               ++verticals;
-            } else if (dv > 1e-9 && du < 1e-9) {  // runs along at one height
-              worstHorizontal = std::max(worstHorizontal, std::fabs(world - dv * wallHeight) / std::max(1.0, world));
+            } else if (du > 1e-9 && dv < 1e-9) {  // runs along at one height
+              worstHorizontal = std::max(worstHorizontal, std::fabs(world - du * wallHeight) / std::max(1.0, world));
               ++horizontals;
             }
           }
         }
         check(verticals > 10 && horizontals > 10, "both edge families are actually present to measure");
+        check(vOrientationConsistent, "V is 1 at the rim and 0 at the top on every wall quad -- a rotation, not a mirror");
         check(worstVertical < 1e-6, "a full-height wall edge is exactly wallHeight long -- worst error " + std::to_string(worstVertical));
-        // Along-edges are measured relative: the rim and top edges of one quad differ slightly in
-        // length wherever the void tapers or the frame normals splay, and both share a u-range.
+        // Run-edges are measured relative: the rim and top edges of one quad differ slightly in
+        // length wherever the void tapers or the frame normals splay, and both share a U range.
         check(worstHorizontal < 1e-6, "along-wall UVs track world distance without stretching -- worst relative error " +
                                           std::to_string(worstHorizontal));
       }
