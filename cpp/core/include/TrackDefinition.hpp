@@ -36,6 +36,13 @@ struct TextureBindingDefinition {
   int tile{0};
 };
 
+// A central reservation: a void carved out of the road between t0 and t1, tapering from zero width
+// at each end to `width` at the midpoint (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1].
+struct ReservationDefinition {
+  std::string id;
+  double t0{0.0}, t1{0.0}, width{0.0};
+};
+
 struct PathDefinition {
   std::string id;
   bool closed{true};
@@ -46,6 +53,7 @@ struct PathDefinition {
   // TrackBake.cpp falls back to the legacy "road" materialKey when empty, so JS<->C++ geometry
   // parity is unaffected for tracks that never carry this field.
   std::string material;
+  std::vector<ReservationDefinition> reservations;
 };
 
 struct MeshVertexDefinition {

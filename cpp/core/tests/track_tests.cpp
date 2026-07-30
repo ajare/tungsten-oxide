@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
       check(static_cast<bool>(loaded), label + " loads through Track::fromFile: " + loaded.error);
       if (!loaded) continue;
       check(loaded.warnings.empty(), label + " loads without warnings");
-      check(loaded.track->definition.version == 10, label + " uses current schema 10");
+      check(loaded.track->definition.version == TrackCore::TRACK_SCHEMA_VERSION, label + " normalizes to current schema " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
       check(!loaded.track->definition.paths.empty(), label + " has at least one path");
       check(!loaded.track->definition.meshAssets.empty(), label + " has mesh assets");
       check(!loaded.track->definition.meshes.empty(), label + " has mesh placements");
@@ -615,6 +615,54 @@ int main(int argc, char** argv) {
     input["version"] = 9;
     const auto loaded = Track::fromJson(input.dump());
     check(!loaded && loaded.error.find("unsupported") != std::string::npos, "historical schema is explicitly unsupported");
+  }
+  {
+    json input = base;
+    input["version"] = 12;
+    const auto loaded = Track::fromJson(input.dump());
+    check(!loaded && loaded.error.find("unsupported") != std::string::npos, "a schema newer than 11 is explicitly unsupported");
+  }
+  {
+    // CENTRAL_RESERVATION_PLAN.md M0: schema 10 (the permanent JS-oracle version, no
+    // reservations field at all) still loads and normalizes with an empty reservations list.
+    json input = base;
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a plain schema-10 fixture with no reservations field loads");
+    if (loaded) check(loaded.track->definition.paths[0].reservations.empty(), "no reservations field means an empty list, not an error");
+  }
+  {
+    json input = base;
+    input["version"] = 11;
+    input["paths"][0]["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.7}, {"t1", 0.3}, {"width", 12.0}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "schema 11 with a reservations array loads: " + loaded.error);
+    if (loaded) {
+      const auto& reservations = loaded.track->definition.paths[0].reservations;
+      check(reservations.size() == 1, "one reservation is parsed");
+      if (!reservations.empty()) {
+        check(reservations[0].id == "res1", "reservation id round-trips");
+        check(reservations[0].t0 == 0.3 && reservations[0].t1 == 0.7, "reservation t0/t1 are normalized so t0 < t1 even if authored reversed");
+        check(reservations[0].width == 12.0, "reservation width round-trips");
+      }
+    }
+  }
+  {
+    // Out-of-range/degenerate reservations are clamped/dropped rather than rejecting the track,
+    // matching every other authored field's defensive-normalization policy in this loader.
+    json input = base;
+    input["version"] = 11;
+    input["paths"][0]["reservations"] = json::array({
+        {{"id", "zeroWidth"}, {"t0", 0.2}, {"t1", 0.4}, {"width", 0.0}},
+        {{"id", "zeroSpan"}, {"t0", 0.5}, {"t1", 0.5}, {"width", 10.0}},
+        {{"id", "outOfRange"}, {"t0", -0.5}, {"t1", 1.5}, {"width", 5.0}},
+    });
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "reservations with degenerate values still load: " + loaded.error);
+    if (loaded) {
+      const auto& reservations = loaded.track->definition.paths[0].reservations;
+      check(reservations.size() == 1, "zero-width/zero-span reservations are dropped, leaving only the clamped one");
+      if (!reservations.empty()) check(reservations[0].t0 == 0.0 && reservations[0].t1 == 1.0, "out-of-[0,1] t0/t1 are clamped into range");
+    }
   }
   {
     json input = base;

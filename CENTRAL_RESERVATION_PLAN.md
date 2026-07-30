@@ -57,10 +57,23 @@ lane for that span.
 
 ## 3. Milestones
 
-- [ ] **M0 — Schema & data model.** `ReservationDefinition` in
+- [x] **M0 — Schema & data model.** `ReservationDefinition` in
   `TrackDefinition.hpp` and the editor mirror; schema version bump;
   JSON load/save (`TrackLoader.cpp`, `EditorTrackDefinition.cpp`) with
   clamping/validation; round-trip unit tests.
+  - The loader now accepts schema **10 or 11** (not just 11): the JS oracle's
+    entire fixture corpus is permanently version 10 with no `reservations`
+    field, so a hard `==11` requirement would have broken every existing
+    fixture load. `TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10` /
+    `TRACK_SCHEMA_VERSION = 11` (and the editor's matching
+    `kSchemaVersionMinSupported`/`kSchemaVersion`) bound the accepted range;
+    both loaders still normalize `version` to 11 on load and the editor only
+    ever writes 11.
+  - Core's loader clamps and silently drops degenerate reservations
+    (`t1-t0<=0` or `width<=0`); the editor's mirror keeps them as authored
+    (mid-edit tolerance, same policy as its other fields) — non-overlap and
+    "fits within the road width" validation is EditorState's job (M3), not
+    the parser's.
 - [ ] **M1 — Baking.** Taper evaluation; carve the gap out of
   `PathSurface`/`PathShell` (two lane strips instead of one, tapering to a
   point at `t0`/`t1`); synthetic `MeshRegion` (bounds + tapered-boundary

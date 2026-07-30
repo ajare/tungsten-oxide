@@ -172,6 +172,26 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
     if (textureValid) path.texture = std::move(texture);
   }
   path.material = stringOr(raw, "material");
+
+  // Central reservations (CENTRAL_RESERVATION_PLAN.md): defensively clamp rather than reject, same
+  // policy as every other authored field here. t0 < t1 within [0,1]; degenerate/zero-width entries
+  // are dropped rather than baked into a zero-width no-op gap. Overlap between reservations on the
+  // same path is the editor's job to prevent at author time (EditorState); the loader tolerates it.
+  if (raw.contains("reservations") && raw.at("reservations").is_array()) {
+    for (const auto& source : raw.at("reservations")) {
+      if (!source.is_object()) continue;
+      ReservationDefinition reservation;
+      reservation.id = stringOr(source, "id");
+      double t0 = clampNumber(numberOr(source, "t0", 0.0), 0.0, 1.0);
+      double t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
+      if (t0 > t1) std::swap(t0, t1);
+      reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
+      if (t1 - t0 <= 1e-6 || reservation.width <= 1e-6) continue;
+      reservation.t0 = t0;
+      reservation.t1 = t1;
+      path.reservations.push_back(std::move(reservation));
+    }
+  }
   return path;
 }
 
@@ -252,9 +272,12 @@ ConnectionDefinition connection(const json& raw) {
 TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings) {
   if (!data.is_object()) throw std::runtime_error("track JSON must be an object");
   if (!data.contains("version"))
-    throw std::runtime_error("track version is required; only schema " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION) + " is supported");
-  if (!data.at("version").is_number_integer() || data.at("version").get<int>() != TrackCore::TRACK_SCHEMA_VERSION)
-    throw std::runtime_error("unsupported track schema version; expected " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
+    throw std::runtime_error("track version is required; only schema " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED) +
+                              "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION) + " is supported");
+  if (!data.at("version").is_number_integer() || data.at("version").get<int>() < TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED ||
+      data.at("version").get<int>() > TrackCore::TRACK_SCHEMA_VERSION)
+    throw std::runtime_error("unsupported track schema version; expected " + std::to_string(TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED) +
+                              "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
   if (!data.contains("paths") || !data.at("paths").is_array() || data.at("paths").empty())
     throw std::runtime_error("a current-schema track needs at least one path");
 

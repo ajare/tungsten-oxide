@@ -10,7 +10,11 @@ namespace tox {
 namespace TrackCore {
 
 // --- schema/geometry constants owned by web/track-core.js ---
-constexpr int TRACK_SCHEMA_VERSION = 10;
+constexpr int TRACK_SCHEMA_VERSION = 11;
+// Oldest schema version the native loader still accepts (no reservations field, always empty).
+// CENTRAL_RESERVATION_PLAN.md M0: the JS oracle and its fixture corpus stay at 10 permanently, so
+// the loader must keep reading it even though C++ now writes/normalizes to 11.
+constexpr int TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10;
 constexpr int N_DEFAULT = 400;
 constexpr double COLLISION_WALL_MARGIN = 1.8;
 constexpr double DEFAULT_WIDTH = 36.0;

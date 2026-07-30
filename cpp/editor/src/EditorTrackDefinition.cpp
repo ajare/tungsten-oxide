@@ -18,7 +18,11 @@ namespace {
 
 using nlohmann::json;
 
-constexpr int kSchemaVersion = 10;
+constexpr int kSchemaVersion = 11;
+// Oldest schema version still readable (no reservations field, always empty) -- mirrors
+// TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED (CENTRAL_RESERVATION_PLAN.md M0). The editor always
+// writes kSchemaVersion; reading stays lenient across the one-version gap.
+constexpr int kSchemaVersionMinSupported = 10;
 
 bool finite(double value) { return std::isfinite(value); }
 double clampNumber(double value, double lo, double hi) { return std::max(lo, std::min(hi, value)); }
@@ -107,6 +111,22 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
   }
   if (raw.is_object() && raw.contains("texture")) path.texture = normalizePathTexture(raw.at("texture"));
   path.material = stringOr(raw, "material");
+
+  // Mirrors core's TrackLoader.cpp normalizePath: clamp defensively rather than reject, matching
+  // this function's own "in-progress state, never fails" posture. Unlike core, does not drop
+  // degenerate entries -- an editor mid-edit reservation (e.g. width not typed in yet) is kept as
+  // authored so the panel doesn't lose it out from under the user.
+  if (raw.is_object() && raw.contains("reservations") && raw.at("reservations").is_array()) {
+    for (const auto& source : raw.at("reservations")) {
+      if (!source.is_object()) continue;
+      Reservation reservation;
+      reservation.id = stringOr(source, "id");
+      reservation.t0 = clampNumber(numberOr(source, "t0", 0.0), 0.0, 1.0);
+      reservation.t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
+      reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
+      path.reservations.push_back(std::move(reservation));
+    }
+  }
   return path;
 }
 
@@ -192,8 +212,10 @@ Connection normalizeConnection(const json& raw) {
 
 TrackDefinition normalize(const json& data) {
   if (!data.is_object()) throw std::runtime_error("track JSON must be an object");
-  if (data.contains("version") && data.at("version").is_number_integer() && data.at("version").get<int>() != kSchemaVersion)
-    throw std::runtime_error("unsupported track schema version; the editor only reads/writes schema " + std::to_string(kSchemaVersion));
+  if (data.contains("version") && data.at("version").is_number_integer() &&
+      (data.at("version").get<int>() < kSchemaVersionMinSupported || data.at("version").get<int>() > kSchemaVersion))
+    throw std::runtime_error("unsupported track schema version; the editor only reads schema " + std::to_string(kSchemaVersionMinSupported) +
+                              "-" + std::to_string(kSchemaVersion) + " and writes schema " + std::to_string(kSchemaVersion));
 
   TrackDefinition out;
   out.version = kSchemaVersion;
@@ -371,6 +393,12 @@ json pathToJson(const Path& path) {
   json out = {{"id", path.id}, {"closed", path.closed}, {"points", std::move(points)}};
   if (path.texture) out["texture"] = json{{"asset", path.texture->assetId}, {"tile", path.texture->tile}};
   if (!path.material.empty()) out["material"] = path.material;
+  if (!path.reservations.empty()) {
+    json reservations = json::array();
+    for (const auto& reservation : path.reservations)
+      reservations.push_back(json{{"id", reservation.id}, {"t0", reservation.t0}, {"t1", reservation.t1}, {"width", reservation.width}});
+    out["reservations"] = std::move(reservations);
+  }
   return out;
 }
 

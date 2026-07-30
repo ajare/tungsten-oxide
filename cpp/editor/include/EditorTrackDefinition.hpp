@@ -48,6 +48,14 @@ struct TextureBinding {
   int tile{0};
 };
 
+// A central reservation: a void carved out of the road between t0 and t1, tapering from zero width
+// at each end to `width` at the midpoint. Mirrors core's tox::ReservationDefinition
+// (CENTRAL_RESERVATION_PLAN.md).
+struct Reservation {
+  std::string id;
+  double t0{0.0}, t1{0.0}, width{0.0};
+};
+
 struct Path {
   std::string id;
   bool closed{true};
@@ -58,6 +66,7 @@ struct Path {
   // finishCreateDraft backfill it to the alphabetically-first material as soon as one is known);
   // mirrors core's PathDefinition::material, which this round-trips through schema-10 JSON.
   std::string material;
+  std::vector<Reservation> reservations;
 };
 
 // `attributesJson` carries the geometry-js "attributes" object verbatim as opaque serialized JSON
@@ -172,7 +181,7 @@ struct Start {
 };
 
 struct TrackDefinition {
-  int version{10};
+  int version{11};
   std::string name{"Untitled Track"};
   int samples{400};
   std::vector<Path> paths;
