@@ -171,24 +171,48 @@
           "type": "crossSection"
         },
         {
-          "t": 0.09602400600150038,
+          "t": 0.09,
           "type": "width",
           "width": 36.0
         },
         {
-          "t": 0.11287358213518495,
+          "t": 0.14,
           "type": "width",
-          "width": 140.5
+          "width": 36.0
         },
         {
-          "t": 0.15707097327714747,
+          "t": 0.13129063147942047,
           "type": "width",
-          "width": 157.0
+          "width": 69.6
         },
         {
-          "t": 0.17854463615903976,
+          "t": 0.09974341901552215,
           "type": "width",
-          "width": 35.99999999999999
+          "width": 72.0
+        },
+        {
+          "t": 0.11537305597785927,
+          "type": "width",
+          "width": 138.6
+        }
+      ],
+      "reservations": [
+        {
+          "endCap0": {
+            "noseLength": 0.0,
+            "style": "mitred",
+            "width": 14.0
+          },
+          "endCap1": {
+            "noseLength": 0.0,
+            "style": "rounded",
+            "width": 14.0
+          },
+          "id": "res1",
+          "t0": 0.1,
+          "t1": 0.13,
+          "wallHeight": 20.0,
+          "width": 24.0
         }
       ]
     }
