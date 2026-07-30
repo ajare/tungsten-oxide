@@ -845,9 +845,13 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     r.b.hasUv = true;
     // Same style as the reservation wall's `wallUv` (TrackBake.cpp's reservationGeometry): U runs
     // along the rail, V spans its extrusion height in [0,1] (0 at the rim, 1 at the top), and U is
-    // measured in units of that same height so tiles stay square in world metres.
+    // measured in units of that same height so tiles stay square in world metres. The left guard
+    // rail's U is additionally flipped (negated, not just reversed in direction) relative to the
+    // right rail's -- an asymmetric texture (e.g. a directional stripe) then mirrors between the
+    // two sides instead of both reading the same way round.
     constexpr double kRailUvTile = 1.8 - .04;
-    auto railUv = [](double across, double along) { return Vec2d{1.0 - along, across}; };
+    const double uSign = side.second ? 1.0 : -1.0;
+    auto railUv = [uSign](double across, double along) { return Vec2d{uSign * (1.0 - along), across}; };
     double run = 0.0;
     const int railN = static_cast<int>(path.centerline.size());
     const int railSegments = def.closed ? railN : railN - 1;
