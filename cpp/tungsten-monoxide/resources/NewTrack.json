@@ -59,9 +59,9 @@
         {
           "id": "p5",
           "pos": [
-            -666.453,
+            -763.4,
             0.0,
-            1154.331
+            1273.3
           ],
           "type": "position",
           "weight": 1.0
@@ -69,9 +69,9 @@
         {
           "id": "p6",
           "pos": [
-            -1154.331,
-            0.0,
-            666.453
+            -1485.0,
+            384.3,
+            1249.4
           ],
           "type": "position",
           "weight": 1.0
@@ -79,9 +79,29 @@
         {
           "id": "p7",
           "pos": [
-            -1332.907,
+            -2044.1,
             0.0,
-            0.0
+            1261.3
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p13",
+          "pos": [
+            -2586.1,
+            0.0,
+            1273.3
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p14",
+          "pos": [
+            -3065.8,
+            0.0,
+            1285.2
           ],
           "type": "position",
           "weight": 1.0
@@ -164,8 +184,8 @@
           "type": "crossSection"
         },
         {
-          "curvature": 0.0,
-          "t": 0.5,
+          "curvature": 1.0,
+          "t": 0.5196936040866262,
           "thickness": 4.0,
           "tightness": 1.0,
           "type": "crossSection"
@@ -184,10 +204,10 @@
             "width": 8.0
           },
           "id": "res1",
-          "railClearanceHeight": 4.0,
+          "railClearanceHeight": 30.0,
           "t0": 0.12,
           "t1": 0.13,
-          "wallHeight": 4.0,
+          "wallHeight": 30.0,
           "width": 36.7,
           "widthMode": "percent"
         }
@@ -242,7 +262,7 @@
         "kind": "path",
         "lateral": 0.0,
         "pathId": "starter-path",
-        "t": 0.5025
+        "t": 0.4789378186669243
       },
       "id": "starter-cp2",
       "role": "intermediate",

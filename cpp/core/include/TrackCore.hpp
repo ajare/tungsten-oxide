@@ -64,6 +64,9 @@ constexpr double RESPAWN_FALL_DEPTH = 100.0;
 constexpr double CORRIDOR_ALONG_TOL = 8.0;
 constexpr double SEGMENT_ALONG_TOL = 0.5;
 constexpr double MAX_PHYSICS_STEP = 1.0 / 120.0;
+// Launches must crest beyond the collision surface's 4 m contact probe. At the
+// default gravity this reaches roughly 7.5 m above a flat launch surface.
+constexpr double MIN_LAUNCH_UPWARD_SPEED = 30.0;
 constexpr double HANDLING_BASE_WEIGHT = 1000.0;
 }  // namespace Consts
 

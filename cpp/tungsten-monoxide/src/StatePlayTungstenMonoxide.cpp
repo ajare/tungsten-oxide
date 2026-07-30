@@ -38,6 +38,7 @@ constexpr double LOOK_AT_FORWARD = 12.0;
 constexpr double LOOK_AT_UP_MIN = -6.0;
 constexpr double LOOK_AT_UP_MAX = 12.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
+constexpr double SHIP_BOB_AMPLITUDE = 0.06;
 
 mpp::mesh::MeshSpecification shipMeshSpecification() {
   mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Triangles);
@@ -118,6 +119,7 @@ void StatePlayTungstenMonoxide::registerInput() {
   // disableInGui=false: F1 must keep toggling the debug overlay even while it's open, or
   // there would be no way to close it again.
   registerInputState("ToggleTriggersDebug", {Key::F1}, {}, {}, {}, {}, {}, false, false, 0, false);
+  registerInputState("DebugLaunch", {Key::J}, {}, {}, {}, {}, {}, false, false, 0, false);
   // InputStateManager treats every key in one definition as a chord (logical
   // AND), not alternatives. Register keyboard alternatives separately so W
   // works without also requiring UpArrow, and likewise for steering/braking.
@@ -298,6 +300,8 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
   // open but unfocused. Guarded by mShowDebugUi since GetIO() needs a bound context, which is
   // only set up (in _renderImGui) on frames the panel actually renders.
   bool guiCapturingInput = mShowDebugUi && (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse);
+  const bool debugLaunchActive =
+      find(activeStates.begin(), activeStates.end(), "DebugLaunch") != activeStates.end();
   tox::ControlIntent player;
   for (auto const& state : activeStates) {
     if (state == "Exit") {
@@ -320,6 +324,12 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
     else if (state == "Respawn")
       player.respawn = true;
   }
+  if (!guiCapturingInput && debugLaunchActive && !mDebugLaunchWasActive &&
+      !mGameSession->ships().empty())
+    mGameSession->simulation().launchShip(mGameSession->ships()[0],
+                                          tox::Consts::MIN_LAUNCH_UPWARD_SPEED);
+  mDebugLaunchWasActive = debugLaunchActive;
+
   vector<tox::ControlIntent> intents(mGameSession->ships().size());
   if (!intents.empty()) intents[0] = player;
   if (!mShipVisualStates.empty()) mShipVisualStates[0].steer = player.steer;
@@ -335,10 +345,18 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
   for (size_t i = 0; i < mGameSession->ships().size(); ++i) {
     auto const& physics = mGameSession->ships()[i].physics;
     auto& visual = mShipVisualStates[i];
-    if (visual.airborne && !physics.airborne) {
+    const bool landed = visual.airborne && !physics.airborne;
+    if (landed) {
+      // Bob is not applied in flight. Resume it from its neutral phase only
+      // after landing so reattaching to a track or mesh cannot add an
+      // unrelated sinusoidal position jump to the contact frame.
+      visual.bobTime = 0.0;
+      visual.landingBounce = 0.0;
       double impact = max(0.0, -visual.lastVerticalVelocity);
-      visual.landingBounce += min(3.2, impact * 0.09);
-      visual.landingBounceVel += min(16.0, impact * 0.35);
+      // Apply the impact as spring velocity, not an immediate position offset.
+      // The old displacement impulse could move the model several metres on
+      // the exact frame that physics attached it to the surface.
+      visual.landingBounceVel = min(16.0, impact * 0.35);
     }
     visual.airborne = physics.airborne;
     visual.lastVerticalVelocity = physics.verticalVel;
@@ -349,12 +367,17 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     else
       visual.groundPos = physics.groundPos;
     visual.up.lerp(physics.up, min(1.0, frameTime * 18.0)).normalize();
-    visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
-    visual.landingBounceVel *= exp(-7.0 * frameTime);
-    visual.landingBounce += visual.landingBounceVel * frameTime;
-    visual.bobTime += frameTime;
+    if (!landed) {
+      visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
+      visual.landingBounceVel *= exp(-7.0 * frameTime);
+      visual.landingBounce += visual.landingBounceVel * frameTime;
+    }
+    if (!physics.airborne && !landed) visual.bobTime += frameTime;
     bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
-    double hover = idle ? 1.0 : 1.0 + sin(visual.bobTime * 6.0) * 0.06 + visual.landingBounce;
+    const double bob = physics.airborne || idle
+                           ? 0.0
+                           : sin(visual.bobTime * 6.0) * SHIP_BOB_AMPLITUDE;
+    double hover = idle ? 1.0 : 1.0 + bob + visual.landingBounce;
     double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
     double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
     visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);

@@ -63,6 +63,7 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   double mLapFlashUntil{0.0};
 
   bool mShowDebugUi{false};
+  bool mDebugLaunchWasActive{false};
   bool mShowTriggersDebug{false};
   bool mShowRailsDebug{false};
   // Unlike the debug-only Trigger/Rail visuals above, a central-reservation wall is real gameplay

@@ -411,6 +411,14 @@ void Simulation::respawn(Ship& ship) const {
     placeShipAtPose(ship, ship.startPose, std::string());  // no id disarmed
 }
 
+void Simulation::launchShip(Ship& ship, double upwardSpeed) const {
+  Physics& p = ship.physics;
+  const Vec3 horizontalVelocity = p.moveDir.clone().multiplyScalar(p.speed);
+  const double verticalSpeed =
+      std::max({Consts::MIN_LAUNCH_UPWARD_SPEED, upwardSpeed, p.verticalVel});
+  beginAirborne(ship, {horizontalVelocity.x, verticalSpeed, horizontalVelocity.z});
+}
+
 StepResult Simulation::stepPhysics(Ship& ship, double dt, double throttle, double brake, double steer) const {
   return ship.step(*this, dt, throttle, brake, steer);
 }

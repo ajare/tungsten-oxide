@@ -97,6 +97,11 @@ public:
   void placeShipAtPose(Ship& ship, const Pose& pose, const std::string& disarmedId) const;
   void respawn(Ship& ship) const;
 
+  // Gives a ship an immediate world-Y launch. Preserves its horizontal velocity,
+  // guarantees at least Consts::MIN_LAUNCH_UPWARD_SPEED, and does not stack
+  // upward speed on repeated calls.
+  void launchShip(Ship& ship, double upwardSpeed) const;
+
   // Advance ONE integration sub-step.
   StepResult stepPhysics(Ship& ship, double dt, double throttle, double brake, double steer) const;
 

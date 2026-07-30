@@ -322,6 +322,37 @@ int main(int argc, char** argv) {
     check(!solidLanding.physics.airborne && solidLanding.physics.groundPos.y == 4,
           "airborne ship lands on solid mesh polygon");
     check(holeLanding.physics.airborne, "airborne ship does not land in polygon hole");
+
+    Track launchTrack = track;
+    CollisionTriangle flatRoad;
+    flatRoad.positions[0].set(-1000, 4, -1000);
+    flatRoad.positions[1].set(1000, 4, -1000);
+    flatRoad.positions[2].set(0, 4, 1000);
+    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    launchTrack.collisionSurface =
+        std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
+    Simulation launchSimulation(launchTrack);
+    Ship launched = shipAt(launchSimulation, launchTrack, {20, 4, -25});
+    launchSimulation.launchShip(launched, 5.0);
+    check(launched.physics.airborne &&
+              std::fabs(launched.physics.verticalVel - Consts::MIN_LAUNCH_UPWARD_SPEED) < 1e-12,
+          "launch enforces the minimum upward speed and detaches the ship");
+    launchSimulation.launchShip(launched, 5.0);
+    check(std::fabs(launched.physics.verticalVel - Consts::MIN_LAUNCH_UPWARD_SPEED) < 1e-12,
+          "repeated launch does not stack upward speed");
+
+    while (launched.physics.verticalVel > 0.0)
+      launchSimulation.stepPhysics(launched, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
+    check(launched.physics.airborne && launched.physics.groundPos.y > 4.0 + 4.0,
+          "launch apex exceeds the collision probe range");
+    const auto apexContact =
+        launchTrack.collisionSurface->nearestAlongAxis(launched.physics.groundPos, UP, 4.0);
+    check(!apexContact.has_value(), "launch apex is beyond the downward collision probe");
+
+    for (int step = 0; launched.physics.airborne && step < 1000; ++step)
+      launchSimulation.stepPhysics(launched, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
+    check(!launched.physics.airborne && std::fabs(launched.physics.groundPos.y - 4.0) < 1e-9,
+          "launched ship descends and lands normally");
   }
   {
     json transformed = readJson(fixtureDir / "transformed-square.json");
