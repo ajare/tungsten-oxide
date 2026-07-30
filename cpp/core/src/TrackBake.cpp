@@ -1006,12 +1006,26 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
 
       // Physics floor: the void's own tapered footprint (left boundary forward, right boundary
       // backward), landable at one elevation. MeshRegion carries only a single scalar elevation --
-      // true of every mesh region, not a reservation-specific limitation -- so this samples it at
-      // the reservation's own midpoint, the same representative point the width-mode feature's
-      // editor preview already uses, rather than trying to track a varying underside height the
-      // format structurally can't represent.
-      const Bound& mid = bounds[bounds.size() / 2];
-      region.elevation = under(mid, mid.left).y;
+      // true of every mesh region, not a reservation-specific limitation -- so this can't track a
+      // varying underside height the format structurally can't represent, and instead picks the
+      // single most defensible flat approximation: the *shallowest* (highest) point of the true
+      // curved underside anywhere across the span, found by scanning every ring rather than
+      // assuming the array's index-middle lands near the reservation's geometric midpoint --
+      // adaptive baking forces far denser rings wherever a tapering end (Joined, or a Mitred/Rounded
+      // shelf's own transition) makes the boundary curve change fastest, so `bounds.size() / 2` can
+      // land well off t=(t0+t1)/2, and did: with an asymmetric end-cap pairing (e.g. Joined at one
+      // end, Mitred at the other) that index-middle sample skewed toward the steeper, more-subdivided
+      // Joined side, picking a deeper (lower) elevation than the true floor beneath the shallower
+      // Mitred end -- the physics floor was flat *below* the visible curved floor there, so a car
+      // driving onto that end visibly sank into the render mesh before reaching the (too-low) actual
+      // ground. Every gap width in the span is <= the reservation's own peak width (end caps only
+      // narrow the taper, never widen past it), and peak width sits farthest from the cross-section's
+      // v=0.5 apex, so the shallowest true point is always present somewhere in `bounds` -- taking
+      // the max here makes the flat floor sit at or above the real curved underside everywhere,
+      // trading a small float at the deep end for never clipping through the visible floor.
+      double elevation = -std::numeric_limits<double>::infinity();
+      for (const Bound& b : bounds) elevation = std::max(elevation, under(b, b.left).y);
+      region.elevation = elevation;
       MeshPolygon floor;
       floor.polygonId = 0;
       for (const auto& b : bounds) floor.outer.push_back({b.left.x, b.left.z});

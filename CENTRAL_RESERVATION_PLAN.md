@@ -482,6 +482,50 @@ frames inside the void. The pre-existing M6 drive-off-the-floor test still
 passes, confirming rails remain one-directional rather than silently reverted
 to bidirectional blocking.
 
+## 3c. Bugfix: Capped floor sank into the visible floor at a Mitred end (post-M6)
+
+**Report:** "with cross-section nodes at curvature -0.5, tightness 0.7, one end
+of the reservation sinks into the track floor" -- reproduced in-game, and
+specifically the Mitred end of an asymmetric (Joined/Mitred) reservation.
+
+**Cause.** M6's Capped floor picks one representative point for
+`MeshRegion::elevation` (the format's single flat scalar, unavoidable per the
+M6 notes above) by indexing to the middle of the `bounds` array --
+`bounds[bounds.size() / 2]`. That's the array's *index* midpoint, not the
+reservation's *geometric* midpoint `t=(t0+t1)/2`: adaptive baking forces far
+denser rings wherever the void boundary curve changes fastest (a Joined end's
+taper to a point, or a Rounded nose), and sparser rings across a Mitred end's
+flat capWidth shelf, so the index-middle sample can land well off the true
+`t=0.5` ring. With nonzero cross-section curvature, boundary height varies
+continuously with gap width (narrower gap sits closer to the cross-section's
+v=0.5 apex, i.e. deeper), so an off-target sample can be measurably deeper
+than the reservation's own true shallowest point -- which is *always* at
+`t=(t0+t1)/2`, since every end cap only narrows the taper, never widens past
+its peak width there. The flat physics floor ended up sitting below the
+visible curved underside at the (shallower) Mitred end, so a car driving onto
+it visibly sank into the render mesh before reaching the too-low actual
+ground.
+
+**Fix.** `reservationGeometry` (`TrackBake.cpp`) now scans every ring in
+`bounds` and takes the maximum underside height, rather than trusting the
+array's index-middle to approximate the geometric one. This is provably safe
+given the peak-width-at-mid invariant above: the true shallowest point is
+always present somewhere in `bounds`, so taking the max makes the flat floor
+sit at or above the real curved underside everywhere in the span -- trading a
+small float at the deep (Joined) end for never clipping through the visible
+floor, which is the direction that doesn't produce a visible bug.
+
+**Tests.** A new `track_tests` block bakes a curved (`curvature=-0.5`,
+`tightness=0.7`) reservation with an asymmetric Joined/Mitred end-cap pairing,
+then checks every shell-underside vertex inside the void's own tapered
+footprint (via `MeshRegion::contains`, not just its bounding box -- the same
+(x,z) neighbourhood continues past t0/t1 as ordinary uncarved road, which
+legitimately runs deeper than anything `region.elevation` claims to bound) sits
+at or below the region's chosen elevation. Verified to have teeth by reverting
+to the old index-middle sample: fails with a 0.126 m gap on this fixture (the
+original in-game report used stronger curvature over a longer span, which is
+consistent with a more dramatic sink).
+
 ## 4. Bugfix: wall/hole alignment (post-M5)
 
 **Report:** "ship physics breaks when near the central reservation."

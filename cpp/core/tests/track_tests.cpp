@@ -626,6 +626,57 @@ int main(int argc, char** argv) {
   const std::filesystem::path basePath = fixtureDir / "transformed-square.json";
   json base = readJson(basePath);
 
+  {
+    // Post-M6 bugfix: a curved cross-section (nonzero crossSectionCurvature) makes a reservation's
+    // true underside height vary along its span, deepest where the void is narrowest. A Capped
+    // region can only carry one flat MeshRegion::elevation, so it has to pick a single representative
+    // point -- and picking the array's index-middle bound (rather than the true shallowest point)
+    // could land on a deeper sample than the reservation's actual shallowest point whenever adaptive
+    // baking put uneven ring density across an asymmetric end-cap pairing (e.g. Joined at one end,
+    // Mitred at the other), leaving the flat physics floor sitting *below* the visible curved floor
+    // at the shallow end -- a car driving onto it visibly sank into the render mesh before reaching
+    // the too-low actual ground. Every gap width in the span is <= the reservation's own peak width
+    // (t=(t0+t1)/2, where end caps never widen past the taper's own peak), so the peak-width point is
+    // always the shallowest true point -- this checks the region's chosen elevation is at or above
+    // every ring's own true underside height, i.e. it never sits below the visible floor anywhere.
+    json input = base;
+    input["version"] = 11;
+    input["paths"][0]["points"][8]["curvature"] = -0.5;
+    input["paths"][0]["points"][8]["tightness"] = 0.7;
+    input["paths"][0]["points"][9]["curvature"] = -0.5;
+    input["paths"][0]["points"][9]["tightness"] = 0.7;
+    input["paths"][0]["reservations"] = json::array(
+        {{{"id", "res1"}, {"t0", 0.3}, {"t1", 0.7}, {"width", 8.0}, {"endCap1", {{"style", "mitred"}, {"width", 6.0}}}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "curved-cross-section asymmetric-endcap reservation bakes: " + loaded.error);
+    if (loaded) {
+      const Track& track = *loaded.track;
+      const auto region = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
+                                       [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+      check(region != track.meshRegions.end(), "the reservation gets a synthetic MeshRegion");
+      const auto shell = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                      [](const GeometryBatch& b) { return b.kind == GeometryKind::PathShell; });
+      check(shell != track.geometry.end(), "the shell batch exists to measure the true underside against");
+      if (region != track.meshRegions.end() && shell != track.geometry.end()) {
+        // Point-in-polygon against the void's own tapered footprint, not just its bounding box --
+        // the same (x,z) neighbourhood continues past t0/t1 as ordinary (uncarved, full-width) road,
+        // where the same curvature dip legitimately runs deeper than anything region.elevation ever
+        // claimed to bound.
+        bool everBelow = false;
+        double worstBelow = 0.0;
+        for (const auto& v : shell->vertices) {
+          if (!region->contains(v.position.x, v.position.z)) continue;
+          if (v.position.y > region->elevation + 1e-6) {
+            everBelow = true;
+            worstBelow = std::max(worstBelow, v.position.y - region->elevation);
+          }
+        }
+        check(!everBelow, "the capped floor's flat elevation sits at or above every shell vertex inside the void's own footprint (no visible sink) -- worst gap " +
+                              std::to_string(worstBelow));
+      }
+    }
+  }
+
   check(!Track::fromJson("{not json"), "malformed JSON is fatal");
   {
     json input = base;
