@@ -212,8 +212,8 @@ void StatePlayTungstenMonoxide::createGameObjects(
 
   if (!getMap()->getTrack())
     throw application::resourcesystem::ResourceException(trackResource.get(), "Track resource has no compiled TrackData.");
-  applyTriggersDebugVisibility();  // mShowTriggersDebug defaults to false: trigger quads start hidden.
-  applyRailsDebugVisibility();     // mShowRailsDebug defaults to false: rails start hidden too.
+  applyTriggersDebugVisibility();          // mShowTriggersDebug defaults to false: trigger quads start hidden.
+  applyRailsDebugVisibility();             // mShowRailsDebug defaults to false: rails start hidden too.
   applyReservationWallsDebugVisibility();  // mShowReservationWallsDebug defaults to true: real gameplay geometry, starts visible.
   mGameSession = make_unique<tox::GameSession>(getMap()->getTrack(), tox::StartGrid::DEFAULT_SHIP_COUNT);
   auto const& poses = getMap()->getStartGridPoses();
@@ -234,6 +234,7 @@ void StatePlayTungstenMonoxide::createGameObjects(
     applyShipTransform(mShipSceneModels[i], physics.groundPos.clone().addScaledVector(physics.up, 1.0),
                        physics.up, physics.forward, 0, 0);
   }
+  applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
 }
 
 void StatePlayTungstenMonoxide::destroyGameObjects() {
@@ -434,10 +435,15 @@ void StatePlayTungstenMonoxide::renderImpl(mpp::RenderSystem* renderSystem, mpp:
 // (TrackBake.cpp/TrackMesh.cpp's GeometryKind::TriggerSurface/PathRail/MeshRail, carried through
 // Map::load() with GeometryBatch::id preserved verbatim as the mesh name), so showing/hiding a
 // whole geometry kind is just a per-mesh render-flag toggle -- no separate geometry to draw.
+// Folds in mShowWireframeDebug too: these are explicit per-mesh overrides (ModelInstance::setParams
+// only falls back to the model-level default for a mesh with no entry of its own), so a kind
+// toggled through here would otherwise keep whatever wireframe bit it last had regardless of the
+// debug window's Wireframe checkbox.
 void StatePlayTungstenMonoxide::setGeometryKindVisible(tox::GeometryKind kind, bool visible) const {
   if (!mTrackSceneModel || !getMap() || !getMap()->getTrack()) return;
   auto params = mTrackSceneModel->getParams();
-  uint32_t flags = visible ? mpp::ModelRenderParams::Flag_Visible : 0;
+  uint32_t flags = (visible ? mpp::ModelRenderParams::Flag_Visible : 0) |
+                   (mShowWireframeDebug ? mpp::ModelRenderParams::Flag_Wireframe : 0);
   for (auto const& batch : getMap()->getTrack()->geometry)
     if (batch.kind == kind) params->setMeshFlags(batch.id, flags);
 }
@@ -453,6 +459,22 @@ void StatePlayTungstenMonoxide::applyRailsDebugVisibility() const {
 
 void StatePlayTungstenMonoxide::applyReservationWallsDebugVisibility() const {
   setGeometryKindVisible(tox::GeometryKind::ReservationWall, mShowReservationWallsDebug);
+}
+
+// Everything else -- the drivable road/mesh surfaces and shells, which never get an explicit
+// per-mesh override above -- picks up wireframe through the model-level default instead (the "" key
+// ModelInstance::setParams falls back to for any mesh without its own entry). Ship models have no
+// per-mesh overrides at all, so the model-level default covers them outright. Re-running the three
+// debug-visibility applies keeps their explicit overrides (trigger quads, rails, reservation walls)
+// in sync with the current wireframe bit too, rather than only picking it up on their own next
+// toggle.
+void StatePlayTungstenMonoxide::applyWireframeDebug() const {
+  uint32_t const wireframeBit = mShowWireframeDebug ? mpp::ModelRenderParams::Flag_Wireframe : 0;
+  if (mTrackSceneModel) mTrackSceneModel->getParams()->setModelFlags(mpp::ModelRenderParams::Flag_Visible | wireframeBit);
+  applyTriggersDebugVisibility();
+  applyRailsDebugVisibility();
+  applyReservationWallsDebugVisibility();
+  for (auto const& model : mShipSceneModels) model->getParams()->setModelFlags(mpp::ModelRenderParams::Flag_Visible | wireframeBit);
 }
 
 // One slider + Reset button for a single physics field, ranged to +-20% of `initial` (the
@@ -483,7 +505,7 @@ void StatePlayTungstenMonoxide::renderShipPhysicsTab() const {
 bool StatePlayTungstenMonoxide::_imGuiActive() const { return mShowDebugUi; }
 
 void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, void* imPlotCtx, void* allocFunc,
-                                              void* freeFunc, void* userData) {
+                                             void* freeFunc, void* userData) {
   VAR_UNUSED(frameTime);
   VAR_UNUSED(imPlotCtx);
   // ImGui statics aren't shared across the DLL boundary between this module and the launcher
@@ -497,6 +519,7 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
       if (ImGui::Checkbox("Show Triggers", &mShowTriggersDebug)) applyTriggersDebugVisibility();
       if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
       if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
+      if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
       ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
       ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
       ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");

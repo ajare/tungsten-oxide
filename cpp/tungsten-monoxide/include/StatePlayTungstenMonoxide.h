@@ -69,6 +69,7 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   // geometry (CENTRAL_RESERVATION_PLAN.md) -- it defaults to visible; this checkbox lets it be
   // hidden for debugging (e.g. to see the physics wall's alignment without the mesh in the way).
   bool mShowReservationWallsDebug{true};
+  bool mShowWireframeDebug{false};
   // Snapshot of ship 0's handling-applied physics, taken once in createGameObjects, so the
   // Physics debug tab's slider ranges (+-20%) and Reset buttons have a stable baseline that
   // isn't itself perturbed by earlier slider edits.
@@ -84,6 +85,7 @@ private:
   void applyTriggersDebugVisibility() const;
   void applyRailsDebugVisibility() const;
   void applyReservationWallsDebugVisibility() const;
+  void applyWireframeDebug() const;
   void renderShipPhysicsTab() const;
   void renderPhysicsSlider(char const* label, double& value, double initial) const;
 
