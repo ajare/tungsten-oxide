@@ -75,6 +75,7 @@ set(EDITOR_SOURCES
   src/PropertiesPanel.cpp
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp
+  src/ReservationsPanel.cpp
   src/MeshPanel.cpp
   src/CurvesPanel.cpp
   src/HandlingPanel.cpp

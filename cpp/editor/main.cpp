@@ -76,6 +76,7 @@
 #include "TrackPropertiesPanel.hpp"
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
+#include "ReservationsPanel.hpp"
 #include "MeshPanel.hpp"
 #include "CurvesPanel.hpp"
 #include "TopDownCanvas.hpp"
@@ -2427,6 +2428,11 @@ int main(int, char**) {
     if (ImGui::CollapsingHeader("Triggers")) {
       ImGui::PushID("Triggers");
       if (editor::DrawTriggersPanel(editorState, currentPathIndex, bakedTrack)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Reservations")) {
+      ImGui::PushID("Reservations");
+      if (editor::DrawReservationsPanel(editorState, currentPathIndex)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Curves")) {

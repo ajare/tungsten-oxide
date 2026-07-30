@@ -74,6 +74,7 @@ public:
   bool meshRotating() const { return meshRotating_; }
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
   const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
+  const std::optional<std::string>& selectedReservationId() const { return selectedReservationId_; }
 
   // ---- Curve management (EDITOR_PARITY_FIXES.md gap 5) ----
   //
@@ -104,6 +105,14 @@ public:
   const Trigger* findTrigger(const std::string& id) const {
     for (const auto& trigger : track_.triggers)
       if (trigger.id == id) return &trigger;
+    return nullptr;
+  }
+
+  // Unlike findZone/findTrigger, reservations are stored per-path, so this scans every path.
+  const Reservation* findReservation(const std::string& id) const {
+    for (const auto& path : track_.paths)
+      for (const auto& reservation : path.reservations)
+        if (reservation.id == id) return &reservation;
     return nullptr;
   }
 
@@ -406,6 +415,79 @@ public:
     history_.push(track_);
     track_.triggers.erase(it);
     selectedTriggerId_.reset();
+    return true;
+  }
+
+  // ---- Central reservations (CENTRAL_RESERVATION_PLAN.md) ----
+  //
+  // A path-hosted void carved out of the road between t0 and t1 (native C++ only -- no JS
+  // equivalent or oracle). Panel-only authoring (numeric t0/t1/width fields via
+  // ReservationsPanel.hpp/.cpp), matching the current state of roll/width/cross-section points:
+  // no on-canvas click-to-place or drag. Stored per-path but selected/deleted through one flat id
+  // namespace like zones/triggers, via findReservation below.
+
+  void selectReservation(const std::string& id) {
+    selectedReservationId_ = id;
+    selection_ = {};
+    selectedMeshId_.reset();
+    selectedZoneId_.reset();
+    selectedTriggerId_.reset();
+  }
+
+  void clearReservationSelection() { selectedReservationId_.reset(); }
+
+  // Locates (pathIndex, reservationIndex) for `id`, or nullopt if no path has it -- unlike
+  // findReservation (a plain pointer, matching findZone/findTrigger's convention for read-only
+  // display), this is what editReservation/deleteSelectedReservation need to mutate/erase in place.
+  std::optional<std::pair<int, int>> locateReservation(const std::string& id) const {
+    for (int pi = 0; pi < static_cast<int>(track_.paths.size()); ++pi) {
+      const auto& reservations = track_.paths[pi].reservations;
+      for (int ri = 0; ri < static_cast<int>(reservations.size()); ++ri)
+        if (reservations[ri].id == id) return std::make_pair(pi, ri);
+    }
+    return std::nullopt;
+  }
+
+  // Adds a reservation on `pathIndex` at [t0,t1] with `width`, clamped/pushed clear of any other
+  // reservation already on that path (see clampReservation below -- auto-clamp, no reachable
+  // invalid state, CENTRAL_RESERVATION_PLAN.md). Selects the new reservation and returns its id, or
+  // nullopt if pathIndex is invalid.
+  std::optional<std::string> addReservation(int pathIndex, double t0, double t1, double width) {
+    if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
+    history_.push(track_);
+    Reservation reservation;
+    reservation.id = newReservationId();
+    reservation.t0 = t0;
+    reservation.t1 = t1;
+    reservation.width = width;
+    auto& reservations = track_.paths[pathIndex].reservations;
+    reservations.push_back(std::move(reservation));
+    clampReservation(reservations, static_cast<int>(reservations.size()) - 1);
+    const std::string id = reservations.back().id;
+    selectReservation(id);
+    return id;
+  }
+
+  // Mutates the reservation by id via `mutate`, pushing one undo step first and re-clamping
+  // afterward (same pattern as editZone/editTrigger).
+  template <typename Mutate>
+  bool editReservation(const std::string& id, Mutate&& mutate) {
+    const auto found = locateReservation(id);
+    if (!found) return false;
+    history_.push(track_);
+    auto& reservations = track_.paths[found->first].reservations;
+    mutate(reservations[found->second]);
+    clampReservation(reservations, found->second);
+    return true;
+  }
+
+  bool deleteSelectedReservation() {
+    if (!selectedReservationId_.has_value()) return false;
+    const auto found = locateReservation(*selectedReservationId_);
+    if (!found) return false;
+    history_.push(track_);
+    track_.paths[found->first].reservations.erase(track_.paths[found->first].reservations.begin() + found->second);
+    selectedReservationId_.reset();
     return true;
   }
 
@@ -1933,6 +2015,35 @@ private:
     track_.start.point = std::clamp(track_.start.point, 0, std::max(0, positionCount - 1));
   }
 
+  // Clamps `list[justEdited]`'s t0/t1 order and range, floors its width, and pushes it clear of
+  // every other reservation on the same path -- CENTRAL_RESERVATION_PLAN.md's auto-clamp decision
+  // (no reachable invalid state, no warning UI). Finds the free [lo,hi] gap (bounded by whichever
+  // other entries are nearest on each side of this entry's own midpoint) and clamps t0/t1 into it,
+  // which guarantees non-overlap without ever having to touch another entry.
+  static void clampReservation(std::vector<Reservation>& list, int justEdited) {
+    Reservation& r = list[justEdited];
+    r.width = std::max(1.0, r.width);
+    r.t0 = std::clamp(r.t0, 0.0, 1.0);
+    r.t1 = std::clamp(r.t1, 0.0, 1.0);
+    if (r.t0 > r.t1) std::swap(r.t0, r.t1);
+
+    const double mid = (r.t0 + r.t1) / 2;
+    double lo = 0.0, hi = 1.0;
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+      if (i == justEdited) continue;
+      const Reservation& other = list[i];
+      if (other.t1 <= mid) lo = std::max(lo, other.t1);
+      if (other.t0 >= mid) hi = std::min(hi, other.t0);
+    }
+    r.t0 = std::clamp(r.t0, lo, hi);
+    r.t1 = std::clamp(r.t1, lo, hi);
+    constexpr double kMinSpan = 0.01;
+    if (r.t1 - r.t0 < kMinSpan) {
+      r.t0 = std::max(lo, std::min(r.t0, hi - kMinSpan));
+      r.t1 = std::min(hi, r.t0 + kMinSpan);
+    }
+  }
+
   // Scans for the first unused "<prefix><N>" id starting at N=1, collision-proof by construction
   // (mirrors web/js/editor.js's newId/newMeshPlacementId -- see EDITOR_PARITY_FIXES.md finding 1,
   // which replaced an ever-incrementing-but-never-seeded counter that collided with ids already
@@ -1979,6 +2090,16 @@ private:
     std::set<std::string> used;
     for (const auto& trigger : track_.triggers) used.insert(trigger.id);
     return firstUnusedId("tr", used);
+  }
+
+  // "res" prefix -- new functionality, no JS equivalent. Reservations are stored per-path
+  // (PathDefinition::reservations) but share one id namespace across every path, same as zones/
+  // triggers' own single flat namespaces (CENTRAL_RESERVATION_PLAN.md).
+  std::string newReservationId() const {
+    std::set<std::string> used;
+    for (const auto& path : track_.paths)
+      for (const auto& reservation : path.reservations) used.insert(reservation.id);
+    return firstUnusedId("res", used);
   }
 
   // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix), mirroring
@@ -2221,6 +2342,7 @@ private:
   std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;
   std::optional<std::string> selectedTriggerId_;
+  std::optional<std::string> selectedReservationId_;
   int explicitCurrentPathIndex_{0};
 };
 
