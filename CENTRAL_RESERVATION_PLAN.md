@@ -1,8 +1,9 @@
 # Central Reservation Plan — median strip on a track path
 
-Status: **M0-M4 complete, M5 partial (core tests done, editor tests + a
-physics-scenario test deferred).** This document is updated after each
-milestone lands.
+Status: **M0-M4 complete, M5 partial (core tests done, editor tests
+deferred). Post-M5: fixed a render/physics wall-alignment bug reported as
+"ship physics breaks near the central reservation" (see §4).** This
+document is updated after each milestone lands.
 Native C++ only (`cpp/core` + `cpp/editor`); the JS reference oracle (`web/`) is
 deliberately NOT touched — JS is slated for retirement and is allowed to diverge.
 
@@ -147,7 +148,60 @@ lane for that span.
   on this pass (this machine is memory-constrained for parallel MSVC builds
   — full-solution builds must run target-by-target, not `-m` all-core).
 
-## 4. Notes for implementers
+## 4. Bugfix: wall/hole alignment (post-M5)
+
+**Report:** "ship physics breaks when near the central reservation."
+
+**Root cause:** the reservation's physics wall (`reservationGeometry` in
+TrackBake.cpp) was built from the fine physics centerline (`path.centerline`,
+hundreds of uniform samples), while the *visible/exported* hole carved out of
+`PathSurface` was built from the coarse, adaptively-resampled render mesh
+(only ~9 forced anchor points across a reservation's span, per M1's
+over-tessellation fix). These two curves could disagree right at the gap
+edge: the analytical corridor surface (which has no notion of the
+reservation at all — `sLeft`/`sRight` stay full-width by design) plus a wall
+that didn't quite reach where the *exported* collision mesh's hole actually
+was could leave a sliver where the game's `TrackCollisionSurface` (built
+from that same coarse exported mesh, as every real native Track resource
+has) finds no nearby triangle, kicking the ship spuriously airborne right
+near the boundary.
+
+**Fix:** `Frame` gained `reservationIndex` (which reservation, if any, is
+active at this frame — needed because adaptive render frames, unlike the
+physics centerline, aren't uniformly spaced in t, so it can't be recovered
+from array index alone the way `reservationHalfGap` originally was).
+`reservationGeometry` now takes the *same* `frames`/`edges` arrays
+`pathGeometry` just carved the surface hole from, instead of the physics
+centerline — the wall and the hole are now built from identical points by
+construction, not just numerically close. This required reordering
+`bakeTrack()`: `compileTrackMeshes` (which clears `track.meshRegions`) now
+runs *before* the per-path loop instead of after, so `pathGeometry` can
+append each reservation's synthetic region to the already-compiled list.
+
+**Verification:** `track_tests.cpp` gained a regression test driving a ship
+into a reservation's taper, both with and without a baked
+`TrackCollisionSurface` (built from the actual carved surface batch, the
+same way the real game runtime always has one). Asserts: position/speed
+stay finite, a wall hit actually fires, speed recovers afterward (not a
+grind-to-a-halt), and — the specific regression — airborne toggling near the
+gap edge stays bounded (≤2 transitions) once a collision surface is
+involved, rather than spuriously repeating.
+
+**Not reproduced, noted as a separate pre-existing issue:** while
+bisecting, an unrelated *flaky* segfault surfaced in
+`cpp/editor/tests/track_resource_tests.cpp` (pre-existing, uncommitted work
+this plan doesn't own) — passed 100% on ~10 repeated runs both before and
+after this fix, so it isn't caused by this feature, but it's real and
+intermittent; worth a look independently of this plan.
+
+**Not reproduced, unrelated:** an unsteered car driving straight through a
+sharp curve (no steering input at all) can grind to a permanent halt against
+the *outer* corridor wall, bleeding speed to zero — reproduced identically
+with zero reservations involved, so it's a latent issue in the pre-existing
+outer-wall `hitSign`/`loS,hiS` restitution logic in `Ship.cpp`, not something
+this feature introduced or is positioned to fix.
+
+## 5. Notes for implementers
 
 - Pre-existing uncommitted work in this working tree (`TrackResourceDocument`/
   `TrackResourceSave`, `docs/adr/0002-...`, editor main.cpp changes, etc.) is

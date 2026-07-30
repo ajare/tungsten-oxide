@@ -483,6 +483,27 @@ int main(int argc, char** argv) {
       checkVec(track.triggers[0].right, pathExpected["triggers"][0]["right"], 2e-11, "trigger.right");
       checkVec(track.triggers[0].up, pathExpected["triggers"][0]["up"], 2e-11, "trigger.up");
       checkVec(track.triggers[0].fwd, pathExpected["triggers"][0]["fwd"], 2e-11, "trigger.fwd");
+
+      const Trigger& trigger = track.triggers[0];
+      const auto triggerGeometry = std::find_if(track.geometry.begin(), track.geometry.end(),
+                                                [&](const auto& batch) { return batch.id == "trigger-" + trigger.id; });
+      check(triggerGeometry != track.geometry.end(), "path trigger emits renderer-neutral geometry");
+      if (triggerGeometry != track.geometry.end()) {
+        int uZeroCount = 0, uOneCount = 0;
+        for (const auto& vertex : triggerGeometry->vertices) {
+          const double lateral = vertex.position.clone().sub(trigger.center).dot(trigger.right);
+          if (vertex.uv.x == 0) {
+            ++uZeroCount;
+            checkClose(lateral, trigger.halfWidth, 1e-10,
+                       "trigger U=0 lies on left-hand edge relative to track direction");
+          } else if (vertex.uv.x == 1) {
+            ++uOneCount;
+            checkClose(lateral, -trigger.halfWidth, 1e-10,
+                       "trigger U=1 lies on right-hand edge relative to track direction");
+          }
+        }
+        check(uZeroCount == 3 && uOneCount == 3, "trigger quad assigns U endpoints to all six vertices");
+      }
     }
     Simulation simulation(track);
     Ship ship;
@@ -849,6 +870,95 @@ int main(int argc, char** argv) {
       check(!falling.physics.airborne &&
                 std::fabs(falling.physics.groundPos.clone().sub(center).dot(start.up)) < 1e-9,
             "Ship::step lands on an external triangle swept before the analytical road");
+    }
+  }
+
+  {
+    // A ship driving straight at a reservation's tapered wall (CENTRAL_RESERVATION_PLAN.md M2):
+    // must not diverge, must recover speed after the bounce, and (the actual game runtime always
+    // has a baked TrackCollisionSurface from an exported .mppmodel -- see the second sub-case
+    // below) must not spuriously toggle airborne/grounded near the gap edge, which would mean the
+    // render mesh's hole (adaptiveRenderBake's anchor-forced approximation) didn't actually line up
+    // with the analytical wall (built from the same frames as of this fix -- previously the wall
+    // used the fine physics centerline while the hole used a handful of anchors, and the two could
+    // disagree right at the edge).
+    json input;
+    input["version"] = 11;
+    input["name"] = "diag";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    // A short span (10% of the path) for a steep taper -- steeper than a gradual one, more likely
+    // to cause repeated re-collision if slideAlongRails behaved badly while grazing it.
+    path["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.45}, {"t1", 0.55}, {"width", 16.0}}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "reservation-wall diag track loads: " + loaded.error);
+    if (loaded) {
+      auto driveInto = [&](std::shared_ptr<Track> track) {
+        Simulation sim(*track);
+        Ship ship;
+        const Frame& startFrame = track->paths[0].centerline.front();
+        Sample startSample;
+        startSample.pos = startFrame.pos;
+        startSample.tangent = startFrame.tangent;
+        startSample.edgeRight = startFrame.edgeRight;
+        startSample.normal = startFrame.normal;
+        startSample.sLeft = startFrame.sLeft;
+        startSample.sRight = startFrame.sRight;
+        startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+        startSample.crossSectionTightness = startFrame.crossSectionTightness;
+        // Offset 7 world units from centerline: inside the 8-unit-half-width gap once it's fully
+        // open, so driving straight ahead (no steering) rides the widening boundary and forces a
+        // real slideAlongRails hit as it sweeps past.
+        const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, 7.0);
+        sim.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+        int airborneToggleCount = 0, railHits = 0;
+        bool wasAirborne = false;
+        bool finite = true;
+        for (int i = 0; i < 400 && finite; i++) {
+          const StepResult step = ship.step(sim, 1.0 / 60.0, 1.0, 0.0, 0.0);
+          if (step.railHit) ++railHits;
+          if (ship.physics.airborne != wasAirborne) {
+            ++airborneToggleCount;
+            wasAirborne = ship.physics.airborne;
+          }
+          finite = std::isfinite(ship.physics.groundPos.x) && std::isfinite(ship.physics.groundPos.y) &&
+                   std::isfinite(ship.physics.groundPos.z) && std::isfinite(ship.physics.speed);
+        }
+        return std::make_tuple(finite, railHits, airborneToggleCount, ship.physics.speed);
+      };
+
+      auto trackPtr = std::make_shared<Track>(*loaded.track);
+      const auto [finite, railHits, toggles, finalSpeed] = driveInto(trackPtr);
+      check(finite, "reservation-wall diag: position/speed stays finite for 400 steps");
+      check(railHits >= 1, "reservation-wall diag: driving into the taper actually triggers a wall hit");
+      check(toggles == 0, "reservation-wall diag: no collisionSurface means no airborne transitions at all");
+      check(finalSpeed > 100.0, "reservation-wall diag: speed recovers after the bounce rather than grinding to a halt");
+
+      const auto surfaceBatch = std::find_if(trackPtr->geometry.begin(), trackPtr->geometry.end(),
+                                              [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
+      check(surfaceBatch != trackPtr->geometry.end(), "reservation-wall diag: surface batch exists to build a collision surface from");
+      if (surfaceBatch != trackPtr->geometry.end()) {
+        std::vector<CollisionTriangle> triangles;
+        for (std::size_t v = 0; v + 2 < surfaceBatch->vertices.size(); v += 3) {
+          CollisionTriangle tri;
+          for (int k = 0; k < 3; k++) {
+            tri.positions[k] = surfaceBatch->vertices[v + k].position;
+            tri.normals[k] = surfaceBatch->vertices[v + k].normal;
+          }
+          triangles.push_back(tri);
+        }
+        auto trackWithCollision = std::make_shared<Track>(*loaded.track);
+        trackWithCollision->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
+        const auto [finiteC, railHitsC, togglesC, finalSpeedC] = driveInto(trackWithCollision);
+        check(finiteC, "reservation-wall diag (with collisionSurface): position/speed stays finite for 400 steps");
+        check(railHitsC >= 1, "reservation-wall diag (with collisionSurface): driving into the taper still triggers a wall hit");
+        check(togglesC <= 2, "reservation-wall diag (with collisionSurface): the render mesh's hole lines up with the analytical "
+                             "wall closely enough that the ship doesn't repeatedly toggle airborne near the gap edge (got " +
+                                 std::to_string(togglesC) + " toggles)");
+        check(finalSpeedC > 100.0, "reservation-wall diag (with collisionSurface): speed recovers after the bounce");
+      }
     }
   }
 

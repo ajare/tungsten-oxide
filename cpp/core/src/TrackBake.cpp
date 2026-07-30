@@ -159,8 +159,13 @@ Frame frame(const Sample0& s) {
 // span containing `t` is authoritative. Ramps 0 -> width -> 0 across [t0,t1] via the same
 // Catmull-Rom `scalar()` every other t-based point already uses, from three synthetic control
 // points at t0/mid/t1 -- CENTRAL_RESERVATION_PLAN.md's "ramp inside [t0,t1]" decision.
-double reservationHalfGapAt(const PathDefinition& def, double t, double roadWidth) {
-  for (const auto& r : def.reservations) {
+struct ReservationGap {
+  double halfWidth{0.0};
+  int index{-1};
+};
+ReservationGap reservationHalfGapAt(const PathDefinition& def, double t, double roadWidth) {
+  for (int i = 0; i < static_cast<int>(def.reservations.size()); ++i) {
+    const auto& r = def.reservations[i];
     if (t < r.t0 || t > r.t1) continue;
     TrackPointDefinition a, b, c;
     a.t = r.t0;
@@ -172,9 +177,14 @@ double reservationHalfGapAt(const PathDefinition& def, double t, double roadWidt
     const std::vector<const TrackPointDefinition*> points{&a, &b, &c};
     const double gapWidth = std::max(0.0, scalar(points, false, t, [](auto& x) { return x.width; }));
     constexpr double kMinLaneWidth = 1.0;
-    return std::max(0.0, std::min(gapWidth / 2.0, roadWidth / 2.0 - kMinLaneWidth));
+    return {std::max(0.0, std::min(gapWidth / 2.0, roadWidth / 2.0 - kMinLaneWidth)), i};
   }
-  return 0.0;
+  return {};
+}
+void applyReservationGap(Frame& f, const PathDefinition& p, double t) {
+  const ReservationGap gap = reservationHalfGapAt(p, t, f.width);
+  f.reservationHalfGap = gap.halfWidth;
+  f.reservationIndex = gap.index;
 }
 std::vector<Frame> center(const PathDefinition& p, int N) {
   Evaluator e(p);
@@ -184,7 +194,7 @@ std::vector<Frame> center(const PathDefinition& p, int N) {
     double g = p.closed ? (double(i) / N) * e.n : (N > 1 ? (double(i) / (N - 1)) * (e.n - 1) : 0);
     Frame f = frame(e.eval(g));
     const double t = p.closed ? double(i) / N : (N > 1 ? double(i) / (N - 1) : 0);
-    f.reservationHalfGap = reservationHalfGapAt(p, t, f.width);
+    applyReservationGap(f, p, t);
     o.push_back(std::move(f));
   }
   return o;
@@ -426,7 +436,7 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
   auto pushAdaptive = [&](double g) {
     Frame f = frame(evaluator.eval(g));
-    f.reservationHalfGap = reservationHalfGapAt(definition, g / gmax, f.width);
+    applyReservationGap(f, definition, g / gmax);
     out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight, -f.halfW));
     out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight, f.halfW));
     out.frames.push_back(std::move(f));
@@ -449,6 +459,7 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   return out;
 }
 
+void reservationGeometry(Track& track, const PathDefinition& def, const std::vector<Frame>& frames, const Edges& e, int pi);
 struct Builder {
   GeometryBatch b;
   void tri(const Vec3& a, const Vec3& c, const Vec3& d, Vec2d ua = {}, Vec2d uc = {}, Vec2d ud = {}) {
@@ -600,6 +611,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     }
     track.geometry.push_back(std::move(r.b));
   }
+  reservationGeometry(track, def, frames, e, pi);
 }
 
 // Builds a reservation's synthetic MeshRegion (rails only -- no polygons/triangles, so
@@ -607,19 +619,30 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
 // "true void" decision) plus its ReservationWall render geometry, from the two tapered inner-lane
 // boundary curves. Mirrors PathRail's own triangle winding (a, b, at), (at, b, bt) exactly, and
 // DEFAULT_RAIL_HEIGHT rather than PathRail's fixed low decorative height, per M1's design.
-void reservationGeometry(Track& track, const PathDefinition& def, const Path& path, const Edges& e, int pi) {
-  const int n = static_cast<int>(path.centerline.size());
+//
+// Deliberately built from the SAME `frames`/`e` arrays `pathGeometry` just carved the visible
+// surface hole from (the adaptive render bake), not the fine physics centerline: a wall built from
+// a finer or coarser sample set than the hole it's supposed to guard would leave slivers where the
+// two disagree about where the void is -- physics would then see "solid ground" (via the corridor's
+// analytical curvedSurfaceFrame, which knows nothing about the carve) directly behind a wall that
+// doesn't quite reach that spot, and any exported collision mesh's hole (built from this exact
+// surface batch) would likewise not line up with a wall built from a different sample set. Grouped
+// by `frame.reservationIndex` rather than re-deriving each frame's `t` (adaptive frames aren't
+// uniformly spaced, so index-based `t` recovery doesn't work here the way it does for the physics
+// centerline).
+void reservationGeometry(Track& track, const PathDefinition& def, const std::vector<Frame>& frames, const Edges& e, int pi) {
+  const int n = static_cast<int>(frames.size());
   if (n < 2) return;
-  for (const auto& reservation : def.reservations) {
+  for (int ri = 0; ri < static_cast<int>(def.reservations.size()); ++ri) {
+    const auto& reservation = def.reservations[ri];
     struct Bound {
       Vec3 left, right;
       Vec3 normal;
     };
     std::vector<Bound> bounds;
     for (int i = 0; i < n; i++) {
-      const double t = def.closed ? double(i) / n : (n > 1 ? double(i) / (n - 1) : 0.0);
-      if (t < reservation.t0 - 1e-9 || t > reservation.t1 + 1e-9) continue;
-      const Frame& f = path.centerline[i];
+      if (frames[i].reservationIndex != ri) continue;
+      const Frame& f = frames[i];
       const double halfGap = f.reservationHalfGap;
       const double w = std::max(1.0, f.width);
       const double vLeft = 0.5 - halfGap / w, vRight = 0.5 + halfGap / w;
@@ -761,7 +784,17 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       bakedEdges[b.path].right[b.index] = flipped ? left : right;
     }
 
+    // Compiled before the per-path loop below (it depends only on definition.meshes/meshAssets, not
+    // on any per-path baked data) so that pathGeometry -> reservationGeometry can append each
+    // reservation's synthetic MeshRegion directly to the already-compiled list, instead of racing
+    // compileTrackMeshes's own track.meshRegions.clear(). Reservation regions are deliberately
+    // excluded from the `low`/trackFloorY computation below (which only sees the regions compiled
+    // here) -- they carry no floor of their own (CENTRAL_RESERVATION_PLAN.md's "true void"
+    // decision), so their `elevation` (the road surface height, not a fall-through depth) must not
+    // raise the respawn floor.
+    compileTrackMeshes(track, warnings);
     double low = INFINITY;
+    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
     for (size_t i = 0; i < track.paths.size(); ++i) {
       const auto& definition = track.definition.paths[i];
       Parts parts = split(definition);
@@ -794,14 +827,6 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
     for (const auto& [id, count] : endpointCounts)
       if (count >= 2) track.connectedEndpointIds.insert(id);
 
-    compileTrackMeshes(track, warnings);
-    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
-    // Reservation regions are appended after compileTrackMeshes (which clears meshRegions) and are
-    // deliberately excluded from the `low`/trackFloorY computation above -- they carry no floor of
-    // their own (CENTRAL_RESERVATION_PLAN.md's "true void" decision), so their `elevation` (the road
-    // surface height, not a fall-through depth) must not raise the respawn floor.
-    for (std::size_t i = 0; i < track.definition.paths.size(); ++i)
-      reservationGeometry(track, track.definition.paths[i], track.paths[i], bakedEdges[i], static_cast<int>(i));
     std::map<std::string, int> regionIds;
     for (std::size_t i = 0; i < track.meshRegions.size(); ++i)
       regionIds.emplace(track.meshRegions[i].id, static_cast<int>(i));

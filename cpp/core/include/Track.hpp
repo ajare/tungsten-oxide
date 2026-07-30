@@ -27,8 +27,13 @@ struct Frame {
   double crossSectionCurvature{0.0}, crossSectionTightness{1.0}, crossSectionThickness{0.0};
   // Half-width of the central-reservation void at this frame (0 when none is active here); the gap
   // spans [-reservationHalfGap, +reservationHalfGap] in cross-section v-space, centered on the
-  // path. CENTRAL_RESERVATION_PLAN.md M1.
+  // path. CENTRAL_RESERVATION_PLAN.md M1. `reservationIndex` (into the owning PathDefinition's
+  // `reservations`, -1 when none is active) lets reservationGeometry group frames by which
+  // reservation they belong to without needing to re-derive each frame's own `t` -- render frames
+  // (unlike physics centerline frames) aren't uniformly spaced in t, so that isn't recoverable from
+  // array index alone.
   double reservationHalfGap{0.0};
+  int reservationIndex{-1};
 };
 
 struct EndpointIds {
