@@ -194,14 +194,27 @@ double roundedNoseWidth(double d, double capWidth, double noseLength) {
 // Half-width of the central-reservation void at `t` (path-fraction domain, same as width/roll/
 // cross-section points), clamped so at least a sliver of each lane always remains. Reservations
 // are authored non-overlapping (EditorState's job, CENTRAL_RESERVATION_PLAN.md M3), so the first
-// span containing `t` is authoritative. `pathLength` is the path's driven length in metres, needed
-// only to size a Rounded end's nose (see above).
+// span containing `t` is authoritative. `roadWidth` is the road's own (un-carved) width at this
+// same `t` -- already what the caller has on hand, being the very frame this gap is being applied
+// to -- and `pathLength` is the path's driven length in metres, needed only to size a Rounded end's
+// nose (see above).
 //
-// Built in two steps -- CENTRAL_RESERVATION_PLAN.md's Mitred-vs-Rounded end-cap decision:
-// 1. `baseWidth`: the plain 0 -> width -> 0 taper, same shape regardless of end-cap style (and
-//    identical to the reservation's original, single-`width`-only behavior when both ends are
-//    Joined).
-// 2. Each end whose style isn't Joined floors its half of the span against that end's cap:
+// Built in three steps -- CENTRAL_RESERVATION_PLAN.md's Fixed-vs-Percent width decision, plus its
+// Mitred-vs-Rounded end-cap decision:
+// 1. `peakHere`: the reservation's own peak width, evaluated AT `t`. Fixed mode holds this at a
+//    constant metres value (`r.width`) everywhere, same as the reservation's original,
+//    single-`width`-only behavior. Percent mode instead re-derives it every call as a fraction of
+//    `roadWidth` -- so if the road itself narrows or widens across the reservation's span, the
+//    void's peak tracks it rather than staying fixed.
+// 2. `baseWidth`: the plain 0 -> 1 -> 0 taper shape (a Hermite curve through (t0,0)-(mid,1)-(t1,0),
+//    unitless -- built with a peak of 1 rather than `r.width` so the same curve serves both width
+//    modes) scaled by `peakHere`. Hermite interpolation is linear in its value/derivative
+//    parameters, so scaling every one of them by a constant scales the whole curve by that same
+//    constant -- meaning this is bit-identical to evaluating the old width-scaled curve directly
+//    whenever `peakHere` doesn't vary with `t` (i.e. Fixed mode, always).
+// 3. Each end whose style isn't Joined floors its half of the span against that end's cap, clamped
+//    to `peakHere` (not `r.width`, which in Percent mode is a 0-100 number, not metres) so a cap
+//    never flares wider than the reservation's own local peak:
 //    - Mitred with a hard max(baseWidth, capWidth) -- a flat shelf wherever baseWidth would have
 //      gone narrower than the cap, ending in a blunt cut of exactly capWidth at the end itself.
 //    - Rounded with that same shelf, except its last `noseLength` metres are replaced by the
@@ -216,11 +229,13 @@ ReservationGap reservationHalfGapAt(const PathDefinition& def, double t, double 
     if (t < r.t0 || t > r.t1) continue;
     const double mid = (r.t0 + r.t1) / 2;
     const double dt = std::max(1e-9, mid - r.t0);
-    const double baseWidth = std::max(0.0, hermitePair(t, r.t0, 0.0, r.width / dt, mid, r.width, 0.0, r.t1, 0.0, -r.width / dt));
+    const double peakHere = r.widthMode == ReservationWidthMode::Percent ? (r.width / 100.0) * roadWidth : r.width;
+    const double taper = std::max(0.0, hermitePair(t, r.t0, 0.0, 1.0 / dt, mid, 1.0, 0.0, r.t1, 0.0, -1.0 / dt));
+    const double baseWidth = taper * peakHere;
 
     const bool firstHalf = t <= mid;
     const ReservationEndCap& cap = firstHalf ? r.endCap0 : r.endCap1;
-    const double capWidth = std::min(cap.width, r.width);
+    const double capWidth = std::min(cap.width, peakHere);
     double gapWidth = baseWidth;
     if (cap.style == ReservationEndCapStyle::Mitred) {
       gapWidth = std::max(baseWidth, capWidth);
@@ -532,7 +547,12 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
       for (int end = 0; end < 2; ++end) {
         const ReservationEndCap& cap = end == 0 ? reservation.endCap0 : reservation.endCap1;
         if (cap.style != ReservationEndCapStyle::Rounded) continue;
-        const double capWidth = std::min(cap.width, reservation.width);
+        // The anchor at this end already carries the actual, final half-gap reservationHalfGapAt
+        // computed there (cap-clamped, and Percent-aware if this reservation's width is a
+        // percentage rather than metres) -- reusing it here instead of re-deriving `capWidth` from
+        // `cap.width`/`reservation.width` directly avoids re-doing (and potentially getting wrong)
+        // that same Fixed-vs-Percent, cap-vs-peak logic a second time.
+        const double capWidth = 2.0 * (end == 0 ? a.halfGap : b.halfGap);
         const double noseT = roundedNoseLength(cap, capWidth) / std::max(1.0, pathLength);
         if (capWidth <= 0 || noseT <= 0) continue;
         constexpr int kNoseRings = 16;

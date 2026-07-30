@@ -2620,7 +2620,7 @@ int main(int, char**) {
     }
     if (ImGui::CollapsingHeader("Reservations")) {
       ImGui::PushID("Reservations");
-      if (editor::DrawReservationsPanel(editorState, currentPathIndex)) rebake();
+      if (editor::DrawReservationsPanel(editorState, currentPathIndex, bakedTrack)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Curves")) {

@@ -4,12 +4,15 @@
 #pragma once
 
 #include "EditorState.hpp"
+#include "Track.hpp"
 
 namespace editor {
 
 // `currentPathIndex` is where a freshly added reservation lands -- same convention as
-// ZonesPanel.cpp/TriggersPanel.cpp/PropertiesPanel.cpp. Returns true if the track was mutated
-// (caller should rebake).
-bool DrawReservationsPanel(EditorState& state, int currentPathIndex);
+// ZonesPanel.cpp/TriggersPanel.cpp/PropertiesPanel.cpp. `baked` (may be null) lets the panel show
+// the resolved metres value next to a Percent-mode width, via PropertiesPanel.hpp's widthAtT --
+// same baked track TriggersPanel.cpp already samples for its own auto-width preview. Returns true
+// if the track was mutated (caller should rebake).
+bool DrawReservationsPanel(EditorState& state, int currentPathIndex, const tox::Track* baked);
 
 }  // namespace editor

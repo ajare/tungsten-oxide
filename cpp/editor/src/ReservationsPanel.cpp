@@ -1,7 +1,9 @@
 #include "ReservationsPanel.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
+#include "PropertiesPanel.hpp"
 #include "imgui.h"
 
 namespace editor {
@@ -10,6 +12,17 @@ namespace {
 constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
 
 constexpr const char* kEndCapStyleNames[] = {"Joined", "Mitred", "Rounded"};
+constexpr const char* kWidthModeNames[] = {"Fixed (m)", "Percent of road (%)"};
+
+// Converts `width` in place when the mode toggle flips, so the reservation's actual size stays
+// (approximately) put rather than being silently reinterpreted under the new unit -- e.g. "8"
+// meaning 8 m suddenly meaning 8% would shrink an authored reservation to a sliver. `roadWidthHere`
+// is the road's own width at the reservation's midpoint (0 if unknown, e.g. no baked track yet),
+// in which case the raw number is carried over unconverted as the least-surprising fallback.
+void ConvertWidthForMode(double& width, ReservationWidthMode fromMode, ReservationWidthMode toMode, double roadWidthHere) {
+  if (fromMode == toMode || roadWidthHere <= 0.0) return;
+  width = toMode == ReservationWidthMode::Percent ? std::clamp(width / roadWidthHere * 100.0, 0.0, 100.0) : width / 100.0 * roadWidthHere;
+}
 
 // Seeded into `noseLength` the first time an end is switched to Rounded. The bake's own fallback
 // for an unset nose is the geometric one, a half-circle of `width / 2` -- correct, but only a
@@ -53,7 +66,7 @@ bool DrawEndCapControls(const char* label, ReservationEndCap& cap) {
 
 }  // namespace
 
-bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
+bool DrawReservationsPanel(EditorState& state, int currentPathIndex, const tox::Track* baked) {
   bool mutated = false;
   const auto& selectedId = state.selectedReservationId();
   const Reservation* reservation = selectedId.has_value() ? state.findReservation(*selectedId) : nullptr;
@@ -64,6 +77,7 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
 
     double t0 = reservation->t0 * 100.0, t1 = reservation->t1 * 100.0, width = reservation->width;
     double wallHeight = reservation->wallHeight;
+    ReservationWidthMode widthMode = reservation->widthMode;
     ReservationEndCap endCap0 = reservation->endCap0, endCap1 = reservation->endCap1;
     bool changed = false;
     ImGui::SetNextItemWidth(120);
@@ -72,9 +86,36 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::InputDouble("t1 (%)", &t1, 0.0, 0.0, "%.1f", kCommitOnEnter);
     changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+    // Road width at this reservation's own midpoint, used both to auto-convert `width` when the
+    // mode toggle flips and to show the Percent field's resolved metres value alongside it.
+    const auto located = state.locateReservation(id);
+    const bool pathClosed = located.has_value() && located->first < static_cast<int>(state.track().paths.size())
+                                ? state.track().paths[located->first].closed
+                                : true;
+    const double roadWidthHere = located.has_value() ? widthAtT(baked, located->first, pathClosed, (reservation->t0 + reservation->t1) / 2.0) : 0.0;
+
+    ImGui::SetNextItemWidth(140);
+    int modeIndex = static_cast<int>(widthMode);
+    if (ImGui::Combo("Width mode", &modeIndex, kWidthModeNames, IM_ARRAYSIZE(kWidthModeNames))) {
+      const auto newMode = static_cast<ReservationWidthMode>(modeIndex);
+      ConvertWidthForMode(width, widthMode, newMode, roadWidthHere);
+      widthMode = newMode;
+      changed = true;
+    }
     ImGui::SetNextItemWidth(120);
-    changed |= ImGui::InputDouble("Width", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
-    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (widthMode == ReservationWidthMode::Percent) {
+      // A slider rather than a typed number for Percent -- "a percentage of the road" reads more
+      // naturally as a position on a 0-100 range you drag than as a value you type, unlike Fixed's
+      // metres (an open-ended quantity a slider's fixed range wouldn't suit).
+      constexpr double kPercentMin = 0.0, kPercentMax = 100.0;
+      changed |= ImGui::SliderScalar("Width (%)", ImGuiDataType_Double, &width, &kPercentMin, &kPercentMax, "%.1f");
+    } else {
+      changed |= ImGui::InputDouble("Width (m)", &width, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+    }
+    if (widthMode == ReservationWidthMode::Percent && roadWidthHere > 0.0)
+      ImGui::Text("  ~%.1f m at this reservation's midpoint", width / 100.0 * roadWidthHere);
     ImGui::SetNextItemWidth(120);
     // <= 0 means "use the engine default" (TrackCore::DEFAULT_RAIL_HEIGHT) -- this is both the
     // wall's render height and its physical height (Ship.cpp reads the same MeshRegion::railHeight
@@ -89,6 +130,7 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
         target.t0 = t0 / 100.0;
         target.t1 = t1 / 100.0;
         target.width = width;
+        target.widthMode = widthMode;
         target.wallHeight = wallHeight;
         target.endCap0 = endCap0;
         target.endCap1 = endCap1;
@@ -147,7 +189,10 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex) {
         ImGui::TableNextColumn();
         ImGui::Text("%.1f", r.t1 * 100.0);
         ImGui::TableNextColumn();
-        ImGui::Text("%.1f", r.width);
+        if (r.widthMode == ReservationWidthMode::Percent)
+          ImGui::Text("%.1f%%", r.width);
+        else
+          ImGui::Text("%.1f", r.width);
       }
     }
     ImGui::EndTable();

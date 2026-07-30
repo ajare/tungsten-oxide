@@ -151,6 +151,7 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
       reservation.id = stringOr(source, "id");
       reservation.t0 = clampNumber(numberOr(source, "t0", 0.0), 0.0, 1.0);
       reservation.t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
+      reservation.widthMode = stringOr(source, "widthMode") == "percent" ? ReservationWidthMode::Percent : ReservationWidthMode::Fixed;
       reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
       reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
@@ -428,6 +429,9 @@ json pathToJson(const Path& path) {
     json reservations = json::array();
     for (const auto& reservation : path.reservations) {
       json entry = {{"id", reservation.id}, {"t0", reservation.t0}, {"t1", reservation.t1}, {"width", reservation.width}};
+      // Omitted (rather than always writing "fixed") when Fixed, matching the loader's default and
+      // every pre-existing reservation's file shape.
+      if (reservation.widthMode == ReservationWidthMode::Percent) entry["widthMode"] = "percent";
       // Omitted (rather than always writing 0) when unset, matching the loader's "<= 0 means
       // engine default" reading and every pre-existing reservation's file shape.
       if (reservation.wallHeight > 0.0) entry["wallHeight"] = reservation.wallHeight;

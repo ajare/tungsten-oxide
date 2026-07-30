@@ -205,15 +205,23 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
       double t0 = clampNumber(numberOr(source, "t0", 0.0), 0.0, 1.0);
       double t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
       if (t0 > t1) std::swap(t0, t1);
+      reservation.widthMode = stringOr(source, "widthMode") == "percent" ? ReservationWidthMode::Percent : ReservationWidthMode::Fixed;
       reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
+      if (reservation.widthMode == ReservationWidthMode::Percent) reservation.width = std::min(reservation.width, 100.0);
       if (t1 - t0 <= 1e-6 || reservation.width <= 1e-6) continue;
       reservation.t0 = t0;
       reservation.t1 = t1;
       reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
       reservation.endCap1 = parseEndCap(source, "endCap1");
-      reservation.endCap0.width = std::min(reservation.endCap0.width, reservation.width);
-      reservation.endCap1.width = std::min(reservation.endCap1.width, reservation.width);
+      // End-cap width is always metres, so it's only clamped against the reservation's own peak
+      // when that peak is also metres (Fixed) -- in Percent mode `width` is a 0-100 number, not
+      // comparable, and the bake clamps the cap against the actual local peak width instead (see
+      // TrackBake.cpp's reservationHalfGapAt).
+      if (reservation.widthMode == ReservationWidthMode::Fixed) {
+        reservation.endCap0.width = std::min(reservation.endCap0.width, reservation.width);
+        reservation.endCap1.width = std::min(reservation.endCap1.width, reservation.width);
+      }
       path.reservations.push_back(std::move(reservation));
     }
   }

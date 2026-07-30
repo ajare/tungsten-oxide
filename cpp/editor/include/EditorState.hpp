@@ -1966,16 +1966,27 @@ private:
   // which guarantees non-overlap without ever having to touch another entry.
   static void clampReservation(std::vector<Reservation>& list, int justEdited) {
     Reservation& r = list[justEdited];
-    r.width = std::max(1.0, r.width);
+    // `width` is metres (Fixed) or a 0-100 percentage of the road's own width (Percent) -- see
+    // tox::ReservationWidthMode. The old floor of 1.0 only made sense as a minimum metres value;
+    // Percent just needs a valid percentage.
+    r.width = r.widthMode == ReservationWidthMode::Percent ? std::clamp(r.width, 0.0, 100.0) : std::max(1.0, r.width);
     // wallHeight <= 0 means "use the engine default" (see tox::ReservationDefinition), so only
     // clamp away negative values, not zero.
     r.wallHeight = std::max(0.0, r.wallHeight);
     // End-cap width never widens past the reservation's own midpoint width (a Mitred/Rounded end
-    // narrower than the reservation makes a taper; wider would make it flare out instead).
+    // narrower than the reservation makes a taper; wider would make it flare out instead). Only
+    // enforceable here in Fixed mode, where `r.width` is metres -- in Percent mode it's a 0-100
+    // number, not comparable, so the bake clamps the cap against the actual local peak width
+    // instead (TrackBake.cpp's reservationHalfGapAt).
     // `noseLength` needs no upper clamp -- the bake maxes the dome against the base taper, so an
     // over-long nose is simply swallowed by it rather than producing anything invalid.
-    r.endCap0.width = std::clamp(r.endCap0.width, 0.0, r.width);
-    r.endCap1.width = std::clamp(r.endCap1.width, 0.0, r.width);
+    if (r.widthMode == ReservationWidthMode::Fixed) {
+      r.endCap0.width = std::clamp(r.endCap0.width, 0.0, r.width);
+      r.endCap1.width = std::clamp(r.endCap1.width, 0.0, r.width);
+    } else {
+      r.endCap0.width = std::max(0.0, r.endCap0.width);
+      r.endCap1.width = std::max(0.0, r.endCap1.width);
+    }
     r.endCap0.noseLength = std::max(0.0, r.endCap0.noseLength);
     r.endCap1.noseLength = std::max(0.0, r.endCap1.noseLength);
     r.t0 = std::clamp(r.t0, 0.0, 1.0);

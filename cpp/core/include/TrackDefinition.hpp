@@ -58,6 +58,14 @@ struct ReservationEndCap {
   double noseLength{0.0};
 };
 
+// Whether ReservationDefinition::width is an absolute metres value (Fixed, the original and
+// default behavior) or a percentage in [0,100] of the road's own width at each point along the
+// span (Percent) -- the void's peak then rises and falls with the road's own authored width curve
+// rather than staying a fixed number of metres. End-cap widths are unaffected either way; they stay
+// an absolute metres value regardless of the reservation's own mode.
+enum class ReservationWidthMode { Fixed,
+                                  Percent };
+
 // A central reservation: a void carved out of the road between t0 and t1, tapering from
 // `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint
 // (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1]. endCap0 governs the t0 end, endCap1 the
@@ -68,6 +76,7 @@ struct ReservationEndCap {
 struct ReservationDefinition {
   std::string id;
   double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
+  ReservationWidthMode widthMode{ReservationWidthMode::Fixed};
   ReservationEndCap endCap0, endCap1;
 };
 

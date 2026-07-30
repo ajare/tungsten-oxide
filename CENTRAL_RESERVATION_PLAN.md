@@ -226,6 +226,42 @@ lane for that span.
     the same field for every `MeshRegion` including this one — no separate
     physics wiring needed. `ReservationsPanel` gained a "Wall height (0 =
     default)" field alongside Width.
+  - **`widthMode` — Fixed metres vs Percent of the road.** `width` can now be
+    authored either as an absolute metres value (`Fixed`, the original and
+    default behavior) or as a percentage in [0,100] of the road's own width
+    (`Percent`) — and Percent tracks the road continuously across the span,
+    not just at one sampled point: if the road itself narrows or widens
+    partway through the reservation, the void's peak narrows or widens with
+    it. End-cap widths are unaffected either way; they stay an absolute
+    metres value regardless of the reservation's own mode (kept simple since
+    it wasn't what was asked for — the cap floor already clamps against the
+    reservation's own local peak, so it works correctly under either mode).
+  - Implemented by splitting the old width-scaled Hermite taper into a
+    unitless 0 → 1 → 0 shape (`taper`, peak of 1 rather than `r.width`) times
+    a `peakHere` evaluated *at the queried t*: `r.width` in Fixed mode
+    (constant, reproducing the old curve exactly — Hermite interpolation is
+    linear in its value/derivative parameters, so scaling all of them by a
+    constant scales the whole curve by that constant), or
+    `(r.width / 100) * roadWidth` in Percent mode, where `roadWidth` is a
+    parameter `reservationHalfGapAt` already received (the frame's own,
+    already-baked, un-carved width at this exact t — no new plumbing needed).
+    Mitred/Rounded cap floors clamp against `peakHere` rather than the raw
+    `r.width` field, since in Percent mode that field is a 0-100 number, not
+    metres. The nose-ring placement heuristic in `adaptiveRenderBake`
+    (`kNoseRings`) had the same bug (re-deriving a metres cap width from
+    `reservation.width`, wrong once that's a percentage) — fixed by reusing
+    the anchor's own already-computed, already-percent-aware half-gap instead
+    of re-deriving it.
+  - `ReservationsPanel` gained a "Width mode" combo; picking it flips the
+    Width field's label and unit, and auto-converts the current number
+    (via `PropertiesPanel.hpp`'s `widthAtT`, sampled at the reservation's own
+    midpoint) so the reservation's actual size stays roughly put across the
+    toggle rather than being silently reinterpreted under the new unit —
+    "8" suddenly meaning 8% instead of 8 m would shrink an authored
+    reservation to a sliver. Percent mode also shows the resolved metres
+    value alongside the field. `DrawReservationsPanel` gained a `baked`
+    parameter for this (same baked track `TriggersPanel.cpp` already samples
+    for its own auto-width preview).
 - [x] **M4 — Debug overlay.** F1 overlay toggle for
   `GeometryKind::ReservationWall` in `StatePlayTungstenMonoxide.cpp`,
   alongside the existing `TriggerSurface`/`PathRail`/`MeshRail` toggles.
