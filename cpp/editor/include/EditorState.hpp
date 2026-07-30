@@ -375,7 +375,7 @@ public:
     if (it->host.kind == "path") {
       it->host.t = std::clamp(it->host.t, 0.0, 1.0);
     } else {
-      it->autoWidth = false;    // meaningless without a host path/t to sample a road width from
+      it->autoWidth = false;   // meaningless without a host path/t to sample a road width from
       it->host.lateral = 0.0;  // meaningless without a host path centerline to offset from
     }
     return true;
@@ -1854,22 +1854,14 @@ private:
     return h00 * p1.second + h10 * m1 + h01 * p2.second + h11 * m2;
   }
 
-  // Resolves every path's material to a concrete, known-good qualified name: empty (never
-  // authored) or unresolvable (references a TrackMaterial that no longer exists in the current
-  // MaterialCatalog, e.g. Resources.xml changed since the track was authored) both fall back to
-  // defaultMaterial(), with a stderr warning for the latter case only (the former is the normal,
-  // silent case for a brand-new path or a JS-authored track that never had this field at all). A
-  // no-op with an empty availableMaterials_ (nothing loaded yet, or in main.cpp's self-tests).
+  // Empty assignments (new/legacy tracks) receive the current default. Non-empty unknown names
+  // are preserved: a Resources XML may be edited while this process is running, and
+  // "Refresh materials from XML" can make that assignment valid later. Save validation blocks
+  // unresolved names rather than silently rewriting authored data.
   void backfillMaterials() {
     if (availableMaterials_.empty()) return;
     for (auto& path : track_.paths) {
-      const bool known = std::binary_search(availableMaterials_.begin(), availableMaterials_.end(), path.material);
-      if (known) continue;
-      if (!path.material.empty()) {
-        std::fprintf(stderr, "EditorState: path '%s' referenced unknown material '%s'; falling back to '%s'.\n",
-                     path.id.c_str(), path.material.c_str(), defaultMaterial().c_str());
-      }
-      path.material = defaultMaterial();
+      if (path.material.empty()) path.material = defaultMaterial();
     }
   }
 

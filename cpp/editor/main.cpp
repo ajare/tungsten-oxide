@@ -81,6 +81,8 @@
 #include "CurvesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
+#include "TrackResourceDocument.hpp"
+#include "TrackResourceSave.hpp"
 #include "USDExport.hpp"
 #include "MppModelExport.hpp"
 
@@ -1203,7 +1205,7 @@ Gap8SmokeCheckResult runGap8SmokeCheck() {
 // written directly against MPPMODEL_EXPORT_SPEC.md's documented layout (independently of
 // MppModelExport.cpp's own writer code) and cross-checks every field against the source
 // tox::Track -- header magic/version/flags, all six directory entries, and every mesh's
-// name/primitive-type/primitive-count/material/vertex-count/stride/index-width/data-sizes.
+// name/primitive-type/primitive-count/material/vertex-count/stride/non-indexed sentinel/data-size.
 struct MppModelReadResult {
   bool ok = false;
   std::string error;
@@ -1212,7 +1214,7 @@ struct MppModelReadResult {
     std::string name, material;
     std::uint32_t primitiveType = 0, primitiveCount = 0;
     std::uint32_t vertexCount = 0, vertexStride = 0, vertexDataSize = 0;
-    std::uint32_t indexWidth = 0, indexDataSize = 0;
+    std::uint32_t indexStreamId = 0, indexWidth = 0, indexDataSize = 0;
   };
   std::vector<Mesh> meshes;
 };
@@ -1273,6 +1275,7 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
     const std::uint32_t vertexStreamId = u32();
     const std::uint32_t indexStreamId = u32();
     streamIds.push_back({vertexStreamId, indexStreamId});
+    mesh.indexStreamId = indexStreamId;
     result.meshes.push_back(mesh);
   }
   if (pos != meshDir.end) {
@@ -1317,7 +1320,8 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
 }
 
 struct MppModelSmokeCheckResult {
-  bool headerOk = false, meshCountMatches = false, fieldsMatch = false, byteSizesMatch = false, wideIndexChosenForLargeMesh = false;
+  bool headerOk = false, meshCountMatches = false, fieldsMatch = false, byteSizesMatch = false,
+       nonIndexedTriangleSoup = false;
 };
 
 MppModelSmokeCheckResult runMppModelSmokeCheck() {
@@ -1330,7 +1334,7 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   const MppModelReadResult read = readMppModelStructurally(exported.bytes);
   if (!read.ok) return result;
 
-  result.headerOk = read.versionMajor == 1 && read.versionMinor == 1 && read.flags == 0x0001;
+  result.headerOk = read.versionMajor == 1 && read.versionMinor == 1 && read.flags == 0x0000;
   result.meshCountMatches = read.meshes.size() == baked.track->geometry.size() && read.meshes.size() == exported.meshCount;
 
   bool fieldsMatch = result.meshCountMatches;
@@ -1342,15 +1346,14 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
     if (mesh.primitiveType != 2 /* Triangles */ || mesh.primitiveCount != batch.indices.size() / 3) fieldsMatch = false;
     if (mesh.vertexCount != batch.vertices.size() || mesh.vertexStride != 36) fieldsMatch = false;
     if (mesh.vertexDataSize != mesh.vertexCount * 36) byteSizesMatch = false;
-    const std::uint32_t expectedIndexWidth = batch.vertices.size() > 65535 ? 32 : 16;
-    if (mesh.indexWidth != expectedIndexWidth) fieldsMatch = false;
-    if (mesh.indexDataSize != batch.indices.size() * (mesh.indexWidth / 8)) byteSizesMatch = false;
+    if (mesh.indexStreamId != 0xFFFFFFFFu || mesh.indexWidth != 0 || mesh.indexDataSize != 0)
+      fieldsMatch = false;
   }
   result.fieldsMatch = fieldsMatch;
   result.byteSizesMatch = byteSizesMatch;
 
-  // Confirm the >65535-vertex branch actually selects 32-bit indices, not just the (much more
-  // common) 16-bit path every real track batch takes.
+  // Even a >65535-vertex batch remains a non-indexed triangle soup; there is no redundant
+  // identity index stream and therefore no 16/32-bit width branch.
   tox::GeometryBatch wideBatch;
   wideBatch.id = "wide-test";
   wideBatch.materialKey = "road";
@@ -1360,7 +1363,9 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   wideTrack.geometry.push_back(wideBatch);
   const editor::MppModelExportResult wideExported = editor::exportTrackToMppModel(wideTrack);
   const MppModelReadResult wideRead = readMppModelStructurally(wideExported.bytes);
-  result.wideIndexChosenForLargeMesh = wideRead.ok && !wideRead.meshes.empty() && wideRead.meshes[0].indexWidth == 32;
+  result.nonIndexedTriangleSoup = wideRead.ok && !wideRead.meshes.empty() &&
+                                  wideRead.meshes[0].indexStreamId == 0xFFFFFFFFu &&
+                                  wideRead.meshes[0].indexWidth == 0;
 
   return result;
 }
@@ -1547,26 +1552,30 @@ std::filesystem::path exeDirEditorIniPath() {
   return result;
 }
 
-// Loads editor.ini's [Resources] Path entry and, from that, the TrackMaterial catalog (see
-// MaterialCatalog.hpp). Called once at startup, after the TextureCache it eager-loads texture
-// thumbnails through already exists.
-editor::MaterialCatalog loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext, editor::TextureCache& textureCache) {
+std::filesystem::path configuredMaterialResourcesPath() {
+  const std::filesystem::path iniPath = exeDirEditorIniPath();
+  if (iniPath.empty() || !std::filesystem::exists(iniPath))
+    throw std::runtime_error("editor.ini not found beside the executable.");
+  const editor::EditorIni ini = editor::EditorIni::load(iniPath);
+  const std::optional<std::string> resourcesPath = ini.get("Resources", "Path");
+  if (!resourcesPath.has_value() || resourcesPath->empty())
+    throw std::runtime_error("editor.ini has no [Resources] Path entry.");
+  return (iniPath.parent_path() / *resourcesPath).lexically_normal();
+}
+
+struct StartupMaterials {
+  std::filesystem::path resourcesPath;
+  editor::MaterialCatalog catalog;
+};
+
+// Startup loading is fatal; the same path is retained for the non-fatal runtime refresh command.
+StartupMaterials loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext,
+                                     editor::TextureCache& textureCache) {
   try {
-    const std::filesystem::path iniPath = exeDirEditorIniPath();
-    if (iniPath.empty() || !std::filesystem::exists(iniPath)) {
-      throw std::runtime_error("editor.ini not found beside the executable.");
-    }
-
-    const editor::EditorIni ini = editor::EditorIni::load(iniPath);
-    const std::optional<std::string> resourcesPath = ini.get("Resources", "Path");
-    if (!resourcesPath.has_value() || resourcesPath->empty()) {
-      throw std::runtime_error("editor.ini has no [Resources] Path entry.");
-    }
-
-    // Path is relative to editor.ini's own (deployed, beside-the-executable) directory -- e.g.
-    // cpp/build/editor/Release/../../../tungsten-monoxide/resources/Resources.xml.
-    const std::filesystem::path resolvedResourcesPath = (iniPath.parent_path() / *resourcesPath).lexically_normal();
-    return editor::MaterialCatalog::load(resolvedResourcesPath, textureCache);
+    StartupMaterials result;
+    result.resourcesPath = configuredMaterialResourcesPath();
+    result.catalog = editor::MaterialCatalog::load(result.resourcesPath, textureCache);
+    return result;
   } catch (const std::exception& e) {
     failStartup(window, glContext, std::string("Failed to load material resources: ") + e.what());
   }
@@ -1590,7 +1599,7 @@ int main(int, char**) {
   const SDL_WindowFlags windowFlags =
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   SDL_Window* window =
-      SDL_CreateWindow("track_editor (M10: texture file picker)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
+      SDL_CreateWindow("track_editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
                        windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -1699,10 +1708,10 @@ int main(int, char**) {
   std::fflush(stdout);
 
   const MppModelSmokeCheckResult mppModelSmoke = runMppModelSmokeCheck();
-  std::fprintf(stdout, "MppModel smoke check: header=%s meshCount=%s fields=%s byteSizes=%s wideIndex=%s\n",
+  std::fprintf(stdout, "MppModel smoke check: header=%s meshCount=%s fields=%s byteSizes=%s nonIndexed=%s\n",
                mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
                mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
-               mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
+               mppModelSmoke.nonIndexedTriangleSoup ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const M7bSmokeCheckResult m7bSmoke = runM7bSmokeCheck();
@@ -1873,7 +1882,9 @@ int main(int, char**) {
   // before the first bake below: setAvailableMaterials backfills the starter track's paths (still
   // material == "" at this point) to the alphabetically-first TrackMaterial, and that backfill has
   // to be visible in the very first tox::Track::fromJson bake, not just after the first rebake().
-  editor::MaterialCatalog materialCatalog = loadMaterialCatalog(window, glContext, textureCache);
+  StartupMaterials startupMaterials = loadMaterialCatalog(window, glContext, textureCache);
+  const std::filesystem::path materialResourcesPath = std::move(startupMaterials.resourcesPath);
+  editor::MaterialCatalog materialCatalog = std::move(startupMaterials.catalog);
   std::fprintf(stdout, "MaterialCatalog: %zu TrackMaterial resource(s) loaded\n", materialCatalog.materials().size());
   std::fflush(stdout);
   {
@@ -1966,15 +1977,155 @@ int main(int, char**) {
     bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
   };
 
+  // Document state is deliberately separate from TrackDefinition: JSON's editable metadata name
+  // may change, while a loaded/first-saved Resource@name remains the stable save identity.
+  std::optional<editor::TrackSaveBinding> saveBinding;
+  std::optional<std::string> cleanTrackJson = editor::toJson(editorState.track());
+  auto documentDirty = [&]() {
+    return !cleanTrackJson.has_value() || editor::toJson(editorState.track()) != *cleanTrackJson;
+  };
+
+  auto materialMap = [&]() {
+    std::map<std::string, std::string> result;
+    for (const editor::MaterialEntry& entry : materialCatalog.materials())
+      result.emplace(entry.qualifiedName, entry.materialQualifiedName);
+    return result;
+  };
+  auto unresolvedMaterial = [&]() -> std::optional<std::string> {
+    std::set<std::string> known;
+    for (const editor::MaterialEntry& entry : materialCatalog.materials()) known.insert(entry.qualifiedName);
+    for (const editor::Path& path : editorState.track().paths)
+      if (path.material.empty() || !known.count(path.material)) return path.material.empty() ? "(unassigned)" : path.material;
+    return std::nullopt;
+  };
+  auto installMaterialNames = [&]() {
+    std::vector<std::string> names;
+    names.reserve(materialCatalog.materials().size());
+    for (const auto& entry : materialCatalog.materials()) names.push_back(entry.qualifiedName);
+    editorState.setAvailableMaterials(std::move(names));
+  };
+  auto refreshMaterials = [&]() {
+    try {
+      editor::MaterialCatalog refreshed = editor::MaterialCatalog::load(materialResourcesPath, textureCache);
+      materialCatalog = std::move(refreshed);
+      installMaterialNames();
+      rebake();
+      showStatus("Refreshed " + std::to_string(materialCatalog.materials().size()) + " material(s) from " +
+                 editor::pathToUtf8(materialResourcesPath));
+    } catch (const std::exception& error) {
+      showStatus(std::string("Material refresh failed; previous catalog retained: ") + error.what());
+    }
+  };
+
+  auto replaceDocument = [&](editor::TrackDefinition track,
+                             std::optional<editor::TrackSaveBinding> binding,
+                             bool dirty) {
+    editorState.history().clear();
+    editorState.replaceTrack(std::move(track));
+    saveBinding = std::move(binding);
+    cleanTrackJson = dirty ? std::nullopt : std::optional<std::string>(editor::toJson(editorState.track()));
+    topDownView.resetView();
+    rebake();
+  };
+
+  enum class DocumentAction { None,
+                              New,
+                              OpenResources,
+                              ImportJson,
+                              Exit };
+  DocumentAction requestedAction = DocumentAction::None;
+  DocumentAction pendingDirtyAction = DocumentAction::None;
+  DocumentAction readyAction = DocumentAction::None;
+
+  std::filesystem::path chooserXmlPath;
+  editor::TrackResourceScanResult chooserScan;
+  bool openTrackChooser = false;
+  std::optional<editor::TrackSavePlan> pendingSavePlan;
+  bool openOverwriteConfirmation = false;
+  bool openSaveConflict = false;
+  std::string saveConflictMessage;
+
+  auto finishSuccessfulSave = [&](const editor::TrackSavePlan& plan) {
+    saveBinding = plan.resultingBinding;
+    cleanTrackJson = editor::toJson(editorState.track());
+    showStatus("Saved Tracks/" + saveBinding->resourceName + " to " + editor::pathToUtf8(saveBinding->xmlPath));
+    if (pendingDirtyAction != DocumentAction::None) {
+      readyAction = pendingDirtyAction;
+      pendingDirtyAction = DocumentAction::None;
+    }
+  };
+  auto commitPreparedSave = [&](const editor::TrackSavePlan& plan) {
+    try {
+      std::string error;
+      if (!editor::commitTrackSave(plan, error)) {
+        showStatus("Save failed; XML, JSON and model were left unchanged: " + error);
+        return false;
+      }
+      finishSuccessfulSave(plan);
+      return true;
+    } catch (const std::exception& error) {
+      showStatus(std::string("Save failed; XML, JSON and model were left unchanged: ") + error.what());
+      return false;
+    }
+  };
+  auto beginSave = [&](bool forceSaveAs) {
+    if (bakedTrack == nullptr) {
+      showStatus("Cannot save -- current track failed to bake");
+      return false;
+    }
+    if (const auto unresolved = unresolvedMaterial()) {
+      showStatus("Cannot save -- unavailable TrackMaterial: " + *unresolved);
+      return false;
+    }
+
+    const bool saveAs = forceSaveAs || !saveBinding.has_value();
+    std::filesystem::path xmlPath;
+    if (saveAs) {
+      const std::string identity = saveBinding ? saveBinding->resourceName : (editorState.track().name.empty() ? "Track" : editorState.track().name);
+      const editor::FileDialogResult picked = editor::showSaveFileDialog(
+          L"Save Track to Resources XML", {{L"Resources XML (*.xml)", L"*.xml"}},
+          toWide(editor::sanitizeTrackResourceFilenameStem(identity) + ".xml"), L"xml", false);
+      if (!picked.ok) return false;
+      xmlPath = picked.path;
+    } else {
+      xmlPath = saveBinding->xmlPath;
+    }
+
+    editor::TrackSavePlan plan;
+    try {
+      plan = editor::prepareTrackSave(editorState.track(), *bakedTrack, materialMap(), xmlPath,
+                                      saveBinding, saveAs);
+    } catch (const std::exception& error) {
+      showStatus(std::string("Save preparation failed: ") + error.what());
+      return false;
+    }
+    if (!plan.ok()) {
+      if (plan.errorKind == editor::TrackSaveErrorKind::ExternalXmlConflict ||
+          plan.errorKind == editor::TrackSaveErrorKind::ExternalJsonConflict) {
+        saveConflictMessage = plan.error;
+        openSaveConflict = true;
+      } else {
+        showStatus("Save failed: " + plan.error);
+      }
+      return false;
+    }
+    if (plan.requiresConfirmation()) {
+      pendingSavePlan = std::move(plan);
+      openOverwriteConfirmation = true;
+      return false;
+    }
+    return commitPreparedSave(plan);
+  };
+
   bool running = true;
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) running = false;
+      if (event.type == SDL_QUIT) requestedAction = DocumentAction::Exit;
       if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE &&
           event.window.windowID == SDL_GetWindowID(window)) {
-        running = false;
+        requestedAction = DocumentAction::Exit;
       }
     }
 
@@ -2001,6 +2152,8 @@ int main(int, char**) {
       if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_X)) editor::FocusOnSelection(topDownView, editorState, bakedTrack);
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) && editorState.undo()) rebake();
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) && editorState.redo()) rebake();
+      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O)) requestedAction = DocumentAction::OpenResources;
+      if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) beginSave(io.KeyShift);
     }
 
     // --- Fixed layout: menu bar, toolbar, dockspace (left panel / top-down top-right / elevation
@@ -2011,28 +2164,13 @@ int main(int, char**) {
     // (menu item / toolbar button / Diagnostics panel), not their logic.
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New")) {
-          editorState.history().push(editorState.track());
-          editorState.replaceTrack(buildStarterTrack());
-          rebake();
-        }
+        if (ImGui::MenuItem("New")) requestedAction = DocumentAction::New;
+        if (ImGui::MenuItem("Open Resources XML...", "Ctrl+O")) requestedAction = DocumentAction::OpenResources;
+        if (ImGui::MenuItem("Save", "Ctrl+S")) beginSave(false);
+        if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) beginSave(true);
+        if (ImGui::MenuItem("Refresh materials from XML")) refreshMaterials();
         ImGui::Separator();
-        if (ImGui::MenuItem("Import JSON...")) {
-          const editor::FileDialogResult picked = editor::showOpenFileDialog(L"Import Track JSON", {{L"Track JSON (*.json)", L"*.json"}});
-          if (picked.ok) {
-            try {
-              editor::TrackDefinition imported = editor::fromFile(picked.path);
-              // Push undo of the prior track only on successful parse, mirroring importFile's
-              // pushUndo() placement in web/js/editor.js -- a failed import must never disturb history.
-              editorState.history().push(editorState.track());
-              editorState.replaceTrack(std::move(imported));
-              rebake();
-              showStatus("Loaded " + editor::pathToUtf8(picked.path));
-            } catch (const std::exception& error) {
-              showStatus(std::string("Import failed: ") + error.what());
-            }
-          }
-        }
+        if (ImGui::MenuItem("Import Track JSON...")) requestedAction = DocumentAction::ImportJson;
         if (ImGui::MenuItem("Export JSON...")) {
           const editor::FileDialogResult picked = editor::showSaveFileDialog(
               L"Export Track JSON", {{L"Track JSON (*.json)", L"*.json"}}, toWide(sanitizeFilenameStem(editorState.track().name) + ".json"), L"json");
@@ -2107,102 +2245,6 @@ int main(int, char**) {
               } else {
                 showStatus("Failed to open " + editor::pathToUtf8(picked.path) + " for writing");
               }
-            }
-          } else {
-            showStatus("Nothing to export -- current track failed to bake");
-          }
-        }
-        // Export .mppmodel (MPPMODEL_EXPORT_SPEC.md), a from-scratch native writer of
-        // MassivePolyPusher's binary model format -- see MppModelExport.hpp for why this doesn't
-        // link mpp::ModelSerializer itself.
-        if (ImGui::MenuItem("Export MppModel...")) {
-          if (bakedTrack != nullptr) {
-            const editor::FileDialogResult picked =
-                editor::showSaveFileDialog(L"Export MppModel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}},
-                                           toWide(sanitizeFilenameStem(editorState.track().name) + ".mppmodel"), L"mppmodel");
-            if (picked.ok) {
-              // TrackMaterial -> underlying Material qualified name (MaterialCatalog.hpp's
-              // comment): a mesh's material reference must be the actual renderable Material a
-              // picked TrackMaterial wraps, not the TrackMaterial's own name.
-              std::map<std::string, std::string> trackMaterialToMaterial;
-              for (const editor::MaterialEntry& entry : materialCatalog.materials())
-                trackMaterialToMaterial.emplace(entry.qualifiedName, entry.materialQualifiedName);
-
-              const editor::MppModelExportResult mppModel = editor::exportTrackToMppModel(*bakedTrack, trackMaterialToMaterial);
-              std::filesystem::path jsonPath = picked.path;
-              jsonPath.replace_extension(L"json");
-              std::filesystem::path xmlPath = picked.path;
-              xmlPath.replace_extension(L"xml");
-              const std::string json = editor::toJson(editorState.track()) + "\n";
-              const std::string xml = editor::buildTrackResourceXml(
-                  editorState.track(), *bakedTrack, editor::pathToUtf8(picked.path.filename()),
-                  editor::pathToUtf8(jsonPath.filename()), trackMaterialToMaterial);
-
-              const std::array<std::filesystem::path, 3> finalPaths{picked.path, jsonPath, xmlPath};
-              const std::array<std::string, 3> contents{mppModel.bytes, json, xml};
-              std::array<std::filesystem::path, 3> tempPaths, backupPaths;
-              bool wroteAll = true;
-              for (std::size_t i = 0; i < finalPaths.size(); ++i) {
-                tempPaths[i] = finalPaths[i];
-                tempPaths[i] += L".tmp";
-                backupPaths[i] = finalPaths[i];
-                backupPaths[i] += L".bak";
-                std::ofstream output(tempPaths[i], std::ios::binary | std::ios::trunc);
-                if (!output || !output.write(contents[i].data(), static_cast<std::streamsize>(contents[i].size()))) {
-                  wroteAll = false;
-                  break;
-                }
-              }
-
-              bool committed = wroteAll;
-              std::array<bool, 3> movedToBackup{false, false, false};
-              std::array<bool, 3> installed{false, false, false};
-              if (committed) {
-                std::error_code ec;
-                for (std::size_t i = 0; i < finalPaths.size(); ++i) {
-                  ec.clear();
-                  std::filesystem::remove(backupPaths[i], ec);
-                  ec.clear();
-                  if (std::filesystem::exists(finalPaths[i])) {
-                    std::filesystem::rename(finalPaths[i], backupPaths[i], ec);
-                    movedToBackup[i] = !ec;
-                  }
-                  if (ec) {
-                    committed = false;
-                    break;
-                  }
-                }
-                if (committed) {
-                  for (std::size_t i = 0; i < finalPaths.size(); ++i) {
-                    ec.clear();
-                    std::filesystem::rename(tempPaths[i], finalPaths[i], ec);
-                    installed[i] = !ec;
-                    if (ec) {
-                      committed = false;
-                      break;
-                    }
-                  }
-                }
-                if (!committed) {
-                  for (std::size_t i = 0; i < finalPaths.size(); ++i) {
-                    ec.clear();
-                    if (installed[i]) std::filesystem::remove(finalPaths[i], ec);
-                    ec.clear();
-                    if (movedToBackup[i]) std::filesystem::rename(backupPaths[i], finalPaths[i], ec);
-                  }
-                } else {
-                  for (auto const& backup : backupPaths) std::filesystem::remove(backup, ec);
-                }
-              }
-              for (auto const& temp : tempPaths) {
-                std::error_code ec;
-                std::filesystem::remove(temp, ec);
-              }
-              if (committed)
-                showStatus("Wrote " + editor::pathToUtf8(picked.path) + ", " + editor::pathToUtf8(jsonPath) + " and " +
-                           editor::pathToUtf8(xmlPath) + " (" + std::to_string(mppModel.meshCount) + " mesh(es))");
-              else
-                showStatus("Export failed; existing model, JSON and XML were left unchanged");
             }
           } else {
             showStatus("Nothing to export -- current track failed to bake");
@@ -2286,6 +2328,168 @@ int main(int, char**) {
         ImGui::EndMenu();
       }
       ImGui::EndMainMenuBar();
+    }
+
+    if (requestedAction != DocumentAction::None) {
+      if (documentDirty()) {
+        pendingDirtyAction = requestedAction;
+        ImGui::OpenPopup("Unsaved Changes");
+      } else {
+        readyAction = requestedAction;
+      }
+      requestedAction = DocumentAction::None;
+    }
+
+    if (openOverwriteConfirmation) {
+      ImGui::OpenPopup("Confirm Track Overwrite");
+      openOverwriteConfirmation = false;
+    }
+    if (openSaveConflict) {
+      ImGui::OpenPopup("Save Conflict");
+      openSaveConflict = false;
+    }
+    if (openTrackChooser) {
+      ImGui::OpenPopup("Select Track Resource");
+      openTrackChooser = false;
+    }
+
+    if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted("The current track has unsaved changes.");
+      if (ImGui::Button("Save")) {
+        const bool saved = beginSave(false);
+        if (saved || pendingSavePlan.has_value() || openSaveConflict) ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Discard")) {
+        readyAction = pendingDirtyAction;
+        pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) {
+        pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Confirm Track Overwrite", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted("Saving will replace:");
+      if (pendingSavePlan)
+        for (const std::string& warning : pendingSavePlan->overwriteWarnings)
+          ImGui::BulletText("%s", warning.c_str());
+      if (ImGui::Button("Overwrite") && pendingSavePlan) {
+        editor::TrackSavePlan plan = std::move(*pendingSavePlan);
+        pendingSavePlan.reset();
+        if (!commitPreparedSave(plan)) pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) {
+        pendingSavePlan.reset();
+        pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Save Conflict", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextWrapped("%s", saveConflictMessage.c_str());
+      if (ImGui::Button("Reload") && saveBinding) {
+        const editor::TrackResourceScanResult scan = editor::scanTrackResources(saveBinding->xmlPath);
+        const auto found = std::find_if(scan.tracks.begin(), scan.tracks.end(),
+                                        [&](const auto& candidate) {
+                                          return candidate.resourceName == saveBinding->resourceName && candidate.loadable();
+                                        });
+        if (scan.validDocument() && found != scan.tracks.end()) {
+          std::string modelRef = found->modelFileReference;
+          if (!editor::isSafeResourceRelativePath(modelRef))
+            modelRef = editor::sanitizeTrackResourceFilenameStem(found->resourceName) + ".mppmodel";
+          editor::TrackSaveBinding refreshed{saveBinding->xmlPath, found->resourceName,
+                                             found->trackDataReference, modelRef,
+                                             found->resourceFingerprint, found->jsonFingerprint};
+          replaceDocument(*found->track, std::move(refreshed), false);
+          showStatus("Reloaded Tracks/" + found->resourceName);
+        } else {
+          showStatus("Reload failed: bound Track resource is no longer loadable");
+        }
+        pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Save As...")) {
+        if (!beginSave(true) && !pendingSavePlan.has_value()) pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) {
+        pendingDirtyAction = DocumentAction::None;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Select Track Resource", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::Text("Resources: %s", editor::pathToUtf8(chooserXmlPath).c_str());
+      if (chooserScan.tracks.empty()) ImGui::TextUnformatted("No Tracks resources were found.");
+      for (std::size_t i = 0; i < chooserScan.tracks.size(); ++i) {
+        const editor::TrackResourceCandidate& candidate = chooserScan.tracks[i];
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::BeginDisabled(!candidate.loadable());
+        if (ImGui::Selectable(candidate.resourceName.c_str(), false)) {
+          std::string modelRef = candidate.modelFileReference;
+          if (!editor::isSafeResourceRelativePath(modelRef))
+            modelRef = editor::sanitizeTrackResourceFilenameStem(candidate.resourceName) + ".mppmodel";
+          editor::TrackSaveBinding binding{chooserXmlPath, candidate.resourceName,
+                                           candidate.trackDataReference, modelRef,
+                                           candidate.resourceFingerprint, candidate.jsonFingerprint};
+          replaceDocument(*candidate.track, std::move(binding), false);
+          showStatus("Loaded Tracks/" + candidate.resourceName +
+                     (candidate.warning.empty() ? "" : " -- " + candidate.warning));
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        if (!candidate.error.empty())
+          ImGui::TextWrapped("Invalid: %s", candidate.error.c_str());
+        else if (!candidate.warning.empty())
+          ImGui::TextWrapped("Warning: %s", candidate.warning.c_str());
+        ImGui::PopID();
+      }
+      if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
+
+    if (readyAction != DocumentAction::None) {
+      const DocumentAction action = readyAction;
+      readyAction = DocumentAction::None;
+      if (action == DocumentAction::New) {
+        replaceDocument(buildStarterTrack(), std::nullopt, false);
+        showStatus("Created a new unbound track");
+      } else if (action == DocumentAction::OpenResources) {
+        const editor::FileDialogResult picked = editor::showOpenFileDialog(
+            L"Open Resources XML", {{L"Resources XML (*.xml)", L"*.xml"}});
+        if (picked.ok) {
+          chooserXmlPath = picked.path;
+          chooserScan = editor::scanTrackResources(picked.path);
+          if (!chooserScan.validDocument())
+            showStatus("Open failed: " + chooserScan.error);
+          else
+            openTrackChooser = true;
+        }
+      } else if (action == DocumentAction::ImportJson) {
+        const editor::FileDialogResult picked = editor::showOpenFileDialog(
+            L"Import Track JSON", {{L"Track JSON (*.json)", L"*.json"}});
+        if (picked.ok) {
+          try {
+            replaceDocument(editor::fromFile(picked.path), std::nullopt, true);
+            showStatus("Imported " + editor::pathToUtf8(picked.path));
+          } catch (const std::exception& error) {
+            showStatus(std::string("Import failed: ") + error.what());
+          }
+        }
+      } else if (action == DocumentAction::Exit) {
+        running = false;
+      }
     }
 
     // Toolbar: a fixed strip pinned directly under the menu bar (not part of the dockspace, not
@@ -2442,6 +2646,8 @@ int main(int, char**) {
     }
     if (ImGui::CollapsingHeader("Materials")) {
       ImGui::PushID("Materials");
+      if (ImGui::Button("Refresh materials from XML")) refreshMaterials();
+      ImGui::TextDisabled("%s", editor::pathToUtf8(materialResourcesPath).c_str());
       if (editor::DrawMaterialsPanel(editorState, materialCatalog, textureCache, currentPathIndex)) rebake();
       ImGui::PopID();
     }
@@ -2492,10 +2698,10 @@ int main(int, char**) {
       ImGui::BulletText("USD export header / meshes: %s / %s (%zu mesh(es))", m7aSmoke.usdHeaderOk ? "OK" : "MISMATCH",
                         m7aSmoke.usdHasMeshes ? "OK" : "MISMATCH", m7aSmoke.usdMeshCount);
       ImGui::TextUnformatted("MppModel smoke check (MPPMODEL_EXPORT_SPEC.md, exercised directly):");
-      ImGui::BulletText("header / mesh count / fields match / byte sizes match / wide-index branch: %s / %s / %s / %s / %s",
+      ImGui::BulletText("header / mesh count / fields match / byte sizes match / non-indexed: %s / %s / %s / %s / %s",
                         mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
                         mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
-                        mppModelSmoke.wideIndexChosenForLargeMesh ? "OK" : "MISMATCH");
+                        mppModelSmoke.nonIndexedTriangleSoup ? "OK" : "MISMATCH");
       ImGui::TextUnformatted("M7b smoke check (texture assets, exercised directly):");
       ImGui::BulletText("image size read / add asset / assign: %s / %s / %s", m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH",
                         m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH");

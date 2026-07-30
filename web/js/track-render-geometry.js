@@ -212,8 +212,10 @@ function triggerBatch(trigger) {
   const corner = (sr, su) => [c.x + r.x * sr * hw + u.x * su * h, c.y + r.y * sr * hw + u.y * su * h, c.z + r.z * sr * hw + u.z * su * h];
   const c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
   const triangles = [];
-  addTri(triangles, c0, c1, c2, [0, 0], [1, 0], [1, 1]);
-  addTri(triangles, c0, c2, c3, [0, 0], [1, 1], [0, 1]);
+  // In the editor's XZ track convention +right is the driver's left-hand side when looking
+  // along fwd. Start U there so trigger textures read left-to-right in the direction of travel.
+  addTri(triangles, c0, c1, c2, [1, 0], [0, 0], [0, 1]);
+  addTri(triangles, c0, c2, c3, [1, 0], [0, 1], [1, 1]);
   return batch(`trigger-${trigger.id}`, 'TriggerSurface', 'Tracks/DefaultTriggerMaterial', triangles, { hasUv: true });
 }
 

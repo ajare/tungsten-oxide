@@ -1,37 +1,271 @@
 {
-  "version": 10,
-  "name": "New Track",
-  "start": { "path": 0, "point": 0, "reverse": false },
-  "handling": {"maxSpeed":140,"accel":71,"turnSpeed":137.5,"weight":1000},
-  "zones": [],
-  "triggers": [{"id":"starter-finish","type":"checkpoint","role":"finish","host":{"kind":"path","pathId":"starter-path","t":0.0025},"width":36,"height":12,"rotation":0,"direction":"forward"},{"id":"starter-cp1","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.2525},"width":36,"height":12,"rotation":0,"direction":"both"},{"id":"starter-cp2","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.5025},"width":36,"height":12,"rotation":0,"direction":"both"},{"id":"starter-cp3","type":"checkpoint","role":"intermediate","host":{"kind":"path","pathId":"starter-path","t":0.7525},"width":36,"height":12,"rotation":0,"direction":"both"}],
   "disjointSeams": [],
+  "handling": {
+    "accel": 71.0,
+    "maxSpeed": 140.0,
+    "turnSpeed": 137.5,
+    "weight": 1000.0
+  },
   "junctions": [],
-  "selfIntersectionOverrides": [],
   "meshAssets": {},
   "meshes": [],
-  "textureAssets": {},
+  "name": "NewTrack",
   "paths": [
-    { "id": "starter-path", "closed": true, "points": [
-      { "type": "position", "id": "", "pos": [1332.907, 0, 0], "weight": 1 },
-      { "type": "position", "id": "", "pos": [1154.331, 0, 666.453], "weight": 1 },
-      { "type": "position", "id": "", "pos": [666.453, 0, 1154.331], "weight": 1 },
-      { "type": "position", "id": "", "pos": [0, 0, 1332.907], "weight": 1 },
-      { "type": "position", "id": "", "pos": [-666.453, 0, 1154.331], "weight": 1 },
-      { "type": "position", "id": "", "pos": [-1154.331, 0, 666.453], "weight": 1 },
-      { "type": "position", "id": "", "pos": [-1332.907, 0, 0], "weight": 1 },
-      { "type": "position", "id": "", "pos": [-1154.331, 0, -666.453], "weight": 1 },
-      { "type": "position", "id": "", "pos": [-666.453, 0, -1154.331], "weight": 1 },
-      { "type": "position", "id": "", "pos": [0, 0, -1332.907], "weight": 1 },
-      { "type": "position", "id": "", "pos": [666.453, 0, -1154.331], "weight": 1 },
-      { "type": "position", "id": "", "pos": [1154.331, 0, -666.453], "weight": 1 },
-      { "type": "roll", "t": 0, "roll": 0 },
-      { "type": "roll", "t": 0.5, "roll": 0 },
-      { "type": "width", "t": 0, "width": 36 },
-      { "type": "width", "t": 0.5, "width": 36 },
-      { "type": "crossSection", "t": 0, "curvature": 0, "tightness": 1, "thickness": 4 },
-      { "type": "crossSection", "t": 0.5, "curvature": 0, "tightness": 1, "thickness": 4 }
-    ] }
-  ]
+    {
+      "closed": true,
+      "id": "starter-path",
+      "material": "Tracks/AsphaltTrack",
+      "points": [
+        {
+          "id": "p1",
+          "pos": [
+            1332.907,
+            0.0,
+            0.0
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p2",
+          "pos": [
+            1154.331,
+            0.0,
+            666.453
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p3",
+          "pos": [
+            666.453,
+            0.0,
+            1154.331
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p4",
+          "pos": [
+            0.0,
+            0.0,
+            1332.907
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p5",
+          "pos": [
+            -666.453,
+            0.0,
+            1154.331
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p6",
+          "pos": [
+            -1154.331,
+            0.0,
+            666.453
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p7",
+          "pos": [
+            -1332.907,
+            0.0,
+            0.0
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p8",
+          "pos": [
+            -1154.331,
+            0.0,
+            -666.453
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p9",
+          "pos": [
+            -666.453,
+            0.0,
+            -1154.331
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p10",
+          "pos": [
+            0.0,
+            0.0,
+            -1332.907
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p11",
+          "pos": [
+            666.453,
+            0.0,
+            -1154.331
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "id": "p12",
+          "pos": [
+            1154.331,
+            0.0,
+            -666.453
+          ],
+          "type": "position",
+          "weight": 1.0
+        },
+        {
+          "roll": 0.0,
+          "t": 0.0,
+          "type": "roll"
+        },
+        {
+          "roll": 0.0,
+          "t": 0.5,
+          "type": "roll"
+        },
+        {
+          "t": 0.0,
+          "type": "width",
+          "width": 36.0
+        },
+        {
+          "t": 0.5,
+          "type": "width",
+          "width": 36.0
+        },
+        {
+          "curvature": 0.0,
+          "t": 0.0,
+          "thickness": 4.0,
+          "tightness": 1.0,
+          "type": "crossSection"
+        },
+        {
+          "curvature": 0.0,
+          "t": 0.5,
+          "thickness": 4.0,
+          "tightness": 1.0,
+          "type": "crossSection"
+        },
+        {
+          "t": 0.09602400600150038,
+          "type": "width",
+          "width": 36.0
+        },
+        {
+          "t": 0.11287358213518495,
+          "type": "width",
+          "width": 140.5
+        },
+        {
+          "t": 0.15707097327714747,
+          "type": "width",
+          "width": 157.0
+        },
+        {
+          "t": 0.17854463615903976,
+          "type": "width",
+          "width": 35.99999999999999
+        }
+      ]
+    }
+  ],
+  "selfIntersectionOverrides": [],
+  "start": {
+    "path": 0,
+    "point": 0,
+    "reverse": false
+  },
+  "textureAssets": {},
+  "triggers": [
+    {
+      "autoWidth": false,
+      "direction": "forward",
+      "height": 12.0,
+      "host": {
+        "kind": "path",
+        "lateral": 0.0,
+        "pathId": "starter-path",
+        "t": 0.0025
+      },
+      "id": "starter-finish",
+      "role": "finish",
+      "rotation": 0.0,
+      "type": "checkpoint",
+      "width": 36.0
+    },
+    {
+      "autoWidth": false,
+      "direction": "both",
+      "height": 12.0,
+      "host": {
+        "kind": "path",
+        "lateral": 0.0,
+        "pathId": "starter-path",
+        "t": 0.2525
+      },
+      "id": "starter-cp1",
+      "role": "intermediate",
+      "rotation": 0.0,
+      "type": "checkpoint",
+      "width": 36.0
+    },
+    {
+      "autoWidth": false,
+      "direction": "both",
+      "height": 12.0,
+      "host": {
+        "kind": "path",
+        "lateral": 0.0,
+        "pathId": "starter-path",
+        "t": 0.5025
+      },
+      "id": "starter-cp2",
+      "role": "intermediate",
+      "rotation": 0.0,
+      "type": "checkpoint",
+      "width": 36.0
+    },
+    {
+      "autoWidth": false,
+      "direction": "both",
+      "height": 12.0,
+      "host": {
+        "kind": "path",
+        "lateral": 0.0,
+        "pathId": "starter-path",
+        "t": 0.7525
+      },
+      "id": "starter-cp3",
+      "role": "intermediate",
+      "rotation": 0.0,
+      "type": "checkpoint",
+      "width": 36.0
+    }
+  ],
+  "version": 11,
+  "zones": []
 }
-

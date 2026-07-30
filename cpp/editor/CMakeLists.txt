@@ -66,6 +66,8 @@ set(EDITOR_SOURCES
   src/ElevationView.cpp
   src/USDExport.cpp
   src/MppModelExport.cpp
+  src/TrackResourceDocument.cpp
+  src/TrackResourceSave.cpp
   src/RandomTrack.cpp
   src/TextureCache.cpp
   src/MaterialsPanel.cpp
@@ -101,8 +103,21 @@ target_link_libraries(track_editor PRIVATE
   SDL2::SDL2
   SDL2::SDL2main)
 
+add_executable(editor_track_resource_tests
+  tests/track_resource_tests.cpp
+  src/EditorTrackDefinition.cpp
+  src/MppModelExport.cpp
+  src/TrackResourceDocument.cpp
+  src/TrackResourceSave.cpp
+  src/FileDialog.cpp)
+target_include_directories(editor_track_resource_tests PRIVATE include third_party)
+target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common)
+add_test(NAME editor_track_resources
+  COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/../web/test/fixtures/path/curved-banked.json")
+
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)
+  target_link_libraries(editor_track_resource_tests PRIVATE ole32 shell32 uuid)
   # windows.h's min/max macros (pulled in transitively via <SDL.h> and gl3w.c) collide with
   # std::min/std::max and Willpower/nlohmann headers; suppress them everywhere in this target.
   target_compile_definitions(track_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

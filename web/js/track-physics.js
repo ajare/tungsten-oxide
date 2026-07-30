@@ -620,8 +620,11 @@ export class Simulation {
       if (moved.hit) {
         railHit = true;
         const before = Math.hypot(vx, vz), after = Math.hypot(velocity.x, velocity.z);
-        physics.speed = after * weightSpeedRetain(physics);
-        if (physics.speed > 1e-6) physics.moveDir.set(velocity.x, 0, velocity.z).normalize();
+        // Gear-preserving, as for the corridor wall above: reversing into a platform's own rail
+        // otherwise flips the car into forward gear on contact.
+        const gear = physics.speed < 0 ? -1 : 1;
+        physics.speed = gear * after * weightSpeedRetain(physics);
+        if (after > 1e-6) physics.moveDir.set(velocity.x * gear, 0, velocity.z * gear).normalize();
         addImpactJolt(physics, before - after);
       }
 
@@ -674,15 +677,43 @@ export class Simulation {
           finalS = clamp(s, loS, hiS);
           _wallN.copy(er).multiplyScalar(hitSign);
           const into = vel.dot(_wallN);
+          // Crossing loS/hiS is first of all a *positional* constraint (finalS, above): it also
+          // fires on a car that merely brushed a limit which moved under it, which is what a
+          // narrowing section does every frame to anything tracking near its edge. Only an actually
+          // into-the-wall velocity earns an impulse -- and only then may speed/moveDir be rewritten.
+          // Rewriting them unconditionally (as this did) drained weightSpeedRetain() off the speed
+          // of a car with zero wall contact, once per frame for as long as the road kept narrowing.
           if (into > 0) {
             vel.addScaledVector(_wallN, -into * (1 + weightRestitution(physics)));
             addImpactJolt(physics, into);
+            // Preserve gear: a plain length()/normalize() decomposition is always non-negative and
+            // re-points moveDir along the post-bounce travel direction, flipping a reversing car
+            // into forward gear with moveDir ~180 degrees off its heading. Held brake then
+            // decelerates that positive speed back through zero while grip swings moveDir around to
+            // meet forward again -- the car judders, slews sideways and makes almost no headway.
+            const gear = physics.speed < 0 ? -1 : 1;
+            const mag = vel.length();
+            physics.speed = gear * mag * weightSpeedRetain(physics);
+            if (mag > 1e-6) physics.moveDir.copy(vel).multiplyScalar(gear).normalize();
           }
-          physics.speed = vel.length() * weightSpeedRetain(physics);
-          if (physics.speed > 1e-6) physics.moveDir.copy(vel).normalize();
         }
 
         const surface = curvedSurfaceFrame(c, finalS);
+        if (forceCurrentWall) {
+          // Restore the along-track component of this step's motion. curvedSurfaceFrame() builds a
+          // position purely as pos + edgeRight*s + normal*lift, i.e. with NO tangential component,
+          // so it lands the ship exactly in `c`'s own station plane. Harmless in the branch above,
+          // where `c` was re-sampled at newPos and has therefore already advanced along the track.
+          // Here `c` is deliberately the sample taken at the ship's OLD position, and the only
+          // channel newPos had into the result — `s` — was just clamped away by finalS. Without this
+          // term groundPos becomes a pure function of the old groundPos, with velocity contributing
+          // exactly nothing: a ship pressed onto the wall maps to itself and locks there permanently
+          // at full indicated speed. A narrowing section is what makes it stick, because the
+          // shrinking hiS re-clamps the ship every frame and so keeps latching forceCurrentWall on.
+          const along = (newPos.x - c.pos.x) * c.tangent.x + (newPos.y - c.pos.y) * c.tangent.y +
+            (newPos.z - c.pos.z) * c.tangent.z;
+          surface.pos.addScaledVector(c.tangent, along);
+        }
         physics.groundPos.copy(surface.pos);
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;

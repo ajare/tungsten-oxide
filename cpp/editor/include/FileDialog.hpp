@@ -27,7 +27,8 @@ struct FileDialogResult {
 // is appended by the shell when the user doesn't type one (no leading dot, e.g. L"json").
 FileDialogResult showOpenFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters);
 FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters,
-                                     const std::wstring& defaultFileName, const std::wstring& defaultExtension);
+                                    const std::wstring& defaultFileName, const std::wstring& defaultExtension,
+                                    bool confirmOverwrite = true);
 
 // UTF-8 <-> native-wide conversions for the Win32 text boundary (dialog default filenames, status
 // text built from a returned path, stb_image). track::Track/editor records hold UTF-8 in memory

@@ -41,6 +41,23 @@ try to re-document things that are self-evident from file/class names.
   a scene's node hierarchy into root/world space. model-tool always passes
   this, since `.mppmodel` has no node concept to preserve it in.
 
+## Native track resource documents (see `docs/adr/0002-track-resource-save-load.md`)
+
+- **Track metadata name** — editable `TrackDefinition::name`, serialized as the top-level schema-10
+  JSON `name`. It is display metadata and does not rename an already-bound resource.
+- **Track resource identity** — stable `(namespace="Tracks", Resource@name)` key captured when a
+  Track is loaded or first saved. Save As copies this identity; changing track metadata does not.
+- **Track save binding** — the editor session's association with one Resources XML path, Track
+  resource identity, safe relative JSON/model references, and external-change fingerprints.
+- **Track sidecars** — the schema-10 `<TrackData>` JSON (authoritative editable source) and generated
+  `<ModelFile>` `.mppmodel` associated with a Track Resource.
+- **Logical Tracks namespace** — all root-level `<Namespace name="Tracks">` blocks in one Resources
+  XML considered together. Multiple blocks are accepted, but duplicate resource identities are
+  ambiguous.
+- **Unavailable TrackMaterial** — a non-empty path material assignment preserved from track JSON
+  but absent from the catalog currently loaded through `editor.ini`. It is not silently replaced;
+  Save remains blocked until refresh or reassignment resolves it.
+
 ## Existing terms referenced by ADR 0001
 
 - **willpower.application Resource system** — the declarative,

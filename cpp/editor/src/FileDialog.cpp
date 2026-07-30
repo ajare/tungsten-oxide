@@ -61,7 +61,8 @@ FileDialogResult showOpenFileDialog(const std::wstring& title, const std::vector
 }
 
 FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector<FileDialogFilter>& filters,
-                                     const std::wstring& defaultFileName, const std::wstring& defaultExtension) {
+                                    const std::wstring& defaultFileName, const std::wstring& defaultExtension,
+                                    bool confirmOverwrite) {
   ComScope com;
   if (!com.ok()) return {};
   IFileSaveDialog* dialog = nullptr;
@@ -69,6 +70,10 @@ FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector
     return {};
   if (!defaultFileName.empty()) dialog->SetFileName(defaultFileName.c_str());
   if (!defaultExtension.empty()) dialog->SetDefaultExtension(defaultExtension.c_str());
+  if (!confirmOverwrite) {
+    FILEOPENDIALOGOPTIONS options = 0;
+    if (SUCCEEDED(dialog->GetOptions(&options))) dialog->SetOptions(options & ~FOS_OVERWRITEPROMPT);
+  }
   const FileDialogResult result = runDialog(dialog, title, filters);
   dialog->Release();
   return result;

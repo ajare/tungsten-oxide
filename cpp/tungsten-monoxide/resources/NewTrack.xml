@@ -3,7 +3,7 @@
 	<Namespace name="Tracks">
 		<Resource type="Track" name="NewTrack">
 			<DependentResources>
-				<DependentResource id="Tracks/AsphaltTrack" ref="Tracks/AsphaltTrack" />
+				<DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial" />
 				<DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial" />
 				<DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial" />
 				<DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial" />

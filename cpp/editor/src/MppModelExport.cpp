@@ -223,9 +223,10 @@ std::string xmlEscape(const std::string& value) {
 
 }  // namespace
 
-std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
-                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
-                                  const std::map<std::string, std::string>& trackMaterialToMaterial) {
+std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox::Track& bakedTrack,
+                                         const std::string& resourceName, const std::string& mppModelFileName,
+                                         const std::string& trackDataFileName,
+                                         const std::map<std::string, std::string>& trackMaterialToMaterial) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
   // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
   // curve content. Resolved through trackMaterialToMaterial first (see MppModelExport.hpp's
@@ -250,7 +251,7 @@ std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track
   // and ResourceManager::instantiateResource() unconditionally discards a composite resource's own
   // `location`/source. The .mppmodel filename instead travels via <Definition><File> below, which
   // MapTungstenMonoxideDefinitionFactory::create() reads into Map::mModelFileName.
-  xml += "\t\t<Resource type=\"Track\" name=\"" + xmlEscape(track.name) + "\">\n";
+  xml += "\t\t<Resource type=\"Track\" name=\"" + xmlEscape(resourceName) + "\">\n";
 
   if (!materials.empty()) {
     xml += "\t\t\t<DependentResources>\n";
@@ -282,6 +283,13 @@ std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track
 
   xml += "\t\t</Resource>\n\t</Namespace>\n</Resources>\n";
   return xml;
+}
+
+std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
+                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
+                                  const std::map<std::string, std::string>& trackMaterialToMaterial) {
+  return buildTrackResourceXmlForName(track, bakedTrack, track.name, mppModelFileName, trackDataFileName,
+                                      trackMaterialToMaterial);
 }
 
 }  // namespace editor

@@ -37,6 +37,18 @@ function serializeRoster(ships) { return ships.map(serializeShip); }
 // so it rarely satisfies the trigger's height bound — a flat track keeps the
 // lap-completion scenario's pass/fail about session/event plumbing, not
 // authored-fixture trigger geometry.
+//
+// The finish host t is 0.10125, deliberately NOT a round 0.1. triggerPathFrame()
+// evaluates the spline continuously, but this path bakes to exactly 400
+// centerline frames, so t=0.1 put the gate's plane bit-exactly on frame 40 —
+// and a ship's ground position is always curvedSurfaceFrame(sample, s), which
+// has zero tangential offset from its sample's own pos. Whenever the ship
+// snapped to frame 40, (pos - center).fwd was therefore exactly zero in exact
+// arithmetic, leaving detectTriggers' strict `d1 > 0` crossing test decided by
+// the last bit: JS and C++ agree on position to ~1e-14 yet disagree about which
+// frame the lap fires on. 0.10125 lands the plane midway between frames 40 and
+// 41 (~0.71m of a ~1.42m spacing), so the sign of d is never in doubt. Any t
+// that is an exact multiple of the frame spacing re-creates the landmine.
 function syntheticFlatLapTrack() {
   return TC().parseTrack(JSON.stringify({
     version: 10, name: 'raw-session synthetic flat lap',
@@ -45,7 +57,7 @@ function syntheticFlatLapTrack() {
     zones: [],
     triggers: [{
       id: 'lap-finish', type: 'checkpoint', role: 'finish', direction: 'both',
-      width: 60, height: 20, rotation: 0, host: { kind: 'path', pathId: 'circle', t: 0.1 }
+      width: 60, height: 20, rotation: 0, host: { kind: 'path', pathId: 'circle', t: 0.10125 }
     }],
     disjointSeams: [], junctions: [], selfIntersectionOverrides: [],
     meshAssets: {}, meshes: [], textureAssets: {},

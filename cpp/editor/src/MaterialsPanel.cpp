@@ -1,5 +1,7 @@
 #include "MaterialsPanel.hpp"
 
+#include <algorithm>
+
 #include "imgui.h"
 
 namespace editor {
@@ -13,6 +15,13 @@ bool DrawMaterialsPanel(EditorState& state, const MaterialCatalog& materialCatal
   if (materialCatalog.materials().empty()) {
     ImGui::TextUnformatted("No TrackMaterials loaded.");
     return mutated;
+  }
+
+  if (currentMaterial.has_value() && !currentMaterial->empty() &&
+      std::none_of(materialCatalog.materials().begin(), materialCatalog.materials().end(),
+                   [&](const MaterialEntry& entry) { return entry.qualifiedName == *currentMaterial; })) {
+    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.25f, 1.0f), "Unavailable: %s", currentMaterial->c_str());
+    ImGui::TextWrapped("Refresh materials or select a replacement before saving.");
   }
 
   constexpr float kThumbDisplay = 48.0f;

@@ -74,6 +74,30 @@ test('path-hosted zones produce conforming renderer-neutral geometry', () => {
   assert.equal(zone.materialKey, 'Tracks/DefaultZoneMaterial');
 });
 
+test('trigger U starts at the left-hand edge relative to track direction', () => {
+  const track = fixture('transformed-square.json');
+  const baked = bakeTrackPhysics(track);
+  const trigger = baked.triggers[0];
+  const gate = buildTrackRenderGeometry(track, baked).batches.find(b => b.id === `trigger-${trigger.id}`);
+  assert.ok(gate);
+
+  let uZeroCount = 0, uOneCount = 0;
+  for (const vertex of gate.vertices) {
+    const side = vertex.position.reduce((sum, coordinate, i) =>
+      sum + (coordinate - [trigger.center.x, trigger.center.y, trigger.center.z][i]) *
+        [trigger.right.x, trigger.right.y, trigger.right.z][i], 0);
+    if (vertex.uv[0] === 0) {
+      ++uZeroCount;
+      assert.ok(Math.abs(side - trigger.halfWidth) < 1e-9, `U=0 side=${side}`);
+    } else if (vertex.uv[0] === 1) {
+      ++uOneCount;
+      assert.ok(Math.abs(side + trigger.halfWidth) < 1e-9, `U=1 side=${side}`);
+    }
+  }
+  assert.equal(uZeroCount, 3);
+  assert.equal(uOneCount, 3);
+});
+
 test('path texture identity and tile are retained without loading an image', () => {
   const track = fixture('transformed-square.json');
   track.textureAssets = {

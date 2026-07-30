@@ -42,7 +42,8 @@ struct MppModelExportResult {
   std::size_t meshCount{0};
 };
 
-// One tox::GeometryBatch -> one mppmodel mesh entry, one vertex stream, one index stream (see
+// One tox::GeometryBatch -> one mppmodel mesh entry and one vertex stream. GeometryBatch is an
+// already-unshared triangle soup, so no redundant identity index stream is written (see
 // MPPMODEL_EXPORT_SPEC.md 4.4). Materials are referenced by name only (batch.materialKey) and
 // never added via addMaterial-equivalent machinery (spec 5, option 1) -- the target
 // MassivePolyPusher project is expected to define "road"/"rail"/"mesh-region" materials itself,
@@ -86,5 +87,13 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track,
 std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
                                   const std::string& mppModelFileName, const std::string& trackDataFileName,
                                   const std::map<std::string, std::string>& trackMaterialToMaterial = {});
+
+// Save/load integration keeps Resource@name stable even when TrackDefinition::name (JSON metadata)
+// changes. This variant therefore accepts the resource identity independently; the legacy helper
+// above continues to use track.name for standalone-export callers and smoke checks.
+std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox::Track& bakedTrack,
+                                         const std::string& resourceName, const std::string& mppModelFileName,
+                                         const std::string& trackDataFileName,
+                                         const std::map<std::string, std::string>& trackMaterialToMaterial = {});
 
 }  // namespace editor

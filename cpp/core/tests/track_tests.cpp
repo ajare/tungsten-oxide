@@ -696,7 +696,7 @@ int main(int argc, char** argv) {
     if (loaded) {
       const Track& track = *loaded.track;
       const auto region = std::find_if(track.meshRegions.begin(), track.meshRegions.end(),
-                                        [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
+                                       [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
       check(region != track.meshRegions.end(), "the reservation gets a synthetic MeshRegion");
       if (region != track.meshRegions.end()) {
         check(region->polygons.empty() && region->triangles.empty(),
@@ -707,11 +707,11 @@ int main(int argc, char** argv) {
       }
 
       const auto wall = std::find_if(track.geometry.begin(), track.geometry.end(),
-                                      [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; });
+                                     [](const GeometryBatch& b) { return b.kind == GeometryKind::ReservationWall; });
       check(wall != track.geometry.end() && !wall->vertices.empty(), "a ReservationWall geometry batch is emitted");
 
       const auto surface = std::find_if(track.geometry.begin(), track.geometry.end(),
-                                         [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
+                                        [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
       check(surface != track.geometry.end(), "the path surface batch still exists");
       if (surface != track.geometry.end() && !track.paths[0].centerline.empty()) {
         // Direct correctness check (a raw vertex-count comparison isn't meaningful here: the
@@ -937,7 +937,7 @@ int main(int argc, char** argv) {
       check(finalSpeed > 100.0, "reservation-wall diag: speed recovers after the bounce rather than grinding to a halt");
 
       const auto surfaceBatch = std::find_if(trackPtr->geometry.begin(), trackPtr->geometry.end(),
-                                              [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
+                                             [](const GeometryBatch& b) { return b.id == "path-0-surface"; });
       check(surfaceBatch != trackPtr->geometry.end(), "reservation-wall diag: surface batch exists to build a collision surface from");
       if (surfaceBatch != trackPtr->geometry.end()) {
         std::vector<CollisionTriangle> triangles;
@@ -954,9 +954,10 @@ int main(int argc, char** argv) {
         const auto [finiteC, railHitsC, togglesC, finalSpeedC] = driveInto(trackWithCollision);
         check(finiteC, "reservation-wall diag (with collisionSurface): position/speed stays finite for 400 steps");
         check(railHitsC >= 1, "reservation-wall diag (with collisionSurface): driving into the taper still triggers a wall hit");
-        check(togglesC <= 2, "reservation-wall diag (with collisionSurface): the render mesh's hole lines up with the analytical "
-                             "wall closely enough that the ship doesn't repeatedly toggle airborne near the gap edge (got " +
-                                 std::to_string(togglesC) + " toggles)");
+        check(togglesC <= 2,
+              "reservation-wall diag (with collisionSurface): the render mesh's hole lines up with the analytical "
+              "wall closely enough that the ship doesn't repeatedly toggle airborne near the gap edge (got " +
+                  std::to_string(togglesC) + " toggles)");
         check(finalSpeedC > 100.0, "reservation-wall diag (with collisionSurface): speed recovers after the bounce");
       }
     }
@@ -1018,10 +1019,216 @@ int main(int argc, char** argv) {
       check(!everWentPositiveAfterHit,
             "reverse-gear diag: a reverse-gear wall hit doesn't flip the car into forward gear");
       check(railHits <= 3, "reverse-gear diag: no repeated bounce-reverse-rebounce loop against the same wall (got " +
-                                std::to_string(railHits) + " hits)");
+                               std::to_string(railHits) + " hits)");
       check(ship.physics.groundPos.z < startZ - 700.0,
             "reverse-gear diag: the car makes steady net progress backward through the reservation's area, not stuck "
             "oscillating in place");
+    }
+  }
+
+  {
+    // Reverse-gear regression on the corridor wall, where the road's *width* changes. Reversing
+    // near the edge of a narrowing section, the shrinking hiS crosses under the car's lateral
+    // offset with the car travelling dead straight -- `into` is exactly 0, so there is no impulse
+    // and no bounce, yet the old code still rewrote speed/moveDir from the raw velocity: speed
+    // flipped -33 to +32.34 and moveDir inverted 180 degrees. Held brake then decelerated that
+    // positive speed back through zero while grip swung moveDir around to meet forward again,
+    // slewing the car sideways to a near halt -- the reported "stutters and can get blocked at
+    // certain place where the track width is not constant". Fix: only touch speed/moveDir when
+    // into > 0, and preserve the gear sign when doing so.
+    json input;
+    input["version"] = 11;
+    input["name"] = "diag-reverse-width";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    // Wide at the far end, narrow in the middle: reversing from t~0.85 back toward the middle runs
+    // the car along a converging edge for hundreds of metres.
+    path["points"].push_back({{"type", "width"}, {"t", 0.0}, {"width", 16.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.45}, {"width", 16.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.75}, {"width", 46.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 1.0}, {"width", 46.0}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "reverse-width diag track loads: " + loaded.error);
+    if (loaded) {
+      Simulation sim(*loaded.track);
+      Ship ship;
+      const auto& centerline = loaded.track->paths[0].centerline;
+      const Frame& startFrame = centerline[static_cast<std::size_t>(std::lround(0.85 * (centerline.size() - 1)))];
+      Sample startSample;
+      startSample.pos = startFrame.pos;
+      startSample.tangent = startFrame.tangent;
+      startSample.edgeRight = startFrame.edgeRight;
+      startSample.normal = startFrame.normal;
+      startSample.sLeft = startFrame.sLeft;
+      startSample.sRight = startFrame.sRight;
+      startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+      startSample.crossSectionTightness = startFrame.crossSectionTightness;
+      // Start inside the wide section's right edge -- comfortably within its wall margin there, but
+      // outside the limit the narrow section further back will present.
+      const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, startFrame.sRight - 4.0);
+      sim.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+      Physics& p = ship.physics;
+      const double startZ = p.groundPos.z;
+      bool everWentPositive = false, finite = true, everSlow = false;
+      for (int i = 0; i < 1200 && finite; i++) {
+        ship.step(sim, 1.0 / 60.0, 0.0, 1.0, 0.0);
+        // Once up to the reverse cap the car should stay pinned there; the wall may only ever slow
+        // it via a genuine impulse, and there is none to be had reversing straight down a taper.
+        if (i > 120) {
+          if (p.speed > 0.0) everWentPositive = true;
+          if (p.speed > -30.0) everSlow = true;
+        }
+        finite = std::isfinite(p.groundPos.x) && std::isfinite(p.groundPos.z) && std::isfinite(p.speed);
+      }
+      check(finite, "reverse-width diag: position/speed stays finite for 1200 steps");
+      check(!everWentPositive,
+            "reverse-width diag: a narrowing corridor wall doesn't flip the reversing car into forward gear");
+      check(!everSlow,
+            "reverse-width diag: brushing the narrowing wall doesn't bleed speed off a car that never "
+            "actually drove into it");
+      // 1200 steps at 60Hz is 20s; capped reverse (-33 m/s) covers 660m, and the car spends the
+      // first ~2s getting up to that cap.
+      check(p.groundPos.z < startZ - 640.0,
+            "reverse-width diag: the car backs steadily through the narrowing section rather than juddering to a "
+            "halt (travelled " +
+                std::to_string(startZ - p.groundPos.z) + "m)");
+    }
+  }
+
+  {
+    // Wall-pinning regression, the *actual* cause of the reported "gets blocked where the track
+    // width is not constant" (the gear fix above was necessary but not sufficient). When a ship is
+    // laterally outside the corridor, `forceCurrentWall` deliberately keeps the sample taken at the
+    // ship's OLD position instead of re-sampling at newPos. But the position is then rebuilt as
+    // curvedSurfaceFrame(c, finalS) = c.pos + edgeRight*finalS + normal*lift, which has no
+    // tangential term -- and `s`, the only channel newPos had into that expression, is clamped away
+    // by finalS. So groundPos became a pure function of the OLD groundPos with velocity contributing
+    // exactly nothing: a ship on the wall maps to itself and freezes there permanently, at full
+    // indicated speed. A *narrowing* section is what makes it latch, because the shrinking hiS
+    // re-clamps the ship every frame and keeps forceCurrentWall true. Modelled on the reported
+    // track's own profile: a wide bulge (36 -> 157 -> 36) with the ship reversing out of it.
+    json input;
+    input["version"] = 11;
+    input["name"] = "diag-wall-pinning";
+    json points = json::array();
+    const int positions = 12;
+    for (int i = 0; i < positions; i++) {
+      const double a = 2.0 * 3.14159265358979323846 * i / positions;
+      points.push_back({{"type", "position"}, {"pos", {600.0 * std::cos(a), 0.0, 600.0 * std::sin(a)}}});
+    }
+    json path = {{"id", "p0"}, {"closed", true}, {"points", points}};
+    path["points"].push_back({{"type", "width"}, {"t", 0.0}, {"width", 36.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.10}, {"width", 36.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.16}, {"width", 157.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.22}, {"width", 36.0}});
+    path["points"].push_back({{"type", "width"}, {"t", 0.50}, {"width", 36.0}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "wall-pinning diag track loads: " + loaded.error);
+    if (loaded) {
+      Simulation sim(*loaded.track);
+      const auto& centerline = loaded.track->paths[0].centerline;
+      const Frame& startFrame = centerline[static_cast<std::size_t>(std::lround(0.16 * (centerline.size() - 1)))];
+      Sample startSample;
+      startSample.pos = startFrame.pos;
+      startSample.tangent = startFrame.tangent;
+      startSample.edgeRight = startFrame.edgeRight;
+      startSample.normal = startFrame.normal;
+      startSample.sLeft = startFrame.sLeft;
+      startSample.sRight = startFrame.sRight;
+      startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+      startSample.crossSectionTightness = startFrame.crossSectionTightness;
+      // Start deep inside the bulge, 75% of the way out to its edge: reversing (decreasing t) runs
+      // the ship out of the 157-wide section into the 36-wide one, closing the wall onto it.
+      const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, startFrame.sRight * 0.75);
+      Ship ship;
+      sim.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+      Physics& p = ship.physics;
+
+      double travelled = 0.0;
+      Vec3 previous = p.groundPos;
+      int frozenFrames = 0, worstFrozenRun = 0;
+      bool finite = true;
+      for (int i = 0; i < 900 && finite; i++) {
+        ship.step(sim, 1.0 / 60.0, 0.0, 1.0, 0.0);
+        const double moved = std::hypot(p.groundPos.x - previous.x, p.groundPos.z - previous.z);
+        travelled += moved;
+        // "Frozen" = indicating real speed while not actually moving. That is the signature of the
+        // bug; a legitimately stopped car has speed ~0 too.
+        if (i > 60 && moved < 1e-9 && std::fabs(p.speed) > 1.0) {
+          ++frozenFrames;
+          worstFrozenRun = std::max(worstFrozenRun, frozenFrames);
+        } else {
+          frozenFrames = 0;
+        }
+        previous = p.groundPos;
+        finite = std::isfinite(p.groundPos.x) && std::isfinite(p.groundPos.z) && std::isfinite(p.speed);
+      }
+      check(finite, "wall-pinning diag: position/speed stays finite for 900 steps");
+      check(worstFrozenRun == 0,
+            "wall-pinning diag: the ship never freezes in place while indicating speed (longest "
+            "frozen run " +
+                std::to_string(worstFrozenRun) + " frames)");
+      // 900 frames at 60Hz is 15s; capped reverse (-33 m/s) covers 495m, less the ~2s spent
+      // reaching the cap. Pinned, the old code managed ~145m of that.
+      check(travelled > 450.0,
+            "wall-pinning diag: the ship slides along the narrowing wall instead of locking onto "
+            "it (travelled " +
+                std::to_string(travelled) + "m of ~495m ideal)");
+    }
+  }
+
+  {
+    // The same pinning defect in forward gear, which CENTRAL_RESERVATION_PLAN.md section 4 had
+    // logged separately as "an unsteered car driving straight through a sharp curve can grind to a
+    // permanent halt against the outer corridor wall". Same root cause, same fix: an unsteered
+    // full-throttle car runs out to the outer wall of a closed circle and must then keep sliding
+    // along it, not stop dead. Before the fix this froze after ~150m.
+    json input;
+    input["version"] = 11;
+    input["name"] = "diag-unsteered-curve";
+    json points = json::array();
+    const int positions = 12;
+    for (int i = 0; i < positions; i++) {
+      const double a = 2.0 * 3.14159265358979323846 * i / positions;
+      points.push_back({{"type", "position"}, {"pos", {300.0 * std::cos(a), 0.0, 300.0 * std::sin(a)}}});
+    }
+    input["paths"] = json::array({{{"id", "p0"}, {"closed", true}, {"points", points}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "unsteered-curve diag track loads: " + loaded.error);
+    if (loaded) {
+      Simulation sim(*loaded.track);
+      const Frame& startFrame = loaded.track->paths[0].centerline[0];
+      Sample startSample;
+      startSample.pos = startFrame.pos;
+      startSample.tangent = startFrame.tangent;
+      startSample.edgeRight = startFrame.edgeRight;
+      startSample.normal = startFrame.normal;
+      startSample.sLeft = startFrame.sLeft;
+      startSample.sRight = startFrame.sRight;
+      startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+      startSample.crossSectionTightness = startFrame.crossSectionTightness;
+      const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, 0.0);
+      Ship ship;
+      sim.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+      Physics& p = ship.physics;
+
+      double travelled = 0.0, slowest = 1e9;
+      Vec3 previous = p.groundPos;
+      for (int i = 0; i < 1800; i++) {
+        ship.step(sim, 1.0 / 60.0, 1.0, 0.0, 0.0);  // full throttle, zero steering
+        travelled += std::hypot(p.groundPos.x - previous.x, p.groundPos.z - previous.z);
+        previous = p.groundPos;
+        if (i > 600) slowest = std::min(slowest, std::fabs(p.speed));
+      }
+      check(travelled > 1500.0,
+            "unsteered-curve diag: an unsteered car keeps sliding along the outer wall rather "
+            "than grinding to a halt (travelled " +
+                std::to_string(travelled) + "m in 30s)");
+      check(slowest > 20.0, "unsteered-curve diag: its speed doesn't bleed away against the wall (slowest " +
+                                std::to_string(slowest) + " m/s)");
     }
   }
 

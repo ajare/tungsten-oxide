@@ -11,7 +11,7 @@
 namespace editor {
 
 class History {
- public:
+public:
   // Call once *before* mutating, capturing pre-edit state -- one discrete edit or one continuous
   // gesture (a drag, a field edit) = one recorded step, matching editor.js's pushUndo() contract.
   void push(const TrackDefinition& current) {
@@ -43,10 +43,15 @@ class History {
     return restored;
   }
 
+  void clear() {
+    undoStack_.clear();
+    redoStack_.clear();
+  }
+
   std::size_t undoDepth() const { return undoStack_.size(); }
   std::size_t redoDepth() const { return redoStack_.size(); }
 
- private:
+private:
   static constexpr std::size_t kMaxHistory = 30;
   std::deque<TrackDefinition> undoStack_;
   std::deque<TrackDefinition> redoStack_;

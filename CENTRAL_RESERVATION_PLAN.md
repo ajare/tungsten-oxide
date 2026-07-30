@@ -202,6 +202,10 @@ with zero reservations involved, so it's a latent issue in the pre-existing
 outer-wall `hitSign`/`loS,hiS` restitution logic in `Ship.cpp`, not something
 this feature introduced or is positioned to fix.
 
+> **Diagnosed and fixed in 4d.** 4c (gear/speed) left this byte-for-byte
+> unchanged — it is a *positional* defect, not a restitution one, and it turned
+> out to be the same root cause as the reported reverse-gear blocking. See 4d.
+
 ## 4b. Bugfix: reverse-gear wall collision (the actual reported cause)
 
 **Report (follow-up):** happens most when going backwards, in the area near
@@ -239,6 +243,158 @@ total hits stay bounded (≤3, not an unbounded loop), and the car makes
 Confirmed by hand first: before the fix, 34-37 step bounce/rebounce cycles
 repeated indefinitely near the wall; after, two hits total and the car
 proceeds straight through in reverse at (still-negative) top speed.
+
+## 4c. Bugfix: reverse-gear on the outer corridor wall, where width varies
+
+**Report (follow-up to 4b):** reversing in the launcher + tungsten-monoxide
+module still stutters and can get blocked "at certain place where the track
+width is not constant".
+
+**Root cause:** exactly the pattern 4b predicted would still bite — the outer
+`sLeft`/`sRight` wall branch in `Ship.cpp`, untouched by 4b. Two distinct
+defects in one statement pair:
+
+1. **Speed/`moveDir` were rewritten even with no impulse.** `p.speed =
+   vel.length() * weightSpeedRetain(p)` sat *outside* the `if (into > 0)`
+   guard. Crossing `loS`/`hiS` is primarily a positional constraint, and it
+   fires on a car that merely brushed a limit which moved *under* it — which
+   is precisely what a narrowing section does, every frame, to anything
+   tracking near its edge. So a car with literally zero wall contact still
+   paid `weightSpeedRetain` (2%) per frame for as long as the road kept
+   narrowing.
+2. **Gear was discarded**, as in 4b: `vel.length()` is unconditionally
+   non-negative and `moveDir.copy(vel).normalize()` re-points along travel.
+
+The measured trigger, on a 1400m path narrowing 46m→16m with the car reversing
+at the cap 4m inside the wide section's edge: for 348 frames it reverses dead
+straight at -33 m/s while `hiS` shrinks past it; at frame 349 `hiS` (19.975)
+crosses under the car's lateral offset (19.983). `into` is **exactly 0** — no
+bounce whatsoever — yet `speed` flipped `-33` → `+32.34` and `moveDir`
+inverted 180°. Held brake then decelerated that positive speed back through
+zero while grip swung `moveDir` around to meet `forward` again: the car slewed
+sideways and made almost no headway. Over 20s it covered 311m instead of 655m
+and ended at 7.5 m/s.
+
+**Fix:** move the `speed`/`moveDir` recomputation inside `if (into > 0)`, and
+preserve gear there the same way 4b does (`speed = gear * mag *
+weightSpeedRetain`, `moveDir = unitVel * gear`, gated on `mag`, not `speed`).
+Applied to both `cpp/core/src/Ship.cpp` and its JS reference oracle
+`web/js/track-physics.js`; the mesh-platform `slideAlongRails` response in the
+grounded branch got the same gear treatment, so reversing into a platform's
+own rail behaves like reversing into a reservation or the outer wall.
+
+**Verification:** after the fix the same run holds a steady -33 m/s straight
+through the narrowing, sliding inward with `lateral` tracking `hiS` exactly,
+and covers 655m of the ideal 660m. A new `track_tests.cpp` regression pins
+this: finite throughout, speed never goes positive, never rises above -30
+(i.e. no speed bled off a car that never drove into anything), and >640m of
+net backward progress.
+
+**Insufficient on its own — see 4d.** 4c is a real fix (the traces prove the
+no-contact speed drain was happening) but it did *not* clear the reported
+symptom. Verifying against the reporter's own track exposed a second, deeper
+defect that 4c does not touch.
+
+**Parity impact (deliberate, reviewable — see CLAUDE.md):** this changes
+physics, so `npm run gen-traces` was rerun. Only 2 of ~26 committed traces
+moved: `boost-circuit.json` and `raw-session/steps/raw-session-step-lap.json`.
+The `boost-circuit` divergence is a clean demonstration of defect 1 — step 622
+`speed` 134.97 → 137.72, a ratio of exactly 1/0.98, i.e. one frame's worth of
+the spurious no-contact penalty. All parity gates pass with the worst ratios
+*unchanged* from the values documented in CLAUDE.md (7.322e-5 baked-world,
+0.01051 raw-track).
+
+**Latent corpus landmine found and removed while doing this.** Regenerating
+exposed a pre-existing knife-edge in the raw-session lap scenario:
+`raw_session_step_parity` failed with C++ firing the lap one frame before JS
+despite the two agreeing on position to ~1e-14. Cause: the finish trigger was
+hosted at `t: 0.1` and that path bakes to exactly 400 centerline frames, so
+`0.1 * 400 = 40` put the gate's plane *bit-exactly* on frame 40 — and a ship's
+ground position is always `curvedSurfaceFrame(sample, s)`, which has zero
+tangential offset from its own sample's `pos`. Whenever the ship snapped to
+frame 40, `(pos - center).fwd` was therefore exactly zero in exact arithmetic,
+leaving `detectTriggers`' strict `d1 > 0` decided by the last bit. The old
+committed trace sat on this too (its closest approach to the plane was
+**exactly 0.0**), having merely been lucky enough that both languages rounded
+the same way. Fixed structurally by moving the host to `t: 0.10125`, midway
+between frames 40 and 41 (~0.71m of a ~1.42m spacing); closest approach is now
+3.1e-2 m. Any `t` that is an exact multiple of the frame spacing re-creates it.
+Note this was only ever a *parity* fragility, not a gameplay bug — the trigger
+still fires, just one frame later.
+
+## 4d. Bugfix: the ship locks onto the corridor wall (the real blocking cause)
+
+**Report:** "the fix did not work" — reversing in the launcher +
+tungsten-monoxide module still stutters and blocks where the width changes.
+
+**What 4c missed.** 4c was verified only against the *analytical* corridor.
+tungsten-monoxide's `Map.cpp` always installs a `collisionSurface` built from
+the exported `.mppmodel` triangles, so the shipped game runs a code path 4c
+never exercised. Reproducing on the reporter's own `NewTrack.json` — whose
+`starter-path` carries a violent width profile, 36m → 140.5m → 157m → 36m over
+t ∈ [0.096, 0.179] — with a collision surface built exactly as `Map.cpp` builds
+it, the ship reverses cleanly for ~300 frames and then **freezes permanently**
+at one point while still indicating −32.34 m/s. 145m travelled of a 495m ideal.
+No gear flips (4c holds), no airborne transitions.
+
+**Root cause.** In the `forceCurrentWall` case, `Ship::step` deliberately keeps
+`current` — the sample taken at the ship's **old** position — rather than
+re-sampling at `newPos`, so that a ship laterally outside the corridor is
+clamped by a wall it was actually next to. But the position is then rebuilt as
+
+```
+curvedSurfaceFrame(c, finalS) = c.pos + c.edgeRight*finalS + c.normal*lift
+```
+
+which carries **no tangential term at all**, and `s` — the only channel
+`newPos` had into that expression — has just been clamped away by
+`finalS = clamp(s, loS, hiS)`. So `groundPos_{n+1}` is a pure function of
+`groundPos_n`, with velocity contributing *exactly nothing*. A ship already on
+the wall maps to itself: a fixed point it can never leave, at any speed. It is
+a *narrowing* section that latches it, because the shrinking `hiS` re-clamps
+the ship every frame and so holds `forceCurrentWall` true — which is precisely
+why the reporter saw it only "where the track width is not constant". The
+instrumented trace shows the deadlock forming: stuck on sample 150, `s` pinned
+to a shrinking `hiS`, and the along-track offset decaying to `2.13e-14` —
+exactly zero — and staying there.
+
+The non-forced branch has the same tangential-discard but never deadlocks,
+because it re-samples at `newPos` and so advances the station regardless.
+
+**Fix:** in the `forceCurrentWall` case only, add back this step's along-track
+motion after rebuilding the position:
+
+```
+along = (newPos - c.pos) · c.tangent
+surface.pos += c.tangent * along
+```
+
+Velocity now reaches the result, so the ship slides along the wall and
+`sampleTrack` advances the station next frame. The term is self-limiting:
+`sampleTrack` re-projects onto the centerline each frame, so `along` never
+accumulates beyond one frame of travel. Applied to `cpp/core/src/Ship.cpp` and
+its JS oracle `web/js/track-physics.js`.
+
+**This also fixes the section-4 "unsteered car grinds to a halt"** logged above
+as a separate issue — same root cause. That fixture went from freezing after
+151m to driving 2082m (multiple continuous laps) in 30s.
+
+**Verification:** on the reporter's own track with a game-equivalent collision
+surface, the reverse run now covers **496.6m of the 495m ideal** (slightly over,
+since it slides along a wall not quite parallel to the tangent), station
+advancing 148 → 146 → … → 100, no pinning. Two new `track_tests.cpp`
+regressions: a 36 → 157 → 36 bulge reversed out of (asserts never frozen while
+indicating speed, >450m of ~495m travelled) and the unsteered-curve case
+(>1500m in 30s, speed never below 20 m/s). All six assertions across 4c+4d fail
+without the fixes and pass with them.
+
+**Parity impact:** `npm run gen-traces` rerun; 3 of ~26 traces moved in total
+across 4c+4d (`boost-circuit`, `raw-session-step-lap`,
+`raw-curved-banked-native-bake`). All gates pass. Baked-world worst ratio
+unchanged at `7.322e-5`; raw-track worst moved `0.01051` → `0.01129` against a
+`0.1` gate (same `1.42e-14` absolute delta) — CLAUDE.md updated. The browser
+smoke suite's mesh-free lap now reaches 140 m/s / 504 km/h where it previously
+read 138 / 493, a visible consequence of no longer bleeding speed against walls.
 
 ## 5. Notes for implementers
 
