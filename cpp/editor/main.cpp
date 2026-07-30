@@ -2028,11 +2028,25 @@ int main(int, char**) {
 
   std::filesystem::path chooserXmlPath;
   editor::TrackResourceScanResult chooserScan;
+  int chooserSelectedTrack = -1;
   bool openTrackChooser = false;
   std::optional<editor::TrackSavePlan> pendingSavePlan;
   bool openOverwriteConfirmation = false;
   bool openSaveConflict = false;
   std::string saveConflictMessage;
+
+  auto loadTrackCandidate = [&](const editor::TrackResourceCandidate& candidate) {
+    if (!candidate.loadable()) return;
+    std::string modelRef = candidate.modelFileReference;
+    if (!editor::isSafeResourceRelativePath(modelRef))
+      modelRef = editor::sanitizeTrackResourceFilenameStem(candidate.resourceName) + ".mppmodel";
+    editor::TrackSaveBinding binding{chooserXmlPath, candidate.resourceName,
+                                     candidate.trackDataReference, modelRef,
+                                     candidate.resourceFingerprint, candidate.jsonFingerprint};
+    replaceDocument(*candidate.track, std::move(binding), false);
+    showStatus("Loaded Tracks/" + candidate.resourceName +
+               (candidate.warning.empty() ? "" : " -- " + candidate.warning));
+  };
 
   auto finishSuccessfulSave = [&](const editor::TrackSavePlan& plan) {
     saveBinding = plan.resultingBinding;
@@ -2333,7 +2347,7 @@ int main(int, char**) {
       openSaveConflict = false;
     }
     if (openTrackChooser) {
-      ImGui::OpenPopup("Select Track Resource");
+      ImGui::OpenPopup("Load Track from Resources XML");
       openTrackChooser = false;
     }
 
@@ -2413,33 +2427,98 @@ int main(int, char**) {
       ImGui::EndPopup();
     }
 
-    if (ImGui::BeginPopupModal("Select Track Resource", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::Text("Resources: %s", editor::pathToUtf8(chooserXmlPath).c_str());
-      if (chooserScan.tracks.empty()) ImGui::TextUnformatted("No Tracks resources were found.");
-      for (std::size_t i = 0; i < chooserScan.tracks.size(); ++i) {
-        const editor::TrackResourceCandidate& candidate = chooserScan.tracks[i];
-        ImGui::PushID(static_cast<int>(i));
-        ImGui::BeginDisabled(!candidate.loadable());
-        if (ImGui::Selectable(candidate.resourceName.c_str(), false)) {
-          std::string modelRef = candidate.modelFileReference;
-          if (!editor::isSafeResourceRelativePath(modelRef))
-            modelRef = editor::sanitizeTrackResourceFilenameStem(candidate.resourceName) + ".mppmodel";
-          editor::TrackSaveBinding binding{chooserXmlPath, candidate.resourceName,
-                                           candidate.trackDataReference, modelRef,
-                                           candidate.resourceFingerprint, candidate.jsonFingerprint};
-          replaceDocument(*candidate.track, std::move(binding), false);
-          showStatus("Loaded Tracks/" + candidate.resourceName +
-                     (candidate.warning.empty() ? "" : " -- " + candidate.warning));
-          ImGui::CloseCurrentPopup();
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Load Track from Resources XML")) {
+      ImGui::TextUnformatted("Choose a track resource to open.");
+      ImGui::TextDisabled("Resources XML");
+      ImGui::SameLine();
+      ImGui::TextWrapped("%s", editor::pathToUtf8(chooserXmlPath).c_str());
+      ImGui::Separator();
+      ImGui::TextDisabled("%zu track resource%s", chooserScan.tracks.size(),
+                          chooserScan.tracks.size() == 1 ? "" : "s");
+
+      bool acceptSelected = false;
+      constexpr ImGuiTableFlags chooserTableFlags =
+          ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH |
+          ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+          ImGuiTableFlags_SizingStretchProp;
+      if (ImGui::BeginTable("trackResources", 3, chooserTableFlags, ImVec2(0.0f, 270.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Track", ImGuiTableColumnFlags_WidthStretch, 0.34f);
+        ImGui::TableSetupColumn("Track data", ImGuiTableColumnFlags_WidthStretch, 0.46f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 0.20f);
+        ImGui::TableHeadersRow();
+        for (std::size_t i = 0; i < chooserScan.tracks.size(); ++i) {
+          const editor::TrackResourceCandidate& candidate = chooserScan.tracks[i];
+          ImGui::PushID(static_cast<int>(i));
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          if (ImGui::Selectable(candidate.resourceName.c_str(),
+                                chooserSelectedTrack == static_cast<int>(i),
+                                ImGuiSelectableFlags_SpanAllColumns |
+                                    ImGuiSelectableFlags_AllowDoubleClick)) {
+            chooserSelectedTrack = static_cast<int>(i);
+            if (candidate.loadable() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+              acceptSelected = true;
+          }
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tracks/%s", candidate.resourceName.c_str());
+
+          ImGui::TableSetColumnIndex(1);
+          const char* trackData = candidate.trackDataReference.empty()
+                                      ? "(not available)"
+                                      : candidate.trackDataReference.c_str();
+          ImGui::TextUnformatted(trackData);
+          if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trackData);
+
+          ImGui::TableSetColumnIndex(2);
+          if (!candidate.error.empty())
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Invalid");
+          else if (!candidate.warning.empty())
+            ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.25f, 1.0f), "Warning");
+          else
+            ImGui::TextDisabled("Ready");
+          ImGui::PopID();
         }
-        ImGui::EndDisabled();
-        if (!candidate.error.empty())
-          ImGui::TextWrapped("Invalid: %s", candidate.error.c_str());
-        else if (!candidate.warning.empty())
-          ImGui::TextWrapped("Warning: %s", candidate.warning.c_str());
-        ImGui::PopID();
+        ImGui::EndTable();
       }
-      if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+
+      const editor::TrackResourceCandidate* selected =
+          chooserSelectedTrack >= 0 &&
+                  chooserSelectedTrack < static_cast<int>(chooserScan.tracks.size())
+              ? &chooserScan.tracks[static_cast<std::size_t>(chooserSelectedTrack)]
+              : nullptr;
+      if (chooserScan.tracks.empty()) {
+        ImGui::TextDisabled("No Track resources were found in this document.");
+      } else if (selected == nullptr) {
+        ImGui::TextDisabled("Select a track to see its details.");
+      } else if (!selected->error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.35f, 0.35f, 1.0f));
+        ImGui::TextWrapped("Cannot load: %s", selected->error.c_str());
+        ImGui::PopStyleColor();
+      } else if (!selected->warning.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.25f, 1.0f));
+        ImGui::TextWrapped("Warning: %s", selected->warning.c_str());
+        ImGui::PopStyleColor();
+      } else {
+        ImGui::TextDisabled("Ready to load Tracks/%s", selected->resourceName.c_str());
+      }
+
+      ImGui::Separator();
+      const float buttonWidth = 100.0f;
+      const float buttonsWidth = buttonWidth * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+      const float rightAlignedX =
+          ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - buttonsWidth;
+      if (rightAlignedX > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(rightAlignedX);
+      ImGui::BeginDisabled(selected == nullptr || !selected->loadable());
+      if (ImGui::Button("Load Track", ImVec2(buttonWidth, 0.0f))) acceptSelected = true;
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel", ImVec2(buttonWidth, 0.0f))) ImGui::CloseCurrentPopup();
+
+      if (acceptSelected && selected != nullptr && selected->loadable()) {
+        loadTrackCandidate(*selected);
+        ImGui::CloseCurrentPopup();
+      }
       ImGui::EndPopup();
     }
 
@@ -2455,10 +2534,20 @@ int main(int, char**) {
         if (picked.ok) {
           chooserXmlPath = picked.path;
           chooserScan = editor::scanTrackResources(picked.path);
-          if (!chooserScan.validDocument())
+          chooserSelectedTrack = -1;
+          if (!chooserScan.validDocument()) {
             showStatus("Open failed: " + chooserScan.error);
-          else
+          } else {
+            const auto firstLoadable =
+                std::find_if(chooserScan.tracks.begin(), chooserScan.tracks.end(),
+                             [](const editor::TrackResourceCandidate& candidate) {
+                               return candidate.loadable();
+                             });
+            if (firstLoadable != chooserScan.tracks.end())
+              chooserSelectedTrack =
+                  static_cast<int>(std::distance(chooserScan.tracks.begin(), firstLoadable));
             openTrackChooser = true;
+          }
         }
       } else if (action == DocumentAction::ImportJson) {
         const editor::FileDialogResult picked = editor::showOpenFileDialog(
