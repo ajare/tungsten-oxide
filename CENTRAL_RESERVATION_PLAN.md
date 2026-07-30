@@ -1,6 +1,8 @@
 # Central Reservation Plan — median strip on a track path
 
-Status: **in progress.** This document is updated after each milestone lands.
+Status: **M0-M4 complete, M5 partial (core tests done, editor tests + a
+physics-scenario test deferred).** This document is updated after each
+milestone lands.
 Native C++ only (`cpp/core` + `cpp/editor`); the JS reference oracle (`web/`) is
 deliberately NOT touched — JS is slated for retirement and is allowed to diverge.
 
@@ -132,9 +134,18 @@ lane for that span.
     defaults to **true** — the wall is real gameplay geometry a player must
     see, not a debug aid; the checkbox exists to let it be hidden for
     inspecting the physics wall's alignment without the mesh in the way.
-- [ ] **M5 — Tests.** `track_tests.cpp`: schema round-trip, baked gap/rail
-  geometry shape, a physics scenario driving into the wall. Editor-side
-  mutation/validation tests alongside the existing `cpp/editor/tests/`.
+- [~] **M5 — Tests (core done, editor deferred).** `track_tests.cpp` covers
+  schema version acceptance (10 and 11, rejects other), reservation parsing/
+  clamping/dropping degenerate entries, and baking correctness (synthetic
+  `MeshRegion` shape, `ReservationWall` batch present, no surface vertex
+  lands in the void at full taper width). Not yet covered: a `Ship`-level
+  physics scenario actually driving into the M2 wall (would need a
+  `Simulation`/`Ship` harness scenario, not just loader/bake assertions),
+  and `EditorState`'s reservation add/edit/delete/clamp methods have no
+  dedicated test alongside `cpp/editor/tests/track_resource_tests.cpp`.
+  Both are reasonable follow-ups, not done here given time/resource limits
+  on this pass (this machine is memory-constrained for parallel MSVC builds
+  — full-solution builds must run target-by-target, not `-m` all-core).
 
 ## 4. Notes for implementers
 
