@@ -1,9 +1,10 @@
 # Central Reservation Plan — median strip on a track path
 
 Status: **M0-M4 complete, M5 partial (core tests done, editor tests
-deferred). Post-M5: fixed a render/physics wall-alignment bug reported as
-"ship physics breaks near the central reservation" (see §4).** This
-document is updated after each milestone lands.
+deferred). Post-M5: fixed two bugs reported as "ship physics breaks near
+the central reservation" — a render/physics wall-alignment mismatch, and
+(the actual reported cause) a reverse-gear wall collision bug — see §4.**
+This document is updated after each milestone lands.
 Native C++ only (`cpp/core` + `cpp/editor`); the JS reference oracle (`web/`) is
 deliberately NOT touched — JS is slated for retirement and is allowed to diverge.
 
@@ -200,6 +201,44 @@ the *outer* corridor wall, bleeding speed to zero — reproduced identically
 with zero reservations involved, so it's a latent issue in the pre-existing
 outer-wall `hitSign`/`loS,hiS` restitution logic in `Ship.cpp`, not something
 this feature introduced or is positioned to fix.
+
+## 4b. Bugfix: reverse-gear wall collision (the actual reported cause)
+
+**Report (follow-up):** happens most when going backwards, in the area near
+the reservation rather than exactly on it; user suspected the width being
+different was a factor.
+
+**Root cause:** M2's `slideAlongRails` collision response in `Ship.cpp`'s
+grounded branch set `p.speed = std::hypot(vel.x, vel.z) * weightSpeedRetain(p)`
+— always non-negative — and re-pointed `moveDir` to match, gated on
+`p.speed > 1e-6`. A car backing (reverse gear, negative `speed`) into the
+wall got flipped into forward gear on impact; holding reverse the whole
+time then decelerated that new positive speed back down through zero and
+into reverse again along the *rotated* post-bounce heading, driving the car
+straight back into the same wall from a slightly different angle each
+time — an unbounded bounce/reverse/rebounce loop. (The pre-existing outer
+`sLeft`/`sRight` wall code has the identical pattern, so this likely isn't
+new to reservations in principle — but backing into a median in the middle
+of the road is a far more everyday maneuver than backing off the track's
+outer edge, so reservations make it dramatically easier to trigger.)
+
+**Fix:** preserve gear across the bounce — `speed = gear * hypot(vel) *
+weightSpeedRetain(p)` where `gear = sign(pre-collision speed)`, and
+`moveDir` reoriented to `unitVel * gear` (so `moveDir * speed` still
+reproduces the actual post-bounce velocity vector) instead of `unitVel`
+unconditionally. The `moveDir` update is now gated on the velocity
+*magnitude* being nonzero, not on `speed > 1e-6` (which was never true
+while reversing, leaving `moveDir` stale in the original bug regardless of
+the sign fix).
+
+**Verification:** a new `track_tests.cpp` regression backs a ship through a
+reservation's tapered area for 1600 steps. Asserts: finite throughout, at
+least one real wall hit occurs, speed never flips positive after a hit,
+total hits stay bounded (≤3, not an unbounded loop), and the car makes
+~700+ units of real net backward progress rather than stalling in place.
+Confirmed by hand first: before the fix, 34-37 step bounce/rebounce cycles
+repeated indefinitely near the wall; after, two hits total and the car
+proceeds straight through in reverse at (still-negative) top speed.
 
 ## 5. Notes for implementers
 

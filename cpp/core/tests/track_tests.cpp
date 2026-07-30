@@ -962,6 +962,69 @@ int main(int argc, char** argv) {
     }
   }
 
+  {
+    // Reverse-gear regression: a car backing into a reservation wall must stay in reverse after
+    // the bounce, not get flipped into forward gear (CENTRAL_RESERVATION_PLAN.md M2 bugfix). The
+    // original bug: the collision response set `speed = hypot(vel)` (always non-negative) and
+    // re-pointed moveDir to match, discarding which gear the car was in. Holding reverse the whole
+    // time then decelerated the now-positive speed back down through zero and into reverse again
+    // along the NEW (rotated) heading, driving the car straight back into the same wall from a
+    // different angle -- an unbounded bounce-reverse-rebounce loop, worse near a reservation than
+    // the track's outer edge since backing into a median is far more common than backing off-track.
+    json input;
+    input["version"] = 11;
+    input["name"] = "diag-reverse";
+    json points = json::array();
+    for (int i = 0; i < 8; i++) points.push_back({{"type", "position"}, {"pos", {0.0, 0.0, i * 200.0}}});
+    json path = {{"id", "p0"}, {"closed", false}, {"points", points}};
+    path["reservations"] = json::array({{{"id", "res1"}, {"t0", 0.45}, {"t1", 0.55}, {"width", 16.0}}});
+    input["paths"] = json::array({path});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "reverse-gear diag track loads: " + loaded.error);
+    if (loaded) {
+      Simulation sim(*loaded.track);
+      Ship ship;
+      const auto& centerline = loaded.track->paths[0].centerline;
+      // Start near the end of the path (past the reservation, t~0.86), offset 3 units laterally
+      // (inside a lane, not the gap), facing forward (+z) but driving in reverse the whole time --
+      // moves backward (-z) through the reservation's tapered area.
+      const Frame& startFrame = centerline[static_cast<std::size_t>(std::lround(0.86 * (centerline.size() - 1)))];
+      Sample startSample;
+      startSample.pos = startFrame.pos;
+      startSample.tangent = startFrame.tangent;
+      startSample.edgeRight = startFrame.edgeRight;
+      startSample.normal = startFrame.normal;
+      startSample.sLeft = startFrame.sLeft;
+      startSample.sRight = startFrame.sRight;
+      startSample.crossSectionCurvature = startFrame.crossSectionCurvature;
+      startSample.crossSectionTightness = startFrame.crossSectionTightness;
+      const SurfaceFrame startSurface = curvedSurfaceFrame(startSample, 3.0);
+      sim.placeShipAtPose(ship, Pose{startSurface.pos, startSurface.normal, startFrame.tangent}, {});
+      int railHits = 0;
+      bool everWentPositiveAfterHit = false;
+      double startZ = ship.physics.groundPos.z;
+      bool finite = true;
+      for (int i = 0; i < 1600 && finite; i++) {
+        const StepResult step = ship.step(sim, 1.0 / 60.0, 0.0, 1.0, 0.0);
+        if (step.railHit) {
+          ++railHits;
+          if (ship.physics.speed > 1.0) everWentPositiveAfterHit = true;
+        }
+        finite = std::isfinite(ship.physics.groundPos.x) && std::isfinite(ship.physics.groundPos.z) &&
+                 std::isfinite(ship.physics.speed);
+      }
+      check(finite, "reverse-gear diag: position/speed stays finite for 1600 steps");
+      check(railHits >= 1, "reverse-gear diag: backing past the reservation actually grazes the wall");
+      check(!everWentPositiveAfterHit,
+            "reverse-gear diag: a reverse-gear wall hit doesn't flip the car into forward gear");
+      check(railHits <= 3, "reverse-gear diag: no repeated bounce-reverse-rebounce loop against the same wall (got " +
+                                std::to_string(railHits) + " hits)");
+      check(ship.physics.groundPos.z < startZ - 700.0,
+            "reverse-gear diag: the car makes steady net progress backward through the reservation's area, not stuck "
+            "oscillating in place");
+    }
+  }
+
   if (failures) {
     std::cerr << failures << " track loader test(s) failed\n";
     return 1;

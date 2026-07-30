@@ -168,9 +168,19 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       newPos.z = moved.z;
       vel.x = velocity.x;
       vel.z = velocity.y;
-      p.speed = std::hypot(vel.x, vel.z) * weightSpeedRetain(p);
-      addImpactJolt(p, before - std::hypot(vel.x, vel.z));
-      if (p.speed > 1e-6) p.moveDir.set(vel.x, 0, vel.z).normalize();
+      // Preserve gear (forward/reverse), unlike a plain `vel.length()`/`vel.normalize()` decomposition
+      // (the outer sLeft/sRight wall's own pattern, further down this function): that always yields a
+      // non-negative speed and reorients moveDir to match, which forces the car into forward gear on
+      // every bounce. Driving in reverse into this wall repeatedly (a median is far more likely to be
+      // backed into than the track's outer edge) then oscillates forever -- brake keeps decelerating
+      // the now-positive speed back through zero into reverse, sending the car back into the same
+      // wall from a slightly different angle each time, denied any use of its resulting outward
+      // impulse to actually escape it (physics-breaks report -- CENTRAL_RESERVATION_PLAN.md M2).
+      const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+      const double mag = std::hypot(vel.x, vel.z);
+      p.speed = gear * mag * weightSpeedRetain(p);
+      addImpactJolt(p, before - mag);
+      if (mag > 1e-6) p.moveDir.set(vel.x * gear, 0, vel.z * gear).normalize();
     }
 
     const Sample current = c;
