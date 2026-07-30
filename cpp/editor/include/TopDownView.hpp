@@ -1,8 +1,6 @@
-// TopDownView.hpp — camera/view state for the top-down 2D canvas
-// (EDITOR_CPP_PORT_PLAN.md M2), mirroring web/js/editor.js's view/topZoom/topPan model exactly:
-// an auto-fit-to-track-bounds scale times a user zoom multiplier, plus a screen-pixel pan offset
-// measured from the auto-fit center. See editor.js's computeView/worldToScreen/screenToWorld/
-// zoomTopAt (web/js/editor.js:700-745, :4533-4541).
+// TopDownView.hpp — camera/view state for the top-down 2D canvas: an auto-fit-to-track-bounds
+// scale times a user zoom multiplier, plus a screen-pixel pan offset measured from the auto-fit
+// center. See computeView/worldToScreen/screenToWorld/zoomAt below.
 #pragma once
 
 #include <algorithm>
@@ -25,8 +23,7 @@ struct ScreenPoint2D {
 
 class TopDownView {
  public:
-  // Same slider range as editor.js's TOP_ZOOM_SLIDER_MIN/MAX: 50 log2 units per doubling,
-  // -100..250 => 0.25x..32x.
+  // 50 log2 units per doubling, -100..250 => 0.25x..32x.
   static constexpr double kZoomSliderMin = -100.0;
   static constexpr double kZoomSliderMax = 250.0;
   static constexpr double kMargin = 30.0;  // px of breathing room around the auto-fit bounds
@@ -74,8 +71,7 @@ class TopDownView {
     panX_ = panY_ = 0.0;
   }
 
-  // Pans+zooms so `target` is centered and framed in the viewport (new functionality -- js/
-  // editor.js has no equivalent; only Home's reset-to-defaults exists). `wholeBounds` MUST be the
+  // Pans+zooms so `target` is centered and framed in the viewport. `wholeBounds` MUST be the
   // same whole-track bounds computeView()/zoomAt() are fed every frame: panX_/panY_ and the zoom
   // slider's 0-point are both defined relative to THAT bounds' own auto-fit center/scale, not an
   // absolute world origin, so focusing has to work within that same frame of reference (mirrors
@@ -103,20 +99,18 @@ class TopDownView {
   double zoomMultiplier() const { return std::pow(2.0, zoomSlider_ / 50.0); }
   double scale() const { return scale_; }
 
-  // Raw slider value in [kZoomSliderMin, kZoomSliderMax] (0 => 1x, 50 units per doubling) --
-  // mirrors editor.js's #topZoomSlider. Unlike zoomAt(), setZoomSlider() does NOT re-anchor on a
-  // screen point: editor.js's own topZoomSlider 'input' handler calls setTopZoomSliderValue()
-  // directly (not zoomTopAt()), so dragging the slider zooms about the view's current center
-  // (auto-fit center + pan), the same way this method does by leaving panX_/panY_ untouched.
+  // Raw slider value in [kZoomSliderMin, kZoomSliderMax] (0 => 1x, 50 units per doubling).
+  // Unlike zoomAt(), setZoomSlider() does NOT re-anchor on a screen point: dragging the zoom
+  // slider zooms about the view's current center (auto-fit center + pan) by leaving
+  // panX_/panY_ untouched.
   double zoomSlider() const { return zoomSlider_; }
   void setZoomSlider(double value) { zoomSlider_ = std::clamp(value, kZoomSliderMin, kZoomSliderMax); }
 
-  // The world point currently at the viewport's centre pixel -- mirrors editor.js's
-  // screenToWorld(view.w/2, view.h/2), used to centre a freshly imported mesh asset (M9) when the
-  // caller has no click position to place it at.
+  // The world point currently at the viewport's centre pixel, used to centre a freshly imported
+  // mesh asset (M9) when the caller has no click position to place it at.
   WorldPoint2D center() const { return screenToWorld(width_ / 2.0, height_ / 2.0); }
 
-  // Mirrors editor.js's frozenViewBounds: while a point is being dragged, computeView() must keep
+  // While a point is being dragged, computeView() must keep
   // using the bounds captured *before* the drag started, not the ones the moving point produces
   // each frame -- otherwise the auto-fit view fights the drag (it re-centers/rescales around the
   // very point the user is trying to move, so the point barely appears to move on screen at all).
@@ -125,8 +119,7 @@ class TopDownView {
   }
   void releaseBoundsFreeze() { frozenBounds_.reset(); }
 
-  // Top-down grid display / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
-  // module-level showGrid/gridSize/snapToGrid: UI/view preferences, not track data, so they live
+  // Top-down grid display / snap-to-grid: UI/view preferences, not track data, so they live
   // here rather than in EditorState/undo history. showGrid(false) does NOT clear snapToGrid_ --
   // the checkbox's own preference is retained so re-showing the grid restores the prior snap
   // setting (CLAUDE.md's editor conventions), and snapWorldXZ() re-checks showGrid_ itself so a
@@ -138,26 +131,23 @@ class TopDownView {
   bool snapToGrid() const { return snapToGrid_; }
   void setSnapToGrid(bool snap) { snapToGrid_ = snap; }
 
-  // Mirrors snapWorldXZ(): a no-op unless both the grid is visible and snap is enabled.
+  // A no-op unless both the grid is visible and snap is enabled.
   WorldPoint2D snapWorldXZ(const WorldPoint2D& w) const {
     if (!showGrid_ || !snapToGrid_) return w;
     return {std::round(w.x / gridSize_) * gridSize_, std::round(w.z / gridSize_) * gridSize_};
   }
 
-  // Render mode / point-type filters / physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10),
-  // mirroring editor.js's module-level renderMode/pointFilters/showPhysicsPoints/physicsSel: all
-  // view/UI preferences, not track data, so -- like grid/snap above -- they live here rather than
-  // in EditorState/undo history.
+  // Render mode / point-type filters / physics-sample overlay: all view/UI preferences, not track
+  // data, so -- like grid/snap above -- they live here rather than in EditorState/undo history.
   enum class RenderMode { Banked, Flat, Elevation };
 
   RenderMode renderMode() const { return renderMode_; }
   void setRenderMode(RenderMode mode) { renderMode_ = mode; }
 
   // Only `showPositionPoints` currently has an observable effect: roll/width/crossSection points
-  // have no on-canvas presence at all yet in this editor (EDITOR_PARITY_FIXES.md gap 1 -- they're
-  // panel-only), so hiding/showing them here is a no-op until that on-canvas rendering exists.
-  // The fields and accessors still exist so the toolbar checkboxes match web/editor.html's four,
-  // rather than silently dropping three of them.
+  // have no on-canvas presence at all yet in this editor (they're panel-only), so hiding/showing
+  // them here is a no-op until that on-canvas rendering exists. The fields and accessors still
+  // exist so the toolbar keeps all four checkboxes, rather than silently dropping three of them.
   bool showPositionPoints() const { return showPositionPoints_; }
   void setShowPositionPoints(bool show) { showPositionPoints_ = show; }
   bool showRollPoints() const { return showRollPoints_; }
@@ -172,7 +162,7 @@ class TopDownView {
   };
 
   bool showPhysicsPoints() const { return showPhysicsPoints_; }
-  // Mirrors setPhysicsPointsVisible: hiding the overlay also drops any active selection, since a
+  // Hiding the overlay also drops any active selection, since a
   // hidden dot can't stay "selected" in any way the user can see.
   void setShowPhysicsPoints(bool show) {
     showPhysicsPoints_ = show;
@@ -185,7 +175,7 @@ class TopDownView {
  private:
   double scale_{1.0}, originX_{0.0}, originY_{0.0};
   double width_{1.0}, height_{1.0};
-  double zoomSlider_{0.0};  // 0 => 1x, matching editor.js's initial topZoom = 1
+  double zoomSlider_{0.0};  // 0 => 1x
   double panX_{0.0}, panY_{0.0};
   std::optional<TrackBounds2D> frozenBounds_;
   bool showGrid_{true};

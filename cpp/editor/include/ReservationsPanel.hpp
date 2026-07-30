@@ -1,5 +1,5 @@
 // ReservationsPanel.hpp — central-reservation list + t0/t1/width fields (CENTRAL_RESERVATION_PLAN.md
-// M3). No JS equivalent or oracle -- native C++ only. Panel-only authoring, matching the current
+// M3). Panel-only authoring, matching the current
 // state of roll/width/cross-section points: no on-canvas click-to-place or drag.
 #pragma once
 

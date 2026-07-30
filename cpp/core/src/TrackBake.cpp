@@ -1,6 +1,5 @@
 // TrackBake.cpp — current-schema authored spline paths to world-space physics
-// frames and graphics-API-agnostic triangle batches. The operation order mirrors
-// web/track-core.js, web/js/track-bake.js and web/js/track-render-geometry.js for parity.
+// frames and graphics-API-agnostic triangle batches.
 #include "TrackBake.hpp"
 #include "Simulation.hpp"
 #include "TrackCore.hpp"
@@ -282,11 +281,11 @@ std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition
     }
     return span <= TrackCore::DEFAULT_SELF_INTERSECTION_SPAN;
   };
-  // Full, UNBOUNDED pairwise scan on the RAW (pre-collapse) points -- EDITOR_PARITY_GAPS.md gap 1:
+  // Full, UNBOUNDED pairwise scan on the RAW (pre-collapse) points: finds
   // every self-intersection this edge has, regardless of span, so the editor can show/cycle markers
   // for far ("auto-keep") crossings too, not just the near ones the bounded collapse pass below
-  // actually acts on. Mirrors web/web/track-core.js's findSelfIntersections, which is likewise a
-  // separate, unbounded scan from removeLocalSelfIntersectionLoops's own bounded one. Only run when
+  // actually acts on -- a separate, unbounded scan from removeLocalSelfIntersectionLoops's own
+  // bounded one. Only run when
   // the caller wants it (`outCrossings != nullptr`) -- this is the expensive O(segmentCount^2) half
   // of this function; the editor skips it while a drag is in progress and reuses its last result
   // (see Track::fromJson's `detectSelfIntersections` parameter).
@@ -552,7 +551,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   top.b.id = "path-" + std::to_string(pi) + "-surface";
   top.b.kind = GeometryKind::PathSurface;
   // Falls back to the legacy "road" literal when no TrackMaterial was authored (see
-  // PathDefinition::material's comment) -- preserves JS<->C++ parity for tracks without it.
+  // PathDefinition::material's comment) -- preserves output for tracks without it.
   top.b.materialKey = def.material.empty() ? "road" : def.material;
   top.b.hasUv = true;
   if (def.texture) top.b.texture = TextureBinding{def.texture->assetId, def.texture->tile};
@@ -897,9 +896,8 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       if (!hasBranch) {
         const bool wrapsAtSeam = !definition.closed && parts.cp.front()->id == parts.cp.back()->id &&
                                  track.connectedEndpointIds.count(parts.cp.front()->id);
-        // Branch-connected paths (the `hasBranch` guard above) intentionally skip detection too,
-        // same as JS's `bp.hasBranchConnection ? [] : detectPathCrossings(...)` -- their authored
-        // geometry is deliberately left unaltered by self-intersection handling.
+        // Branch-connected paths (the `hasBranch` guard above) intentionally skip detection too --
+        // their authored geometry is deliberately left unaltered by self-intersection handling.
         bakedEdges[i].left = removeSelfLoops(std::move(bakedEdges[i].left), definition, "left", wrapsAtSeam,
                                              track.definition.selfIntersectionOverrides,
                                              detectSelfIntersections ? &track.selfIntersections : nullptr);
@@ -1151,9 +1149,8 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         continue;
       }
       {
-        // Gate quad matching track-game.js's buildTriggerDebugMesh corners exactly (c0=(-1,0),
-        // c1=(1,0), c2=(1,1), c3=(-1,1) in right/up space, same two-triangle split) -- this is the
-        // renderer-neutral counterpart of that debug-only three.js quad, not a new shape.
+        // Gate quad corners (c0=(-1,0), c1=(1,0), c2=(1,1), c3=(-1,1) in right/up space, same
+        // two-triangle split) match the game's own trigger debug-overlay quad exactly.
         Builder trig;
         trig.b.id = "trigger-" + t.id;
         trig.b.kind = GeometryKind::TriggerSurface;

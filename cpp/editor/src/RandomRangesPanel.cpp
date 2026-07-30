@@ -12,8 +12,8 @@ namespace {
 double clampNum(double v, double lo, double hi, double fallback) { return std::isfinite(v) ? std::clamp(v, lo, hi) : fallback; }
 int clampInt(int v, int lo, int hi) { return std::clamp(v, lo, hi); }
 
-// Direct port of sanitizeRandomRanges (web/js/editor.js:3679-3711): clamps every field to its own
-// range, then fixes each min/max pair's ordering so a lerp never sees max < min.
+// Clamps every field to its own range, then fixes each min/max pair's ordering so a lerp never
+// sees max < min.
 void sanitize(RandomTrackRanges& r) {
   const RandomTrackRanges d;  // default-constructed == RANDOM_RANGE_DEFAULTS
   r.lengthMin = clampNum(r.lengthMin, 500.0, 100000.0, d.lengthMin);

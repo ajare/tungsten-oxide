@@ -4,8 +4,8 @@
 #               Willpower.Geometry, ...) — see willpower/CMakeLists.txt.
 #   willpower/willpower.application/  Willpower's application/resource-system
 #               library — see willpower/willpower.application/CMakeLists.txt.
-#   core/       the track-physics engine ported from js/track-physics.js,
-#               parity-tested against the JS oracle — see core/CMakeLists.txt.
+#   core/       the track-physics engine, checked against a committed golden fixture/trace
+#               corpus — see core/CMakeLists.txt.
 #   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
 #   launcher/   Windows host for a Willpower application DLL — see
 #               launcher/CMakeLists.txt.

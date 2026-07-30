@@ -1,12 +1,11 @@
-// Vec3.hpp — hand-rolled double-precision 3D vector, a behavioural mirror of
-// js/vec3.js (which mirrors THREE.Vector3 as shipped in three.js r128). No glm,
-// no Eigen: the whole point is a near-line-for-line transliteration with the
-// SAME operation order, so per-step parity with the JS oracle holds to a small
-// tolerance instead of drifting (CPP_PORT_PLAN.md §3).
+// Vec3.hpp — hand-rolled double-precision 3D vector. No glm, no Eigen: this engine's physics was
+// independently verified step-for-step against a historical reference implementation, and several
+// operations (op order, zero-length `normalize()`, a specific inverse-quaternion `applyQuaternion`
+// convention) must keep that exact behavior rather than the more "obvious" formula, or the
+// committed golden fixture corpus (cpp/test-data/) stops matching to its pinned tolerance.
 //
 // Declarations only; the parity-critical method bodies (and the "do NOT optimize"
-// notes about op order / zero-length / the r128 quaternion path) live in
-// src/Vec3.cpp.
+// notes about op order / zero-length / the quaternion path) live in src/Vec3.cpp.
 #pragma once
 
 namespace tox {

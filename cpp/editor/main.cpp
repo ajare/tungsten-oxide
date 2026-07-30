@@ -13,9 +13,9 @@
 // M6 added the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
 // current path's baked Y profile plus draggable position-point elevation markers, collapsible.
 // M7a adds USD export (USDExport.hpp/.cpp, walking core's own baked renderer-neutral
-// tox::Track::geometry batches into .usda Mesh prims -- not a port of web/js/usd-export.js's from-
-// scratch surface derivation, see USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
-// initially scoped to editor.js's closed-loop/no-mesh-sections branch only). M7b adds texture
+// tox::Track::geometry batches into .usda Mesh prims -- not a from-scratch surface derivation, see
+// USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
+// initially scoped to the closed-loop/no-mesh-sections branch only). M7b adds texture
 // assets: TextureCache.hpp/.cpp decodes PNGs with the vendored stb_image and uploads GL textures
 // for thumbnails; TexturePanel.hpp/.cpp is the asset list + tile-grid picker UI, backed by
 // EditorState's new addTextureAsset/deleteTextureAsset/setTextureTileSize/assignPathTexture/
@@ -24,8 +24,8 @@
 // endpoint-blend solve (via probe bakes through core, not a reimplemented spline evaluator -- see
 // RandomTrack.hpp) to land each drop exactly. M8 (EDITOR_NATIVE_FILE_IO_PLAN.md) adds New/Export
 // JSON/Export USD/Import JSON, backed by FileDialog.hpp/.cpp's modern IFileOpenDialog/
-// IFileSaveDialog wrappers -- the first native replacement for web/editor.html's browser file-picker
-// primitives. M9 adds mesh asset import: EditorTrackDefinition.hpp's parseMeshAssetJson (reusing
+// IFileSaveDialog wrappers. M9 adds mesh asset import: EditorTrackDefinition.hpp's
+// parseMeshAssetJson (reusing
 // its existing file-local normalizeMeshAsset -- no new from-scratch parser needed after all) plus
 // EditorState::importMeshAsset/importMeshFromJsonText back the toolbar's Import/Paste Mesh buttons
 // and TopDownCanvas.cpp's new minimal right-click "Paste Mesh" context menu; Clipboard.hpp/.cpp
@@ -88,8 +88,8 @@
 
 namespace {
 
-// Mirrors web/js/editor.js's #exportBtn default filename: `(track.name || 'track').replace(/[^\w.-]+/g,
-// '_')`. \w is ASCII word chars only, so runs of anything else collapse to a single underscore.
+// Default export filename stem, sanitized: ASCII word chars only, so runs of anything else
+// collapse to a single underscore.
 std::string sanitizeFilenameStem(const std::string& name) {
   const std::string base = name.empty() ? "track" : name;
   std::string out;
@@ -108,13 +108,12 @@ std::string sanitizeFilenameStem(const std::string& name) {
 }
 
 // Was std::wstring(text.begin(), text.end()) -- widens BYTES, not code points, mangling any
-// non-ASCII track name in the Save dialog's default filename (EDITOR_PARITY_FIXES.md finding 7).
+// non-ASCII track name in the Save dialog's default filename.
 std::wstring toWide(const std::string& text) { return editor::utf8ToWide(text); }
 
-// A flat 8km circle, mirroring web/track-core.js's STARTER_TRACK exactly (same 12 control points,
-// same calibrated radius, same roll/width/crossSection defaults, same finish + 3 intermediate
-// checkpoints) -- there is no "new track" UI yet, so this is the only in-memory content M1 has to
-// exercise the authoring model against.
+// A flat 8km circle (12 control points, calibrated radius, roll/width/crossSection defaults, a
+// finish + 3 intermediate checkpoints) -- there is no "new track" UI yet, so this is the only
+// in-memory content M1 has to exercise the authoring model against.
 editor::TrackDefinition buildStarterTrack() {
   editor::TrackDefinition track;
   track.name = "New Track";
@@ -221,10 +220,9 @@ SmokeCheckResult runSmokeCheck() {
   const std::string json1 = editor::toJson(starter);
   const editor::TrackDefinition reparsed = editor::fromJson(json1);
   const std::string json2 = editor::toJson(reparsed);
-  // Not json1 == json2: buildStarterTrack() constructs points with no id at all (mirroring
-  // web/track-core.js's own STARTER_TRACK literal, which is likewise id-less until parseTrack backfills
-  // it -- EDITOR_PARITY_FIXES.md finding 2), so json1's ids are legitimately empty and json2's are
-  // legitimately p1..p12. That first parse is where backfilling happens, same as in JS; it is not
+  // Not json1 == json2: buildStarterTrack() constructs points with no id at all, so json1's ids
+  // are legitimately empty and json2's are legitimately p1..p12 once fromJson's backfilling has
+  // run. That first parse is where backfilling happens; it is not
   // supposed to be a fixed point. The real idempotence claim -- toJson . fromJson . toJson stops
   // changing anything once ids exist -- is what json2 == toJson(fromJson(json2)) checks instead.
   result.roundTripOk = (json2 == editor::toJson(editor::fromJson(json2)));
@@ -272,7 +270,7 @@ M3SmokeCheckResult runM3SmokeCheck() {
   state.dragSelectedTo(originalPos.x + 50.0, originalPos.z + 50.0);
   state.endDrag();
   const tox::Vec3 movedPos = state.track().paths[0].points[0].pos;
-  // dragSelectedTo rounds to 0.1m (mirrors editor.js's Math.round(w.x*10)/10), so the expected
+  // dragSelectedTo rounds to 0.1m, so the expected
   // value must go through the same rounding rather than comparing against the raw +50.0 literal.
   const double expectedX = std::round((originalPos.x + 50.0) * 10.0) / 10.0;
   const double expectedZ = std::round((originalPos.z + 50.0) * 10.0) / 10.0;
@@ -448,8 +446,8 @@ M7cSmokeCheckResult runM7cSmokeCheck() {
 
   // Seed 1 at complexity 10 (mesh-section chance is highest there) is a known-good, deterministic
   // pick that rolls at least one cut and bakes cleanly -- checked once with a broad seed scan
-  // during development (see EDITOR_CPP_PORT_PLAN.md's M7c note on a rare short-ordinary-path edge
-  // case this generator inherits from editor.js's own separation math, unrelated to this seed).
+  // during development (there is a rare short-ordinary-path edge case in this generator's own
+  // separation math, unrelated to this seed).
   for (std::uint32_t seed = 1; seed <= 64; ++seed) {
     const editor::TrackDefinition random = editor::generateRandomTrack(10, seed);
     if (random.meshAssets.empty()) continue;  // this seed rolled the no-cuts single-loop branch
@@ -559,10 +557,8 @@ M9SmokeCheckResult runM9SmokeCheck() {
   return result;
 }
 
-// Parity-fix smoke check (EDITOR_PARITY_FIXES.md): regression coverage for findings 1, 2, 4, 5 --
-// the ones that silently corrupted or lost authored data rather than crashing or misformatting.
-// findings 3/6/7/8/9/10/11/12 are covered by the differential JS<->C++ harness described in that
-// document (not committed -- see its "Regression coverage worth adding" section) or are too
+// Parity-fix smoke check: regression coverage for the fixes that silently corrupted or lost
+// authored data rather than crashing or misformatting. A few related fixes are too
 // UI/encoding-specific for a headless check.
 struct ParitySmokeCheckResult {
   bool noIdCollisionOnCreate = false, drawnPathBakesAsDrawn = false;
@@ -647,7 +643,7 @@ ParitySmokeCheckResult runParitySmokeCheck() {
   return result;
 }
 
-// Gap-1 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #1): add/edit/delete a roll, width,
+// Gap-1 smoke check: add/edit/delete a roll, width,
 // and cross-section point through EditorState directly (the same methods PropertiesPanel.cpp
 // calls), and confirm core's own bake reflects a banked/widened/curved cross-section -- not just
 // that the schema round-trips, but that the values actually reach the physics.
@@ -669,8 +665,8 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   editor::EditorState state(buildStarterTrack());
   const auto rollIndex = state.addAuxPoint(0, editor::PointKind::Roll, 0.1);
   result.rollAdded = rollIndex.has_value() && state.selection().pathIndex == 0 && state.selection().pointIndex == *rollIndex;
-  // addAuxPoint() selects the point it just added -- selectionIsPosition() (EDITOR_PARITY_FIXES.md
-  // gap 1's on-canvas handles: click-to-select, but no on-canvas drag) must say false for it, and
+  // addAuxPoint() selects the point it just added -- selectionIsPosition() (whose on-canvas handles
+  // support click-to-select but no on-canvas drag) must say false for it, and
   // true once a real Position point is selected instead, so TopDownCanvas.cpp's drag-continuation
   // guard can tell them apart.
   result.selectionIsPositionFalseForAux = !state.selectionIsPosition();
@@ -693,7 +689,7 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
                         state.editAuxPoint(0, *widthIndex, [](editor::TrackPoint& p) { p.width = 60.0; }) &&
                         state.track().paths[0].points[*widthIndex].width == 60.0;
 
-  // On-canvas width-handle drag (mirrors editor.js's `dragging === 'widthTop'`): EditorState's
+  // On-canvas width-handle drag: EditorState's
   // side of it only (dragSelectedWidthTo's screen-position -> width math lives in
   // TopDownCanvas.cpp, ImGui-adjacent glue with no headless entry point -- same tradeoff already
   // taken for gap 8's sanitize()/gap 13's nearestPathPlacement()).
@@ -717,7 +713,7 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   state.endDrag();
   result.widthDragRefusedForPositionSelection = state.track().paths[0].points[*widthIndex].width == widthBeforeMisdirectedDrag;
 
-  // On-canvas roll-handle drag (mirrors editor.js's `dragging === 'rollTop'`): same split as the
+  // On-canvas roll-handle drag: same split as the
   // width-drag block above -- EditorState's clamp/undo bookkeeping only, screen-position -> roll
   // math lives in TopDownCanvas.cpp.
   state.selectPoint(0, *rollIndex);
@@ -773,7 +769,7 @@ Gap1SmokeCheckResult runGap1SmokeCheck() {
   return result;
 }
 
-// Gap-2 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #2): rename the track, undo/redo it,
+// Gap-2 smoke check: rename the track, undo/redo it,
 // and confirm an empty name falls back to "Untitled Track" only at serialize time, not live.
 struct Gap2SmokeCheckResult {
   bool renamed = false, undone = false, redone = false, noOpRefused = false;
@@ -798,7 +794,7 @@ Gap2SmokeCheckResult runGap2SmokeCheck() {
   return result;
 }
 
-// Gap-3 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #3): add a path-hosted boost zone,
+// Gap-3 smoke check: add a path-hosted boost zone,
 // confirm core's own bake compiles it into a real path-relative gLo/gHi span (not just schema
 // plumbing) with the correct default boost factor, edit its fields, add a second (start grid) zone
 // and confirm the track still bakes with both, then delete.
@@ -842,7 +838,7 @@ Gap3SmokeCheckResult runGap3SmokeCheck() {
   return result;
 }
 
-// Gap-4 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #4): add a path-hosted checkpoint
+// Gap-4 smoke check: add a path-hosted checkpoint
 // trigger, confirm core's own bake compiles a real world-space gate frame (not just schema
 // plumbing), edit its fields, promote a second checkpoint to Finish and confirm the first is
 // demoted (at-most-one-finish invariant), confirm a Finish trigger can't be deleted, then confirm
@@ -858,8 +854,8 @@ struct Gap4SmokeCheckResult {
 Gap4SmokeCheckResult runGap4SmokeCheck() {
   Gap4SmokeCheckResult result;
 
-  // buildStarterTrack() already seeds four checkpoint triggers (mirroring web/track-core.js's
-  // STARTER_TRACK, one of them "finish"), so every check below must match by id, never by index.
+  // buildStarterTrack() already seeds four checkpoint triggers (one of them "finish"), so every
+  // check below must match by id, never by index.
   editor::EditorState state(buildStarterTrack());
   const auto triggerId = state.addPathTrigger(0, "checkpoint", 0.25);
   result.added = triggerId.has_value();
@@ -901,7 +897,7 @@ Gap4SmokeCheckResult runGap4SmokeCheck() {
   return result;
 }
 
-// Gap-5 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #5, curve management): exercises
+// Gap-5 smoke check (curve management): exercises
 // makeDisjoint/reconnectDisjoint on both a closed path (opened-closed seam) and an open path
 // (split-open seam, producing two paths), confirms core's own bake still accepts the result at
 // each step, confirms deleteCurrentPath prunes a disjoint seam left dangling by removing one of
@@ -998,7 +994,7 @@ Gap5SmokeCheckResult runGap5SmokeCheck() {
   return result;
 }
 
-// Gap-6 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #6): direction toggle and
+// Gap-6 smoke check: direction toggle and
 // start-point selection, mirroring #dirBtn and the properties panel's #startBtn. Confirms
 // toggleStartReverse/setStartPoint reach undo/redo and, unlike a pure schema-plumbing check, that
 // the reversal actually flips which way the baked starting grid faces (StartGrid::startingGridPoses'
@@ -1049,7 +1045,7 @@ Gap6SmokeCheckResult runGap6SmokeCheck() {
   return result;
 }
 
-// Gap-7 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #7): the handling panel
+// Gap-7 smoke check: the handling panel
 // (maxSpeed/accel/turnSpeed/weight), mirroring #handlingPanel's field-change handler and
 // #handlingResetBtn. Confirms setHandling clamps to the same ranges
 // TrackCore.normalizeHandling/fromJson use, undo/redo work, and resetHandling restores defaults --
@@ -1088,9 +1084,8 @@ Gap7SmokeCheckResult runGap7SmokeCheck() {
   return result;
 }
 
-// Gap-9 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #9): top-down grid display, grid
-// size, and snap-to-grid, mirroring editor.js's showGrid/gridSize/snapToGrid module state and
-// snapWorldXZ(). Exercises TopDownView::snapWorldXZ directly (no ImGui needed -- it's pure view
+// Gap-9 smoke check: top-down grid display, grid
+// size, and snap-to-grid. Exercises TopDownView::snapWorldXZ directly (no ImGui needed -- it's pure view
 // state) and EditorState::createModeClick's snapped-point overload, confirming a click near an
 // existing draft point still closes/finishes the draft (hit-testing stays unsnapped) while a
 // genuinely new point lands on the grid.
@@ -1135,8 +1130,7 @@ Gap9SmokeCheckResult runGap9SmokeCheck() {
   return result;
 }
 
-// Gap-14 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #14): undo/redo disabled state,
-// mirroring web/editor.html's #undoBtn/#redoBtn -- disabled while their stack is empty rather than
+// Gap-14 smoke check: undo/redo disabled state -- disabled while their stack is empty rather than
 // always active. Exercises EditorHistory::canUndo/canRedo directly through the same mutation/undo/
 // redo calls the UI's BeginDisabled guards now read.
 struct Gap14SmokeCheckResult {
@@ -1161,7 +1155,7 @@ Gap14SmokeCheckResult runGap14SmokeCheck() {
   return result;
 }
 
-// Gap-8 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #8): the random-ranges panel.
+// Gap-8 smoke check: the random-ranges panel.
 // `generateRandomTrack` already accepted a `RandomTrackRanges` parameter (M7a/M7c); main.cpp
 // simply never passed anything but the `{}` default until this gap's UI wiring. Confirms a custom
 // range actually reaches the generator -- pinning turnsMin == turnsMax forces the single-loop
@@ -1387,11 +1381,10 @@ editor::TrackDefinition buildOpenTestTrack(int pointCount) {
   return track;
 }
 
-// Gap-11 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #11): segment selection,
-// deletion, splitting, and insert-point-on-segment, mirroring segSel/deleteSegment/
-// selectedOutgoingSegment/selectedIncomingSegment/insertNear. Deliberately does not exercise
-// segmentAtTop (click-to-select-a-segment) -- web/js/editor.js defines it but never calls it, so it's
-// not ported here either (see EditorState.hpp's comment on the port).
+// Gap-11 smoke check: segment selection,
+// deletion, splitting, and insert-point-on-segment: selectedOutgoingSegment/selectedIncomingSegment/
+// insertNear. Deliberately does not exercise click-to-select-a-segment, which is never wired to
+// any UI here (see EditorState.hpp's comment on the port).
 struct Gap11SmokeCheckResult {
   bool outgoingNulloptOnAuxSelection = false, outgoingNulloptAtOpenPathEnd = false, incomingNulloptAtOpenPathStart = false;
   bool closedSegmentDeleteOpensPath = false, closedSegmentDeleteKeepsAllPoints = false;
@@ -1466,12 +1459,11 @@ Gap11SmokeCheckResult runGap11SmokeCheck() {
   return result;
 }
 
-// Gap-10 smoke check (EDITOR_PARITY_FIXES.md "Functional gaps" #10): render modes, point-type
+// Gap-10 smoke check: render modes, point-type
 // filters, and the physics-sample overlay. Exercises TopDownView's new state directly (pure view
 // state, no ImGui needed -- same reasoning as gap 9's snapWorldXZ check); the render-mode fill
 // color formulas (rollFillColor/elevationFillColor) and physicsPointAtWorld/
-// drawPhysicsSampleInfo are ImGui-adjacent glue with no headless entry point, verified by
-// inspection against web/js/editor.js's rollColor/elevationColor/physicsPointAtTop -- same tradeoff
+// drawPhysicsSampleInfo are ImGui-adjacent glue with no headless entry point -- same tradeoff
 // already taken for gap 8's sanitize() and gap 13's nearestPathPlacement().
 struct Gap10SmokeCheckResult {
   bool defaultRenderModeIsBanked = false, renderModeRoundTrips = false;
@@ -1895,21 +1887,19 @@ int main(int, char**) {
   }
   tox::TrackLoadResult bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()));
   const tox::Track* bakedTrack = bakedResult ? &*bakedResult.track : nullptr;
-  // Self-intersection crossing detection (EDITOR_PARITY_GAPS.md gap 1) is the one expensive
+  // Self-intersection crossing detection is the one expensive
   // (O(N^2)) part of a bake; cachedCrossings holds the last result computed with it ON, reused
-  // while a drag is in progress (see rebake() below) -- mirrors editor.js's own `if (!dragging)`
-  // guard around detectPathCrossings.
+  // while a drag is in progress (see rebake() below).
   std::vector<tox::SelfIntersection> cachedCrossings = bakedResult.track.has_value() ? bakedResult.track->selfIntersections : std::vector<tox::SelfIntersection>{};
   editor::TopDownView topDownView;
   bool elevationVisible = true;
   int randomSeed = 12345;
   int randomComplexity = 5;
-  // Random-track generator ranges (EDITOR_PARITY_FIXES.md gap 8), mirrors editor.js's
-  // randomRanges -- a session-only generator preference (see RandomRangesPanel.hpp), not track
-  // data, so it lives here rather than in EditorState/undo history.
+  // Random-track generator ranges: a session-only generator preference (see RandomRangesPanel.hpp),
+  // not track data, so it lives here rather than in EditorState/undo history.
   editor::RandomTrackRanges randomRanges;
-  // Status bar (docked to the bottom of the window, mirrors web/editor.html's #statusBar):
-  // the most recent message replaces whatever's showing and is displayed for 3 seconds.
+  // Status bar (docked to the bottom of the window): the most recent message replaces whatever's
+  // showing and is displayed for 3 seconds.
   // Deliberately a real wall clock (steady_clock), not ImGui::GetTime(): several showStatus()
   // calls below happen right after a blocking native file dialog (showOpenFileDialog/
   // showSaveFileDialog) returns, which pumps its own message loop for however long the user
@@ -1963,9 +1953,8 @@ int main(int, char**) {
   auto rebake = [&]() {
     // Skip the expensive self-intersection detection pass while a point/mesh drag is in progress
     // (this lambda gets called every frame of an active drag, since dragging mutates the track
-    // every frame) -- mirrors editor.js's `if (!dragging) crossingCache = ...` (web/js/editor.js:978,
-    // 999). Reuse the last good detection result instead, so markers stay visible (just briefly
-    // stale) mid-drag rather than flickering empty.
+    // every frame). Reuse the last good detection result instead, so markers stay visible (just
+    // briefly stale) mid-drag rather than flickering empty.
     const bool detect = !editorState.dragging();
     bakedResult = tox::Track::fromJson(editor::toJson(editorState.track()), detect);
     if (bakedResult.track.has_value()) {
@@ -2133,18 +2122,18 @@ int main(int, char**) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    // E/C/R switch mode (mirrors editor.js's shortcuts), Ctrl+Z/Ctrl+Y undo/redo -- all global
+    // E/C/R switch mode, Ctrl+Z/Ctrl+Y undo/redo -- all global
     // since there's no text-input widget yet that would need to steal these keys.
     if (!io.WantTextInput) {
       if (ImGui::IsKeyPressed(ImGuiKey_E)) editorState.setMode(editor::EditMode::Edit);
       if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
       if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
       if (ImGui::IsKeyPressed(ImGuiKey_G)) topDownView.setShowGrid(!topDownView.showGrid());
-      // Deselect (new functionality, no JS equivalent): clears whichever of point/mesh-region/
+      // Deselect: clears whichever of point/mesh-region/
       // zone/trigger is currently selected -- mirrored by the Edit menu's "Deselect" item below.
       if (ImGui::IsKeyPressed(ImGuiKey_D)) editorState.deselectAll();
       const bool ctrl = io.KeyCtrl;
-      // Home / zoom-to-selection (new functionality, no JS equivalent): plain 'z'/'x', not
+      // Home / zoom-to-selection: plain 'z'/'x', not
       // Ctrl-modified, so Ctrl+Z for Undo just below still works. Mirrored by the View menu
       // entries and (for zoom-to-selection) the top-down canvas's own "Object" button -- all three
       // go through the same TopDownView::resetView()/editor::FocusOnSelection() calls.
@@ -2177,7 +2166,7 @@ int main(int, char**) {
           if (picked.ok) {
             // toFile() throws when the stream won't open (read-only target, locked file, removed
             // drive) -- uncaught here it took the whole process down and the user's unsaved track
-            // with it (EDITOR_PARITY_FIXES.md finding 3). Import JSON already caught; this didn't.
+            // with it. Import JSON already caught; this didn't.
             try {
               editor::toFile(editorState.track(), picked.path);
               showStatus("Wrote " + editor::pathToUtf8(picked.path));
@@ -2194,9 +2183,8 @@ int main(int, char**) {
           // canvas at all.
           if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
         }
-        // Import Mesh/Paste Mesh mirror web/editor.html's #importMeshBtn/#pasteMeshBtn
-        // (EDITOR_NATIVE_FILE_IO_PLAN.md M9); the right-click "Paste Mesh" in TopDownCanvas.cpp
-        // shares EditorState::importMeshFromJsonText with the menu item below.
+        // Import Mesh and the right-click "Paste Mesh" in TopDownCanvas.cpp
+        // share EditorState::importMeshFromJsonText with the menu item below.
         if (ImGui::MenuItem("Import Mesh...")) {
           const editor::FileDialogResult picked = editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
           if (picked.ok) {
@@ -2204,7 +2192,7 @@ int main(int, char**) {
             if (!input) {
               // Previously fell through to importMeshFromJsonText with empty text, which reported
               // the clipboard-flavoured "nothing to import (the clipboard is empty)" for a file
-              // that simply couldn't be opened (EDITOR_PARITY_FIXES.md finding 8).
+              // that simply couldn't be opened.
               showStatus("Mesh import failed: could not open " + editor::pathToUtf8(picked.path));
             } else {
               std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
@@ -2253,9 +2241,8 @@ int main(int, char**) {
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("Edit")) {
-        // Undo/redo disabled state (EDITOR_PARITY_FIXES.md gap 14), mirrors web/editor.html's
-        // #undoBtn/#redoBtn: disabled while their respective stack is empty rather than always
-        // active.
+        // Undo/redo disabled state: disabled while their respective stack is empty rather than
+        // always active.
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editorState.history().canUndo())) {
           if (editorState.undo()) rebake();
         }
@@ -2263,18 +2250,17 @@ int main(int, char**) {
           if (editorState.redo()) rebake();
         }
         ImGui::Separator();
-        // Deselect (new functionality, no JS equivalent): mirrors the 'D' hotkey above.
+        // Deselect: mirrors the 'D' hotkey above.
         if (ImGui::MenuItem("Deselect", "D")) editorState.deselectAll();
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("View")) {
-        // Home / zoom-to-selection (new functionality, no JS equivalent): mirror the 'z'/'x'
+        // Home / zoom-to-selection: mirror the 'z'/'x'
         // hotkeys above; zoom-to-selection is also on the top-down canvas's own "Object" button.
         if (ImGui::MenuItem("Home", "Z")) topDownView.resetView();
         if (ImGui::MenuItem("Zoom to Selection", "X")) editor::FocusOnSelection(topDownView, editorState, bakedTrack);
         ImGui::Separator();
-        // Top-down grid display / grid size / snap-to-grid (EDITOR_PARITY_FIXES.md gap 9),
-        // mirrors web/editor.html's #showGridChk/#gridSizeSelect/#snapGridChk. Hiding the grid
+        // Top-down grid display / grid size / snap-to-grid. Hiding the grid
         // disables (but doesn't clear) the size and snap controls -- snapWorldXZ() itself
         // re-checks showGrid, so there's no way to leave snapping silently active behind a
         // hidden grid.
@@ -2291,7 +2277,7 @@ int main(int, char**) {
         bool snapToGrid = topDownView.snapToGrid();
         if (ImGui::MenuItem("Snap to Grid", nullptr, &snapToGrid, showGrid)) topDownView.setSnapToGrid(snapToGrid);
         ImGui::Separator();
-        // Render mode (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's #renderModeSelect.
+        // Render mode.
         if (ImGui::BeginMenu("Render Mode")) {
           const std::pair<const char*, editor::TopDownView::RenderMode> renderModes[] = {
               {"Banked edges (lean tint)", editor::TopDownView::RenderMode::Banked},
@@ -2304,10 +2290,9 @@ int main(int, char**) {
           ImGui::EndMenu();
         }
         ImGui::Separator();
-        // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's
-        // #pointFilters. Only Position currently has an observable effect -- roll/width/
-        // crossSection points have no on-canvas presence yet at all (gap 1), so those three
-        // checkboxes exist for UI parity but are otherwise inert until that on-canvas rendering
+        // Point-type filters. Only Position currently has an observable effect -- roll/width/
+        // crossSection points have no on-canvas presence yet at all, so those three
+        // checkboxes exist ready for that but are otherwise inert until that on-canvas rendering
         // lands.
         if (ImGui::BeginMenu("Point Filters")) {
           bool showPosition = topDownView.showPositionPoints();
@@ -2321,8 +2306,7 @@ int main(int, char**) {
           ImGui::EndMenu();
         }
         ImGui::Separator();
-        // Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10), mirrors web/editor.html's
-        // #showPhysicsBtn/#hidePhysicsBtn.
+        // Physics-sample overlay.
         bool showPhysicsPoints = topDownView.showPhysicsPoints();
         if (ImGui::MenuItem("Show Physics Points", nullptr, &showPhysicsPoints)) topDownView.setShowPhysicsPoints(showPhysicsPoints);
         ImGui::EndMenu();
@@ -2528,10 +2512,10 @@ int main(int, char**) {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    // Point-type filters (EDITOR_PARITY_FIXES.md gap 10), same toggles as the View > Point Filters
+    // Point-type filters, same toggles as the View > Point Filters
     // submenu below -- both read/write the same TopDownView state, so either one moves the other.
     // Only Position currently has an observable effect -- roll/width/crossSection points have no
-    // on-canvas presence yet at all (gap 1), so those three checkboxes exist for UI parity but are
+    // on-canvas presence yet at all, so those three checkboxes exist ready for that but are
     // otherwise inert until that on-canvas rendering lands.
     ImGui::TextUnformatted("Show:");
     ImGui::SameLine();
@@ -2550,8 +2534,8 @@ int main(int, char**) {
     ImGui::End();
     ImGui::PopStyleVar();
 
-    // Status bar: a fixed strip docked to the bottom of the window (mirrors web/editor.html's
-    // #statusBar), showing the most recent showStatus() message for 3 seconds. Its height is fixed
+    // Status bar: a fixed strip docked to the bottom of the window, showing the most recent
+    // showStatus() message for 3 seconds. Its height is fixed
     // up front (unlike the toolbar's auto-measured height above) so the dockspace host below can
     // subtract it out in the same pass it's positioned in, rather than needing a second frame.
     const float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 16.0f;
@@ -2602,7 +2586,7 @@ int main(int, char**) {
     // section below that needs it now lives in the same "Panels" window.
     const int currentPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
 
-    // Left-docked panel (EDITOR_PARITY_FIXES.md-adjacent UI pass): every property/tool section as
+    // Left-docked panel: every property/tool section as
     // a collapsing header in one window, rather than separate tabbed windows -- CollapsingHeader
     // does NOT push an ID scope onto what follows it (unlike TreeNode), so each section's content
     // is wrapped in its own PushID/PopID to keep same-labelled widgets in different sections
@@ -2717,7 +2701,7 @@ int main(int, char**) {
                         m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
       ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
                         m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
-      ImGui::TextUnformatted("Parity-fix smoke check (EDITOR_PARITY_FIXES.md findings 1/4/5, exercised directly):");
+      ImGui::TextUnformatted("Parity-fix smoke check (exercised directly):");
       ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
                         paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
       ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
@@ -2857,16 +2841,15 @@ int main(int, char**) {
     ImGui::End();
     ImGui::PopStyleVar();
 
-    // Mirrors editor.js's elevCollapsed: the panel can be hidden (its own persisted preference in
-    // the web editor; a plain in-session toggle here, since there's no settings file yet).
+    // The panel can be hidden -- a plain in-session toggle, since there's no settings file yet.
     ImGui::SetNextWindowSize(ImVec2(900, 260), ImGuiCond_FirstUseEver);
     ImGui::Begin("Elevation Profile");
     ImGui::Checkbox("Show", &elevationVisible);
     if (elevationVisible) {
       ImGui::Separator();
-      // Mirrors editor.js's curPath(): the currently selected point's path if there is one,
+      // The currently selected point's path if there is one,
       // otherwise EditorState::currentPathIndex()'s own fallback (the curve-selector dropdown's
-      // choice, or path 0 -- EDITOR_PARITY_FIXES.md gap 5).
+      // choice, or path 0).
       const int elevationPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
       if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex, topDownView.showPositionPoints())) rebake();
     }

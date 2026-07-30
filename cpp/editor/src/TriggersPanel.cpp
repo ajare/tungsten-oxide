@@ -31,7 +31,7 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
       int roleIndex = isFinish ? 1 : 0;
       const char* roleNames[] = {"Intermediate", "Finish"};
       // A trigger already marked Finish can't be demoted here -- another checkpoint must be
-      // promoted to Finish first, mirroring setTriggerRole's alert-and-revert (web/js/editor.js:2313-2317).
+      // promoted to Finish first.
       ImGui::BeginDisabled(isFinish);
       ImGui::SetNextItemWidth(140);
       roleChanged = ImGui::Combo("Role", &roleIndex, roleNames, 2);
@@ -53,7 +53,7 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
     double width = trigger->width, height = trigger->height, rotation = trigger->rotation;
     bool changed = roleChanged;
 
-    // Auto Width (new functionality, no JS equivalent): keeps the trigger's gate width matched to
+    // Auto Width: keeps the trigger's gate width matched to
     // the host path's own baked road width at its host t, recomputed every frame from `baked`
     // rather than a one-time snap -- so it stays in sync whenever a Width control point elsewhere
     // on the track changes and the caller rebakes. Meaningless for a mesh-hosted trigger (no path/

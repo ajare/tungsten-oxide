@@ -1,7 +1,6 @@
-// TriggersPanel.hpp — trigger (dummy / checkpoint) list + fields (EDITOR_PARITY_FIXES.md gap 4),
-// mirroring web/js/editor.js's renderProps() trigger branch and its right-click "Add trigger" menu.
-// See EditorState.hpp's "Triggers" section for the scope this deliberately does NOT cover
-// (creating a mesh-hosted trigger from scratch).
+// TriggersPanel.hpp — trigger (dummy / checkpoint) list + fields, plus its right-click "Add
+// trigger" menu. See EditorState.hpp's "Triggers" section for the scope this deliberately does
+// NOT cover (creating a mesh-hosted trigger from scratch).
 #pragma once
 
 #include "EditorState.hpp"

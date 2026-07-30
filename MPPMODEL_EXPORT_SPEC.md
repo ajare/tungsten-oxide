@@ -180,7 +180,7 @@ Facts that matter for the converter, established by reading `cpp/core/src/TrackB
 - **`rgba` is always the struct default** `Color4{1,1,1,1}` — nothing in the codebase ever writes
   a non-white vertex colour today (confirmed by `track_tests.cpp`'s "render RGBA defaults white"
   assertion). Safe to treat as an always-white/unused channel for now.
-- **Units/axes:** double-precision metres, Y-up, right-handed (`Vec3.hpp` mirrors three.js r128) —
+- **Units/axes:** double-precision metres, Y-up, right-handed (see `Vec3.hpp`'s header comment) —
   the same convention `cpp/editor/src/USDExport.cpp` assumes (`upAxis = "Y"`, `metersPerUnit = 1`)
   when walking these same batches. No evidence `mpp`'s `RenderSystem.cpp` enables
   `GL_CULL_FACE` anywhere (grepped for it, found nothing), so winding order is very likely

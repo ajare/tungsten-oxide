@@ -2,7 +2,7 @@
 
 Canonical domain vocabulary for the track editor + driving game. Definitions
 only — no implementation detail. See `CLAUDE.md` for the architecture and
-`web/track-core.js` for the authoritative data-model spec.
+`cpp/core/include/TrackCore.hpp`/`TrackDefinition.hpp` for the authoritative data-model spec.
 
 ## Terms
 

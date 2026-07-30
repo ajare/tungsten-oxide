@@ -1,8 +1,7 @@
 # Native C++ track engine
 
 `cpp/core` is a C++20 static library that independently loads and runs complete
-schema-10 tracks. It does not call JavaScript or consume JS-baked geometry.
-`cpp/willpower` provides the embedded Willpower.Common and Willpower.Geometry
+schema-10 tracks. `cpp/willpower` provides the embedded Willpower.Common and Willpower.Geometry
 libraries used for mesh topology validation and triangulation.
 
 ## Capabilities
@@ -16,7 +15,7 @@ libraries used for mesh topology validation and triangulation.
   semantic material keys and texture tile metadata;
 - complete path/mesh simulation including surface ownership, two-sided swept
   rail collision, transitions, airborne landing, zones, checkpoints and respawn;
-- legacy baked-world and current-schema raw-track parity against JavaScript.
+- legacy baked-world and current-schema raw-track parity against a committed golden trace corpus.
 
 The loader accepts only version 10. Migration and native saving/editing are not
 part of the runtime API.
@@ -55,13 +54,13 @@ CTest entries:
 - `parity` — unchanged 4000-step baked-world runtime gate;
 - `raw_parity` — 12 independently loaded/baked tracks, 1116 steps;
 - `track_tests` — loader, bake, topology, geometry and simulation scenarios;
-- `random_geometry_parity` — five seeded random schema-10 JSON tracks independently baked into
-  renderer-neutral geometry by JavaScript and C++.
+- `random_geometry_parity` — five seeded random schema-10 JSON tracks independently baked in C++
+  and compared against a committed geometry-summary fixture.
 
-Run `npm run parity` from `web/` for JS self-replay followed by all C++ parity layers. Trace
-regeneration is deliberate: `npm run gen-traces`. The random geometry corpus is regenerated
-separately with `npm run gen-random-mesh-fixtures`; see
-`web/test/fixtures/random-track-mesh/README.md`.
+The fixture/trace corpus under `cpp/test-data/` is a fixed, committed regression suite; there is no
+in-repo tool to regenerate it, so treat it as append-only unless you're prepared to hand-author or
+validate new fixtures directly against this C++ implementation. See
+`cpp/test-data/fixtures/random-track-mesh/README.md`.
 
 ## Native runtime host
 
@@ -78,8 +77,7 @@ deterministic simulation loop in real time — each frame's `dt` comes from a
 steady clock, not a fixed step — printing a once-a-second status line until
 Escape is pressed. The roster stays idle (zero throttle): there is no
 rendering, audio, or driving input, so this is a session lifecycle/timing
-smoke host, not a playable client. See `NATIVE_GAME_RUNTIME_PLAN.md` for what
-deliberately stays outside it.
+smoke host, not a playable client.
 
 ## Public data flow
 
@@ -114,7 +112,7 @@ Important headers:
 ## Numeric contracts
 
 MSVC builds use `/fp:precise`; non-MSVC builds disable FP contraction. Locked
-Release measurements are documented in `MESH_CPP_PORT_PLAN.md`:
+Release measurements against the committed golden trace corpus:
 
 - baked world: `atol=rtol=1e-12`, ratio gate `1e-3`;
 - raw track: `atol=rtol=1e-12`, ratio gate `0.1`;

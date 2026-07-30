@@ -1,9 +1,8 @@
 // EditorTrackDefinition.hpp — the editor's own authoring-side mirror of
-// cpp/core/include/TrackDefinition.hpp (EDITOR_CPP_PORT_PLAN.md M1).
+// cpp/core/include/TrackDefinition.hpp.
 //
-// Audited field-for-field against web/track-core.js's parseTrack/serializeTrack (the JS authoring
-// source of truth): every field core's TrackDefinition.hpp already carries is exactly what the
-// schema-10 authoring format needs, so this mirror adds no editor-only fields yet. If a future
+// Every field core's TrackDefinition.hpp already carries is exactly what the schema-10/11
+// authoring format needs, so this mirror adds no editor-only fields yet. If a future
 // milestone needs authoring-only bookkeeping that never round-trips through the schema (e.g. a
 // UI selection hint), add it here, not in cpp/core/include/TrackDefinition.hpp — core's copy stays
 // a compiled-runtime-adjacent record, this one is the mutable thing the editor edits and undoes.
@@ -71,9 +70,9 @@ struct Path {
 
 // `attributesJson` carries the geometry-js "attributes" object verbatim as opaque serialized JSON
 // text (default "{}"), so vertex/polygon attributes this editor doesn't understand (UVs, colours,
-// material keys) survive a load/save round trip rather than being silently dropped -- see
-// EDITOR_PARITY_FIXES.md finding 6. Kept as text rather than a structured type so this header
-// doesn't have to depend on a JSON library; EditorTrackDefinition.cpp parses/merges it as needed.
+// material keys) survive a load/save round trip rather than being silently dropped. Kept as text
+// rather than a structured type so this header doesn't have to depend on a JSON library;
+// EditorTrackDefinition.cpp parses/merges it as needed.
 struct MeshVertex {
   int id{-1};
   double x{0.0}, y{0.0};
@@ -147,7 +146,7 @@ struct Trigger {
   std::string id;
   std::string type{"dummy"}, role, direction{"both"};
   double width{40.0}, height{12.0}, rotation{0.0};
-  // When true (new functionality, no JS equivalent), `width` is kept in sync with the host path's
+  // When true, `width` is kept in sync with the host path's
   // baked road width at `host.t` instead of being manually authored -- see TriggersPanel.cpp's
   // auto-width handling. Ignored for a mesh-hosted trigger (no path/t to sample).
   bool autoWidth{false};
@@ -158,9 +157,7 @@ struct Trigger {
 // disjoint seams ("opened-closed" | "split-open", created by splitting a shared point back into a
 // hard, unsmoothed corner). sourcePathId/sourceEnd/targetPathId/targetEnd are junction-only fields;
 // pathId (opened-closed) / leftPathId+rightPathId (split-open) are disjoint-seam-only fields --
-// mirrors web/js/editor.js's seam records exactly (EDITOR_PARITY_FIXES.md gap 5), which is why this
-// carries both field sets rather than a variant: JS's own objects are equally loose duck-typed
-// records keyed by `kind`.
+// this carries both field sets rather than a variant, keyed by `kind`.
 struct Connection {
   std::string id, pointId, kind;
   std::string sourcePathId, sourceEnd, targetPathId, targetEnd;
@@ -196,25 +193,22 @@ struct TrackDefinition {
   Start start;
 };
 
-// Backfills missing position-point ids in place, mirroring web/track-core.js's parseTrack id
-// assignment (web/track-core.js:1665-1678) and, for state that doesn't come from JSON at all, its
-// ensureTrackIds() (called after every track construction/replacement in web/js/editor.js: initial
-// load, New, Random, Import). Without this, points have no stable identity at all -- every id
-// round-trips as "", not merely "unassigned" -- which is also what let freshly-minted ids collide
-// with ids already on the track (EDITOR_PARITY_FIXES.md findings 1, 2, 4). Existing non-empty ids
-// are preserved verbatim, even if duplicated across paths -- aliasing duplicate ids to a single
-// shared point identity is core's job (TrackLoader.cpp) and a separate, unimplemented feature here
-// (EDITOR_PARITY_FIXES.md gap 5, "shared/disjoint" editing). Called by fromJson/normalize() and by
-// EditorState's constructor/replaceTrack, so every TrackDefinition an EditorState ever holds has
-// had this run at least once, regardless of where it came from.
+// Backfills missing position-point ids in place. Called after every track construction/
+// replacement (initial load, New, Random, Import). Without this, points have no stable identity at
+// all -- every id round-trips as "", not merely "unassigned" -- which also lets freshly-minted ids
+// collide with ids already on the track. Existing non-empty ids are preserved verbatim, even if
+// duplicated across paths -- aliasing duplicate ids to a single shared point identity is core's job
+// (TrackLoader.cpp) and a separate, unimplemented feature here ("shared/disjoint" editing). Called
+// by fromJson/normalize() and by EditorState's constructor/replaceTrack, so every TrackDefinition
+// an EditorState ever holds has had this run at least once, regardless of where it came from.
 void backfillPointIds(TrackDefinition& track);
 
 // Parses schema-10 JSON directly into a TrackDefinition, independently of tox::Track's loader.
 // Tolerant of a mid-edit/partial authoring state (e.g. a path with fewer than four position
 // points, dangling references not yet cleaned up): missing/malformed fields fall back to schema
-// defaults rather than failing the whole load, mirroring editor.js's own lenient parseTrack.
-// Throws std::runtime_error only when the input isn't parseable as an object at all, or names an
-// explicit, unsupported non-10 schema version (no legacy migration lives here or in cpp/core).
+// defaults rather than failing the whole load. Throws std::runtime_error only when the input isn't
+// parseable as an object at all, or names an explicit, unsupported non-10 schema version (no legacy
+// migration lives here or in cpp/core).
 TrackDefinition fromJson(const std::string& text);
 TrackDefinition fromFile(const std::filesystem::path& path);
 
@@ -230,9 +224,8 @@ struct MeshAssetParseResult {
 
 // Parses a standalone geometry-js mesh export (the "mesh" field of one track.meshAssets[id]
 // entry, or a bare {vertices,edges,polygons} document straight from the ext/geoemetry-js editor's
-// "Copy JSON" button) for mesh import/paste (EDITOR_NATIVE_FILE_IO_PLAN.md M9). Mirrors
-// web/js/editor.js's parseMeshJSON: never throws, reports why parsing failed instead. The returned
-// asset's `id`/`name` are unset -- callers assign a fresh id when registering it (see
+// "Copy JSON" button) for mesh import/paste. Never throws, reports why parsing failed instead. The
+// returned asset's `id`/`name` are unset -- callers assign a fresh id when registering it (see
 // EditorState::importMeshAsset).
 MeshAssetParseResult parseMeshAssetJson(const std::string& text);
 

@@ -1,7 +1,6 @@
-# cpp/editor — the native ImGui/SDL2/OpenGL track editor (EDITOR_CPP_PORT_PLAN.md), a port of
-# editor.html/js/editor.js. Sits alongside cpp/core and cpp/willpower and links both: `core` for
-# schema-10 loading/baking/preview (reused unmodified as a black box) and `Willpower::Geometry`
-# transitively through `core` for mesh topology.
+# cpp/editor — the native ImGui/SDL2/OpenGL track editor. Sits alongside cpp/core and
+# cpp/willpower and links both: `core` for schema-10 loading/baking/preview (reused unmodified as a
+# black box) and `Willpower::Geometry` transitively through `core` for mesh topology.
 #
 # Dear ImGui (docking branch) and its SDL2/OpenGL3 backends, plus the gl3w GL loader, are copied
 # into include/ and src/ rather than pulled in as a submodule/FetchContent — see the
@@ -113,7 +112,7 @@ add_executable(editor_track_resource_tests
 target_include_directories(editor_track_resource_tests PRIVATE include third_party)
 target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common)
 add_test(NAME editor_track_resources
-  COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/../web/test/fixtures/path/curved-banked.json")
+  COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
 
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)

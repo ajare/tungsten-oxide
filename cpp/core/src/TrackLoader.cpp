@@ -1,5 +1,6 @@
 // TrackLoader.cpp — strict current-schema JSON loading and runtime-subset
-// normalization. Historical migrations remain JavaScript/editor-only.
+// normalization. Older schema versions (below TRACK_SCHEMA_VERSION_MIN_SUPPORTED) are not
+// migrated; only schema 10/11 are accepted.
 #include "Track.hpp"
 #include "TrackBake.hpp"
 #include "TrackCore.hpp"

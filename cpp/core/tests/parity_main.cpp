@@ -190,10 +190,10 @@ static double posDrift(const Ship& ship, const json& after) {
 }
 
 // The documented growing-tolerance envelope for the bounded-trajectory smoke
-// check (CPP_PORT_PLAN.md milestone 3). Free-running, the C++ engine threads its
+// check. Free-running, the C++ engine threads its
 // own output back in, so per-step transcendental drift (~1 ULP) compounds. We do
 // NOT pretend a long run stays close — the envelope grows geometrically and the
-// assertion is only that the trajectory tracks the JS one out to a documented
+// assertion is only that the trajectory tracks the recorded golden trace out to a documented
 // horizon before chaotic divergence is allowed to take over.
 static double trajectoryEnvelope(int k, bool rawTrack) {
   // Native baking introduces a small starting-frame delta before runtime drift
@@ -245,7 +245,7 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  // Minimum number of free-running steps every trace must track the JS
+  // Minimum number of free-running steps every trace must track the recorded golden
   // trajectory within trajectoryEnvelope() before chaotic divergence is
   // tolerated. Documented, deliberately modest — the per-step gate is the real
   // guarantee; this only catches gross structural drift (a whole branch wrong).
@@ -457,10 +457,10 @@ int main(int argc, char** argv) {
       }
     }
     if (horizon < (int)steps.size())
-      std::printf("      free-run: tracks JS to step %d/%zu (drift %.3g m exceeds envelope %.3g m); chaotic beyond\n",
+      std::printf("      free-run: tracks reference to step %d/%zu (drift %.3g m exceeds envelope %.3g m); chaotic beyond\n",
                   horizon, steps.size(), driftAtHorizon, trajectoryEnvelope(horizon, rawTrack));
     else
-      std::printf("      free-run: tracks JS within envelope for all %zu steps\n", steps.size());
+      std::printf("      free-run: tracks reference within envelope for all %zu steps\n", steps.size());
     const int requiredHorizon = std::min(FREE_MIN_HORIZON, static_cast<int>(steps.size()));
     if (freeDiscreteFailure || horizon < requiredHorizon) {
       ++freeFails;

@@ -1,9 +1,7 @@
-// FileDialog.hpp — native Open/Save dialogs (EDITOR_NATIVE_FILE_IO_PLAN.md M8), backing the
-// editor's Save/Export/Import buttons. web/editor.html leans on browser primitives (<input type=file>,
-// Blob/URL.createObjectURL) that have no native equivalent; this wraps the modern COM
-// IFileOpenDialog/IFileSaveDialog (Vista+) picked over the legacy GetOpenFileNameW/
-// GetSaveFileNameW pair for nicer dialog chrome and Explorer integration (see the plan's "Open
-// decisions" section). Windows/MSVC-only, matching the rest of cpp/editor.
+// FileDialog.hpp — native Open/Save dialogs backing the editor's Save/Export/Import buttons. Wraps
+// the modern COM IFileOpenDialog/IFileSaveDialog (Vista+), picked over the legacy
+// GetOpenFileNameW/GetSaveFileNameW pair for nicer dialog chrome and Explorer integration.
+// Windows/MSVC-only, matching the rest of cpp/editor.
 #pragma once
 
 #include <filesystem>
@@ -35,7 +33,7 @@ FileDialogResult showSaveFileDialog(const std::wstring& title, const std::vector
 // throughout (TrackDefinition::name, TextureAsset::path, ...); convert only at this boundary.
 // std::wstring(narrow.begin(), narrow.end()) widens BYTES, not code points, and
 // std::filesystem::path::string() narrows through the system ANSI codepage -- both silently mangle
-// non-ASCII text (EDITOR_PARITY_FIXES.md finding 7). `pathToUtf8` exists because a
+// non-ASCII text. `pathToUtf8` exists because a
 // std::filesystem::path already holds native (wide, on Windows) text, so converting it via this
 // path avoids that ACP round trip entirely rather than doing wide->ACP->UTF-8.
 std::wstring utf8ToWide(const std::string& utf8);

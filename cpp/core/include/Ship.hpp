@@ -77,8 +77,7 @@ struct Race {
   double flashUntil{0.0};
 };
 
-// The respawn fallback pose (mirror of track-game.js ship.startPose), used when
-// no checkpoint has been reached yet.
+// The respawn fallback pose, used when no checkpoint has been reached yet.
 struct Pose {
   Vec3 pos, up, forward;
 };

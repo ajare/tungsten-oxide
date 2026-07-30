@@ -1,6 +1,6 @@
-// EditorHistory.hpp — whole-track deep-copy undo/redo, mirroring web/js/editor.js's
-// undoStack/redoStack (MAX_HISTORY-capped, a fresh edit clears redo). editor::TrackDefinition is
-// plain data (no live handles like editor.js's meshCache), so a deep copy is just a struct copy.
+// EditorHistory.hpp — whole-track deep-copy undo/redo:
+// undoStack/redoStack (kMaxHistory-capped, a fresh edit clears redo). editor::TrackDefinition is
+// plain data (no live handles), so a deep copy is just a struct copy.
 #pragma once
 
 #include <deque>
@@ -13,7 +13,7 @@ namespace editor {
 class History {
 public:
   // Call once *before* mutating, capturing pre-edit state -- one discrete edit or one continuous
-  // gesture (a drag, a field edit) = one recorded step, matching editor.js's pushUndo() contract.
+  // gesture (a drag, a field edit) = one recorded step.
   void push(const TrackDefinition& current) {
     undoStack_.push_back(current);
     if (undoStack_.size() > kMaxHistory) undoStack_.pop_front();

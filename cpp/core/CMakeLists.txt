@@ -20,7 +20,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (MSVC)
-  # /fp:precise (MSVC default) stops FMA contraction fusing a*b+c that the JS
+  # /fp:precise (MSVC default) stops FMA contraction fusing a*b+c that the reference physics engine
   # never used — keeps per-step error small so the tolerance stays easy to pick.
   add_compile_options(/fp:precise /W3 /EHsc)
 else()
@@ -103,12 +103,10 @@ if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
 endif()
 
 enable_testing()
-# test/ (the committed physics/geometry golden corpus, shared with the JS test suite) lives under
-# web/ alongside the rest of the JS/HTML implementation -- cpp/ itself stays at the repo root, so
-# this is one level deeper than before the move (see CLAUDE.md's "What this is").
-set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/traces)
-set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/fixtures/mesh)
-set(RANDOM_GEOMETRY_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../web/test/fixtures/random-track-mesh)
+# test-data/ (the committed physics/geometry golden corpus) lives under cpp/, a sibling of core/.
+set(TRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../test-data/traces)
+set(MESH_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../test-data/fixtures/mesh)
+set(RANDOM_GEOMETRY_FIXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../test-data/fixtures/random-track-mesh)
 set(RAW_TRACE_DIR ${TRACE_DIR}/raw)
 add_test(NAME parity
   COMMAND parity

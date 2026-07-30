@@ -1,7 +1,7 @@
 // Track.hpp — authored current-schema data plus the baked, world-space runtime
 // records and renderer-neutral geometry. Track::fromJson/fromFile normalizes the
 // definition and compiles its spline paths and mesh placements. The legacy
-// parity harness may still construct baked records directly from committed JS traces.
+// parity harness may still construct baked records directly from the committed golden trace corpus.
 #pragma once
 #include <filesystem>
 #include <optional>
@@ -62,22 +62,21 @@ struct Zone {
 };
 
 // A compiled trigger gate: baked world-space frame (center + right/up/fwd) and
-// extent, plus its checkpoint role (mirror of track-game.js buildTriggers).
+// extent, plus its checkpoint role.
 struct Trigger {
   std::string id, type, role, direction;
   Vec3 center, right, up, fwd;
   double halfWidth{0.0}, height{0.0};
 };
 
-// A self-intersecting crossing found on one edge of one path (EDITOR_PARITY_GAPS.md gap 1),
-// mirroring editor.js's crossing records (detectPathCrossings, web/js/editor.js:823-835): every place
-// the edge's own polyline crosses itself, keyed by the two control points nearest its branches (a
-// stable identity across edits/resampling, matching TrackCore.crossingKey) rather than by segment
-// index (which shifts on every edit). `a`/`b` are stored order-insensitively sorted so a lookup
-// never needs to check both orderings. Whether this crossing was actually collapsed by the bake
-// (span <= the default window, or a matching SelfIntersectionOverrideDefinition) is NOT stored
-// here -- like JS's crossingState(), that is re-derived at draw/lookup time from `span` plus
-// TrackDefinition::selfIntersectionOverrides, so an override change never needs re-detection.
+// A self-intersecting crossing found on one edge of one path: every place the edge's own polyline
+// crosses itself, keyed by the two control points nearest its branches (a stable identity across
+// edits/resampling, matching TrackCore.crossingKey) rather than by segment index (which shifts on
+// every edit). `a`/`b` are stored order-insensitively sorted so a lookup never needs to check both
+// orderings. Whether this crossing was actually collapsed by the bake (span <= the default window,
+// or a matching SelfIntersectionOverrideDefinition) is NOT stored here -- that is re-derived at
+// draw/lookup time from `span` plus TrackDefinition::selfIntersectionOverrides, so an override
+// change never needs re-detection.
 struct SelfIntersection {
   std::string side;  // "left" | "right"
   std::string a, b;  // control-point ids, sorted (a <= b)
@@ -100,8 +99,8 @@ struct Track {
   // JSON-only consumers leave this null and retain analytical collision.
   TrackCollisionSurfacePtr collisionSurface;
   // Every self-intersection found across every path/side, from an UNBOUNDED full pairwise scan on
-  // the pre-collapse edges (EDITOR_PARITY_GAPS.md gap 1) -- unlike the bounded, iterative collapse
-  // pass that actually mutates the baked geometry, this finds every crossing regardless of span, so
+  // the pre-collapse edges -- unlike the bounded, iterative collapse pass that actually mutates
+  // the baked geometry, this finds every crossing regardless of span, so
   // the editor can show/cycle markers for far ("auto-keep") crossings too. Populated only when
   // `fromJson`/`fromFile` is called with `detectSelfIntersections` true (the default); left empty
   // otherwise. Empty (not skipped) is indistinguishable from "genuinely no crossings" from this
@@ -114,8 +113,7 @@ struct Track {
   // `detectSelfIntersections` gates the extra O(N^2) full-pairwise-scan pass that populates
   // `selfIntersections` above -- on by default (every load is a one-time cost everywhere except the
   // editor's own live-preview rebake, which passes false while a drag is in progress and reuses its
-  // last good detection result instead, mirroring editor.js's own `if (!dragging)` guard around
-  // detectPathCrossings, EDITOR_PARITY_GAPS.md gap 1).
+  // last good detection result instead).
   static TrackLoadResult fromJson(std::string_view text, bool detectSelfIntersections = true);
   static TrackLoadResult fromFile(const std::filesystem::path& path, bool detectSelfIntersections = true);
 };

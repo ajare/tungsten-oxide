@@ -1,9 +1,6 @@
-// GameSession.hpp — the renderer-neutral session/roster layer
-// (NATIVE_GAME_RUNTIME_PLAN.md §2.3/§2.4/§2.5/§2.6). Owns a compiled Track and
+// GameSession.hpp — the renderer-neutral session/roster layer. Owns a compiled Track and
 // its Simulation, a fixed ship roster, a deterministic session clock, and the
-// gameplay events fired since the last step. Mirrors the frame/substep
-// orchestration in web/js/track-game.js's updateShip/animate (lines 1092-1134,
-// 1466-1475) and the event surface fireTrigger's onTriggerFired hook exposes.
+// gameplay events fired since the last step.
 //
 // No renderer, DOM, image, audio, or platform-input dependency: platform code
 // translates its own input into ControlIntent outside this class.
@@ -17,7 +14,7 @@
 namespace tox {
 
 // One frame's worth of a single ship's input, sampled by the host once per
-// rendered frame per ship (mirror of web/js/track-game.js's IDLE_INTENT shape).
+// rendered frame per ship.
 struct ControlIntent {
   double throttle{0.0};
   double brake{0.0};
@@ -39,8 +36,7 @@ struct GameEvent {
 
 class GameSession {
 public:
-  // Largest frame delta accepted before clamping (mirror of track-game.js's
-  // animate(): `Math.min(clock.getDelta(), 0.05)`), so a debugger pause or a
+  // Largest frame delta accepted before clamping, so a debugger pause or a
   // dropped frame cannot inject a huge, tunneling-prone physics step.
   static constexpr double MAX_FRAME_DELTA = 0.05;
 

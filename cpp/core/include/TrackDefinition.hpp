@@ -49,9 +49,9 @@ struct PathDefinition {
   std::vector<TrackPointDefinition> points;
   std::optional<TextureBindingDefinition> texture;
   // Namespace-qualified Willpower TrackMaterial name (e.g. "Tracks/DefaultTrack") authored by
-  // cpp/editor's Materials panel; empty when absent (JS-originated tracks never set this).
-  // TrackBake.cpp falls back to the legacy "road" materialKey when empty, so JS<->C++ geometry
-  // parity is unaffected for tracks that never carry this field.
+  // cpp/editor's Materials panel; empty when absent (older tracks never set this).
+  // TrackBake.cpp falls back to the legacy "road" materialKey when empty, so
+  // output is unaffected for tracks that never carry this field.
   std::string material;
   std::vector<ReservationDefinition> reservations;
 };

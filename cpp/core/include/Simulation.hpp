@@ -16,7 +16,7 @@ namespace tox {
 
 inline const Vec3 UP{0, 1, 0};
 
-// sampleTrack's result (mirror of the JS _sample).
+// sampleTrack's result.
 struct Sample {
   Vec3 pos, tangent, edgeRight, normal;
   double halfW{0.0}, sLeft{0.0}, sRight{0.0};
@@ -49,7 +49,7 @@ enum class TriggerNotice { Fired,
                            CheckpointAccepted,
                            LapCompleted };
 
-// --- pure helpers (mirror of the track-physics.js exports) -----------------
+// --- pure helpers ------------------------------------------------------------
 double effectiveMaxSpeed(const Physics& p);
 void triggerBoost(Ship& ship, const Zone& zone);
 void tickBoost(Ship& ship, double dt);
@@ -71,10 +71,9 @@ public:
 
   const Track& track() const { return track_; }
 
-  // Game-only observation hooks (mirror of web/js/track-physics.js's injected
-  // `opts.onTriggerFired`/`opts.now`). Both default to no-ops so existing
-  // headless callers are unaffected; a GameSession sets these to surface
-  // gameplay events and a deterministic session clock. `now()` feeds the
+  // Game-only observation hooks (injected trigger-fired callback / session-time source). Both
+  // default to no-ops so existing headless callers are unaffected; a GameSession sets these to
+  // surface gameplay events and a deterministic session clock. `now()` feeds the
   // Race::lapStartedAt/flashUntil timestamps on lap completion only — never
   // read for anything else in the deterministic step itself.
   std::function<void(Ship&, const Trigger&, const std::string& dir, TriggerNotice)> onTriggerFired;
@@ -85,7 +84,7 @@ public:
   // Recovers the ship's evaluator parameter g on the path the sample landed on.
   double shipParamG(const Sample& sample) const;
 
-  // Surface ownership and zone/trigger detection (mirror of track-physics.js).
+  // Surface ownership and zone/trigger detection.
   const MeshRegion* meshRegionAt(double x, double z, double shipY) const;
   const MeshRegion* surfaceOwnerAt(double x, double z, double shipY, const Sample& corridorSample) const;
   void detectZoneTriggers(Ship& ship, const Sample& sample, const MeshRegion* meshRegion) const;

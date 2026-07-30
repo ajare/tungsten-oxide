@@ -25,16 +25,14 @@ const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
 // Mirrors TopDownCanvas.cpp's kHoverRingColor: a separate, softer ring further out from the fill,
 // so it never gets confused with the tighter selection border even when both apply.
 const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
-// Disjoint-seam ring (EDITOR_PARITY_GAPS.md gap 9), matching editor.js's own drawElev height-handle
-// styling ('#ffcc44', web/js/editor.js:1521-1523) -- a thicker amber stroke, not a cross (that's a
-// separate drawTop-only styling, still gap 8/EDITOR_PARITY_GAPS.md's own open item there).
+// Disjoint-seam ring: a thicker amber stroke, not a cross (that's a separate drawTop-only styling
+// in TopDownCanvas.cpp).
 const ImU32 kDisjointColor = IM_COL32(255, 204, 68, 255);
-const ImU32 kIndexLabelColor = IM_COL32(127, 184, 216, 255);  // matches editor.js's '#7fb8d8'
-// Selected mesh region's elevation line (EDITOR_PARITY_GAPS.md gap 4): matches editor.js's
-// '#b98cff' idle / '#f0e4ff' dragging (web/js/editor.js:1483-1484), 2px idle / 3px dragging.
+const ImU32 kIndexLabelColor = IM_COL32(127, 184, 216, 255);
+// Selected mesh region's elevation line: idle / dragging, 2px idle / 3px dragging.
 const ImU32 kMeshElevLineColor = IM_COL32(185, 140, 255, 255);
 const ImU32 kMeshElevLineDraggingColor = IM_COL32(240, 228, 255, 255);
-constexpr float kMeshElevPickPx = 6.0f;  // matches editor.js's MESH_ELEV_PICK_PX
+constexpr float kMeshElevPickPx = 6.0f;
 
 struct Layout {
   float w{1.0f}, h{1.0f};
@@ -48,16 +46,14 @@ float screenY(const Layout& layout, double y) { return (layout.h - kPadY) - stat
 
 double worldYAt(const Layout& layout, float screenYPx) { return layout.minY + ((layout.h - kPadY) - screenYPx) / layout.yScale; }
 
-// Cumulative-arc-length profile of the baked centerline (EDITOR_PARITY_GAPS.md gap 9), replacing
-// this view's original authored-ORDER x-axis with true arc length -- matching editor.js's own
-// cumulative-XZ-distance x-axis (web/js/editor.js:1433-1451) and making the profile line up exactly
-// with the control-point handles plotted on it. `frameCumulative[i]` is the arc length from frame
-// 0 up to baked frame i; for a CLOSED path there's one extra trailing entry (index == centerline
-// size) holding the full lap length, representing the wrap back to frame 0 -- this both lets
-// interpolation cross the seam cleanly and doubles as the arc length of the closed-loop "echo"
-// slot (see xFracForPositionIndex). `valid` is false (and every lookup falls back to plain
-// order-based spacing, this view's original simplification) when there's no baked centerline yet
-// to measure -- mirrors this file's existing "baked may be null mid-edit" tolerance.
+// Cumulative-arc-length profile of the baked centerline, replacing an authored-ORDER x-axis with
+// true arc length so the profile lines up exactly with the control-point handles plotted on it.
+// `frameCumulative[i]` is the arc length from frame 0 up to baked frame i; for a CLOSED path
+// there's one extra trailing entry (index == centerline size) holding the full lap length,
+// representing the wrap back to frame 0 -- this both lets interpolation cross the seam cleanly and
+// doubles as the arc length of the closed-loop "echo" slot (see xFracForPositionIndex). `valid` is
+// false (and every lookup falls back to plain order-based spacing) when there's no baked
+// centerline yet to measure -- mirrors this file's existing "baked may be null mid-edit" tolerance.
 struct ArcProfile {
   bool valid{false};
   bool closed{false};
@@ -109,8 +105,8 @@ double arcLengthAtG(const ArcProfile& profile, std::size_t centerlineCount, doub
 // Fraction across the plotted x-axis [0, 1] for a control-point "slot" at position-space index
 // `slotIndex` (g = slotIndex): a normal control point for slotIndex in [0, positionCount), or --
 // for a CLOSED path only -- the echo slot at slotIndex == positionCount, which resolves to g ==
-// gMax and therefore arc length == totalArc, i.e. the far right edge (mirrors editor.js's `slots =
-// closed ? n + 1 : n`). Falls back to plain order-based spacing when no arc profile is available.
+// gMax and therefore arc length == totalArc, i.e. the far right edge. Falls back to plain
+// order-based spacing when no arc profile is available.
 double xFracForPositionIndex(const ArcProfile& arc, std::size_t centerlineCount, int slotIndex, bool closed, int positionCount) {
   if (arc.valid) {
     const double gMax = closed ? positionCount : positionCount - 1;
@@ -123,11 +119,10 @@ double xFracForPositionIndex(const ArcProfile& arc, std::size_t centerlineCount,
 float screenX(const Layout& layout, double xFrac) { return kPadX + static_cast<float>(xFrac) * (layout.w - 2.0f * kPadX); }
 
 // Inverse of arcLengthAtG: the path parameter g in [0, gMax] whose arc length equals
-// `arcFrac * totalArc`. Used for right-click-to-insert (EDITOR_PARITY_GAPS.md gap 5), the
-// counterpart of JS's sampleAtArc mapping a clicked screen x back to a curve parameter. Falls back
-// to plain `arcFrac * gMax` (matching xFracForPositionIndex's own fallback) when no arc profile is
-// available. Linear scan over frameCumulative is fine here: this only runs once per right-click,
-// not per frame.
+// `arcFrac * totalArc`. Used for right-click-to-insert, mapping a clicked screen x back to a curve
+// parameter. Falls back to plain `arcFrac * gMax` (matching xFracForPositionIndex's own fallback)
+// when no arc profile is available. Linear scan over frameCumulative is fine here: this only runs
+// once per right-click, not per frame.
 double gAtArcFraction(const ArcProfile& arc, std::size_t centerlineCount, double arcFrac, double gMax) {
   if (!arc.valid || arc.frameCumulative.size() < 2) return std::clamp(arcFrac, 0.0, 1.0) * gMax;
   const double targetArc = std::clamp(arcFrac, 0.0, 1.0) * arc.totalArc;
@@ -183,8 +178,7 @@ struct YRange {
 // show. Split out from computeLayout() so a drag gesture can combine this frame's raw extent with
 // the extent frozen at drag-start (see DrawElevationView) without re-deriving the flat-profile
 // padding twice. `extraY`, when present, is folded into the range too -- used to keep the selected
-// mesh region's elevation line on-panel even when it sits well above or below this curve (mirrors
-// web/js/editor.js:1410-1415's `if (selectedMeshPlacement) { minY = Math.min(minY, ...); ... }`).
+// mesh region's elevation line on-panel even when it sits well above or below this curve.
 YRange rawYRange(const std::vector<std::pair<int, double>>& points, std::optional<double> extraY = std::nullopt) {
   double minY = 1e300, maxY = -1e300;
   for (const auto& [index, y] : points) {
@@ -206,7 +200,7 @@ Layout layoutFromRange(double minY, double maxY, bool closed, int positionCount,
   layout.closed = closed;
   layout.positionCount = positionCount;
   if (maxY - minY < 1.0) {
-    // Flat or near-flat profiles still need visible headroom, matching editor.js padding a
+    // Flat or near-flat profiles still need visible headroom -- pad a
     // degenerate [minY, maxY] out to a sane span rather than dividing by ~0.
     const double mid = (minY + maxY) / 2.0;
     minY = mid - 5.0;
@@ -223,7 +217,7 @@ Layout computeLayout(const std::vector<std::pair<int, double>>& points, bool clo
   return layoutFromRange(range.minY, range.maxY, closed, static_cast<int>(points.size()), w, h);
 }
 
-// blue (low) -> teal -> warm (high), ported 1:1 from editor.js's heightColor (web/js/editor.js:755-762).
+// blue (low) -> teal -> warm (high).
 ImU32 heightColor(double y) {
   const double t = std::clamp(y / 8.0, -1.0, 1.0);
   const int r = static_cast<int>(std::lround(60.0 + 150.0 * std::max(0.0, t)));
@@ -232,8 +226,7 @@ ImU32 heightColor(double y) {
   return IM_COL32(r, g, b, 255);
 }
 
-// Ported from editor.js's niceAxisStep (web/js/editor.js:1342-1348): rounds a raw tick spacing down to
-// a "nice" 1/2/5-times-a-power-of-ten step.
+// Rounds a raw tick spacing down to a "nice" 1/2/5-times-a-power-of-ten step.
 double niceAxisStep(double range, double targetTicks) {
   const double raw = range / std::max(1.0, targetTicks);
   if (!(raw > 0.0) || !std::isfinite(raw)) return 1.0;
@@ -243,19 +236,17 @@ double niceAxisStep(double range, double targetTicks) {
   return step * magnitude;
 }
 
-// A few short dashes rather than one native ImGui doesn't support -- used only for the zero line
-// (EDITOR_PARITY_GAPS.md gap 9 explicitly calls it out as "dashed"), unlike this file's other solid
-// lines, which already accept a solid-for-dashed simplification elsewhere (e.g. drawCreateDraft in
-// TopDownCanvas.cpp).
+// A few short dashes rather than one native ImGui doesn't support -- used only for the zero line,
+// which is explicitly "dashed", unlike this file's other solid lines, which already accept a
+// solid-for-dashed simplification elsewhere (e.g. drawCreateDraft in TopDownCanvas.cpp).
 void addDashedHLine(ImDrawList* drawList, float x0, float x1, float y, ImU32 color, float thickness) {
   constexpr float kDash = 4.0f, kGap = 4.0f;
   for (float x = x0; x < x1; x += kDash + kGap) drawList->AddLine(ImVec2(x, y), ImVec2(std::min(x + kDash, x1), y), color, thickness);
 }
 
 // Full-width horizontal gridline per "nice" Y-axis tick, each labelled in the left gutter, plus a
-// distinctly-emphasized dashed zero line -- mirrors editor.js's drawElevYAxis (web/js/editor.js:1360-
-// 1386) and its immediately-following zero-line block (:1463-1477). The tick landing on zero is
-// skipped (same reasoning as JS: it would collide with the zero line's own label).
+// distinctly-emphasized dashed zero line. The tick landing on zero is skipped -- it would collide
+// with the zero line's own label.
 void drawYAxis(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& layout) {
   const double range = layout.maxY - layout.minY;
   if (range > 0.0 && std::isfinite(range)) {
@@ -282,10 +273,8 @@ void drawYAxis(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& l
 
 // Nearest position-point "slot" (see xFracForPositionIndex) to `mouseLocal`, within kPickRadiusPx,
 // returned as the raw Path::points index it resolves to -- a hit on the closed-loop echo slot
-// resolves to point 0, same as editor.js's handleAtElev (`idx = i % n`, web/js/editor.js:2701). Shared
-// by click-to-select and hover-highlight so they always agree on what's "under the cursor". Empty
-// (-1) when `showPositionPoints` is false, matching handleAtElev's own `pointFilters.position`
-// guard (web/js/editor.js:2694).
+// resolves to point 0 (`idx = i % n`). Shared by click-to-select and hover-highlight so they always
+// agree on what's "under the cursor". Empty (-1) when `showPositionPoints` is false.
 int nearestPointIndex(const std::vector<std::pair<int, double>>& points, const ArcProfile& arc, std::size_t centerlineCount, const Layout& layout,
                      const ImVec2& mouseLocal, bool showPositionPoints) {
   if (!showPositionPoints || points.empty()) return -1;
@@ -321,9 +310,8 @@ void drawBakedProfile(ImDrawList* drawList, const ImVec2& canvasOrigin, const La
 }
 
 // Full-width horizontal line at the selected mesh region's elevation, with an "<asset>  y <elev>"
-// label -- mirrors editor.js's selected-mesh elevation line (web/js/editor.js:1479-1489). A mesh
-// placement has no path parameter, so unlike a position point's marker this always spans the
-// panel's full width rather than sitting at one x position.
+// label. A mesh placement has no path parameter, so unlike a position point's marker this always
+// spans the panel's full width rather than sitting at one x position.
 void drawMeshElevationLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const Layout& layout, const MeshPlacement& placement, bool dragging) {
   const float y = canvasOrigin.y + screenY(layout, placement.elevation);
   const ImU32 color = dragging ? kMeshElevLineDraggingColor : kMeshElevLineColor;
@@ -356,15 +344,15 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   const Path& path = state.track().paths[pathIndex];
   const std::vector<std::pair<int, double>> points = collectPositionPoints(path);
   const tox::Path* bakedPath = (baked != nullptr && pathIndex < static_cast<int>(baked->paths.size())) ? &baked->paths[pathIndex] : nullptr;
-  // Arc-length profile (EDITOR_PARITY_GAPS.md gap 9): rebuilt fresh every call, NOT frozen like the
+  // Arc-length profile: rebuilt fresh every call, NOT frozen like the
   // Y layout below -- a Y-only drag (position elevation or mesh elevation) never changes any path's
   // X/Z, so the arc length along this curve is unaffected by it, even though main.cpp does rebake
   // on every dragging frame.
   const ArcProfile arc = buildArcProfile(bakedPath, path.closed);
   const std::size_t centerlineCount = bakedPath != nullptr ? bakedPath->centerline.size() : 0;
-  // Selected mesh region (EDITOR_PARITY_GAPS.md gap 4), if any -- its elevation line is drawn/
-  // draggable in this panel regardless of which path is currently shown, mirroring editor.js's
-  // selectedPlacement() (a mesh has no path parameter of its own).
+  // Selected mesh region, if any -- its elevation line is drawn/
+  // draggable in this panel regardless of which path is currently shown (a mesh has no path
+  // parameter of its own).
   const MeshPlacement* meshPlacement = state.selectedMeshId().has_value() ? state.findMeshPlacement(*state.selectedMeshId()) : nullptr;
   std::optional<double> meshElevationForRange;
   if (meshPlacement != nullptr) meshElevationForRange = meshPlacement->elevation;
@@ -397,16 +385,14 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   // always agree on which point is "under the cursor".
   const int hoveredRawIndex = hovered ? nearestPointIndex(points, arc, centerlineCount, layout, mouseLocal, showPositionPoints) : -1;
 
-  // Selected mesh region's elevation line: grabbed on vertical proximity alone, matching
-  // editor.js's `if (Math.abs(y - my) <= MESH_ELEV_PICK_PX)` (web/js/editor.js:3566) -- no x-range
+  // Selected mesh region's elevation line: grabbed on vertical proximity alone -- no x-range
   // restriction, since the line spans the panel's full width.
   const bool meshElevLineHovered =
       hovered && meshPlacement != nullptr && std::abs(mouseLocal.y - screenY(layout, meshPlacement->elevation)) <= kMeshElevPickPx;
   // Persists across frames for the life of one drag gesture, mirroring frozenLayout's own
-  // static-local lifetime just above. Set on the mousedown that starts a gesture (mirrors JS
-  // checking mesh-elevation proximity FIRST in its mousedown handler, before roll/position hit
-  // tests, web/js/editor.js:3560-3576), so a click landing on the line always grabs it rather than
-  // falling through to point selection.
+  // static-local lifetime just above. Set on the mousedown that starts a gesture, checking
+  // mesh-elevation proximity FIRST, before roll/position hit tests, so a click landing on the line
+  // always grabs it rather than falling through to point selection.
   static bool meshElevDragArmed = false;
 
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -419,11 +405,9 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
     }
   }
 
-  // Right-click to insert a new position control point (EDITOR_PARITY_GAPS.md gap 5), mirroring
-  // insertPositionAtSide (web/js/editor.js:2806-2826, wired at :3557): X/Z come from the baked
+  // Right-click to insert a new position control point: X/Z come from the baked
   // centerline at the clicked arc position, Y comes from the click's height. Gated on
-  // showPositionPoints and the click landing inside the plot gutter, same as JS's
-  // `pointFilters.position && x >= elevGeom.padX && x <= elevGeom.w - elevGeom.padX`.
+  // showPositionPoints and the click landing inside the plot gutter.
   if (showPositionPoints && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mouseLocal.x >= kPadX &&
       mouseLocal.x <= layout.w - kPadX && bakedPath != nullptr && !bakedPath->centerline.empty()) {
     const int n = EditorState::positionCount(path);
@@ -476,9 +460,9 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
   if (bakedPath != nullptr) drawBakedProfile(drawList, canvasOrigin, layout, *bakedPath, arc);
   if (meshPlacement != nullptr) drawMeshElevationLine(drawList, canvasOrigin, layout, *meshPlacement, meshElevDragging);
 
-  // Height handles: circles colored by heightColor(y) (editor.js's own node fill), a closed path
-  // getting one extra faded "echo" slot of point 0 at the far right (web/js/editor.js:1508-1526).
-  // Skipped entirely when showPositionPoints is false, matching JS's `if (pointFilters.position)`.
+  // Height handles: circles colored by heightColor(y), a closed path
+  // getting one extra faded "echo" slot of point 0 at the far right.
+  // Skipped entirely when showPositionPoints is false.
   if (showPositionPoints && !points.empty()) {
     const int n = static_cast<int>(points.size());
     const int slots = path.closed ? n + 1 : n;
@@ -486,9 +470,8 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
       const int pointsIndex = slot % n;
       const int rawIndex = points[pointsIndex].first;
       const bool echo = path.closed && slot == n;
-      // NOT gated on !echo: when point 0 is selected/hovered, JS draws the echo slot with the same
-      // selected/hovered styling too, just faded like every other echo attribute (web/js/editor.js's
-      // `isSel = idx === sel.point`, unconditional on `echo` -- web/js/editor.js:1518).
+      // NOT gated on !echo: when point 0 is selected/hovered, the echo slot draws with the same
+      // selected/hovered styling too, just faded like every other echo attribute.
       const bool isSelected = selectionOnThisPath && selection.pointIndex == rawIndex;
       const bool isHovered = rawIndex == hoveredRawIndex;
       const bool isDisjoint =
@@ -497,11 +480,11 @@ bool DrawElevationView(EditorState& state, const tox::Track* baked, int pathInde
       const ImVec2 screen(canvasOrigin.x + screenX(layout, xFracForPositionIndex(arc, centerlineCount, slot, path.closed, n)),
                           canvasOrigin.y + screenY(layout, points[pointsIndex].second));
       const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
-      const ImU32 alphaMask = echo ? 0x73000000u : 0xFF000000u;  // ~45% alpha for the echo, matching JS's ctx.globalAlpha = 0.45
+      const ImU32 alphaMask = echo ? 0x73000000u : 0xFF000000u;  // ~45% alpha for the echo
       drawList->AddCircleFilled(screen, radius, ((isSelected ? kSelectedPointColor : heightColor(points[pointsIndex].second)) & 0x00FFFFFFu) | alphaMask);
       // Ring only, no cross: unlike the top-down view's own disjoint-node styling (drawTop's amber
-      // X, TopDownCanvas.cpp's kDisjointColor use), drawElev's disjoint indicator is just a
-      // thicker amber stroke (web/js/editor.js:1521-1523) -- there is no cross in this view.
+      // X, TopDownCanvas.cpp's kDisjointColor use), this view's disjoint indicator is just a
+      // thicker amber stroke -- there is no cross in this view.
       const ImU32 strokeColor = isSelected ? kSelectedOutlineColor : (isDisjoint ? kDisjointColor : IM_COL32(0, 0, 0, 153));
       drawList->AddCircle(screen, radius, (strokeColor & 0x00FFFFFFu) | alphaMask, 0, isSelected || isDisjoint ? 3.0f : 1.5f);
       if (isHovered) drawList->AddCircle(screen, radius + 3.0f, kHoverRingColor, 0, 2.0f);

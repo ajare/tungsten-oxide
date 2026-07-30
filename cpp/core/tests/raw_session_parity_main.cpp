@@ -1,12 +1,12 @@
-// raw_session_parity_main.cpp — the raw-session parity replayer/comparator
-// (NATIVE_GAME_RUNTIME_PLAN.md's completion criteria), modeled directly on
-// parity_main.cpp's structure but operating on a roster instead of one ship.
+// raw_session_parity_main.cpp — the raw-session parity replayer/comparator,
+// modeled directly on parity_main.cpp's structure but operating on a roster instead of one ship.
 //
 // Two fixture kinds, dispatched by `meta.kind`:
 //  - "raw-session-init": Track::fromJson(sourceTrack) -> GameSession(track,
 //    shipCount) -> compare the freshly-built roster against the fixture's
-//    recorded roster. Proves independent native/JS ship-factory and
-//    starting-grid initialization — no JS-created initialState involved.
+//    recorded roster. Proves independent native ship-factory and
+//    starting-grid initialization against the recorded fixture, with no externally-created
+//    initialState involved.
 //  - "raw-session-step": for each recorded frame, load the "before" roster +
 //    session time into a GameSession, call step(intents, dt), and compare the
 //    resulting roster + emitted events against the recorded "after"/events —

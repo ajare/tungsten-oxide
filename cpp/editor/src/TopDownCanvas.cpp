@@ -18,8 +18,8 @@ namespace editor {
 namespace {
 
 constexpr float kPointRadius = 4.0f;
-constexpr float kPickRadiusPx = 10.0f;                    // matches editor.js's nodeAtTop hit radius
-const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);  // matches web/editor.html's #canvasWrap
+constexpr float kPickRadiusPx = 10.0f;
+const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);
 const ImU32 kGridColor = IM_COL32(255, 255, 255, 18);
 const ImU32 kRoadColor = IM_COL32(60, 70, 82, 255);
 const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
@@ -31,28 +31,25 @@ const ImU32 kCenterlineColor = IM_COL32(120, 170, 220, 200);
 const ImU32 kCurrentPathCenterlineColor = IM_COL32(255, 224, 102, 255);
 constexpr float kCenterlineThickness = 2.0f;
 constexpr float kCurrentPathCenterlineThickness = 3.5f;
-// Selected-point segment highlight (web/js/editor.js's drawSegmentHighlight, drawTop:1156-1165):
-// incoming (previous) segment in green #31d66b, outgoing (next) segment in red #ff3344, both
-// solid 4px lines -- matches editor.js exactly despite reading like a red/blue convention at a
+// Selected-point segment highlight: incoming (previous) segment in green #31d66b, outgoing (next)
+// segment in red #ff3344, both solid 4px lines -- despite reading like a red/blue convention at a
 // glance.
 const ImU32 kIncomingSegmentColor = IM_COL32(49, 214, 107, 255);
 const ImU32 kOutgoingSegmentColor = IM_COL32(255, 51, 68, 255);
 constexpr float kSegmentHighlightThickness = 4.0f;
-// Drag-to-weld target ring (new functionality -- see EditorState::hitTestOpenEndpoint's comment):
-// the same green web/js/editor.js uses for its own join-drag target highlight (editor.js:1186,
-// '#31d66b'), drawn as an extra outer ring so it reads clearly alongside the selected/hover rings
-// above without a fourth distinct fill color to track.
+// Drag-to-weld target ring (see EditorState::hitTestOpenEndpoint's comment): the same green as the
+// join-drag target highlight below ('#31d66b'), drawn as an extra outer ring so it reads clearly
+// alongside the selected/hover rings above without a fourth distinct fill color to track.
 const ImU32 kWeldTargetColor = IM_COL32(49, 214, 107, 255);
 constexpr float kWeldTargetRingThickness = 2.5f;
-// Shift-drag rubber band (EDITOR_PARITY_GAPS.md gap 6, new interaction alongside the plain
-// drag-to-weld above): a live line from the dragged endpoint to the cursor, matching
-// web/js/editor.js's joinDrag colors exactly -- yellow while free, the SAME green as kWeldTargetColor
-// once snapped onto a valid drop target (web/js/editor.js:1215, '#ffd23c'/'#31d66b'). Drawn solid
-// rather than JS's dashed [6,4]: this file already accepts that simplification elsewhere (e.g.
-// drawCreateDraft's solid line for JS's own dashed create-mode draft).
+// Shift-drag rubber band (a separate interaction alongside the plain
+// drag-to-weld above): a live line from the dragged endpoint to the cursor -- yellow while free,
+// the SAME green as kWeldTargetColor once snapped onto a valid drop target ('#ffd23c'/'#31d66b').
+// Drawn solid rather than dashed: this file already accepts that simplification elsewhere (e.g.
+// drawCreateDraft's solid line for a dashed create-mode draft).
 const ImU32 kJoinDragFreeColor = IM_COL32(255, 210, 60, 255);
 constexpr float kJoinDragLineThickness = 2.0f;
-constexpr float kJoinDragMinPx = 12.0f;  // matches editor.js's JOIN_DRAG_MIN_PX
+constexpr float kJoinDragMinPx = 12.0f;
 const ImU32 kPositionPointColor = IM_COL32(240, 200, 60, 255);
 const ImU32 kSelectedPointColor = IM_COL32(255, 90, 90, 255);
 // Selected points get a crisp white "handle" border immediately at the fill edge, on top of the
@@ -64,10 +61,10 @@ const ImU32 kSelectedOutlineColor = IM_COL32(255, 255, 255, 255);
 // and "hovered + selected" both read clearly without a fourth distinct fill color to track, and
 // without being confusable with the tighter selection border above.
 const ImU32 kHoverRingColor = IM_COL32(255, 255, 255, 140);
-// Matches editor.js's WIDTH_COLOR (#b6ff3c) / CROSS_SECTION_COLOR (#d58cff); roll's own stroke
-// colour is computed per-point by rollTint() below, matching editor.js's rollTint(), not a fixed
-// constant. All three handles fill white (matches editor.js's roll/width/cross-section handles,
-// which are always '#ffffff' regardless of selection -- only stroke width/handle size change).
+// Width color #b6ff3c / cross-section color #d58cff; roll's own stroke
+// colour is computed per-point by rollTint() below, not a fixed
+// constant. All three handles fill white regardless of selection -- only stroke width/handle size
+// change.
 const ImU32 kWidthColor = IM_COL32(182, 255, 60, 255);
 const ImU32 kCrossSectionColor = IM_COL32(213, 140, 255, 255);
 const ImU32 kAuxHandleFillColor = IM_COL32(255, 255, 255, 255);
@@ -77,33 +74,29 @@ const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
 const ImU32 kRailEdgeSelectedColor = IM_COL32(255, 90, 90, 255);
-// Disjoint-seam node ring + X cross (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's own
-// '#ffcc44' styling (web/js/editor.js:1188-1197) -- unlike ElevationView.cpp's own disjoint styling,
-// which is ring-only, this view also draws the X cross, matching drawTop specifically.
+// Disjoint-seam node ring + X cross ('#ffcc44' styling) -- unlike ElevationView.cpp's own disjoint
+// styling, which is ring-only, this view also draws the X cross.
 const ImU32 kDisjointColor = IM_COL32(255, 204, 68, 255);
-// Position-point index/elevation label (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's
-// '#bfe6f7' (web/js/editor.js:1199).
+// Position-point index/elevation label ('#bfe6f7').
 const ImU32 kPositionLabelColor = IM_COL32(191, 230, 247, 255);
 
-// Matches editor.js's physics-sample dot colors (web/js/editor.js:1095: '#ff9c3c' idle, '#ff5ea8'
-// selected).
+// Physics-sample dot colors: '#ff9c3c' idle, '#ff5ea8' selected.
 const ImU32 kPhysicsPointColor = IM_COL32(255, 156, 60, 255);
 const ImU32 kPhysicsSelectedColor = IM_COL32(255, 94, 168, 255);
-constexpr float kMeshEdgePickPx = 8.0f;  // matches editor.js's MESH_EDGE_PICK_PX
+constexpr float kMeshEdgePickPx = 8.0f;
 
-// Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1), matching editor.js's
-// CROSSING_COLORS exactly (web/js/editor.js:812-819): grey/amber for the automatic decision, red/green
+// Self-intersection crossing markers: grey/amber for the automatic decision, red/green
 // once a user override forces the opposite. kCrossingHaloColor is the dark contrast halo drawn
-// behind every marker so it stays visible over any ribbon/centerline color (web/js/editor.js:1119).
+// behind every marker so it stays visible over any ribbon/centerline color.
 enum class CrossingState { AutoCollapse, AutoKeep, ForcedCollapse, ForcedKeep };
 const ImU32 kCrossingAutoCollapseColor = IM_COL32(185, 194, 208, 255);   // #b9c2d0
 const ImU32 kCrossingAutoKeepColor = IM_COL32(255, 176, 32, 255);       // #ffb020
 const ImU32 kCrossingForcedCollapseColor = IM_COL32(255, 51, 85, 255);  // #ff3355
 const ImU32 kCrossingForcedKeepColor = IM_COL32(55, 209, 122, 255);     // #37d17a
 const ImU32 kCrossingHaloColor = IM_COL32(0, 0, 0, 153);
-constexpr float kCrossingHitRadiusPx = 11.0f;  // matches editor.js's CROSSING_HIT_RADIUS
+constexpr float kCrossingHitRadiusPx = 11.0f;
 
-// Matches editor.js's ZONE_FILL/ZONE_STROKE (web/js/editor.js:4209-4210) minus the startGrid checker
+// Zone fill/stroke colors, minus the startGrid checker
 // pattern, which is cosmetic only -- a flat fill reads fine at editor zoom levels.
 const ImU32 kZoneBoostFillColor = IM_COL32(255, 165, 32, 107);         // rgba(255,165,32,0.42)
 const ImU32 kZoneBoostStrokeColor = IM_COL32(255, 176, 32, 255);       // #ffb020
@@ -111,13 +104,13 @@ const ImU32 kZoneStartGridFillColor = IM_COL32(207, 214, 221, 97);     // rgba(2
 const ImU32 kZoneStartGridStrokeColor = IM_COL32(207, 214, 221, 255);  // #cfd6dd
 const ImU32 kZoneSelectedStrokeColor = IM_COL32(255, 90, 90, 255);
 
-// Matches editor.js's TRIGGER_COLOR / triggerColor (web/js/editor.js:4347-4350). Selection is shown
+// Trigger colors. Selection is shown
 // via line/point weight only (matching drawTriggers), not a separate highlight color.
 const ImU32 kTriggerDummyColor = IM_COL32(255, 94, 168, 255);        // #ff5ea8
 const ImU32 kTriggerCheckpointColor = IM_COL32(127, 231, 255, 255);  // #7fe7ff
 const ImU32 kTriggerFinishColor = IM_COL32(255, 211, 79, 255);       // #ffd34f
 
-// Mirrors editor.js's computeTrackBounds: authored control points plus every mesh region's baked
+// Authored control points plus every mesh region's baked
 // bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
 TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked) {
   TrackBounds2D bounds{1e300, -1e300, 1e300, -1e300};
@@ -147,8 +140,7 @@ ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ScreenPoint2D& local) {
 }
 ImVec2 toAbsolute(const ImVec2& canvasOrigin, const ImVec2& local) { return ImVec2(canvasOrigin.x + local.x, canvasOrigin.y + local.y); }
 
-// Road-fill color formulas for Flat/Elevation render modes (EDITOR_PARITY_FIXES.md gap 10),
-// ported 1:1 from web/js/editor.js's rollColor/elevationColor (web/js/editor.js:774-787).
+// Road-fill color formulas for Flat/Elevation render modes.
 ImU32 rollFillColor(double rollDeg) {
   const double t = std::clamp(std::abs(rollDeg) / 180.0, 0.0, 1.0);
   const int r = static_cast<int>(std::lround(40.0 + (210.0 - 40.0) * t));
@@ -163,9 +155,8 @@ ImU32 elevationFillColor(double y, double minY, double maxY) {
   return IM_COL32(r, g, 55, 255);
 }
 
-// Position-point node fill (EDITOR_PARITY_GAPS.md gap 8): blue (low) -> teal -> warm (high),
-// ported 1:1 from web/js/editor.js's heightColor (web/js/editor.js:755-762) -- the same function
-// ElevationView.cpp ports independently for its own node fill, per this codebase's established
+// Position-point node fill: blue (low) -> teal -> warm (high). ElevationView.cpp has its own
+// independent copy of this same function for its own node fill, per this codebase's established
 // per-file duplication of small color helpers.
 ImU32 heightColor(double y) {
   const double t = std::clamp(y / 8.0, -1.0, 1.0);
@@ -175,9 +166,8 @@ ImU32 heightColor(double y) {
   return IM_COL32(r, g, b, 255);
 }
 
-// Configurable top-down reference grid (EDITOR_PARITY_FIXES.md gap 9), mirroring editor.js's
-// drawTop() grid block: gated on view.showGrid(), spaced at view.gridSize() world units, skipped
-// once screen spacing drops below drawTop's own `step > 6` threshold rather than smearing into a
+// Configurable top-down reference grid: gated on view.showGrid(), spaced at view.gridSize() world
+// units, skipped once screen spacing drops below a `step > 6` threshold rather than smearing into a
 // solid fill.
 void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& canvasSize, const TopDownView& view) {
   if (!view.showGrid()) return;
@@ -200,11 +190,11 @@ void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& ca
   }
 }
 
-// `mode` mirrors editor.js's renderMode (EDITOR_PARITY_FIXES.md gap 10): Banked (default) offsets
+// `mode`: Banked (default) offsets
 // edges by each frame's baked, banked `edgeRight` and fills with a flat color, matching
-// TrackCore.buildEdges + drawTop's non-flat ribbon fill. Flat/Elevation instead offset by the
-// UNROLLED `h` axis (mirrors buildFlatEdges -- "the track's plan-view footprint (width only)
-// without banking distorting the top-down shape") and fill each segment by interpolated roll or
+// TrackCore.buildEdges' non-flat ribbon fill. Flat/Elevation instead offset by the
+// UNROLLED `h` axis (the track's plan-view footprint (width only)
+// without banking distorting the top-down shape) and fill each segment by interpolated roll or
 // elevation (rollFillColor/elevationFillColor) instead of a flat color. `minElev`/`maxElev` are
 // ignored outside Elevation mode.
 void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Path& path,
@@ -247,11 +237,11 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
                         isCurrent ? kCurrentPathCenterlineThickness : kCenterlineThickness);
 }
 
-// Mirrors web/js/editor.js's drawSegmentHighlight: a straight screen-space line between the selected
+// A straight screen-space line between the selected
 // Position point and one neighbor (not the spline itself), using the baked path's `anchors` --
-// the world position of each Position control point in order, the direct analogue of JS's
-// `parts.controlPoints` -- so `SegmentRef::i` (a position-space index, see EditorState.hpp) indexes
-// straight into it the same way. No-op if the segment doesn't exist (aux point selected, no
+// the world position of each Position control point in order -- so `SegmentRef::i` (a
+// position-space index, see EditorState.hpp) indexes straight into it. No-op if the segment
+// doesn't exist (aux point selected, no
 // selection, or an open path's boundary point in that direction).
 void drawSegmentHighlight(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track* baked,
                           const std::optional<EditorState::SegmentRef>& segment, ImU32 color) {
@@ -267,8 +257,9 @@ void drawSegmentHighlight(ImDrawList* drawList, const ImVec2& canvasOrigin, cons
 }
 
 // Mesh polygons are already baked into world space by core's compileTrackMeshes (Vec2d{x, y}
-// where y is world Z, matching web/js/track-mesh.js's localToWorld) -- the editor draws that directly
-// rather than re-deriving placement transforms itself, the same reuse-core approach as the road.
+// where y is world Z, matching TrackMesh's localToWorld convention) -- the editor draws that
+// directly rather than re-deriving placement transforms itself, the same reuse-core approach as
+// the road.
 void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::MeshRegion>& regions,
                      const std::optional<std::string>& selectedMeshId) {
   for (const auto& region : regions) {
@@ -285,27 +276,26 @@ void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   }
 }
 
-// ---- Zones (EDITOR_PARITY_FIXES.md gap 3) --------------------------------------------------
+// ---- Zones --------------------------------------------------
 //
 // core bakes zones into tox::Track::zones (a mesh-hosted rotated rectangle, or a path-hosted strip
 // described by gLo/gHi/gMax/lateral/halfWidth into the host path's own parameter space) but not
 // into a ready-made 2D outline the way MeshRegion's polygons already are. For a mesh-hosted zone
 // that's just a rotated rectangle; for a path-hosted one this samples the host path's baked
 // CENTERLINE (linear interpolation between the nearest two samples) rather than re-evaluating the
-// underlying rational spline the way web/js/editor.js's zoneOutlineWorld does via
-// TrackCore.zonePathStrip -- core keeps its own spline Evaluator private to TrackBake.cpp, so nothing
-// equivalent is exposed here. Approximate, but the centerline is already sampled densely enough
-// (TrackCore.adaptiveSampleCount, ~6m spacing) that the visual difference at editor zoom levels is
-// imperceptible; this is a 2D outline for editing, never fed back into physics.
+// underlying rational spline directly -- core keeps its own spline Evaluator private to
+// TrackBake.cpp, so nothing equivalent is exposed here. Approximate, but the centerline is already
+// sampled densely enough (TrackCore.adaptiveSampleCount, ~6m spacing) that the visual difference at
+// editor zoom levels is imperceptible; this is a 2D outline for editing, never fed back into
+// physics.
 
 // Maps a path parameter g in [0, gMax] to an interpolated centerline frame, given core's own
-// sampling convention: closed paths sample N points spanning [0, gMax) (wrapping,
-// web/track-core.js:471-472), open paths sample N points spanning [0, gMax] inclusive of both ends.
+// sampling convention: closed paths sample N points spanning [0, gMax) (wrapping), open paths
+// sample N points spanning [0, gMax] inclusive of both ends.
 // `hX/hZ` is the UNROLLED horizontal axis (roll/width/cross-section handles are drawn along this,
-// not the banked `edgeRight`, matching web/js/editor.js's own frame.h usage in its roll/width/
-// cross-section rendering); `width`/`roll` (radians) are the frame's own baked values. `tangentX/
+// not the banked `edgeRight`); `width`/`roll` (radians) are the frame's own baked values. `tangentX/
 // tangentZ` is the raw (un-normalized-in-XZ) driven-direction tangent, added for the start-marker
-// arrow (EDITOR_PARITY_GAPS.md gap 7) -- the only current consumer, so it's fine if its magnitude
+// arrow -- the only current consumer, so it's fine if its magnitude
 // isn't unit length; the arrow only ever uses atan2 on it.
 struct WorldFrame2D {
   double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0}, hX{1.0}, hZ{0.0}, width{1.0}, roll{0.0}, tangentX{0.0}, tangentZ{1.0};
@@ -346,16 +336,14 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
           a.tangent.z + (b.tangent.z - a.tangent.z) * t};
 }
 
-const ImU32 kStartMarkerColor = IM_COL32(141, 255, 157, 255);  // matches editor.js's '#8dff9d'
+const ImU32 kStartMarkerColor = IM_COL32(141, 255, 157, 255);  // '#8dff9d'
 constexpr float kStartMarkerArrowLength = 22.0f;
 constexpr float kStartMarkerHeadLength = 8.0f;
 constexpr float kStartMarkerHeadSpreadRad = 0.4f;
 
 // Green arrow at the track's start point, along the driven direction (flipped when track.start.
-// reverse is set), with a "START" label -- mirrors web/js/editor.js's drawTop start-marker block
-// (web/js/editor.js:1130-1148, EDITOR_PARITY_GAPS.md gap 7). JS derives the start frame from the
-// authored evaluator (startFrame()); this samples the baked centerline via sampleCenterlineAtG
-// instead, like every other on-canvas frame lookup in this file -- an accepted approximation at
+// reverse is set), with a "START" label. Samples the baked centerline via sampleCenterlineAtG,
+// like every other on-canvas frame lookup in this file -- an accepted approximation at
 // editor zoom (see this file's header comment above WorldFrame2D).
 void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked, const Start& start) {
   if (start.path < 0 || start.path >= static_cast<int>(baked.paths.size())) return;
@@ -370,8 +358,7 @@ void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
     dirX = -dirX;
     dirZ = -dirZ;
   }
-  // Screen-space heading: atan2(x, z) matches worldToScreen's x/z -> screen x/y mapping, same
-  // convention JS uses for this same arrow (web/js/editor.js:1136).
+  // Screen-space heading: atan2(x, z) matches worldToScreen's x/z -> screen x/y mapping.
   const double angle = std::atan2(dirX, dirZ);
   const ImVec2 p0 = toAbsolute(canvasOrigin, view.worldToScreen(f.x, f.z));
   const ImVec2 tip(p0.x + static_cast<float>(std::sin(angle)) * kStartMarkerArrowLength, p0.y + static_cast<float>(std::cos(angle)) * kStartMarkerArrowLength);
@@ -385,9 +372,9 @@ void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   drawList->AddText(ImVec2(p0.x + 10.0f, p0.y - 10.0f), kStartMarkerColor, "START");
 }
 
-// Along-curve component of an aux-point drag (new functionality, no JS precedent -- web/js/editor.js's
-// roll/width/crossSection drags only ever change the perpendicular value, never `t`; see
-// EditorState::dragSelectedAuxTTo's comment). Estimates the local tangent direction and
+// Along-curve component of an aux-point drag (see EditorState::dragSelectedAuxTTo's comment
+// on letting a drag move `t`, not just the perpendicular value). Estimates the local tangent
+// direction and
 // arc-length-per-t scale by finite-differencing sampleCenterlineAtG around the point's current t,
 // wrapping across the seam for a closed path rather than clamping into it (which would flatten the
 // derivative right at t=0/1). Then projects the mouse's world offset from the point's current frame
@@ -497,7 +484,7 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
   return nullptr;
 }
 
-// ---- Add-point context menu (EDITOR_PARITY_FIXES.md gap 13) ----------------------------------
+// ---- Add-point context menu -------------------------------------------------------------------
 
 struct NearestPathPlacement {
   int pathIndex{-1};
@@ -505,11 +492,11 @@ struct NearestPathPlacement {
   const tox::Frame* frame{nullptr};
 };
 
-// Mirrors nearestPathPlacement (web/js/editor.js:4238-4257): nearest centerline sample across every
+// Nearest centerline sample across every
 // path, plus the lateral offset from it -- used to place a zone/trigger/aux point at a right-click
-// world position. Approximated off the baked centerline's own discrete samples rather than JS's
-// fine-grained live spline evaluator (same tradeoff already accepted for zone/trigger outlines,
-// EDITOR_PARITY_FIXES.md gaps 3/4 -- no evaluator is exposed to cpp/editor).
+// world position. Approximated off the baked centerline's own discrete samples rather than a
+// fine-grained live spline evaluator (same tradeoff already accepted for zone/trigger outlines --
+// no evaluator is exposed to cpp/editor).
 std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked, double worldX, double worldZ) {
   if (baked == nullptr) return std::nullopt;
   int bestPath = -1, bestIndex = -1;
@@ -535,19 +522,16 @@ std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked
   return NearestPathPlacement{bestPath, t, lateral, &frame};
 }
 
-// ---- Physics-sample overlay (EDITOR_PARITY_FIXES.md gap 10) ----------------------------------
+// ---- Physics-sample overlay ----------------------------------
 //
 // A read-only debug overlay showing the baked centerline frames physics actually reads: one dot
-// per tox::Path::centerline entry, selectable for inspection only (no drag). Mirrors editor.js's
-// showPhysicsPoints/physicsSel/drawTop's dot loop. One accepted divergence: JS specifically
-// re-samples at TrackCore.N_DEFAULT (its own fixed preview constant), not the adaptive count the
-// real game runtime uses; this instead shows the track's *actual* baked centerline (core's own
-// adaptive-by-length sampling, see CLAUDE.md's "Game conventions") -- the true physics samples the
-// current native bake produced, which is arguably more useful for a physics-debug overlay than a
-// separately-forced fixed count, and needs no extra bake path.
+// per tox::Path::centerline entry, selectable for inspection only (no drag). Shows the track's
+// *actual* baked centerline (core's own adaptive-by-length sampling, see CLAUDE.md's "Physics
+// core") rather than some separately-forced fixed sample count -- the true physics samples the
+// current native bake produced, which is more useful for a physics-debug overlay, and needs no
+// extra bake path.
 
-// Nearest baked centerline frame (across all paths) to a world point, within `pickRadiusWorld` --
-// mirrors physicsPointAtTop's small-threshold nearest-dot search.
+// Nearest baked centerline frame (across all paths) to a world point, within `pickRadiusWorld`.
 std::optional<TopDownView::PhysicsSampleRef> physicsPointAtWorld(const tox::Track* baked, double worldX, double worldZ,
                                                                   double pickRadiusWorld) {
   if (baked == nullptr) return std::nullopt;
@@ -580,14 +564,13 @@ void drawPhysicsPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const T
   }
 }
 
-// ---- Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1) ------------------------
+// ---- Self-intersection crossing markers ------------------------------------------------------
 //
 // `baked->selfIntersections` is the core-side detection result (TrackBake.cpp's removeSelfLoops,
-// an unbounded full pairwise scan on the pre-collapse edges, gap 1's implementation note) --
+// an unbounded full pairwise scan on the pre-collapse edges) --
 // already computed once per non-dragging bake by main.cpp's rebake(), not re-derived here. This
 // file only re-derives, per crossing, the effective forced/auto STATE from the current override
-// list -- mirrors editor.js's crossingState (web/js/editor.js:807-811) re-deriving it at draw time
-// too, so cycling an override never needs a re-detection pass.
+// list, so cycling an override never needs a re-detection pass.
 CrossingState crossingStateFor(const tox::SelfIntersection& crossing, const std::vector<SelfIntersectionOverride>& overrides) {
   const auto it = std::find_if(overrides.begin(), overrides.end(), [&](const SelfIntersectionOverride& o) {
     return o.side == crossing.side && ((o.a == crossing.a && o.b == crossing.b) || (o.a == crossing.b && o.b == crossing.a));
@@ -609,8 +592,8 @@ ImU32 crossingColor(CrossingState state) {
 bool crossingIsCollapsed(CrossingState state) { return state == CrossingState::AutoCollapse || state == CrossingState::ForcedCollapse; }
 
 // Nearest crossing marker to a LOCAL (canvas-relative) screen point, within kCrossingHitRadiusPx,
-// or nullptr -- mirrors crossingMarkerAtTop's linear search over the crossing cache
-// (web/js/editor.js:837-847). Returns a pointer into `baked->selfIntersections` (stable for the
+// or nullptr -- a linear search over the crossing cache. Returns a pointer into
+// `baked->selfIntersections` (stable for the
 // lifetime of this frame's bake) rather than a copy, since the caller only needs side/a/b.
 const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopDownView& view, const ImVec2& mouseLocal) {
   if (baked == nullptr) return nullptr;
@@ -629,8 +612,8 @@ const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopD
 }
 
 // One dot per detected crossing, colored by effective state; filled disc = collapsed, hollow ring
-// (with a small center pip) = kept -- mirrors editor.js's marker draw exactly (web/js/editor.js:1111-
-// 1128), including the dark contrast halo so markers stay visible over any ribbon/centerline color.
+// (with a small center pip) = kept, including the dark contrast halo so markers stay visible over
+// any ribbon/centerline color.
 void drawCrossings(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
                    const std::vector<SelfIntersectionOverride>& overrides) {
   for (const auto& crossing : baked.selfIntersections) {
@@ -645,12 +628,11 @@ void drawCrossings(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
   }
 }
 
-// ---- Triggers (EDITOR_PARITY_FIXES.md gap 4) -------------------------------------------------
+// ---- Triggers ----------------------------------------------------------------------------------
 //
 // Unlike zones, core bakes a trigger directly into a complete world-space gate frame
-// (tox::Trigger::center/right/up/fwd, halfWidth, height) -- web/js/editor.js's own triggerFrameXZ
-// re-derives the same thing client-side from the authored host, but core already did the
-// equivalent work at bake time, so this reuses it verbatim rather than re-deriving anything.
+// (tox::Trigger::center/right/up/fwd, halfWidth, height), so this reuses it verbatim rather than
+// re-deriving anything client-side.
 
 ImU32 triggerColor(const tox::Trigger& trigger) {
   if (trigger.type != "checkpoint") return kTriggerDummyColor;
@@ -716,7 +698,7 @@ void drawTriggers(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDow
   }
 }
 
-// Local-to-world for one mesh vertex, mirroring web/js/track-mesh.js's localToWorld and
+// Local-to-world for one mesh vertex, mirroring
 // TrackMesh.cpp's transform() exactly (rotation in degrees, CCW, local y -> world z). Needed only
 // for rail-edge picking/highlighting: core's baked MeshRegion carries just the rail SUBSET already
 // flagged (what physics needs), not every edge, but Rails mode must be able to pick ANY edge to
@@ -761,7 +743,7 @@ struct MeshEdgeHit {
 };
 
 // Nearest mesh edge (any edge, flagged or not) to a world point, within a screen-space-derived
-// world tolerance -- mirrors editor.js's meshEdgeAtWorld, iterating every placement's asset edges.
+// world tolerance -- iterates every placement's asset edges.
 std::optional<MeshEdgeHit> meshEdgeAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld) {
   std::optional<MeshEdgeHit> best;
   double bestDistSq = tolWorld * tolWorld;
@@ -805,19 +787,15 @@ void drawMeshRails(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
   }
 }
 
-// ---- Roll/width/cross-section on-canvas handles (EDITOR_PARITY_FIXES.md gap 1) ---------------
+// ---- Roll/width/cross-section on-canvas handles ------------------------------------------------
 //
-// Mirrors web/js/editor.js's drawTop() roll/width/crossSection blocks (web/js/editor.js:1238-1310) and
-// their rollTint()/rollLineEnd() helpers, restricted -- as JS itself is -- to only the
-// CURRENTLY-SELECTED path's points (`curPrev = pathPreviews[sel.path]`), to avoid cluttering
+// Restricted to only the CURRENTLY-SELECTED path's points, to avoid cluttering
 // every other path's curve with handles. Positions come from sampleCenterlineAtG() (smooth
-// interpolation over the baked centerline) rather than JS's frameAtT() (nearest-frame rounding);
-// same "close enough, no evaluator exposed" tradeoff already used for zone outlines above, and
-// the visual difference is imperceptible at editor zoom levels. This finishes what gap 1's own
-// note deferred ("no on-canvas handle to click") now that sampleCenterlineAtG already exists for
-// zones -- still no on-canvas DRAG, though (values are edited via PropertiesPanel.cpp only).
+// interpolation over the baked centerline), a "close enough, no evaluator exposed" tradeoff already
+// used for zone outlines above -- the visual difference is imperceptible at editor zoom levels.
+// Still no on-canvas DRAG (values are edited via PropertiesPanel.cpp only).
 
-// Mirrors rollTint(): right-lean (negative) -> cyan, left-lean (positive) -> magenta-ish.
+// Right-lean (negative) -> cyan, left-lean (positive) -> magenta-ish.
 ImU32 rollTint(double rollDeg) {
   const double t = std::clamp(rollDeg / 25.0, -1.0, 1.0);
   const int r = static_cast<int>(std::lround(120.0 + 120.0 * std::max(0.0, t)));
@@ -894,9 +872,8 @@ void drawAuxPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
 }
 
 // Nearest roll/width/cross-section handle to a LOCAL (canvas-relative) screen point, within
-// `pickRadiusPx`, on the current path -- mirrors editor.js's crossSectionHandleAtTop/
-// widthHandleAtTop/rollHandleAtTop and their mousedown priority (checked in that exact order,
-// all three before a position-point hit -- web/js/editor.js:3270-3277).
+// `pickRadiusPx`, on the current path -- checked in a fixed priority order (cross-section, width,
+// roll), all three before a position-point hit.
 std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, const tox::Track* baked, int currentPathIndex,
                                               const TopDownView& view, const ImVec2& mouseLocal, float pickRadiusPx) {
   if (currentPathIndex < 0 || currentPathIndex >= static_cast<int>(track.paths.size())) return std::nullopt;
@@ -939,9 +916,8 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
     const Path& path = track.paths[pi];
     const auto& points = path.points;
     // First/last raw indices among this path's Position points -- needed both for the weld-target
-    // check below (a position-space concept, see EditorState::OpenEndpointRef) and for `isEndpoint`
-    // (EDITOR_PARITY_GAPS.md gap 8), matching editor.js's own `i === 0 || i === cps.length - 1`
-    // computed over the same control-point-only sequence (web/js/editor.js:1178).
+    // check below (a position-space concept, see EditorState::OpenEndpointRef) and for `isEndpoint`,
+    // computed over the control-point-only sequence.
     int firstPosRaw = -1, lastPosRaw = -1;
     for (int i = 0; i < static_cast<int>(points.size()); ++i) {
       if (points[i].kind != PointKind::Position) continue;
@@ -959,8 +935,7 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
                                            [&](const Connection& s) { return s.pointId == points[i].id; }) != disjointSeams.end();
       const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
       const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
-      // Square = open-path endpoint (join-eligible), circle otherwise -- matches editor.js's
-      // ctx.rect vs ctx.arc branch (web/js/editor.js:1184-1185).
+      // Square = open-path endpoint (join-eligible), circle otherwise.
       if (isEndpoint) {
         drawList->AddRectFilled(ImVec2(screen.x - radius, screen.y - radius), ImVec2(screen.x + radius, screen.y + radius),
                                 isSelected ? kSelectedPointColor : heightColor(points[i].pos.y));
@@ -969,8 +944,7 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
       }
       // Selected: a crisp white border right at the (already-larger) fill's edge -- a "handle"
       // look that reads as selected regardless of hover state or background. Disjoint seams get a
-      // thicker amber stroke instead when not selected, matching editor.js's stroke choice
-      // (web/js/editor.js:1189-1190).
+      // thicker amber stroke instead when not selected.
       const ImU32 strokeColor = isSelected ? kSelectedOutlineColor : (isDisjoint ? kDisjointColor : IM_COL32(0, 0, 0, 153));
       if (isEndpoint) {
         drawList->AddRect(ImVec2(screen.x - radius, screen.y - radius), ImVec2(screen.x + radius, screen.y + radius), strokeColor, 0.0f, 0,
@@ -984,16 +958,14 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
       // Drag-to-weld target: a wider green ring still, so it's unmistakable even though the
       // dragged point itself is what's under the cursor, not this one.
       if (isWeldTarget) drawList->AddCircle(screen, radius + 6.0f, kWeldTargetColor, 0, kWeldTargetRingThickness);
-      // Disjoint X cross, on top of everything else -- matches editor.js's separate cross stroke
-      // pass (web/js/editor.js:1192-1198), sized off the same radius+4 offset.
+      // Disjoint X cross, on top of everything else, sized off the same radius+4 offset.
       if (isDisjoint) {
         drawList->AddLine(ImVec2(screen.x - radius - 4.0f, screen.y - radius - 4.0f), ImVec2(screen.x + radius + 4.0f, screen.y + radius + 4.0f),
                           kDisjointColor, 2.0f);
         drawList->AddLine(ImVec2(screen.x + radius + 4.0f, screen.y - radius - 4.0f), ImVec2(screen.x - radius - 4.0f, screen.y + radius + 4.0f),
                           kDisjointColor, 2.0f);
       }
-      // Index + elevation label, matching editor.js's `${pi}.${i} (y${p.pos[1].toFixed(0)})`
-      // (web/js/editor.js:1199-1200).
+      // Index + elevation label: "<path>.<index> (y<elevation>)".
       char label[32];
       std::snprintf(label, sizeof(label), "%d.%d (y%d)", pi, i, static_cast<int>(std::lround(points[i].pos.y)));
       drawList->AddText(ImVec2(screen.x + 9.0f, screen.y - 5.0f), kPositionLabelColor, label);
@@ -1025,9 +997,7 @@ const tox::MeshRegion* meshRegionAt(const tox::Track* baked, double worldX, doub
 // visibly-drawn road counts as clicking that curve, not just its thin centerline. Picked last, after
 // every other clickable thing (points/mesh regions/zones/triggers), since the ribbon is the largest,
 // least-specific target on the canvas -- same "biggest thing loses to anything smaller drawn on top
-// of it" precedent as meshRegionAt going last among those. There's no JS precedent to mirror here:
-// editor.js defines an analogous segmentAtTop() but never calls it -- this is new functionality, not
-// a ported gap.
+// of it" precedent as meshRegionAt going last among those.
 std::optional<int> pathAtWorld(const tox::Track* baked, double worldX, double worldZ, double edgeTolWorld) {
   if (baked == nullptr) return std::nullopt;
   std::optional<int> best;
@@ -1056,8 +1026,7 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
   return std::atan2(worldZ - originZ, worldX - originX) * 180.0 / std::numbers::pi;
 }
 
-// Live state for the shift-drag rubber-band gesture (EDITOR_PARITY_GAPS.md gap 6), mirroring
-// web/js/editor.js's joinDragFrom/joinDragTarget/joinDragScreen. `from` has a value for the entire
+// Live state for the shift-drag rubber-band gesture. `from` has a value for the entire
 // gesture once armed; `target` is whichever OTHER open endpoint the cursor currently rests on, if
 // any; `currentLocal` is the cursor's canvas-local position, used to draw the free end of the line
 // when not snapped to a target.
@@ -1067,8 +1036,8 @@ struct JoinDragPreview {
   ImVec2 currentLocal{0.0f, 0.0f};
 };
 
-// Left click/drag: hit-test + select + move a position point or mesh placement (Edit mode only --
-// mirrors editor.js's dragging === 'top'/'meshTop'/'meshRotate'). Shift+drag on a mesh rotates it
+// Left click/drag: hit-test + select + move a position point or mesh placement (Edit mode only).
+// Shift+drag on a mesh rotates it
 // about its own placement origin instead of moving it. Returns true if the track was mutated this
 // frame. Freezes the view's auto-fit bounds for the duration of any drag (see
 // TopDownView::freezeBounds) so moving/rotating something doesn't fight the camera auto-fitting
@@ -1079,12 +1048,11 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   bool mutated = false;
   outWeldTarget = std::nullopt;
   outJoinDrag = JoinDragPreview{};
-  // Decided once per gesture, at the mousedown that starts it -- mirrors editor.js's mousedown
-  // handler picking a `dragging` mode ('top'/'meshTop'/'panTop'/...) once and sticking with it,
-  // rather than re-deriving "what to drag" from whatever happens to be selected on every
+  // Decided once per gesture, at the mousedown that starts it, rather than re-deriving "what to
+  // drag" from whatever happens to be selected on every
   // subsequent frame (which would let a stale selection from an earlier, unrelated click hijack a
-  // later empty-space pan drag). Left-drag-on-empty-space panning itself mirrors editor.js's
-  // mousedown fallthrough to `dragging = 'panTop'` when nothing else was hit.
+  // later empty-space pan drag). Left-drag-on-empty-space panning falls through to a plain pan
+  // when nothing else was hit.
   static bool panDragActive = false;
   // Live only during an open-endpoint drag (see selectedOpenEndpointEnd()'s comment); persists
   // across frames (unlike outWeldTarget, which is reset every call) so the release branch below --
@@ -1095,9 +1063,8 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // ALREADY resting on when this drag started, if any -- excluded from weldTarget candidates for
   // the rest of the gesture so merely being selected while coincident never re-triggers a weld.
   static std::optional<EditorState::OpenEndpointRef> weldExcludeTarget;
-  // Shift-drag rubber-band gesture (EDITOR_PARITY_GAPS.md gap 6): a SEPARATE gesture from the
-  // plain drag-to-weld above (mirrors web/js/editor.js's dedicated `dragging === 'joinDrag'` mode,
-  // distinct from `dragging === 'top'`) -- it never relocates the dragged point itself, only
+  // Shift-drag rubber-band gesture: a SEPARATE gesture from the
+  // plain drag-to-weld above -- it never relocates the dragged point itself, only
   // previews a connection or, on release into empty space, appends a new point. `joinDragFrom`
   // persists across frames like weldTarget above (the release check runs on a frame where
   // draggingGesture may already be false); `joinDragStartLocal` is the mousedown position, used
@@ -1117,22 +1084,21 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
           : std::nullopt;
   if (shiftClickEndpointHit.has_value()) {
     // Shift-clicking an open endpoint starts the rubber-band gesture instead of the normal
-    // select-and-drag handling below -- mirrors editor.js's mousedown checking `e.shiftKey` and an
-    // endpoint hit BEFORE falling through to the plain-click branch (web/js/editor.js:3281-3298).
+    // select-and-drag handling below -- shift plus an endpoint hit is checked BEFORE falling
+    // through to the plain-click branch.
     joinDragFrom = shiftClickEndpointHit;
     joinDragTarget.reset();
     joinDragStartLocal = mouseLocal;
   } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1) win over a position-point
-    // hit, mirroring editor.js's mousedown priority (crossSection, then width, then roll, all
-    // before nodeAtTop's position check -- web/js/editor.js:3270-3277).
+    // Roll/width/cross-section handles win over a position-point
+    // hit, checked in priority order (crossSection, then width, then roll, all
+    // before a position-point check).
     const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx);
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     bool pathSelected = false;
-    // Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1): a click cycles the
-    // crossing's override instead of selecting/dragging anything, mirroring editor.js's mousedown
-    // handler checking crossingMarkerAtTop before nodeAtTop's position-point hit, and skipping this
-    // check entirely while shift is held (web/js/editor.js:3278-3281) since shift is reserved for the
+    // Self-intersection crossing markers: a click cycles the
+    // crossing's override instead of selecting/dragging anything -- checked before a position-point
+    // hit, and skipped entirely while shift is held, since shift is reserved for the
     // rubber-band gesture above.
     const tox::SelfIntersection* crossingHit =
         !ImGui::GetIO().KeyShift ? crossingAtLocal(baked, view, mouseLocal) : nullptr;
@@ -1145,10 +1111,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     } else if (view.showPositionPoints() && state.selectPositionAt(world.x, world.z, pickRadiusWorld)) {
       view.clearPhysicsSelection();
     } else {
-      // Physics sample points (debug overlay, EDITOR_PARITY_FIXES.md gap 10): picked after
+      // Physics sample points (debug overlay): picked after
       // authored control points so editing is never obstructed, but before zones/triggers/mesh
-      // regions -- mirrors physicsPointAtTop's placement in editor.js's mousedown handler.
-      // Read-only: selecting one just shows its baked values, no drag.
+      // regions. Read-only: selecting one just shows its baked values, no drag.
       const auto physicsHit = view.showPhysicsPoints() ? physicsPointAtWorld(baked, world.x, world.z, kPickRadiusPx / view.scale()) : std::nullopt;
       if (physicsHit.has_value()) {
         view.selectPhysicsSample(physicsHit->pathIndex, physicsHit->frameIndex);
@@ -1165,9 +1130,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         if (zone != nullptr) {
           state.selectZone(zone->id);
         } else {
-          // Triggers: gate lines, picked alongside zones (before the big mesh regions) -- mirrors
-          // web/js/editor.js's mousedown ordering (zoneAtTop then triggerAtTop, both before
-          // meshAtWorld).
+          // Triggers: gate lines, picked alongside zones (before the big mesh regions).
           const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld);
           if (trigger != nullptr) {
             state.selectTrigger(trigger->id);
@@ -1185,7 +1148,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
               // (it requires !state.selection().valid()) -- left-drag panning looked entirely
               // broken once anything had ever been selected.
               state.clearSelection();
-              // Clicking the road itself (mirrors nothing in editor.js -- see pathAtWorld's
+              // Clicking the road itself (see pathAtWorld's
               // comment): picked last since it's the biggest, least-specific target on the
               // canvas. Selects that curve as "current" for the panels/dropdown.
               const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld);
@@ -1216,9 +1179,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   // the same drag.
   const bool draggingGesture = itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f) && !joinDragFrom.has_value();
 
-  // Join-drag update + release (EDITOR_PARITY_GAPS.md gap 6): runs independently of
-  // draggingGesture's 2px threshold (mirrors editor.js's own joinDrag mousemove having no
-  // threshold either -- only the release-into-empty-space branch below is distance-gated).
+  // Join-drag update + release: runs independently of
+  // draggingGesture's 2px threshold -- only the release-into-empty-space branch below is
+  // distance-gated.
   if (joinDragFrom.has_value()) {
     if (itemActive && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
@@ -1229,16 +1192,14 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       if (joinDragTarget.has_value()) {
-        // Over a valid target: connect, mirroring performJoin() via joinSel = [from, target]
-        // (web/js/editor.js:3536-3538). joinPathEndpoints itself makes the two endpoints coincide (by
-        // copying the target point onto the source's slot), so there's no separate "snap" step
+        // Over a valid target: connect. joinPathEndpoints itself makes the two endpoints coincide
+        // (by copying the target point onto the source's slot), so there's no separate "snap" step
         // needed here.
         mutated = state.joinPathEndpoints(joinDragFrom->pathIndex, joinDragFrom->atEnd, joinDragTarget->pathIndex, joinDragTarget->atEnd) || mutated;
       } else {
         // Released into empty space: extend the curve instead, but only past a minimum drag
-        // distance -- mirrors extendCurveFromDrag's own JOIN_DRAG_MIN_PX guard (web/js/editor.js:3539-
-        // 3543), which exists so a plain shift-click (no real drag) doesn't spuriously append a
-        // point. Snapped to the grid like JS's own `snapWorldXZ(screenToWorld(...))` call there.
+        // distance (kJoinDragMinPx), so a plain shift-click (no real drag) doesn't spuriously append
+        // a point. Snapped to the grid.
         const float dx = mouseLocal.x - joinDragStartLocal.x, dy = mouseLocal.y - joinDragStartLocal.y;
         if (std::sqrt(dx * dx + dy * dy) >= kJoinDragMinPx) {
           const WorldPoint2D dropWorld = view.snapWorldXZ(view.screenToWorld(mouseLocal.x, mouseLocal.y));
@@ -1257,11 +1218,11 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   }
 
   // selectionIsPosition() (not just selection().valid()) guards this: a roll/width/cross-section
-  // handle counts as a valid selection too (EDITOR_PARITY_FIXES.md gap 1's handles are click-to-
+  // handle counts as a valid selection too (those handles are click-to-
   // select only), but dragSelectedTo() writes to Vec3 pos.x/z, which those point kinds don't use
   // for placement at all (they're positioned by `t` along the baked centerline) -- without this
   // guard, dragging after clicking a roll handle would silently mutate an inert field and push a
-  // no-visible-effect undo step instead of doing nothing, which is what gap 1 actually promises.
+  // no-visible-effect undo step instead of doing nothing, which is the actual intended behavior.
   if (draggingGesture && state.selectionIsPosition() && !panDragActive) {
     const bool startingNewDrag = !state.dragging();
     if (startingNewDrag) {
@@ -1294,9 +1255,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     weldTarget = candidate;
     outWeldTarget = weldTarget;
   } else if (draggingGesture && state.selectionIsWidth() && !panDragActive) {
-    // On-canvas width-handle drag (mirrors editor.js's `dragging === 'widthTop'`,
-    // web/js/editor.js:3481-3495): distance of the mouse from the width point's centerline position,
-    // projected onto the frame's unrolled h axis -- either edge handle sits at halfW along h, so
+    // On-canvas width-handle drag: distance of the mouse from the width point's centerline
+    // position, projected onto the frame's unrolled h axis -- either edge handle sits at halfW
+    // along h, so
     // |distance|*2 = full width regardless of which handle was grabbed to start the drag.
     const int pathIndex = state.selection().pathIndex;
     const Path& path = state.track().paths[pathIndex];
@@ -1309,7 +1270,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
-      // Tangential component moves the point along the curve (new functionality -- see
+      // Tangential component moves the point along the curve (see
       // dragAuxTAlongTangent's comment), computed from the SAME frame/mouse position as the
       // perpendicular value above, before either mutator fires this frame.
       const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f);
@@ -1318,8 +1279,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       mutated = true;
     }
   } else if (draggingGesture && state.selectionIsRoll() && !panDragActive) {
-    // On-canvas roll-handle drag (mirrors editor.js's `dragging === 'rollTop'`,
-    // web/js/editor.js:3453-3467): signed distance of the mouse from the roll point's centerline
+    // On-canvas roll-handle drag: signed distance of the mouse from the roll point's centerline
     // position, projected onto the frame's unrolled h axis (+h = right), divided by the frame's
     // width and scaled to degrees -- inverse of the perpendicular indicator line's own length.
     const int pathIndex = state.selection().pathIndex;
@@ -1340,9 +1300,8 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       mutated = true;
     }
   } else if (draggingGesture && state.selectionIsCrossSection() && !panDragActive) {
-    // On-canvas cross-section-handle drag (mirrors editor.js's `dragging === 'crossSectionTop'`,
-    // web/js/editor.js:3468-3480), previously click-to-select only in this port -- same pattern as
-    // width/roll above, now with the along-curve `t` component too.
+    // On-canvas cross-section-handle drag, previously click-to-select only in this port -- same
+    // pattern as width/roll above, now with the along-curve `t` component too.
     const int pathIndex = state.selection().pathIndex;
     const Path& path = state.track().paths[pathIndex];
     const TrackPoint& point = path.points[state.selection().pointIndex];
@@ -1361,11 +1320,10 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       mutated = true;
     }
   } else if (draggingGesture && state.selectedTriggerId().has_value() && !panDragActive) {
-    // On-canvas trigger center-handle drag (new functionality -- previously host.t was panel-
-    // edited only): mirrors web/js/editor.js's `dragging === 'triggerTop'` path-host branch except it
-    // keeps the trigger on its CURRENT host path via tangent-projection (dragAuxTAlongTangent,
-    // same helper the aux-point t-drags use) rather than JS's re-host-onto-nearest-path-under-the-
-    // cursor behavior -- there's no live spline evaluator here to redo that search. No-op for a
+    // On-canvas trigger center-handle drag (previously host.t was panel-edited only). Keeps the
+    // trigger on its CURRENT host path via tangent-projection (dragAuxTAlongTangent, same helper
+    // the aux-point t-drags use) rather than re-hosting onto whatever path is nearest the cursor --
+    // there's no live spline evaluator here to do that search. No-op for a
     // mesh-hosted trigger (dragSelectedTriggerTTo itself refuses; skipped here too since there's no
     // path/centerline to sample).
     const Trigger* trigger = state.findTrigger(*state.selectedTriggerId());
@@ -1405,7 +1363,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     state.endDrag();
     view.releaseBoundsFreeze();
   } else if (draggingGesture && panDragActive) {
-    // Left-drag-on-empty-space pan, mirrors editor.js's 'panTop' -- decided at mousedown (see
+    // Left-drag-on-empty-space pan -- decided at mousedown (see
     // panDragActive's own comment above), not just "nothing happens to be selected right now".
     view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
   } else if (draggingGesture && state.selectedMeshId().has_value()) {
@@ -1437,10 +1395,10 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
   return mutated;
 }
 
-// Shift-drag rubber band (EDITOR_PARITY_GAPS.md gap 6): a line from the dragged endpoint's world
+// Shift-drag rubber band: a line from the dragged endpoint's world
 // position to wherever the cursor currently is -- yellow while free, green (reusing
 // kWeldTargetColor) and snapped to the target endpoint's own position once hovering a valid drop
-// point -- mirrors web/js/editor.js:1207-1220. No-op if the gesture isn't active.
+// point. No-op if the gesture isn't active.
 void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track* baked,
                       const JoinDragPreview& joinDrag) {
   if (!joinDrag.from.has_value() || baked == nullptr) return;
@@ -1464,8 +1422,8 @@ void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const To
 }
 
 // Rails mode is modal: a left click either toggles the nearest edge within pick tolerance, or (no
-// edge hit) falls back to panning -- mirrors editor.js's topCanvas mousedown 'rails' branch
-// exactly, including that a miss still starts a pan rather than doing nothing.
+// edge hit) falls back to panning, including that a miss still starts a pan rather than doing
+// nothing.
 bool handleRailsModeInput(EditorState& state, TopDownView& view, const ImVec2& mouseLocal, double edgePickToleranceWorld, bool hovered,
                           bool itemActive) {
   bool mutated = false;
@@ -1481,8 +1439,7 @@ bool handleRailsModeInput(EditorState& state, TopDownView& view, const ImVec2& m
   return mutated;
 }
 
-// Left click: add a draft point, or close/finish the draft (mirrors createModeClick). Right
-// click: cancel the draft (mirrors create mode's button===2 handling).
+// Left click: add a draft point, or close/finish the draft. Right click: cancel the draft.
 bool handleCreateModeInput(EditorState& state, const TopDownView& view, const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
   if (!hovered) return false;
   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
@@ -1498,8 +1455,8 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 }
 
 // Bounds of whichever of the four mutually-exclusive selection kinds (EditorState::deselectAll's
-// comment) is currently selected, for the "Object" zoom-to-selection feature (new functionality --
-// no JS equivalent). A single point has zero area, so it comes back as a degenerate
+// comment) is currently selected, for the "Object" zoom-to-selection feature. A single point has
+// zero area, so it comes back as a degenerate
 // {x,x,z,z} bounds; TopDownView::focusOn floors that to a fixed minimum span rather than zooming
 // to infinity. Returns nullopt if nothing is selected, or a selected id/index no longer resolves
 // (stale selection, or `baked` not ready yet).
@@ -1581,8 +1538,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
 
   view.computeView(bounds, canvasSize.x, canvasSize.y);
 
-  // Zoom slider + Home (EDITOR_PARITY_FIXES.md-adjacent UI pass), mirrors web/editor.html's
-  // #topZoomControl: a vertical zoom slider (same -100..250 range as scroll-wheel zoom, see
+  // Zoom slider + Home: a vertical zoom slider (same -100..250 range as scroll-wheel zoom, see
   // TopDownView::kZoomSliderMin/Max) plus a reset-to-default button, overlaid at the bottom-right
   // corner of the canvas.
   //
@@ -1615,14 +1571,14 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
                           canvasOrigin.y + canvasSize.y - groupHeight - kMargin - kPad);
     const ImVec2 panelMin(groupPos.x - kPad, groupPos.y - kPad);
     const ImVec2 panelMax(groupPos.x + kControlWidth + kPad, groupPos.y + groupHeight + kPad);
-    // Mirrors #topZoomControl's CSS: rgba(16,32,46,0.82) fill, #2c6a9e 1px border, 8px radius.
+    // rgba(16,32,46,0.82) fill, #2c6a9e 1px border, 8px radius.
     drawList->AddRectFilled(panelMin, panelMax, IM_COL32(16, 32, 46, 209), 8.0f);
     drawList->AddRect(panelMin, panelMax, IM_COL32(44, 106, 158, 255), 8.0f, 0, 1.0f);
 
     ImGui::SetCursorScreenPos(groupPos);
     ImGui::PushID("TopDownZoomControl");
     ImGui::BeginGroup();
-    // Mirrors .zoomLabel's --accent (#4fd6ff) colour.
+    // #4fd6ff accent colour.
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(79, 214, 255, 255));
     ImGui::TextUnformatted(" +");
     ImGui::PopStyleColor();
@@ -1633,8 +1589,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(140, 230, 255, 255));
     float zoomValue = static_cast<float>(view.zoomSlider());
     // Unlike zoomAt() (scroll wheel), dragging the slider does not re-anchor on a screen point --
-    // mirrors editor.js's topZoomSlider 'input' handler, which calls setTopZoomSliderValue()
-    // directly rather than zoomTopAt(), so it zooms about the view's current center.
+    // it zooms about the view's current center instead.
     if (ImGui::VSliderFloat("##zoom", ImVec2(kControlWidth, kSliderHeight), &zoomValue, static_cast<float>(TopDownView::kZoomSliderMin),
                             static_cast<float>(TopDownView::kZoomSliderMax), ""))
       view.setZoomSlider(zoomValue);
@@ -1642,13 +1597,13 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(79, 214, 255, 255));
     ImGui::TextUnformatted(" -");
     ImGui::PopStyleColor();
-    // Mirrors #topHomeBtn's #16344a bg / #1f4c6b hover.
+    // #16344a bg / #1f4c6b hover.
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(22, 52, 74, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(31, 76, 107, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(44, 106, 158, 255));
     if (ImGui::Button("Home", ImVec2(kControlWidth, 0))) view.resetView();
     ImGui::PopStyleColor(3);
-    // Zoom-to-selection (new functionality -- web/js/editor.js has no equivalent), mirrors the 'x'
+    // Zoom-to-selection, mirroring the 'x'
     // hotkey/View-menu entry in main.cpp -- both go through FocusOnSelection so the bounds
     // resolution logic lives in exactly one place. Disabled when nothing is selected, same
     // pattern as every other "acts on the current selection" button elsewhere in this editor.
@@ -1681,8 +1636,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   if (hoveredWorldOut != nullptr) *hoveredWorldOut = hovered ? std::optional(view.screenToWorld(mouseLocal.x, mouseLocal.y)) : std::nullopt;
 
   if (hovered && ImGui::GetIO().MouseWheel != 0.0f) {
-    // 15 slider units per wheel notch (editor.js uses deltaY*0.16 against ~100px/notch deltaY,
-    // i.e. ~16 units/notch); ImGui's MouseWheel is already normalized to ~1 per notch.
+    // 15 slider units per wheel notch; ImGui's MouseWheel is already normalized to ~1 per notch.
     view.zoomAt(mouseLocal.x, mouseLocal.y, ImGui::GetIO().MouseWheel * 15.0, bounds);
   }
 
@@ -1705,12 +1659,9 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         else if (state.selectedTriggerId().has_value())
           mutated = state.deleteSelectedTrigger() || mutated;
       }
-      // Right-click context menu (EDITOR_NATIVE_FILE_IO_PLAN.md M9, extended by
-      // EDITOR_PARITY_FIXES.md gap 13): a right-*click* (no drag) opens it instead of panning; a
+      // Right-click context menu: a right-*click* (no drag) opens it instead of panning; a
       // real drag still pans, since ResetMouseDragDelta below only ever fires on release, after
-      // the drag's own per-frame pan deltas already applied. Mirrors web/editor.html's #addPointMenu
-      // except "Position" (`insertNear`) -- that needs inserting a point mid-segment, i.e. gap 11's
-      // (unimplemented) segment machinery, so it's left out here rather than half-done.
+      // the drag's own per-frame pan deltas already applied.
       if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
         const ImVec2 dragDelta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right, 0.0f);
         if (std::abs(dragDelta.x) < 3.0f && std::abs(dragDelta.y) < 3.0f) {
@@ -1720,18 +1671,15 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
       }
       if (ImGui::BeginPopup("TopDownContextMenu")) {
-        // Add control point: Roll/Width/Cross-section, mirroring insertRollPointAtWorld/
-        // insertWidthPoint/insertCrossSectionPoint -- seeded from the nearest baked centerline
-        // frame's actual current value at that point (not a schema default), same as JS.
+        // Add control point: Position/Roll/Width/Cross-section -- seeded from the nearest baked
+        // centerline frame's actual current value at that point (not a schema default).
         const std::optional<NearestPathPlacement> nearPlacement = nearestPathPlacement(baked, contextMenuWorld.x, contextMenuWorld.z);
         ImGui::TextDisabled("Add control point");
         ImGui::BeginDisabled(!nearPlacement.has_value());
-        // Position (EDITOR_PARITY_FIXES.md gap 11, finishing what gap 13 deferred): mirrors
-        // insertNear -- `t` (already a curve-parametric fraction, whether it came from the fine
-        // evaluator in JS or the baked centerline's discrete samples here) reconstructs the
-        // approximate segment index the same way insertNear's own `g = t * gMax` does. World X/Z
+        // Position: `t` (a curve-parametric fraction from the baked centerline's discrete samples)
+        // reconstructs the approximate segment index via `g = t * gMax`. World X/Z
         // are the exact click position (not the nearest sample's); elevation is the nearest
-        // baked frame's Y, standing in for JS's real curve-evaluated Y at that point.
+        // baked frame's Y.
         if (ImGui::MenuItem("Position")) {
           const Path& authoredPath = state.track().paths[nearPlacement->pathIndex];
           const int n = EditorState::positionCount(authoredPath);
@@ -1856,14 +1804,12 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
-    // Self-intersection crossing markers (EDITOR_PARITY_GAPS.md gap 1), drawn right after the
-    // physics-point dots and before the start marker, matching web/js/editor.js's own draw order
-    // (web/js/editor.js:1106, between the physics dots at :1095 and the start marker at :1130) -- and
+    // Self-intersection crossing markers, drawn right after the
+    // physics-point dots and before the start marker, and
     // before the authored point draw further below, so markers never occlude editable handles.
     drawCrossings(drawList, canvasOrigin, view, *baked, state.track().selfIntersectionOverrides);
-    // Start marker + direction arrow (EDITOR_PARITY_GAPS.md gap 7), drawn in the same place JS's
-    // drawTop does relative to the rest of the ribbon/overlay draw (web/js/editor.js:1130, right after
-    // the physics-point dots and before the selected-segment highlights). EditorState's own
+    // Start marker + direction arrow, drawn right after
+    // the physics-point dots and before the selected-segment highlights. EditorState's own
     // mutators already call its private clampStart() after every structural edit, so track().start
     // is valid here without needing to re-clamp (drawStartMarker itself defensively bounds-checks
     // the path index and clamps `point`'s corresponding g via sampleCenterlineAtG regardless).
@@ -1879,16 +1825,14 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       const WorldPoint2D hoverWorld = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       hoveredPosition = state.hoverTestPosition(hoverWorld.x, hoverWorld.z, pickRadiusWorld);
     }
-    // Selected point's adjacent segments (web/js/editor.js's drawTop:1156-1165): drawn before the
-    // point nodes so the nodes render on top, same as JS's ordering.
+    // Selected point's adjacent segments: drawn before the
+    // point nodes so the nodes render on top.
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor);
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor);
     drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget, state.disjointSeams());
     drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag);
   }
-  // Roll/width/cross-section handles (EDITOR_PARITY_FIXES.md gap 1), drawn after position points
-  // -- mirrors editor.js's drawTop() drawing them in that same order (position at
-  // web/js/editor.js:1171, roll/width/crossSection at :1245-1298), so they sit on top.
+  // Roll/width/cross-section handles, drawn after position points so they sit on top.
   drawAuxPoints(drawList, canvasOrigin, view, state.track(), baked, state.currentPathIndex(), state.selection());
   if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
 

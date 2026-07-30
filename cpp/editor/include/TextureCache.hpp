@@ -2,8 +2,7 @@
 // (EDITOR_CPP_PORT_PLAN.md M7b), backed by stb_image (vendored single-header decoder, see
 // include/stb/stb_image.h) since the editor process has no other image codec.
 //
-// Unlike editor.js (which reads File objects / fetches bundled assets over HTTP in-browser), this
-// loads PNG bytes straight off disk with stbi_load and uploads one GL_TEXTURE_2D per unique path,
+// Loads PNG bytes straight off disk with stbi_load and uploads one GL_TEXTURE_2D per unique path,
 // cached for the process lifetime -- textures are display-only decoration here (the tile grid
 // picker), never touched by physics/baking, so re-decoding per frame would be pure waste.
 #pragma once
@@ -21,20 +20,18 @@ struct LoadedTexture {
   bool ok() const { return glId != 0; }
 };
 
-// Extracts a display name from a path the way editor.js's textureNameFromPath does: strips any
-// ?query/#fragment, then takes the last path segment (either slash style).
+// Extracts a display name from a path: strips any ?query/#fragment, then takes the last path
+// segment (either slash style).
 std::string textureNameFromPath(const std::string& path);
 
-// Reads just the pixel dimensions of an image file without decoding it (mirrors editor.js's
-// imageSizeFromPath, used when registering a new texture asset). Returns false if the file can't
-// be read/decoded.
+// Reads just the pixel dimensions of an image file without decoding it, used when registering a
+// new texture asset. Returns false if the file can't be read/decoded.
 bool readImageSize(const std::filesystem::path& file, int& outWidth, int& outHeight);
 
 // Locates the repo's checked-in assets/ directory by walking up from the current working
 // directory looking for assets/track/manifest.json -- the editor's build output directory is
-// nested several levels under the repo root (cpp/build/editor/Release/...), unlike the browser
-// editor, which simply requests a relative URL from whatever served the page. Returns an empty
-// path if not found within a bounded number of parent hops.
+// nested several levels under the repo root (cpp/build/editor/Release/...). Returns an empty path
+// if not found within a bounded number of parent hops.
 std::filesystem::path findAssetsDir();
 
 class TextureCache {

@@ -1,8 +1,8 @@
 // EditorTrackDefinition.cpp — schema-10 JSON <-> editor::TrackDefinition, independent of
 // cpp/core's tox::Track loader (see EditorTrackDefinition.hpp for why). JSON field names and
-// defaults are kept in lockstep with cpp/core/src/TrackLoader.cpp's normalize() and
-// web/track-core.js's parseTrack/serializeTrack — those two are the source of truth for what schema
-// 10 looks like; diverge from them only where noted (the mid-edit tolerance described above).
+// defaults are kept in lockstep with cpp/core/src/TrackLoader.cpp's normalize() -- that is the
+// source of truth for what schema 10 looks like; diverge from it only where noted (the mid-edit
+// tolerance described above).
 #include "EditorTrackDefinition.hpp"
 
 #include <cmath>
@@ -186,7 +186,7 @@ std::optional<MeshAsset> normalizeMeshAsset(const std::string& id, const json& e
       polygon.edges.push_back({directed.at("edge").get<int>(), directed.at("v0").get<int>(), directed.at("v1").get<int>()});
     }
     // Always read `holes` as present-but-possibly-empty (mirrors geometry-js's Mesh.toJSON, which
-    // always emits the key) rather than only when non-empty -- see EDITOR_PARITY_FIXES.md finding 6.
+    // always emits the key) rather than only when non-empty.
     if (raw.contains("holes") && raw.at("holes").is_array())
       for (const auto& hole : raw.at("holes"))
         if (hole.is_number_integer()) polygon.holes.push_back(hole.get<int>());
@@ -420,8 +420,8 @@ json meshAssetToJson(const MeshAsset& asset) {
     vertices.push_back(json{{"id", v.id}, {"position", json{{"x", v.x}, {"y", v.y}}}, {"attributes", parseAttributes(v.attributesJson)}});
   json edges = json::array();
   for (const auto& e : asset.edges) {
-    // Re-merge the structured `rail` field back into the preserved attribute bag, matching
-    // web/js/track-mesh.js's setRailEdge: present (true) when railed, omitted entirely when not.
+    // Re-merge the structured `rail` field back into the preserved attribute bag: present (true)
+    // when railed, omitted entirely when not.
     json attributes = parseAttributes(e.attributesJson);
     if (e.rail)
       attributes["rail"] = true;
@@ -434,7 +434,7 @@ json meshAssetToJson(const MeshAsset& asset) {
     json directedEdges = json::array();
     for (const auto& d : p.edges) directedEdges.push_back(json{{"edge", d.edge}, {"v0", d.v0}, {"v1", d.v1}});
     // holes/attributes are always emitted, even empty -- geometry-js's Mesh.toJSON always writes
-    // both keys (see EDITOR_PARITY_FIXES.md finding 6), so omitting them on an empty/default value
+    // both keys, so omitting them on an empty/default value
     // would itself be a divergence from the reference format.
     polygons.push_back(json{{"id", p.id},
                             {"edges", std::move(directedEdges)},
@@ -524,9 +524,8 @@ std::string toJson(const TrackDefinition& track) {
   json paths = json::array();
   for (const auto& path : track.paths) paths.push_back(pathToJson(path));
 
-  // Only assets a placement still references are written out, mirroring web/track-core.js's
-  // referencedMeshAssets (web/track-core.js:1277-1283) -- see EDITOR_PARITY_FIXES.md finding 5.
-  // Otherwise an imported-then-deleted mesh accumulates in the file forever.
+  // Only assets a placement still references are written out. Otherwise an
+  // imported-then-deleted mesh accumulates in the file forever.
   json meshAssets = json::object();
   {
     std::set<std::string> referenced;
@@ -558,15 +557,12 @@ std::string toJson(const TrackDefinition& track) {
   for (const auto& o : track.selfIntersectionOverrides)
     selfIntersectionOverrides.push_back(json{{"side", o.side}, {"a", o.a}, {"b", o.b}, {"action", o.action}});
 
-  // "samples" is intentionally omitted: serializeTrack never writes it either (web/track-core.js:1721-
-  // 1741), even though parseTrack reads one back if present -- see EDITOR_PARITY_FIXES.md finding
-  // 10. Matching that (rather than "fixing" it here) keeps a track this editor round-trips
-  // byte-identical to one round-tripped through web/js/editor.js; `TrackDefinition::samples` is kept
-  // in memory only so a load-time value still feeds a live preview bake within this session.
-  // Falls back at serialize time only, matching serializeTrack's `track.name || 'Untitled Track'`
-  // -- an empty in-memory name (mid-edit, e.g. the track-name field cleared but not yet retyped) is
-  // otherwise left alone rather than forced to a placeholder the instant it's empty (see
-  // EDITOR_PARITY_FIXES.md gap 2's EditorState::setTrackName).
+  // "samples" is intentionally omitted from the written JSON, even though it is read back in if
+  // present: `TrackDefinition::samples` is kept in memory only so a load-time value still feeds a
+  // live preview bake within this session, not as a field this editor round-trips.
+  // Falls back at serialize time only -- an empty in-memory name (mid-edit, e.g. the track-name
+  // field cleared but not yet retyped) is otherwise left alone rather than forced to a placeholder
+  // the instant it's empty (see EditorState::setTrackName).
   const json out = {
       {"version", kSchemaVersion},
       {"name", track.name.empty() ? "Untitled Track" : track.name},

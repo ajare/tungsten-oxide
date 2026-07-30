@@ -13,8 +13,7 @@ constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsT
 // There's no on-canvas list of placed mesh regions -- each one is picked by clicking it, which
 // means a region hidden behind another (or off-screen after a pan) has no way back into selection.
 // Mirrors the "Existing roll/width/cross-section points"/"Existing zones"/"Existing triggers"
-// tables elsewhere in this UI (no JS precedent -- editor.js has no mesh list either, canvas-click
-// is its only selection path too).
+// tables elsewhere in this UI: canvas-click is otherwise the only selection path for a mesh region.
 void drawMeshListTable(EditorState& state) {
   ImGui::Separator();
   ImGui::TextUnformatted("Existing mesh regions:");
@@ -95,8 +94,7 @@ bool DrawMeshPanel(EditorState& state) {
     });
   }
 
-  // Rail height is per-ASSET, not per-placement -- applies to every placement of this asset, same
-  // as web/js/editor.js's title="Applies to every placement of this asset" (web/js/editor.js:2198).
+  // Rail height is per-ASSET, not per-placement -- applies to every placement of this asset.
   double railHeight = asset != nullptr ? asset->railHeight : 6.0;
   ImGui::SetNextItemWidth(120);
   bool railChanged = ImGui::InputDouble("Rail Height", &railHeight, 0.0, 0.0, "%.1f", kCommitOnEnter);

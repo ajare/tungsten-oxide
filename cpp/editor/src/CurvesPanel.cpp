@@ -35,14 +35,12 @@ bool DrawCurvesPanel(EditorState& state) {
   }
   ImGui::EndDisabled();
 
-  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11), mirrors web/editor.html's
-  // #delSegmentBtn/#delPrevSegmentBtn: only shown for a selected Position point, and only the
+  // Delete outgoing/incoming segment: only shown for a selected Position point, and only the
   // button whose direction actually has a segment (an open path's last/first point has no
-  // outgoing/incoming segment respectively) -- same as JS's `if (outgoingSeg)`/`if (incomingSeg)`
-  // guards. Grouped here with Delete Curve/Join as a curve-topology edit, rather than in the
-  // point's own Properties fields. Labelled with the same red/green the two segments are
-  // highlighted with on the top-down canvas (see TopDownCanvas.cpp's kOutgoingSegmentColor/
-  // kIncomingSegmentColor, matching web/js/editor.js's drawSegmentHighlight colors).
+  // outgoing/incoming segment respectively). Grouped here with Delete Curve/Join as a
+  // curve-topology edit, rather than in the point's own Properties fields. Labelled with the same
+  // red/green the two segments are highlighted with on the top-down canvas (see TopDownCanvas.cpp's
+  // kOutgoingSegmentColor/kIncomingSegmentColor).
   if (state.selection().valid()) {
     const auto outgoingSeg = state.selectedOutgoingSegment();
     const auto incomingSeg = state.selectedIncomingSegment();

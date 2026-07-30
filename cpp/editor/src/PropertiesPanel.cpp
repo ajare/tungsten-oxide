@@ -73,10 +73,9 @@ double selectedPointT(const Path& path, const TrackPoint& point, int rawIndex) {
   return path.closed ? static_cast<double>(idx) / n : static_cast<double>(idx) / static_cast<double>(std::max(1, n - 1));
 }
 
-// Type dropdown (EDITOR_PARITY_GAPS.md gap 2), mirrors renderProps()'s typeSelectRow/wireTypeSelect
-// -- shown atop every point-kind's own field set, same placement JS uses in each of its four props
-// branches. Disabled entries carry a tooltip explaining the refusal (EditorState::convertBlockedReason),
-// this editor's established alert() substitute (see MeshPanel.cpp's rail-height tooltip).
+// Type dropdown, shown atop every point-kind's own field set. Disabled entries carry a tooltip
+// explaining the refusal (EditorState::convertBlockedReason),
+// this editor's established modal substitute (see MeshPanel.cpp's rail-height tooltip).
 void drawTypeSelect(EditorState& state, const SelectedPoint& sel, const TrackPoint& point, const Path& path, const tox::Track* baked,
                     bool& mutated) {
   static constexpr const char* kLabels[] = {"Position", "Roll", "Width", "Cross-section"};
@@ -119,10 +118,10 @@ const ImU32 kCrossSectionEdgeColor = IM_COL32(213, 140, 255, 255);
 const ImU32 kCrossSectionTextColor = IM_COL32(205, 238, 255, 255);
 const ImU32 kCrossSectionLabelColor = IM_COL32(111, 147, 168, 255);
 
-// On-canvas cross-section preview (web/editor.html's #crossSectionPreview / drawCrossSectionPreview,
-// web/js/editor.js:2032-2125): the same profile the game's ribbon mesh and USD exporter build, so this
-// always shows the surface that will actually be baked, not just an abstract curvature/tightness
-// readout. tox::TrackCore::crossSectionHeight is the exact function TrackBake.cpp uses.
+// On-canvas cross-section preview: the same profile the game's ribbon mesh and USD exporter build,
+// so this always shows the surface that will actually be baked, not just an abstract
+// curvature/tightness readout. tox::TrackCore::crossSectionHeight is the exact function
+// TrackBake.cpp uses.
 void drawCrossSectionPreview(double curvature, double tightness, double thickness, double width) {
   constexpr float kPreviewHeight = 170.0f;
   constexpr float kPad = 18.0f;
@@ -224,8 +223,7 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   changed |= ImGui::IsItemDeactivatedAfterEdit();
   if (changed && state.setSelectedPositionFields(x, y, z, weight)) mutated = true;
 
-  // "Set as start point" (EDITOR_PARITY_FIXES.md gap 6), mirrors web/editor.html's #startBtn: disabled
-  // once this already is the start point, same as JS's `${isStart ? 'disabled' : ''}`.
+  // "Set as start point": disabled once this already is the start point.
   const bool isStart = state.isStartPoint(sel.pathIndex, sel.pointIndex);
   ImGui::BeginDisabled(isStart);
   if (ImGui::Button(isStart ? "This is the start point" : "Set as start point")) {
@@ -233,10 +231,10 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
   }
   ImGui::EndDisabled();
 
-  // Disjoint (EDITOR_PARITY_FIXES.md gap 5): mirrors web/editor.html's #disjointChk. Checking splits
+  // Disjoint: checking splits
   // this point into a hard, unsmoothed seam (EditorState::makeDisjoint); unchecking merges it back
   // (reconnectDisjoint). Silently no-ops when disallowed (open endpoint, or fewer than 4 position
-  // points on either side) rather than JS's alert() -- there's no modal dialog plumbing here yet.
+  // points on either side) -- there's no modal dialog plumbing here yet.
   const auto seamIt = std::find_if(state.disjointSeams().begin(), state.disjointSeams().end(),
                                    [&](const Connection& s) { return s.pointId == point.id; });
   const bool isDisjoint = seamIt != state.disjointSeams().end();
@@ -249,7 +247,7 @@ void drawPositionFields(EditorState& state, const SelectedPoint& sel, const Trac
     }
   }
 
-  // Delete outgoing/incoming segment (EDITOR_PARITY_FIXES.md gap 11) now lives in the Curves panel
+  // Delete outgoing/incoming segment now lives in the Curves panel
   // (curve-topology edits grouped with Delete Curve/Join), not here.
 }
 
@@ -320,10 +318,9 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
   drawCrossSectionPreview(curvature, tightness, thickness, width);
 }
 
-// Read-only physics-sample info (EDITOR_PARITY_FIXES.md gap 10), mirroring renderProps()'s
-// `if (physicsSel)` branch exactly: these are baked frames, not authored state, so there's
+// Read-only physics-sample info: these are baked frames, not authored state, so there's
 // nothing here to edit -- just the exact values physics consumes. Returns true if a selection was
-// shown (caller should skip the normal point-fields body), matching JS's early-return precedence.
+// shown (caller should skip the normal point-fields body).
 bool drawPhysicsSampleInfo(const TopDownView& view, const tox::Track* baked) {
   const auto& sel = view.physicsSelection();
   if (!sel.has_value() || baked == nullptr || sel->pathIndex < 0 || sel->pathIndex >= static_cast<int>(baked->paths.size())) return false;

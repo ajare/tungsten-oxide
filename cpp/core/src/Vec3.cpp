@@ -1,13 +1,12 @@
 // Vec3.cpp — the double-precision Vec3 bodies (declared in include/Vec3.hpp).
 //
-// Do NOT "optimize" these method bodies — parity with the JS oracle depends on
-// the exact operation order (float add isn't associative):
+// Do NOT "optimize" these method bodies — parity with the committed golden fixture corpus
+// (cpp/test-data/) depends on the exact operation order (float add isn't associative):
 //   * normalize() divides by length()||1, so a zero vector stays zero (not NaN).
-//   * applyQuaternion() uses r128's inverse-quaternion form (ix/iy/iz/iw), NOT
-//     the t = 2*cross form three.js adopted around r150 — they differ in the last
-//     ULP.
-//   * applyAxisAngle() goes through setFromAxisAngle -> applyQuaternion, as THREE
-//     does; it is not a direct Rodrigues rotation.
+//   * applyQuaternion() uses the inverse-quaternion form (ix/iy/iz/iw), NOT the alternate
+//     t = 2*cross formula some quaternion libraries use — they differ in the last ULP.
+//   * applyAxisAngle() goes through setFromAxisAngle -> applyQuaternion; it is not a direct
+//     Rodrigues rotation.
 #include "Vec3.hpp"
 #include <cmath>
 

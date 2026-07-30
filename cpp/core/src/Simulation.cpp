@@ -1,6 +1,5 @@
 // Simulation.cpp — bodies of the physics step + helpers declared in
-// include/Simulation.hpp, transliterated line-for-line from web/js/track-physics.js.
-// See the header for the native runtime scope.
+// include/Simulation.hpp. See the header for the native runtime scope.
 #include "Simulation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -12,7 +11,7 @@ double effectiveMaxSpeed(const Physics& p) {
   return p.boostActive ? std::max(p.maxSpeed, p.boostEffCap) : p.maxSpeed;
 }
 
-// Start a boost for one ship (mirror of track-physics.js triggerBoost). Each ship
+// Start a boost for one ship. Each ship
 // owns its own lock/cap; `|| DEFAULT` guards a zone missing factor/duration.
 void triggerBoost(Ship& ship, const Zone& zone) {
   Physics& p = ship.physics;

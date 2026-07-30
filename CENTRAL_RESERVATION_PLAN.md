@@ -6,8 +6,8 @@ reverse-gear/corridor-wall physics bugs (§4b–§4d, the last being the actual
 "ship gets blocked" cause), and the carved hole's resolution (§4e) and edge
 smoothness (§4f).**
 This document is updated after each milestone lands.
-Native C++ only (`cpp/core` + `cpp/editor`); the JS reference oracle (`web/`) is
-deliberately NOT touched — JS is slated for retirement and is allowed to diverge.
+Native C++ only (`cpp/core` + `cpp/editor`). The former `web/` JS reference implementation has
+since been retired and removed from the repository entirely.
 
 ## 1. Goal
 
@@ -66,8 +66,8 @@ lane for that span.
   `TrackDefinition.hpp` and the editor mirror; schema version bump;
   JSON load/save (`TrackLoader.cpp`, `EditorTrackDefinition.cpp`) with
   clamping/validation; round-trip unit tests.
-  - The loader now accepts schema **10 or 11** (not just 11): the JS oracle's
-    entire fixture corpus is permanently version 10 with no `reservations`
+  - The loader now accepts schema **10 or 11** (not just 11): the committed golden
+    fixture corpus is permanently version 10 with no `reservations`
     field, so a hard `==11` requirement would have broken every existing
     fixture load. `TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10` /
     `TRACK_SCHEMA_VERSION = 11` (and the editor's matching
@@ -282,8 +282,8 @@ and ended at 7.5 m/s.
 **Fix:** move the `speed`/`moveDir` recomputation inside `if (into > 0)`, and
 preserve gear there the same way 4b does (`speed = gear * mag *
 weightSpeedRetain`, `moveDir = unitVel * gear`, gated on `mag`, not `speed`).
-Applied to both `cpp/core/src/Ship.cpp` and its JS reference oracle
-`web/js/track-physics.js`; the mesh-platform `slideAlongRails` response in the
+Applied to `cpp/core/src/Ship.cpp` (and, at the time, its since-retired JS reference
+oracle); the mesh-platform `slideAlongRails` response in the
 grounded branch got the same gear treatment, so reversing into a platform's
 own rail behaves like reversing into a reservation or the outer wall.
 
@@ -310,7 +310,7 @@ the spurious no-contact penalty. All parity gates pass with the worst ratios
 
 **Latent corpus landmine found and removed while doing this.** Regenerating
 exposed a pre-existing knife-edge in the raw-session lap scenario:
-`raw_session_step_parity` failed with C++ firing the lap one frame before JS
+`raw_session_step_parity` failed with C++ firing the lap one frame before the recorded reference
 despite the two agreeing on position to ~1e-14. Cause: the finish trigger was
 hosted at `t: 0.1` and that path bakes to exactly 400 centerline frames, so
 `0.1 * 400 = 40` put the gate's plane *bit-exactly* on frame 40 — and a ship's
@@ -376,8 +376,8 @@ surface.pos += c.tangent * along
 Velocity now reaches the result, so the ship slides along the wall and
 `sampleTrack` advances the station next frame. The term is self-limiting:
 `sampleTrack` re-projects onto the centerline each frame, so `along` never
-accumulates beyond one frame of travel. Applied to `cpp/core/src/Ship.cpp` and
-its JS oracle `web/js/track-physics.js`.
+accumulates beyond one frame of travel. Applied to `cpp/core/src/Ship.cpp` (and, at the time, its
+since-retired JS reference oracle).
 
 **This also fixes the section-4 "unsteered car grinds to a halt"** logged above
 as a separate issue — same root cause. That fixture went from freezing after
@@ -518,7 +518,8 @@ strictly between a ring's two boundary points**, which is the exact structural
 property the corner-wise rule guarantees and the "both rings" rule violates.
 Under the old rule that check reports a 0.247 m intrusion, matching `kGapStep`
 as predicted. All 7 ctest targets pass; no trace moved (no fixture in the
-parity corpus is schema 11, and the JS oracle has no reservations by design).
+parity corpus is schema 11, and reservations were never part of the retired JS reference oracle
+by design).
 
 ## 5. Notes for implementers
 

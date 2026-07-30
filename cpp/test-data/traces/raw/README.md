@@ -18,16 +18,13 @@ Each file contains:
 }
 ```
 
-JavaScript and C++ independently normalize, load, bake, and compile
-`sourceTrack`; unlike the older suite, no baked world geometry is shared.
-Per-step replay restores the preceding JS state and compares the complete next
-state. Surface IDs, rail hits, respawns, zones, triggers, checkpoints, and other
+These traces independently normalize, load, bake, and compile
+`sourceTrack` in C++ against a fixed recorded reference; unlike the older suite, no baked world
+geometry is shared. Per-step replay restores the preceding recorded state and compares the complete
+next state. Surface IDs, rail hits, respawns, zones, triggers, checkpoints, and other
 discrete state match exactly. Continuous state uses the separately locked raw
-track tolerance documented in `MESH_CPP_PORT_PLAN.md`.
+track tolerance documented in `CLAUDE.md`.
 
 `manifest.json` records scenario activity so generation fails if a fixture stops
-exercising its intended branch. Regenerate both trace layers deliberately with:
-
-```text
-npm run gen-traces
-```
+exercising its intended branch. This corpus is a fixed, committed regression suite; there is no
+in-repo tool to regenerate it.

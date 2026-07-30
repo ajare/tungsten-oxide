@@ -9,8 +9,8 @@ namespace editor {
 bool DrawTrackPropertiesPanel(EditorState& state) {
   bool mutated = false;
 
-  // Track name (EDITOR_PARITY_FIXES.md gap 2), mirrors web/editor.html's #nameInput. The buffer only
-  // resyncs from state.track().name when that value has actually changed since last frame
+  // Track name field. The buffer only resyncs from state.track().name when that value has
+  // actually changed since last frame
   // (undo/redo/New/Import all go through setTrackName or replaceTrack, not live typing) --
   // otherwise a resync every frame would stomp in-progress keystrokes before they're committed.
   static char nameBuf[256] = "";
@@ -26,7 +26,7 @@ bool DrawTrackPropertiesPanel(EditorState& state) {
     mutated = true;
   }
 
-  // Direction toggle (EDITOR_PARITY_FIXES.md gap 6), mirrors web/editor.html's #dirBtn.
+  // Direction toggle.
   if (ImGui::Button(state.track().start.reverse ? "Direction: Reversed" : "Direction: Forward")) {
     state.toggleStartReverse();
     mutated = true;

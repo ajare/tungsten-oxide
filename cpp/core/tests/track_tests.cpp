@@ -1,5 +1,5 @@
 // track_tests.cpp — focused native track loading/bake/geometry/mesh tests.
-// M2 validates strict current-schema loading and JS-produced normalization
+// M2 validates strict current-schema loading and reference-produced normalization
 // summaries. Later milestones add bake and physics assertions to this target.
 #include <algorithm>
 #include <cmath>
@@ -166,12 +166,12 @@ int main(int argc, char** argv) {
       check(!loaded.track->definition.meshes.empty(), label + " has mesh placements");
 
       const json actual = normalizedSummary(loaded.track->definition);
-      check(expectedSummaries.contains(label), label + " has a JS normalization summary");
+      check(expectedSummaries.contains(label), label + " has a reference normalization summary");
       if (expectedSummaries.contains(label))
-        check(actual == expectedSummaries.at(label), label + " normalized summary matches JS\n  got:  " + dump(actual) +
+        check(actual == expectedSummaries.at(label), label + " normalized summary matches reference\n  got:  " + dump(actual) +
                                                          "\n  want: " + dump(expectedSummaries.at(label)));
 
-      check(expectedCompiled.contains(label), label + " has a JS compiled mesh summary");
+      check(expectedCompiled.contains(label), label + " has a reference compiled mesh summary");
       if (!expectedCompiled.contains(label)) continue;
       const json& expectedRegions = expectedCompiled.at(label);
       check(loaded.track->meshRegions.size() == expectedRegions.size(), label + " compiles every mesh placement");
@@ -186,18 +186,18 @@ int main(int argc, char** argv) {
         checkClose(region.bounds.maxX, expected["bounds"]["maxX"].get<double>(), 2e-12, label + " bounds.maxX");
         checkClose(region.bounds.minZ, expected["bounds"]["minZ"].get<double>(), 2e-12, label + " bounds.minZ");
         checkClose(region.bounds.maxZ, expected["bounds"]["maxZ"].get<double>(), 2e-12, label + " bounds.maxZ");
-        check(region.polygons.size() == expected["polygons"].size(), label + " polygon count matches JS");
+        check(region.polygons.size() == expected["polygons"].size(), label + " polygon count matches reference");
         for (std::size_t p = 0; p < std::min(region.polygons.size(), expected["polygons"].size()); ++p) {
           check(region.polygons[p].polygonId == expected["polygons"][p]["polygonId"].get<int>(), label + " polygon keeps authored id");
-          check(region.polygons[p].outer.size() == expected["polygons"][p]["outerCount"].get<std::size_t>(), label + " outer-loop topology matches JS");
-          check(region.polygons[p].holes.size() == expected["polygons"][p]["holeCounts"].size(), label + " hole count matches JS");
+          check(region.polygons[p].outer.size() == expected["polygons"][p]["outerCount"].get<std::size_t>(), label + " outer-loop topology matches reference");
+          check(region.polygons[p].holes.size() == expected["polygons"][p]["holeCounts"].size(), label + " hole count matches reference");
           for (std::size_t h = 0; h < std::min(region.polygons[p].holes.size(), expected["polygons"][p]["holeCounts"].size()); ++h)
             check(region.polygons[p].holes[h].size() == expected["polygons"][p]["holeCounts"][h].get<std::size_t>(),
-                  label + " hole-loop topology matches JS");
+                  label + " hole-loop topology matches reference");
         }
-        check(region.triangles.size() == expected["triangleCount"].get<std::size_t>(), label + " equivalent triangulation count matches JS");
+        check(region.triangles.size() == expected["triangleCount"].get<std::size_t>(), label + " equivalent triangulation count matches reference");
         checkClose(triangleArea(region), expected["triangleArea"].get<double>(), 2e-9, label + " triangulated area");
-        check(region.rails.size() == expected["rails"].size(), label + " rail count matches JS");
+        check(region.rails.size() == expected["rails"].size(), label + " rail count matches reference");
         for (std::size_t r = 0; r < std::min(region.rails.size(), expected["rails"].size()); ++r) {
           const MeshRail& rail = region.rails[r];
           const json& expectedRail = expected["rails"][r];
@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
   check(found == expectedFiles, "fixture inventory matches the seven shared M0 cases");
 
   // M4 semantic queries: holes subtract, concavity remains outside, shared
-  // polygon seams are not rails, and bounds padding follows the JS contract.
+  // polygon seams are not rails, and bounds padding follows the reference contract.
   const auto holeTrack = Track::fromFile(fixtureDir / "pad-with-hole.json");
   if (holeTrack && !holeTrack.track->meshRegions.empty()) {
     const MeshRegion& region = holeTrack.track->meshRegions[0];
@@ -446,7 +446,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // M3: independently baked curved/banked path against selected JS oracle data.
+  // M3: independently baked curved/banked path against selected reference fixture data.
   const std::filesystem::path pathFixture = fixtureDir.parent_path() / "path" / "curved-banked.json";
   const json pathExpected = readJson(fixtureDir.parent_path() / "path" / "expected" / "curved-banked-summary.json");
   const TrackLoadResult pathLoaded = Track::fromFile(pathFixture);
@@ -456,8 +456,8 @@ int main(int argc, char** argv) {
     check(track.paths.size() == 1, "native bake produces one path");
     const Path& path = track.paths[0];
     const json& expectedPath = pathExpected["paths"][0];
-    check(path.centerline.size() == expectedPath["frameCount"].get<std::size_t>(), "adaptive physics frame count matches JS");
-    check(path.anchors.size() == expectedPath["anchors"].size(), "anchor count matches JS");
+    check(path.centerline.size() == expectedPath["frameCount"].get<std::size_t>(), "adaptive physics frame count matches reference");
+    check(path.anchors.size() == expectedPath["anchors"].size(), "anchor count matches reference");
     for (std::size_t i = 0; i < path.anchors.size(); ++i) checkVec(path.anchors[i], expectedPath["anchors"][i], 1e-12, "anchor");
     for (const auto& expectedFrame : expectedPath["frames"]) {
       const int index = expectedFrame["index"].get<int>();
@@ -531,14 +531,14 @@ int main(int argc, char** argv) {
       check(!foundBatch->vertices.empty() && foundBatch->indices.size() % 3 == 0, "render batch is non-empty triangles: " + id);
       check(foundBatch->vertices.size() == expectedBatch["vertexCount"].get<std::size_t>() &&
                 foundBatch->indices.size() == expectedBatch["indexCount"].get<std::size_t>(),
-            "adaptive render triangle count matches JS: " + id);
-      check(foundBatch->hasUv == expectedBatch["hasUv"].get<bool>(), "render UV presence matches JS: " + id);
+            "adaptive render triangle count matches reference: " + id);
+      check(foundBatch->hasUv == expectedBatch["hasUv"].get<bool>(), "render UV presence matches reference: " + id);
       if (expectedBatch.contains("texture") && !expectedBatch["texture"].is_null()) {
         check(foundBatch->texture.has_value(), "render texture metadata exists: " + id);
         if (foundBatch->texture) {
           check(foundBatch->texture->assetId == expectedBatch["texture"]["assetId"].get<std::string>() &&
                     foundBatch->texture->tile == expectedBatch["texture"]["tile"].get<int>(),
-                "render texture metadata matches JS: " + id);
+                "render texture metadata matches reference: " + id);
         }
       }
       Vec3 min(1e300, 1e300, 1e300), max(-1e300, -1e300, -1e300);
@@ -644,7 +644,7 @@ int main(int argc, char** argv) {
     check(!loaded && loaded.error.find("unsupported") != std::string::npos, "a schema newer than 11 is explicitly unsupported");
   }
   {
-    // CENTRAL_RESERVATION_PLAN.md M0: schema 10 (the permanent JS-oracle version, no
+    // CENTRAL_RESERVATION_PLAN.md M0: schema 10 (the permanently pinned fixture version, no
     // reservations field at all) still loads and normalizes with an empty reservations list.
     json input = base;
     const auto loaded = Track::fromJson(input.dump());
@@ -1316,6 +1316,6 @@ int main(int argc, char** argv) {
   }
   std::cout << "geometry oracle worst: " << worstOracleDelta << " (" << worstOracleRatio
             << "x gate, " << worstOracleField << ")\n";
-  std::cout << "PASS: strict loader and " << found.size() << " JS-normalized mesh fixtures\n";
+  std::cout << "PASS: strict loader and " << found.size() << " reference-normalized mesh fixtures\n";
   return 0;
 }

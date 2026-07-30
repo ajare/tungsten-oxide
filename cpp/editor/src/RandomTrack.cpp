@@ -13,9 +13,9 @@
 namespace editor {
 namespace {
 
-// Bit-exact port of editor.js's mulberry32: uint32_t wraparound arithmetic reproduces JS's
-// `|0`/Math.imul/`>>>` exactly for this particular operation sequence (XOR, add, multiply all
-// wrap identically whether the bit pattern is read as signed or unsigned).
+// The mulberry32 PRNG: uint32_t wraparound arithmetic gives a deterministic bit sequence from a
+// seed (XOR, add, multiply all wrap identically whether the bit pattern is read as signed or
+// unsigned).
 struct Mulberry32 {
   std::uint32_t a;
   explicit Mulberry32(std::uint32_t seed) : a(seed) {}
@@ -28,8 +28,8 @@ struct Mulberry32 {
   }
 };
 
-// editor.js's RANDOM_ROUTE_CONTROL_SPACING: temporary route sampling used only to choose mesh
-// cuts, unrelated to the authored path's own control density.
+// Temporary route sampling used only to choose mesh cuts, unrelated to the authored path's own
+// control density.
 constexpr double kRouteControlSpacing = 250.0;
 
 // Mirrors measureLoopLength: bake a bare closed loop through core's real loader/spline (not a
@@ -60,8 +60,7 @@ double measureClosedLoopLength(const std::vector<tox::Vec3>& positions) {
   return length;
 }
 
-// M7c's substitute for editor.js's endpoint() (TrackCore.makeEvaluator + splitPoints, evaluated at
-// the exact knot parameter 0 or CP_N-1): bakes `path` alone through core's real loader and reads
+// Bakes `path` alone through core's real loader and reads
 // the baked centerline's first/last frame. buildCenterline samples an open path's parameter range
 // as (i/(N-1))*(CP_N-1), which lands EXACTLY on 0 and CP_N-1 at the array's own first/last index
 // regardless of N -- so this is the same value the evaluator would give, not an approximation. See
@@ -177,9 +176,8 @@ std::vector<tox::Vec3> flattenTightTurnElevations(const std::vector<tox::Vec3>& 
   return out;
 }
 
-// Mirrors generatedPath: builds an authored Path from raw [x,y,z] coords, drawing roll/width/
-// cross-section from `rnd` in the same order editor.js does (position points first, then one
-// roll/width/crossSection triplet per coordinate).
+// Builds an authored Path from raw [x,y,z] coords, drawing roll/width/cross-section from `rnd` in
+// a fixed order (position points first, then one roll/width/crossSection triplet per coordinate).
 Path generatedPath(const std::string& id, std::vector<tox::Vec3> coords, Mulberry32& rnd, const RandomTrackRanges& ranges,
                     double complexityT, bool ramp, bool closed) {
   if (!ramp && !closed) coords = simplifyGeneratedCoords(coords);
