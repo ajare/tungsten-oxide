@@ -98,7 +98,7 @@ lane for that span.
     `region.contains()`) can never treat it as a standing surface. This is
     also how M2 tells a reservation's region apart from a real placed mesh
     asset's (always-populated) region.
-- [ ] **M2 — Physics wiring.** `Ship.cpp`'s grounded-corridor branch checks
+- [x] **M2 — Physics wiring.** `Ship.cpp`'s grounded-corridor branch checks
   reservation regions via `slideAlongRails` (new small loop; the existing
   mesh-region loops only fire while airborne-near or already "on" a mesh
   region, neither of which covers "driving the main corridor near a gap").
@@ -106,6 +106,11 @@ lane for that span.
   `collisionSurface` (native-editor-saved tracks); raw-JSON-only physics
   without one still treats the gap's lateral span as within `sLeft`/`sRight`
   and won't rebuild a floor gap on its own — the wall still blocks entry.
+  - New loop lives in the `hasTranslation` grounded branch, gated on
+    `region.polygons.empty()` — the trait that tells a reservation's
+    synthetic region apart from a real placed mesh asset's region (always
+    populated). A real platform's edge is unaffected: it still only collides
+    via the pre-existing ownership/airborne-proximity paths.
 - [ ] **M3 — Native editor UI.** `EditorState` mutation helpers (add/
   remove/update with clamp + non-overlap validation — undo/redo is free via
   existing whole-document snapshots); new `ReservationsPanel` (list + t0/t1/

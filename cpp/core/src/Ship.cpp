@@ -147,6 +147,32 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   } else if (hasTranslation) {
     Vec3 newPos = p.groundPos.clone().addScaledVector(vel, dt);
 
+    // Central-reservation walls (CENTRAL_RESERVATION_PLAN.md M2): a car driving the main corridor
+    // is never "on" one of these regions (they have no floor -- see reservationGeometry in
+    // TrackBake.cpp) and isn't airborne, so neither of this function's other mesh-region checks
+    // (the ownership branch above, the airborne-loop below) ever runs for it here. `polygons.empty()`
+    // is what distinguishes a reservation's rails-only synthetic MeshRegion from a real placed mesh
+    // asset's region (which always has compiled polygons/triangles) -- only the former gatekeeps the
+    // corridor this way; a real platform's edge still only collides via ownership/airborne-proximity,
+    // unchanged from before this feature.
+    for (const auto& region : simulation.track().meshRegions) {
+      if (!region.polygons.empty()) continue;
+      if (!region.withinBounds(newPos.x, newPos.z, TrackCore::COLLISION_WALL_MARGIN)) continue;
+      Vec2d velocity{vel.x, vel.z};
+      const double before = std::hypot(vel.x, vel.z);
+      const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {newPos.x, newPos.z},
+                                                   velocity, TrackCore::COLLISION_WALL_MARGIN, weightRestitution(p));
+      if (!moved.hit) continue;
+      railHit = true;
+      newPos.x = moved.x;
+      newPos.z = moved.z;
+      vel.x = velocity.x;
+      vel.z = velocity.y;
+      p.speed = std::hypot(vel.x, vel.z) * weightSpeedRetain(p);
+      addImpactJolt(p, before - std::hypot(vel.x, vel.z));
+      if (p.speed > 1e-6) p.moveDir.set(vel.x, 0, vel.z).normalize();
+    }
+
     const Sample current = c;
     Projection projection = projectToSurface(current, newPos.x, newPos.y, newPos.z);
     const bool forceCurrentWall = !current.offEnd && (projection.s > projection.hiS || projection.s < projection.loS);
