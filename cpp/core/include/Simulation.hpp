@@ -115,7 +115,7 @@ public:
 
 private:
   const Track& track_;
-  bool meshPhysicsEnabled_{true};
+  bool meshPhysicsEnabled_{false};
 };
 
 }  // namespace tox
