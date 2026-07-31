@@ -37,5 +37,7 @@ void MapTungstenMonoxideDefinitionFactory::create(
     } while (meshNode->next());
   }
   if (mapRes->mTrackMeshNames.empty())
-    throw wp::application::resourcesystem::ResourceException(resource, "Track definition requires at least one <TrackMeshes><Mesh> entry.");
+    throw wp::application::resourcesystem::ResourceException(
+        resource, "Track definition requires at least one <TrackMeshes><Mesh> entry -- this track resource "
+                  "predates the collision-mesh export contract and must be re-exported from the editor.");
 }

@@ -349,6 +349,157 @@ int main(int argc, char** argv) {
       launchSimulation.stepPhysics(launched, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
     check(!launched.physics.airborne && std::fabs(launched.physics.groundPos.y - 4.0) < 1e-9,
           "launched ship descends and lands normally");
+
+    // Simulation::meshPhysicsEnabled: ground contact, wall collision and airborne landing all come
+    // from the BVH alone, none of the corridor/MeshRegion machinery this whole file otherwise
+    // exercises. flatRoad matches the launch test above; wall is a vertical face at z=-10 whose
+    // normal faces back toward an oncoming ship (as an inner track wall would).
+    Track meshModeTrack = track;
+    CollisionTriangle wall;
+    wall.positions[0] = Vec3(15, 0, -10);
+    wall.positions[1] = Vec3(35, 0, -10);
+    wall.positions[2] = Vec3(25, 12, -10);
+    wall.normals[0] = wall.normals[1] = wall.normals[2] = Vec3(0, 0, -1);
+    meshModeTrack.collisionSurface =
+        std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad, wall});
+    Simulation meshSimulation(meshModeTrack);
+    meshSimulation.setMeshPhysicsEnabled(true);
+
+    Ship driving = shipAt(meshSimulation, meshModeTrack, {20, 4, -25});
+    driving.physics.speed = 40;
+    meshSimulation.stepPhysics(driving, 0.1, 1, 0, 0);
+    check(!driving.physics.airborne && std::fabs(driving.physics.groundPos.y - 4.0) < 1e-6 &&
+              driving.physics.groundPos.z > -25,
+          "mesh mode keeps a driving ship grounded on the BVH road surface");
+
+    Ship intoWall = shipAt(meshSimulation, meshModeTrack, {25, 4, -12});
+    intoWall.physics.speed = 40;
+    const double speedBeforeWall = intoWall.physics.speed;
+    meshSimulation.stepPhysics(intoWall, 0.1, 1, 0, 0);
+    check(intoWall.physics.groundPos.z < -9.5,
+          "mesh mode wall bounce stops the ship at the BVH wall instead of passing through it");
+    check(std::fabs(intoWall.physics.speed) < speedBeforeWall,
+          "mesh mode wall bounce sheds speed on impact");
+
+    // Regression for a real bug: driving at a shallow angle into the wall must slide along it
+    // (like the analytic corridor/rail code does), not freeze the ship at the first contact point.
+    // The original mesh-mode wall response snapped position to the exact contact point every
+    // frame; since only moveDir (not forward) gets corrected, grip re-aimed moveDir back into the
+    // wall each frame, so the ship re-hit and re-snapped to the same spot indefinitely instead of
+    // making any progress along the wall.
+    // 20 steps at this speed/angle advances roughly 12-13 units in x -- comfortably inside the
+    // wall's finite x:[15,35] extent (unlike the full 120-step run, which slides the ship clean off
+    // the wall's far edge and into open space, where it's expected to leave the wall's z-plane).
+    Ship sliding = shipAt(meshSimulation, meshModeTrack, {16, 4, -13}, normalizeSafe(Vec3(1, 0, 0.3)));
+    sliding.physics.speed = 40;
+    const double slideStartX = sliding.physics.groundPos.x;
+    for (int step = 0; step < 20; ++step) meshSimulation.stepPhysics(sliding, 1.0 / 60.0, 1, 0, 0);
+    check(std::isfinite(sliding.physics.groundPos.x) && std::isfinite(sliding.physics.groundPos.z),
+          "mesh mode wall sliding stays finite");
+    check(sliding.physics.groundPos.x > slideStartX + 8,
+          "mesh mode wall contact slides the ship along the wall instead of freezing it in place "
+          "(advanced only " + std::to_string(sliding.physics.groundPos.x - slideStartX) + ")");
+    check(sliding.physics.groundPos.z < -9.0,
+          "mesh mode wall contact keeps the ship behind the wall surface while still within its "
+          "extent (z=" + std::to_string(sliding.physics.groundPos.z) + ")");
+
+    // Regression for a second real bug found via headless investigation against the actual bundled
+    // track: on a banked/sloped road, the horizontal wall-probe (fixed y) can clip through the road
+    // surface itself a short distance ahead -- sweep() has no notion of "wall vs. floor", it just
+    // returns whatever one-sided triangle a segment crosses first. Treating that as a wall snapped
+    // the ship to the same spurious contact point every single frame (into ~= 0 for a road-normal
+    // hit against near-parallel velocity, so it fell straight to the raw position-snap branch,
+    // reproducing the exact "stuck in place, speed climbs to max" symptom) even though there was no
+    // wall there at all -- just a gentle upward slope in the road itself.
+    Track rampTrack = track;
+    CollisionTriangle rampA, rampB;
+    // y = 0.05*z: a ~3-degree upward slope, gentle enough that the ramp's own normal stays close to
+    // UP (as a real banked/graded road section would), which is exactly the case the >0.5 dot-with-
+    // UP threshold needs to still classify correctly.
+    // Long enough (z out to 1200) that a ship accelerating to max speed for the whole 300-step run
+    // never reaches the far end -- otherwise it legitimately runs out of road there and gets
+    // edge-stopped, which would trip the "never freezes" assertion for the wrong reason.
+    const Vec3 rampNormal = normalizeSafe(Vec3(0, 1, -0.05));
+    rampA.positions[0] = Vec3(-50, -0.5, -10);
+    rampA.positions[1] = Vec3(50, -0.5, -10);
+    rampA.positions[2] = Vec3(50, 60.0, 1200);
+    rampB.positions[0] = Vec3(-50, -0.5, -10);
+    rampB.positions[1] = Vec3(50, 60.0, 1200);
+    rampB.positions[2] = Vec3(-50, 60.0, 1200);
+    rampA.normals[0] = rampA.normals[1] = rampA.normals[2] = rampNormal;
+    rampB.normals[0] = rampB.normals[1] = rampB.normals[2] = rampNormal;
+    rampTrack.collisionSurface =
+        std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{rampA, rampB});
+    Simulation rampSimulation(rampTrack);
+    rampSimulation.setMeshPhysicsEnabled(true);
+
+    Ship ramping = shipAt(rampSimulation, rampTrack, {0, -0.5, 0});
+    bool everStuckOnRamp = false;
+    Vec3 lastRampPos = ramping.physics.groundPos;
+    for (int step = 0; step < 300; ++step) {
+      rampSimulation.stepPhysics(ramping, 1.0 / 60.0, 1, 0, 0);
+      if (step > 5 && glm::length(ramping.physics.groundPos - lastRampPos) < 1e-9) everStuckOnRamp = true;
+      lastRampPos = ramping.physics.groundPos;
+    }
+    check(std::isfinite(ramping.physics.groundPos.z), "mesh mode ramp driving stays finite");
+    check(!everStuckOnRamp,
+          "mesh mode does not mistake a gently sloped road surface for a wall and freeze in place");
+    check(ramping.physics.groundPos.z > 50.0,
+          "mesh mode ship drives up a sloped road normally (z=" +
+              std::to_string(ramping.physics.groundPos.z) + ")");
+
+    // Regression for the reported "ship does not collide with the side rails". A track's two edge
+    // rails are baked with the same world-space facing, so relative to the track interior one faces
+    // inward and the other outward. The wall probe used a ONE-SIDED sweep, which by construction
+    // rejects any triangle whose normal points away from the direction of travel -- so the ship
+    // sailed straight through whichever rail faced away and fell off the track. Wall collision has
+    // to be two-sided: a barrier blocks regardless of how its render normal was authored.
+    //
+    // Both walls below are identical except for normal direction; both must stop the ship.
+    for (int facing = 0; facing < 2; ++facing) {
+      const Vec3 outwardNormal = facing == 0 ? Vec3(0, 0, -1) : Vec3(0, 0, 1);
+      // The floor deliberately continues well PAST the barrier. If it stopped at the barrier, a
+      // ship that tunnelled through would simply run out of ground and be caught by the separate
+      // edge-stop fallback -- masking the very bug this case exists to detect. With ground on both
+      // sides, only real two-sided barrier collision can keep the ship on the near side.
+      CollisionTriangle floorA, floorB, barrier;
+      floorA.positions[0] = Vec3(-60, 0, -60);
+      floorA.positions[1] = Vec3(60, 0, -60);
+      floorA.positions[2] = Vec3(60, 0, 120);
+      floorB.positions[0] = Vec3(-60, 0, -60);
+      floorB.positions[1] = Vec3(60, 0, 120);
+      floorB.positions[2] = Vec3(-60, 0, 120);
+      for (int k = 0; k < 3; ++k) floorA.normals[k] = floorB.normals[k] = UP;
+      barrier.positions[0] = Vec3(-60, 0, 20);
+      barrier.positions[1] = Vec3(60, 0, 20);
+      barrier.positions[2] = Vec3(0, 6, 20);
+      for (int k = 0; k < 3; ++k) barrier.normals[k] = outwardNormal;
+
+      Track barrierTrack = track;
+      barrierTrack.collisionSurface = std::make_shared<TrackCollisionSurface>(
+          std::vector<CollisionTriangle>{floorA, floorB, barrier});
+      Simulation barrierSim(barrierTrack);
+      barrierSim.setMeshPhysicsEnabled(true);
+
+      Ship charging = shipAt(barrierSim, barrierTrack, {0, 0, -20}, Vec3(0, 0, 1));
+      charging.physics.speed = 60;
+      for (int step = 0; step < 120; ++step) barrierSim.stepPhysics(charging, 1.0 / 60.0, 1, 0, 0);
+      const std::string which = facing == 0 ? "inward-facing" : "outward-facing";
+      check(!charging.physics.airborne,
+            "mesh mode: a ship driven at an " + which + " barrier never leaves the surface");
+      check(charging.physics.groundPos.z < 20.0,
+            "mesh mode: an " + which + " barrier stops the ship (z=" +
+                std::to_string(charging.physics.groundPos.z) + ", barrier at z=20)");
+    }
+
+    Ship falling = shipAt(meshSimulation, meshModeTrack, {20, 20, 0});
+    falling.physics.airborne = true;
+    falling.physics.verticalVel = -15;
+    falling.physics.speed = 0;
+    for (int step = 0; falling.physics.airborne && step < 200; ++step)
+      meshSimulation.stepPhysics(falling, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
+    check(!falling.physics.airborne && std::fabs(falling.physics.groundPos.y - 4.0) < 1e-6,
+          "mesh mode airborne ship lands purely via BVH raycast, with no MeshRegion/corridor check");
   }
   {
     json transformed = readJson(fixtureDir / "transformed-square.json");
@@ -712,6 +863,97 @@ int main(int argc, char** argv) {
     check(sawExplicitRespawn, "an explicit respawn intent fires a non-automatic Respawned event");
     check(glm::distance(session.ships()[0].physics.groundPos, startPos) < 1.0,
           "an explicit respawn with no checkpoint reached returns to the starting-grid pose");
+  }
+
+  if (pathLoaded) {
+    // Ship::step's meshModeOverride: lets a single call pick a mode regardless of what
+    // Simulation::meshPhysicsEnabled() says. GameSession::stepGhost (tested below) is built on
+    // this; test it directly first since it's the simpler surface.
+    auto overrideTrack = std::make_shared<Track>(*pathLoaded.track);
+    CollisionTriangle flatRoad;
+    flatRoad.positions[0] = Vec3(-1000, 4, -1000);
+    flatRoad.positions[1] = Vec3(1000, 4, -1000);
+    flatRoad.positions[2] = Vec3(0, 4, 1000);
+    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    overrideTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
+    Simulation overrideSim(*overrideTrack);
+
+    Ship forcedMesh = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedMesh.physics.speed = 20;
+    const StepResult meshResult = forcedMesh.step(overrideSim, 1.0 / 60.0, 1, 0, 0, true);
+    check(std::fabs(meshResult.surfaceNormal.y - 1.0) < 1e-9,
+          "meshModeOverride=true uses mesh physics even though meshPhysicsEnabled() is false");
+
+    // Same starting state, opposite override, with meshPhysicsEnabled() itself now flipped to
+    // true too -- so both results below come from the override alone, not from the ambient flag.
+    overrideSim.setMeshPhysicsEnabled(true);
+    Ship forcedMesh2 = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedMesh2.physics.speed = 20;
+    forcedMesh2.step(overrideSim, 1.0 / 60.0, 1, 0, 0, true);
+    Ship forcedAnalytic = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedAnalytic.physics.speed = 20;
+    forcedAnalytic.step(overrideSim, 1.0 / 60.0, 1, 0, 0, false);
+    check(glm::distance(forcedMesh2.physics.groundPos, forcedAnalytic.physics.groundPos) > 1e-6,
+          "meshModeOverride selects the mode itself, independent of meshPhysicsEnabled()");
+  }
+
+  if (pathLoaded) {
+    // GameSession::stepGhost: the debug "other physics method" ghost projection. Real ships run
+    // mesh mode (matching the flat road below); the ghost is driven with meshModeOverride's
+    // opposite, i.e. analytic.
+    auto ghostTrack = std::make_shared<Track>(*pathLoaded.track);
+    GameSession probeSession(ghostTrack, 1);
+    const double spawnY = probeSession.ships()[0].physics.groundPos.y;
+    CollisionTriangle flatRoad;
+    flatRoad.positions[0] = Vec3(-1000, spawnY, -1000);
+    flatRoad.positions[1] = Vec3(1000, spawnY, -1000);
+    flatRoad.positions[2] = Vec3(0, spawnY, 1000);
+    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    ghostTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
+
+    GameSession ghostSession(ghostTrack, 1);
+    ghostSession.setMeshPhysicsEnabled(true);
+    Ship ghost = ghostSession.ships()[0];
+    const Ship realShipBefore = ghostSession.ships()[0];
+
+    std::vector<ControlIntent> driveIntent(1);
+    driveIntent[0].throttle = 1.0;
+    driveIntent[0].steer = 0.3;
+    bool everDiverged = false;
+    bool finiteThroughout = true;
+    for (int frame = 0; frame < 90 && finiteThroughout; ++frame) {
+      ghostSession.step(driveIntent, 1.0 / 60.0);
+      ghostSession.stepGhost(ghost, driveIntent[0], 1.0 / 60.0);
+      finiteThroughout = std::isfinite(ghost.physics.groundPos.x) && std::isfinite(ghost.physics.groundPos.y) &&
+                         std::isfinite(ghost.physics.groundPos.z);
+      if (glm::distance(ghost.physics.groundPos, ghostSession.ships()[0].physics.groundPos) > 0.5)
+        everDiverged = true;
+    }
+    check(finiteThroughout, "stepGhost's projected position stays finite while driving");
+    check(everDiverged,
+          "stepGhost visibly diverges from the real ship when driven with the opposite physics mode");
+
+    // Safety: stepGhost must not perturb the real roster or its event stream. `ghost` isn't a
+    // roster member -- if GameSession's onTriggerFired ship-index pointer arithmetic (`&ship -
+    // ships_.data()`) ever ran against it, this would be undefined behavior, not just a wrong
+    // answer, so this checks the callback-suppression itself, not merely its visible effect.
+    check(ghostSession.ships().size() == 1 &&
+              glm::distance(ghostSession.ships()[0].physics.groundPos, realShipBefore.physics.groundPos) > 0.01,
+          "stepGhost does not touch the real roster (it moved only via its own ghostSession.step calls)");
+    const std::size_t eventsAfterGhost = ghostSession.events().size();
+    ghostSession.stepGhost(ghost, driveIntent[0], 1.0 / 60.0);
+    check(ghostSession.events().size() == eventsAfterGhost,
+          "stepGhost never appends to GameSession::events()");
+
+    // Respawn path: must reset the ghost via Ship::respawn without touching the real session.
+    const Vec3 ghostPosBeforeRespawn = ghost.physics.groundPos;
+    const Vec3 startGridPos = ghostSession.ships()[0].startPose.pos;
+    ControlIntent respawnGhost;
+    respawnGhost.respawn = true;
+    ghostSession.stepGhost(ghost, respawnGhost, 1.0 / 60.0);
+    check(glm::distance(ghost.physics.groundPos, startGridPos) < 1.0 &&
+              glm::distance(ghost.physics.groundPos, ghostPosBeforeRespawn) > 0.01,
+          "stepGhost's respawn intent resets the ghost to its starting-grid pose");
   }
 
   const std::filesystem::path basePath = fixtureDir / "transformed-square.json";
@@ -1298,6 +1540,25 @@ int main(int argc, char** argv) {
     auto smoothHit = smoothSurface.nearestAlongAxis({0, 0.1, 0}, {0, 1, 0}, 1);
     check(smoothHit && smoothHit->normal.y < 1.0 && smoothHit->normal.y > 0.7,
           "contact normal barycentrically interpolates exported vertex normals");
+
+    // A wall facing back toward the probe origin (normal opposes the probe axis) -- e.g. the inner
+    // face of a track-side wall, as seen by a ship driving inside the track. nearestAlongAxis's
+    // road-facing filter can never accept this; nearestAcrossAxis has no such filter and is what a
+    // lateral/wall probe needs instead.
+    CollisionTriangle wall;
+    wall.positions[0] = {3, -1, -2};
+    wall.positions[1] = {3, -1, 2};
+    wall.positions[2] = {3, 1, 0};
+    wall.normals[0] = wall.normals[1] = wall.normals[2] = {-1, 0, 0};
+    wall.surfaceId = 30;
+    TrackCollisionSurface wallSurface({wall});
+    check(!wallSurface.nearestAlongAxis({0, 0, 0}, {1, 0, 0}, 5).has_value(),
+          "nearestAlongAxis rejects a wall whose normal opposes the probe axis");
+    auto wallHit = wallSurface.nearestAcrossAxis({0, 0, 0}, {1, 0, 0}, 5);
+    check(wallHit && wallHit->surfaceId == 30 && std::fabs(wallHit->position.x - 3) < 1e-9,
+          "nearestAcrossAxis finds the same wall regardless of which way its normal faces");
+    check(!wallSurface.nearestAcrossAxis({0, 0, 0}, {0, 1, 0}, 5).has_value(),
+          "nearestAcrossAxis still finds nothing along an axis that misses the geometry entirely");
   }
 
   {
@@ -1369,6 +1630,10 @@ int main(int argc, char** argv) {
     if (loaded) {
       auto driveInto = [&](std::shared_ptr<Track> track) {
         Simulation sim(*track);
+        // This diagnostic is specifically about the analytic corridor/MeshRegion reservation-wall
+        // path (slideAlongRails) -- the collisionSurface built below (when present) deliberately
+        // omits wall geometry, so mesh mode would see nothing to bounce off at all.
+        sim.setMeshPhysicsEnabled(false);
         Ship ship;
         const Frame& startFrame = track->paths[0].centerline.front();
         Sample startSample;

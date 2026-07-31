@@ -57,6 +57,18 @@ void addTriangle(GeometryBatch& batch, const Vec3& a, const Vec3& b, const Vec3&
   batch.indices.insert(batch.indices.end(), {base, base + 1, base + 2});
 }
 
+// Like addTriangle, but for triangles (e.g. MeshFloorTriangle-derived floors) whose winding isn't
+// known to follow this file's (a,b,c) -> cross(c-a,b-a) convention: swap the last two corners
+// whenever the computed normal points away from world up, so a ship standing on the result always
+// sees an upward-facing surface normal.
+void addUpwardTriangle(GeometryBatch& batch, const Vec3& a, const Vec3& b, const Vec3& c) {
+  if (glm::dot(normalOf(a, b, c), Vec3{0.0, 1.0, 0.0}) < 0.0) {
+    addTriangle(batch, a, c, b);
+  } else {
+    addTriangle(batch, a, b, c);
+  }
+}
+
 struct AssetTopology {
   wp::geometry::Mesh mesh;
   std::map<int, std::uint32_t> vertices, edges, polygons;
@@ -176,10 +188,21 @@ void addGeometry(Track& track, const MeshRegion& region) {
   // "DefaultMeshMaterial", and with MaterialCatalog's startup existence check for it.
   surface.materialKey = "Tracks/DefaultMeshMaterial";
   surface.kind = GeometryKind::MeshSurface;
-  for (const auto& triangle : region.triangles) {
-    addTriangle(surface, {triangle.points[0].x, region.elevation, triangle.points[0].y},
-                {triangle.points[1].x, region.elevation, triangle.points[1].y},
-                {triangle.points[2].x, region.elevation, triangle.points[2].y});
+  if (!region.floor.empty()) {
+    // Capped reservations carry a curved floor (per-corner heights from the reservation's
+    // physics-facing MeshFloorTriangle data) -- emit that instead of the flat region.elevation
+    // extrusion below, so the collision mesh matches what elevationAt() already computes.
+    for (const auto& triangle : region.floor) {
+      addUpwardTriangle(surface, {triangle.points[0].x, triangle.heights[0], triangle.points[0].y},
+                        {triangle.points[1].x, triangle.heights[1], triangle.points[1].y},
+                        {triangle.points[2].x, triangle.heights[2], triangle.points[2].y});
+    }
+  } else {
+    for (const auto& triangle : region.triangles) {
+      addTriangle(surface, {triangle.points[0].x, region.elevation, triangle.points[0].y},
+                  {triangle.points[1].x, region.elevation, triangle.points[1].y},
+                  {triangle.points[2].x, region.elevation, triangle.points[2].y});
+    }
   }
   track.geometry.push_back(std::move(surface));
 

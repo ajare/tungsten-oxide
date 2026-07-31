@@ -3,6 +3,7 @@
 // immutable track queries and keeps a compatibility facade for existing callers.
 #pragma once
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -85,7 +86,13 @@ struct Pose {
 struct Ship {
   // Canonical per-ship behavior entry points. Simulation remains a shared
   // track-query/compatibility facade for existing parity consumers.
-  StepResult step(const Simulation& simulation, double dt, double throttle, double brake, double steer);
+  //
+  // meshModeOverride, when set, picks analytic (false) or mesh (true) physics for this call
+  // regardless of Simulation::meshPhysicsEnabled() -- the mode every other caller implicitly gets.
+  // Exists for GameSession::stepGhost's debug "what would the other method have done" projection;
+  // ordinary gameplay callers should leave it unset.
+  StepResult step(const Simulation& simulation, double dt, double throttle, double brake, double steer,
+                  std::optional<bool> meshModeOverride = std::nullopt);
   void respawn(const Simulation& simulation);
   void placeAt(const Simulation& simulation, const Pose& pose, const std::string& disarmedId = {});
 

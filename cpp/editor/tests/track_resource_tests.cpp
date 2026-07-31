@@ -145,6 +145,20 @@ int main(int argc, char** argv) {
   check(!malformedPlan.ok() && readFile(malformed) == "<NotResources/>",
         "invalid existing XML is rejected and left untouched");
 
+  // A zero-path TrackDefinition already fails to bake at all ("a current-schema track needs at
+  // least one path" -- TrackLoader.cpp), so that particular no-geometry case never reaches
+  // prepareTrackSave's own hasCollidableGeometry() check. That check exists as a second,
+  // independent guard for tracks that *do* bake (at least one path/mesh region present) but end up
+  // producing zero PathSurface/MeshSurface/ReservationWall/PathRail/MeshRail batches; exercise it
+  // directly against a hand-built Track rather than trying to author a degenerate-but-bakeable
+  // TrackDefinition.
+  tox::Track geometryFreeTrack;
+  const std::filesystem::path emptyXml = temp / "empty" / "Resources.xml";
+  const editor::TrackSavePlan emptyPlan =
+      editor::prepareTrackSave(authored, geometryFreeTrack, {}, emptyXml, std::nullopt, true);
+  check(!emptyPlan.ok(), "a baked Track with no drivable/collidable geometry is refused at export time");
+  check(!std::filesystem::exists(emptyXml), "refused export leaves no partial Resources XML behind");
+
   std::filesystem::remove_all(temp, ec);
   if (failures == 0) std::cout << "PASS: Resources XML Track save/load transaction\n";
   return failures == 0 ? 0 : 1;

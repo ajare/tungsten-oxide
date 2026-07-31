@@ -57,7 +57,13 @@ filesystem::path safeRelativePath(Map* map, filesystem::path const& root, string
 }
 
 bool gameplayKind(tox::GeometryKind kind) {
-  return kind == tox::GeometryKind::PathSurface || kind == tox::GeometryKind::MeshSurface;
+  // Everything a ship can physically contact -- drivable surfaces, reservation walls, and both
+  // Path- and MeshRegion-authored rails -- goes into the collision BVH. PathShell stays out: it's
+  // render-only. Must stay in lock-step with the editor's <TrackMeshes> export loop
+  // (MppModelExport.cpp) -- same set, same reasoning.
+  return kind == tox::GeometryKind::PathSurface || kind == tox::GeometryKind::MeshSurface ||
+         kind == tox::GeometryKind::ReservationWall || kind == tox::GeometryKind::PathRail ||
+         kind == tox::GeometryKind::MeshRail;
 }
 
 float readFloat(int8_t const* bytes, size_t offset) {
@@ -81,7 +87,8 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
     expectedByName.emplace(batch.id, &batch);
   }
   if (selected != expectedNames) {
-    string detail = "TrackMeshes must contain exactly every PathSurface and MeshSurface batch";
+    string detail = "TrackMeshes must contain exactly every collidable geometry batch "
+                     "(PathSurface, MeshSurface, ReservationWall, PathRail, MeshRail)";
     for (auto const& name : expectedNames)
       if (!selected.count(name)) detail += "; missing '" + name + "'";
     for (auto const& name : selected)
@@ -189,7 +196,9 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 
   auto collisionTriangles = buildCollisionTriangles(this, serializer, *mTrack, mTrackMeshNames);
   if (collisionTriangles.empty())
-    throw application::resourcesystem::ResourceException(this, "TrackMeshes produced no collision triangles.");
+    throw application::resourcesystem::ResourceException(
+        this, "TrackMeshes produced no collision triangles -- this track has no drivable/collidable geometry "
+              "and cannot be loaded; re-export it from the editor after adding a path or mesh region.");
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
   tox::Simulation simulation(*mTrack);

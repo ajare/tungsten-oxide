@@ -7,15 +7,26 @@
 #include <optional>
 
 namespace tox {
+namespace {
 
-StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer) {
-  Ship& ship = *this;
+// The lateral wall probe runs this far above the ship's contact point rather than at its feet. A
+// ship's groundPos sits exactly ON the road surface -- which is also exactly where the edge rails'
+// bottom edge sits, since rails are extruded upward from the road boundary. A probe at ground level
+// therefore grazes that shared edge and slips underneath the rail entirely (verified headlessly:
+// the ship drove clean through the track's edge rail, while an otherwise identical probe half a
+// unit higher hit it every time). Half a unit sits comfortably inside a rail's ~1.6-unit vertical
+// span.
+constexpr double MESH_WALL_PROBE_HEIGHT = 0.5;
+// Leave the ship this far inside a wall after a bounce. It is deliberately the same
+// COLLISION_WALL_MARGIN the analytic corridor keeps from its own sLeft/sRight limits, and it needs
+// to be a real distance rather than a token epsilon: the edge rails stand exactly at the road's
+// outer boundary, so clamping a ship merely "just inside the wall" leaves it in the sliver where
+// the drivable surface has already ended -- it then finds no ground and falsely goes airborne
+// (verified headlessly: road ends at x~1312.3 with the rail at x~1312.36). A full margin puts the
+// ship back on actual road, and keeps mesh mode's wall standoff consistent with analytic mode's.
+constexpr double MESH_WALL_CLEARANCE = TrackCore::COLLISION_WALL_MARGIN;
 
-  Physics& p = ship.physics;
-  const Vec3 previousPosition = p.groundPos;
-  const bool startedAirborne = p.airborne;
-  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
-
+void integrateSpeed(Physics& p, double dt, double throttle, double brake) {
   if (throttle) {
     p.speed += p.accel * dt;
   } else if (brake) {
@@ -28,6 +39,272 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       p.speed = std::min(0.0, p.speed + decay);
   }
   p.speed = TrackCore::clamp(p.speed, p.maxReverse, effectiveMaxSpeed(p));
+}
+
+// Debug/experimental alternate physics mode (Simulation::meshPhysicsEnabled): ground contact, wall
+// collision and airborne/landing all come directly from the baked collision BVH instead of the
+// analytic corridor/MeshRegion math the rest of this file uses. No corridor sampling, no
+// MeshRegion ownership/ elevationAt/slideAlongRails -- see docs/MESH_PHYSICS_PLAN.md. Zone/trigger
+// *hosting* still needs a corridor Sample and an owning MeshRegion (Simulation::detectZoneTriggers'
+// signature), so this still computes those as cheap read-only inputs to that gameplay-trigger
+// system; their results are never used for ship positioning here, only Simulation::detectTriggers
+// (checkpoints/finish) is purely position-based and needs nothing from this mode.
+StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, double throttle,
+                           double brake, double steer) {
+  Physics& p = ship.physics;
+  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
+  const TrackCollisionSurface& bvh = *simulation.track().collisionSurface;
+
+  integrateSpeed(p, dt, throttle, brake);
+  const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
+
+  // p.up is frozen at spawn/respawn for the rest of a run (see Ship.hpp) -- fine for the analytic
+  // path, which never uses it as a probe axis, but wrong here: on a banked/rolled section, probing
+  // straight along a stale spawn-time "up" increasingly misses the actual (tilted) road surface as
+  // the ship goes around the bank, so it falsely reads as airborne. ship.renderNormal is the field
+  // that exists precisely for "a live, correct-every-frame value to chase instead" (Ship.hpp) --
+  // GameSession updates it from the previous frame's resolved StepResult::surfaceNormal, so it's
+  // the best available estimate of the ship's actual current orientation for this frame's probes.
+  // Defensive: renderNormal is maintained outside this function, so refuse anything that isn't
+  // plausibly a drivable surface's "up". A probe axis with no meaningful vertical component can
+  // never find the road below the ship, and silently turns every subsequent frame airborne.
+  const Vec3 probeAxis =
+      glm::dot(ship.renderNormal, UP) > 0.1 ? normalizeSafe(ship.renderNormal) : UP;
+  Vec3 surfaceNormal = probeAxis;
+  Vec3 surfaceRenderPos = p.groundPos;
+  bool railHit = false;  // mesh mode has no rail concept -- walls are ordinary BVH geometry
+
+  const Vec3 steerAxis = p.airborne ? UP : surfaceNormal;
+  const double sgn = p.speed > 0 ? 1.0 : (p.speed < 0 ? -1.0 : 1.0);
+  const double effectiveTurn = p.turnRate * (1 - 0.35 * speedRatio) * sgn;
+  p.forward = applyAxisAngle(p.forward, steerAxis, steer * effectiveTurn * dt);
+  tangentize(p.forward, steerAxis, p.forward);
+
+  const double gripThisFrame = p.grip * (0.5 + 0.5 * (1 - std::min(std::fabs(steer) * speedRatio, 1.0)));
+  const double toForward = signedAngleAbout(p.moveDir, p.forward, steerAxis);
+  p.moveDir = applyAxisAngle(p.moveDir, steerAxis, toForward * std::min(gripThisFrame * dt, 1.0));
+  tangentize(p.moveDir, steerAxis, p.forward);
+
+  const Vec3 vel = p.moveDir * p.speed;
+
+  if (p.airborne) {
+    p.verticalVel -= p.gravity * dt;
+    const Vec3 fullVel(vel.x, p.verticalVel, vel.z);
+    const Vec3 nextPos = p.groundPos + fullVel * dt;
+    // Landing is a one-sided road query (you land on the road's driven face, not its underside),
+    // but a rail struck mid-air still has to block -- and rails need the same two-sided treatment
+    // here as on the ground, or a ship sails through whichever rail faces away. Take whichever
+    // contact happens first along this step's motion.
+    const auto landing = bvh.sweep(p.groundPos, nextPos);
+    // Lifted like the grounded probe below: a ship skimming along at road level would otherwise
+    // graze the rails' bottom edge and pass under them.
+    const Vec3 airProbeLift = UP * MESH_WALL_PROBE_HEIGHT;
+    const auto wallHit = bvh.sweepWall(p.groundPos + airProbeLift, nextPos + airProbeLift);
+    const bool wallFirst = wallHit && (!landing || wallHit->t < landing->t);
+    if (const auto hit = wallFirst ? wallHit : landing) {
+      if (!wallFirst) {
+        // An upward-facing road surface: a real landing.
+        const double impactSpeed = std::max(0.0, -p.verticalVel);
+        landOnSurface(ship, hit->normal);
+        p.landingBounce += std::min(3.2, impactSpeed * 0.09);
+        p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
+      } else {
+        // A wall/rail hit mid-air -- bounce off it and stay airborne, rather than "landing"
+        // sideways on its near-horizontal normal (an obviously wrong grounded state).
+        const double into = glm::dot(fullVel, hit->normal);
+        if (into < 0) {
+          const Vec3 bounced = fullVel + hit->normal * (-into * (1 + weightRestitution(p)));
+          addImpactJolt(p, -into);
+          p.verticalVel = bounced.y;
+          const double horizMag = std::hypot(bounced.x, bounced.z);
+          p.speed = horizMag;
+          if (horizMag > 1e-6) p.moveDir = Vec3(bounced.x / horizMag, 0.0, bounced.z / horizMag);
+        }
+      }
+      // The wall probe ran in lifted space, so undo the lift before this becomes the ship's
+      // position -- otherwise every mid-air rail graze would ratchet the ship upward.
+      p.groundPos = wallFirst ? hit->position - airProbeLift : hit->position;
+      surfaceRenderPos = p.groundPos;
+      // Only a landing surface may become the reported surface normal. A wall's normal is
+      // horizontal, and this value is what GameSession feeds back into ship.renderNormal -- which
+      // is this function's ground-probe axis. Reporting a wall normal here therefore left the ship
+      // probing for ground *sideways* on every subsequent frame, so it never found ground again,
+      // fell, and respawned: exactly one such event per lap in the headless drive test.
+      surfaceNormal = wallFirst ? UP : hit->normal;
+    } else {
+      p.groundPos = nextPos;
+      surfaceRenderPos = nextPos;
+      surfaceNormal = UP;
+    }
+  } else if (hasTranslation) {
+    Vec3 intended = p.groundPos + Vec3(vel.x, 0, vel.z) * dt;
+    // Lateral/wall probe, run horizontally across this step's motion.
+    //
+    // It starts a COLLISION_WALL_MARGIN behind groundPos (along the direction of travel) rather
+    // than at groundPos itself: once the ship is already resting against a wall, a segment starting
+    // exactly at the contact point barely crosses the surface at all, so contact stops being
+    // reported and nothing keeps the ship from creeping through frame after frame. Starting the
+    // probe slightly behind keeps resting contact detected every frame -- the same purpose
+    // COLLISION_WALL_MARGIN already serves for the analytic corridor/rail wall checks.
+    //
+    // It is also lifted MESH_WALL_PROBE_HEIGHT off the surface: see that constant -- at ground
+    // level the probe grazes the rails' own bottom edge and slides underneath them.
+    const Vec3 horizontalVel(vel.x, 0.0, vel.z);
+    const double horizontalSpeed = std::hypot(horizontalVel.x, horizontalVel.z);
+    const Vec3 sweepFrom = horizontalSpeed > 1e-6
+                               ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
+                               : p.groundPos;
+    const Vec3 probeLift = probeAxis * MESH_WALL_PROBE_HEIGHT;
+    // sweepWall(), not sweep(): wall contact must be two-sided and floor-filtered. A one-sided
+    // sweep passes straight through whichever of the track's two edge rails happens to be baked
+    // facing away from the ship, and it also reports the drivable road surface itself as a "wall"
+    // wherever a fixed-height horizontal probe clips through a banked/graded section. sweepWall
+    // handles both, and hands back a contact normal already oriented against travel.
+    if (const auto wall = bvh.sweepWall(sweepFrom + probeLift, intended + probeLift)) {
+      const Vec3 wallN = wall->normal;
+      const double into = glm::dot(vel, wallN);
+      if (into < 0) {
+        Vec3 bounced = vel + wallN * (-into * (1 + weightRestitution(p)));
+        addImpactJolt(p, -into);
+        // Gear-preserving, as every other wall bounce in this file: a plain length/normalize
+        // decomposition is always non-negative and forces the car into forward gear on contact.
+        const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+        const double mag = glm::length(bounced);
+        p.speed = gear * mag * weightSpeedRetain(p);
+        if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
+        // Slide along the wall using this frame's corrected (into-wall component removed)
+        // velocity, rather than snapping to the exact contact point. A snap left position pinned
+        // to the same spot every frame while grip kept re-aiming moveDir at `forward` (never
+        // corrected here) back into the wall, so the ship re-hit and re-snapped to that same point
+        // indefinitely instead of sliding along the wall like the analytic corridor/rail code does.
+        intended = p.groundPos + Vec3(bounced.x, 0, bounced.z) * dt;
+      }
+      // Keep the ship on the inside of the wall regardless of which branch ran. The velocity
+      // correction alone doesn't stop it creeping past the plane over repeated frames at a shallow
+      // approach angle (each frame's `forward` still points partly into the wall, so grip
+      // re-introduces a small into-wall component before the next contact is detected) -- same
+      // idea as the corridor's finalS lateral clamp.
+      const double penetration = glm::dot((intended + probeLift) - wall->position, wallN);
+      if (penetration < MESH_WALL_CLEARANCE) intended += wallN * (MESH_WALL_CLEARANCE - penetration);
+    }
+    auto groundAt = [&](const Vec3& at) {
+      return bvh.nearestAlongAxis(Vec3(at.x, p.groundPos.y, at.z), probeAxis, 4.0);
+    };
+    auto ground = groundAt(intended);
+    if (!ground) {
+      // The step would leave the drivable surface. A rail is *supposed* to have stopped this, but
+      // rails stand exactly at the road's outer boundary, so the last road triangle and the first
+      // rail triangle meet in a razor-thin seam that a fast ship can slip through without the wall
+      // probe ever registering a crossing (reproduced headlessly: the ship escaped at one exact
+      // spot every lap, with the probe segment passing within rounding distance of the rail).
+      // Rather than chase that floating-point edge, treat "walked off the road" as track-edge
+      // contact in its own right: bisect back to the last point that still has ground under it,
+      // and remove the outward velocity so the ship scrapes along the edge instead of flying off.
+      if (auto here = groundAt(p.groundPos)) {
+        Vec3 inside = p.groundPos, outside = intended;
+        auto insideHit = here;
+        for (int i = 0; i < 6; ++i) {
+          const Vec3 mid = (inside + outside) * 0.5;
+          if (auto midHit = groundAt(mid)) {
+            inside = mid;
+            insideHit = midHit;
+          } else {
+            outside = mid;
+          }
+        }
+        ground = insideHit;
+        intended = inside;
+        // Estimate which way "off the track" actually points by sampling around the contact point:
+        // the directions with no ground under them are off-road. The bisection direction is NOT
+        // usable for this -- it converges along the direction of travel, so subtracting it would
+        // remove essentially all velocity and pin the ship dead against the edge instead of letting
+        // it scrape along.
+        Vec3 outward(0.0, 0.0, 0.0);
+        constexpr int EDGE_SAMPLES = 12;
+        constexpr double EDGE_SAMPLE_RADIUS = 1.0;
+        for (int i = 0; i < EDGE_SAMPLES; ++i) {
+          const double angle = (2.0 * 3.14159265358979323846 * i) / EDGE_SAMPLES;
+          const Vec3 dir(std::cos(angle), 0.0, std::sin(angle));
+          if (!groundAt(inside + dir * EDGE_SAMPLE_RADIUS)) outward += dir;
+        }
+        outward = glm::dot(outward, outward) > 1e-12
+                      ? normalizeSafe(outward)
+                      : normalizeSafe(Vec3(outside.x - inside.x, 0.0, outside.z - inside.z));
+        const Vec3 flat(vel.x, 0.0, vel.z);
+        const double outSpeed = glm::dot(flat, outward);
+        if (outSpeed > 0.0) {
+          const Vec3 slid = flat - outward * outSpeed;
+          addImpactJolt(p, outSpeed);
+          const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+          const double mag = glm::length(slid);
+          p.speed = gear * mag * weightSpeedRetain(p);
+          if (mag > 1e-6) p.moveDir = normalizeSafe(slid * gear);
+          // Actually travel along the corrected, edge-parallel velocity this frame. Without this
+          // the ship keeps a healthy tangential speed while its position stays pinned at the
+          // bisected contact point -- a car reading 27 m/s that never moves, which is precisely
+          // the "gets stuck" symptom.
+          const Vec3 slidTarget = p.groundPos + Vec3(slid.x, 0.0, slid.z) * dt;
+          if (auto slidHit = groundAt(slidTarget)) {
+            ground = slidHit;
+            intended = slidTarget;
+          }
+        }
+      }
+    }
+    if (ground) {
+      p.groundPos = ground->position;
+      surfaceRenderPos = ground->position;
+      surfaceNormal = ground->normal;
+      tangentize(p.moveDir, surfaceNormal, p.forward);
+      tangentize(p.forward, surfaceNormal, p.moveDir);
+    } else {
+      beginAirborne(ship, vel);
+      p.groundPos = Vec3(intended.x, p.groundPos.y, intended.z);
+      surfaceRenderPos = p.groundPos;
+    }
+  } else {
+    if (const auto ground = bvh.nearestAlongAxis(p.groundPos, probeAxis, 4.0)) {
+      p.groundPos = ground->position;
+      surfaceRenderPos = ground->position;
+      surfaceNormal = ground->normal;
+    } else {
+      beginAirborne(ship, Vec3(0, 0, 0));
+      surfaceRenderPos = p.groundPos;
+      surfaceNormal = probeAxis;
+    }
+  }
+
+  tickBoost(ship, dt);
+  const Sample zoneSample = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
+  const MeshRegion* zoneRegion =
+      simulation.surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, zoneSample);
+  if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample, zoneRegion);
+
+  simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);
+  ship.prevTriggerPos = p.groundPos;
+
+  if (p.airborne && p.groundPos.y < simulation.track().trackFloorY) {
+    simulation.respawn(ship);
+    return {surfaceNormal, surfaceRenderPos, true, railHit};
+  }
+  return {surfaceNormal, surfaceRenderPos, false, railHit};
+}
+
+}  // namespace
+
+StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer,
+                      std::optional<bool> meshModeOverride) {
+  Ship& ship = *this;
+  const bool useMeshPhysics = meshModeOverride.value_or(simulation.meshPhysicsEnabled());
+  if (useMeshPhysics && simulation.track().collisionSurface)
+    return stepMeshPhysics(ship, simulation, dt, throttle, brake, steer);
+
+  Physics& p = ship.physics;
+  const Vec3 previousPosition = p.groundPos;
+  const bool startedAirborne = p.airborne;
+  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
+
+  integrateSpeed(p, dt, throttle, brake);
 
   const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
 

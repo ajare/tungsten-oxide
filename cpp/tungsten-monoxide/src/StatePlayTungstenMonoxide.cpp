@@ -237,6 +237,12 @@ void StatePlayTungstenMonoxide::createGameObjects(
                        ship.renderNormal, physics.forward, 0, 0);
   }
   applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
+
+  mGhostShipSceneModel = mScene->add3dModel(mShipModel);
+  mGhostShip = mGameSession->ships()[0];
+  applyShipTransform(mGhostShipSceneModel, mGhostShip.physics.groundPos + mGhostShip.renderNormal * 1.0,
+                     mGhostShip.renderNormal, mGhostShip.physics.forward, 0, 0);
+  applyGhostVisibility();  // mShowPhysicsGhost defaults to false: ghost starts hidden.
 }
 
 void StatePlayTungstenMonoxide::destroyGameObjects() {
@@ -244,6 +250,8 @@ void StatePlayTungstenMonoxide::destroyGameObjects() {
   mShipVisualStates.clear();
   for (auto const& model : mShipSceneModels) mScene->remove3dModel(model);
   mShipSceneModels.clear();
+  if (mGhostShipSceneModel) mScene->remove3dModel(mGhostShipSceneModel);
+  mGhostShipSceneModel.reset();
   if (mTrackSceneModel) mScene->remove3dModel(mTrackSceneModel);
   mTrackSceneModel.reset();
   if (mShipModel) mShipModel->release(&mWrangler);
@@ -334,6 +342,7 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
   if (!intents.empty()) intents[0] = player;
   if (!mShipVisualStates.empty()) mShipVisualStates[0].steer = player.steer;
   mGameSession->step(intents, frameTime);
+  if (mShowPhysicsGhost) mGameSession->stepGhost(mGhostShip, player, frameTime);
   for (auto const& event : mGameSession->events())
     if (event.shipIndex == 0 && event.type == tox::GameEventType::LapCompleted)
       mLapFlashUntil = mGameSession->sessionTime() + 0.5;
@@ -385,6 +394,14 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     visual.pitch += (physics.speed * 0.004 - visual.pitch) * min(1.0, frameTime * 6.0);
     tox::Vec3 position = visual.groundPos + visual.up * hover;
     applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, visual.pitch, visual.bank);
+  }
+
+  // Ghost: raw physics position, no smoothing/bob/bank -- it's meant to show exactly what the
+  // other method computed, not a pleasant-looking approximation of it.
+  if (mShowPhysicsGhost && mGhostShipSceneModel) {
+    auto const& ghostPhysics = mGhostShip.physics;
+    applyShipTransform(mGhostShipSceneModel, ghostPhysics.groundPos + mGhostShip.renderNormal * 1.0,
+                       mGhostShip.renderNormal, ghostPhysics.forward, 0, 0);
   }
 }
 
@@ -485,6 +502,16 @@ void StatePlayTungstenMonoxide::applyReservationWallsDebugVisibility() const {
   setGeometryKindVisible(tox::GeometryKind::ReservationWall, mShowReservationWallsDebug);
 }
 
+// Wireframe unconditionally (not just when mShowWireframeDebug is set): with no translucency
+// primitive available, a wireframe outline drawn over the real ship's solid model is what tells
+// the two apart, so the ghost visually reads as "the other one" instead of a second identical ship
+// sitting off to the side. Otherwise it would defeat its own purpose when Wireframe is off.
+void StatePlayTungstenMonoxide::applyGhostVisibility() const {
+  if (!mGhostShipSceneModel) return;
+  mGhostShipSceneModel->getParams()->setModelFlags(
+      (mShowPhysicsGhost ? mpp::ModelRenderParams::Flag_Visible : 0) | mpp::ModelRenderParams::Flag_Wireframe);
+}
+
 // Everything else -- the drivable road/mesh surfaces and shells, which never get an explicit
 // per-mesh override above -- picks up wireframe through the model-level default instead (the "" key
 // ModelInstance::setParams falls back to for any mesh without its own entry). Ship models have no
@@ -544,6 +571,15 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
       if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
       if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
       if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
+      if (ImGui::Checkbox("Mesh Physics (experimental)", &mMeshPhysicsDebug) && mGameSession)
+        mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
+      if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
+        // Resync on enable so the comparison always starts from "right now", not wherever the
+        // ghost last happened to be (e.g. left behind from the last time this was toggled on).
+        if (mShowPhysicsGhost && mGameSession && !mGameSession->ships().empty())
+          mGhostShip = mGameSession->ships()[0];
+        applyGhostVisibility();
+      }
       ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
       ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
       ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");
