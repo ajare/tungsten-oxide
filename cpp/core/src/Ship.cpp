@@ -80,7 +80,21 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
     // path's own airborne landing already use, just run horizontally. sweep() only accepts a hit
     // the ship is actually moving into (dot(displacement, normal) < 0), which is exactly the
     // "wall in front of me" case and naturally ignores geometry merely brushed tangentially.
-    if (const auto wall = bvh.sweep(p.groundPos, intended)) {
+    //
+    // The probe starts a COLLISION_WALL_MARGIN behind groundPos (along the direction of travel),
+    // not at groundPos itself: once the ship is already resting against a wall, a segment starting
+    // exactly at groundPos no longer "crosses into" the surface (it's already on/past the plane),
+    // so sweep() -- being one-sided -- stops reporting a hit at all, and nothing keeps the ship from
+    // continuing to creep through it frame after frame. Starting the probe slightly behind the
+    // ship's actual position keeps resting contact detected every frame, same purpose
+    // COLLISION_WALL_MARGIN already serves for the analytic corridor/rail wall checks elsewhere in
+    // this file.
+    const Vec3 horizontalVel(vel.x, 0.0, vel.z);
+    const double horizontalSpeed = std::hypot(horizontalVel.x, horizontalVel.z);
+    const Vec3 sweepFrom = horizontalSpeed > 1e-6
+                               ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
+                               : p.groundPos;
+    if (const auto wall = bvh.sweep(sweepFrom, intended)) {
       const Vec3 wallN = wall->normal;
       const double into = glm::dot(vel, wallN);
       if (into < 0) {
@@ -92,8 +106,22 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
         const double mag = glm::length(bounced);
         p.speed = gear * mag * weightSpeedRetain(p);
         if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
+        // Slide along the wall using this frame's corrected (into-wall component removed)
+        // velocity, rather than snapping to the exact contact point. A snap left position pinned
+        // to the same spot every frame while grip kept re-aiming moveDir at `forward` (never
+        // corrected here) back into the wall, so the ship re-hit and re-snapped to that same point
+        // indefinitely instead of sliding along the wall like the analytic corridor/rail code does.
+        intended = p.groundPos + Vec3(bounced.x, 0, bounced.z) * dt;
+        // The velocity correction alone doesn't stop the ship creeping past the wall plane over
+        // repeated frames at a shallow approach angle (each frame's `forward` still points partly
+        // into the wall, so grip re-introduces a small into-wall component before the next contact
+        // is detected) -- clamp the slid-to position back onto the wall's outside half-space, same
+        // idea as the corridor's finalS lateral clamp.
+        const double penetration = glm::dot(intended - wall->position, wallN);
+        if (penetration < 0.0) intended -= wallN * penetration;
+      } else {
+        intended = wall->position;
       }
-      intended = wall->position;
     }
     if (const auto ground = bvh.nearestAlongAxis(Vec3(intended.x, p.groundPos.y, intended.z), p.up, 4.0)) {
       p.groundPos = ground->position;

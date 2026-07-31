@@ -381,6 +381,28 @@ int main(int argc, char** argv) {
     check(std::fabs(intoWall.physics.speed) < speedBeforeWall,
           "mesh mode wall bounce sheds speed on impact");
 
+    // Regression for a real bug: driving at a shallow angle into the wall must slide along it
+    // (like the analytic corridor/rail code does), not freeze the ship at the first contact point.
+    // The original mesh-mode wall response snapped position to the exact contact point every
+    // frame; since only moveDir (not forward) gets corrected, grip re-aimed moveDir back into the
+    // wall each frame, so the ship re-hit and re-snapped to the same spot indefinitely instead of
+    // making any progress along the wall.
+    // 20 steps at this speed/angle advances roughly 12-13 units in x -- comfortably inside the
+    // wall's finite x:[15,35] extent (unlike the full 120-step run, which slides the ship clean off
+    // the wall's far edge and into open space, where it's expected to leave the wall's z-plane).
+    Ship sliding = shipAt(meshSimulation, meshModeTrack, {16, 4, -13}, normalizeSafe(Vec3(1, 0, 0.3)));
+    sliding.physics.speed = 40;
+    const double slideStartX = sliding.physics.groundPos.x;
+    for (int step = 0; step < 20; ++step) meshSimulation.stepPhysics(sliding, 1.0 / 60.0, 1, 0, 0);
+    check(std::isfinite(sliding.physics.groundPos.x) && std::isfinite(sliding.physics.groundPos.z),
+          "mesh mode wall sliding stays finite");
+    check(sliding.physics.groundPos.x > slideStartX + 8,
+          "mesh mode wall contact slides the ship along the wall instead of freezing it in place "
+          "(advanced only " + std::to_string(sliding.physics.groundPos.x - slideStartX) + ")");
+    check(sliding.physics.groundPos.z < -9.0,
+          "mesh mode wall contact keeps the ship behind the wall surface while still within its "
+          "extent (z=" + std::to_string(sliding.physics.groundPos.z) + ")");
+
     Ship falling = shipAt(meshSimulation, meshModeTrack, {20, 20, 0});
     falling.physics.airborne = true;
     falling.physics.verticalVel = -15;
@@ -1428,6 +1450,10 @@ int main(int argc, char** argv) {
     if (loaded) {
       auto driveInto = [&](std::shared_ptr<Track> track) {
         Simulation sim(*track);
+        // This diagnostic is specifically about the analytic corridor/MeshRegion reservation-wall
+        // path (slideAlongRails) -- the collisionSurface built below (when present) deliberately
+        // omits wall geometry, so mesh mode would see nothing to bounce off at all.
+        sim.setMeshPhysicsEnabled(false);
         Ship ship;
         const Frame& startFrame = track->paths[0].centerline.front();
         Sample startSample;
