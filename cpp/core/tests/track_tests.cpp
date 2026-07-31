@@ -416,13 +416,16 @@ int main(int argc, char** argv) {
     // y = 0.05*z: a ~3-degree upward slope, gentle enough that the ramp's own normal stays close to
     // UP (as a real banked/graded road section would), which is exactly the case the >0.5 dot-with-
     // UP threshold needs to still classify correctly.
+    // Long enough (z out to 1200) that a ship accelerating to max speed for the whole 300-step run
+    // never reaches the far end -- otherwise it legitimately runs out of road there and gets
+    // edge-stopped, which would trip the "never freezes" assertion for the wrong reason.
     const Vec3 rampNormal = normalizeSafe(Vec3(0, 1, -0.05));
     rampA.positions[0] = Vec3(-50, -0.5, -10);
     rampA.positions[1] = Vec3(50, -0.5, -10);
-    rampA.positions[2] = Vec3(50, 15.5, 310);
+    rampA.positions[2] = Vec3(50, 60.0, 1200);
     rampB.positions[0] = Vec3(-50, -0.5, -10);
-    rampB.positions[1] = Vec3(50, 15.5, 310);
-    rampB.positions[2] = Vec3(-50, 15.5, 310);
+    rampB.positions[1] = Vec3(50, 60.0, 1200);
+    rampB.positions[2] = Vec3(-50, 60.0, 1200);
     rampA.normals[0] = rampA.normals[1] = rampA.normals[2] = rampNormal;
     rampB.normals[0] = rampB.normals[1] = rampB.normals[2] = rampNormal;
     rampTrack.collisionSurface =
@@ -444,6 +447,50 @@ int main(int argc, char** argv) {
     check(ramping.physics.groundPos.z > 50.0,
           "mesh mode ship drives up a sloped road normally (z=" +
               std::to_string(ramping.physics.groundPos.z) + ")");
+
+    // Regression for the reported "ship does not collide with the side rails". A track's two edge
+    // rails are baked with the same world-space facing, so relative to the track interior one faces
+    // inward and the other outward. The wall probe used a ONE-SIDED sweep, which by construction
+    // rejects any triangle whose normal points away from the direction of travel -- so the ship
+    // sailed straight through whichever rail faced away and fell off the track. Wall collision has
+    // to be two-sided: a barrier blocks regardless of how its render normal was authored.
+    //
+    // Both walls below are identical except for normal direction; both must stop the ship.
+    for (int facing = 0; facing < 2; ++facing) {
+      const Vec3 outwardNormal = facing == 0 ? Vec3(0, 0, -1) : Vec3(0, 0, 1);
+      // The floor deliberately continues well PAST the barrier. If it stopped at the barrier, a
+      // ship that tunnelled through would simply run out of ground and be caught by the separate
+      // edge-stop fallback -- masking the very bug this case exists to detect. With ground on both
+      // sides, only real two-sided barrier collision can keep the ship on the near side.
+      CollisionTriangle floorA, floorB, barrier;
+      floorA.positions[0] = Vec3(-60, 0, -60);
+      floorA.positions[1] = Vec3(60, 0, -60);
+      floorA.positions[2] = Vec3(60, 0, 120);
+      floorB.positions[0] = Vec3(-60, 0, -60);
+      floorB.positions[1] = Vec3(60, 0, 120);
+      floorB.positions[2] = Vec3(-60, 0, 120);
+      for (int k = 0; k < 3; ++k) floorA.normals[k] = floorB.normals[k] = UP;
+      barrier.positions[0] = Vec3(-60, 0, 20);
+      barrier.positions[1] = Vec3(60, 0, 20);
+      barrier.positions[2] = Vec3(0, 6, 20);
+      for (int k = 0; k < 3; ++k) barrier.normals[k] = outwardNormal;
+
+      Track barrierTrack = track;
+      barrierTrack.collisionSurface = std::make_shared<TrackCollisionSurface>(
+          std::vector<CollisionTriangle>{floorA, floorB, barrier});
+      Simulation barrierSim(barrierTrack);
+      barrierSim.setMeshPhysicsEnabled(true);
+
+      Ship charging = shipAt(barrierSim, barrierTrack, {0, 0, -20}, Vec3(0, 0, 1));
+      charging.physics.speed = 60;
+      for (int step = 0; step < 120; ++step) barrierSim.stepPhysics(charging, 1.0 / 60.0, 1, 0, 0);
+      const std::string which = facing == 0 ? "inward-facing" : "outward-facing";
+      check(!charging.physics.airborne,
+            "mesh mode: a ship driven at an " + which + " barrier never leaves the surface");
+      check(charging.physics.groundPos.z < 20.0,
+            "mesh mode: an " + which + " barrier stops the ship (z=" +
+                std::to_string(charging.physics.groundPos.z) + ", barrier at z=20)");
+    }
 
     Ship falling = shipAt(meshSimulation, meshModeTrack, {20, 20, 0});
     falling.physics.airborne = true;

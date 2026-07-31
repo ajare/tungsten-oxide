@@ -8,6 +8,10 @@
 namespace tox {
 namespace {
 constexpr double EPSILON = 1e-9;
+// Above this |dot(normal, up)| a surface counts as floor/ceiling rather than wall, for
+// sweepWall()'s purposes. Rails/barriers sit near 0; a road surface sits near 1.
+constexpr double WALL_MAX_UP_DOT = 0.5;
+const Vec3 WORLD_UP{0.0, 1.0, 0.0};
 
 Vec3 minVec(const Vec3& a, const Vec3& b) {
   return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)};
@@ -119,18 +123,37 @@ int TrackCollisionSurface::build(std::size_t begin, std::size_t end) {
 }
 
 void TrackCollisionSurface::querySegment(int nodeIndex, const Vec3& from, const Vec3& to,
-                                         bool swept, std::optional<CollisionHit>& best) const {
+                                         SegmentFilter filter, std::optional<CollisionHit>& best) const {
   const Node& node = nodes_[nodeIndex];
   if (!segmentBounds(from, to, node.bounds)) return;
   if (node.left >= 0) {
-    querySegment(node.left, from, to, swept, best);
-    querySegment(node.right, from, to, swept, best);
+    querySegment(node.left, from, to, filter, best);
+    querySegment(node.right, from, to, filter, best);
     return;
   }
+  const bool oneSided = filter == SegmentFilter::OneSidedAny;
+  const Vec3 direction = to - from;
   for (std::size_t i = node.begin; i < node.begin + node.count; ++i) {
     const int triangleIndex = static_cast<int>(order_[i]);
-    auto hit = intersect(triangles_[triangleIndex], triangleIndex, from, to, swept);
-    if (hit && (!best || hit->t < best->t)) best = std::move(hit);
+    auto hit = intersect(triangles_[triangleIndex], triangleIndex, from, to, oneSided);
+    if (!hit) continue;
+    if (filter == SegmentFilter::TwoSidedWall) {
+      // Mostly-horizontal surface: road/floor (or its underside), never a wall.
+      if (std::fabs(glm::dot(hit->normal, WORLD_UP)) > WALL_MAX_UP_DOT) continue;
+      // Two-sided, so the authored facing is arbitrary -- orient the contact normal to point back
+      // toward the side the sweep started from. That is where the mover currently is, and so the
+      // side it must be kept on. Orienting against travel direction instead looks equivalent but
+      // mis-signs a *grazing* contact, where the mover slides nearly parallel to the wall and
+      // dot(normal, direction) is ~0 with an essentially arbitrary sign -- a caller pushing the
+      // mover "away from the wall" along that normal can then shove it straight through instead.
+      const Vec3 toStart = from - hit->position;
+      const double side = glm::dot(hit->normal, toStart);
+      if (side < -EPSILON)
+        hit->normal = -hit->normal;
+      else if (side <= EPSILON && glm::dot(hit->normal, direction) > 0.0)
+        hit->normal = -hit->normal;  // started exactly on the surface: fall back to opposing travel
+    }
+    if (!best || hit->t < best->t) best = std::move(hit);
   }
 }
 
@@ -158,7 +181,14 @@ void TrackCollisionSurface::queryNearestSegment(int nodeIndex, const Vec3& from,
 std::optional<CollisionHit> TrackCollisionSurface::sweep(const Vec3& from, const Vec3& to) const {
   if (nodes_.empty()) return std::nullopt;
   std::optional<CollisionHit> best;
-  querySegment(0, from, to, true, best);
+  querySegment(0, from, to, SegmentFilter::OneSidedAny, best);
+  return best;
+}
+
+std::optional<CollisionHit> TrackCollisionSurface::sweepWall(const Vec3& from, const Vec3& to) const {
+  if (nodes_.empty()) return std::nullopt;
+  std::optional<CollisionHit> best;
+  querySegment(0, from, to, SegmentFilter::TwoSidedWall, best);
   return best;
 }
 
