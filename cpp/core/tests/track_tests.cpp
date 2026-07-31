@@ -1298,6 +1298,25 @@ int main(int argc, char** argv) {
     auto smoothHit = smoothSurface.nearestAlongAxis({0, 0.1, 0}, {0, 1, 0}, 1);
     check(smoothHit && smoothHit->normal.y < 1.0 && smoothHit->normal.y > 0.7,
           "contact normal barycentrically interpolates exported vertex normals");
+
+    // A wall facing back toward the probe origin (normal opposes the probe axis) -- e.g. the inner
+    // face of a track-side wall, as seen by a ship driving inside the track. nearestAlongAxis's
+    // road-facing filter can never accept this; nearestAcrossAxis has no such filter and is what a
+    // lateral/wall probe needs instead.
+    CollisionTriangle wall;
+    wall.positions[0] = {3, -1, -2};
+    wall.positions[1] = {3, -1, 2};
+    wall.positions[2] = {3, 1, 0};
+    wall.normals[0] = wall.normals[1] = wall.normals[2] = {-1, 0, 0};
+    wall.surfaceId = 30;
+    TrackCollisionSurface wallSurface({wall});
+    check(!wallSurface.nearestAlongAxis({0, 0, 0}, {1, 0, 0}, 5).has_value(),
+          "nearestAlongAxis rejects a wall whose normal opposes the probe axis");
+    auto wallHit = wallSurface.nearestAcrossAxis({0, 0, 0}, {1, 0, 0}, 5);
+    check(wallHit && wallHit->surfaceId == 30 && std::fabs(wallHit->position.x - 3) < 1e-9,
+          "nearestAcrossAxis finds the same wall regardless of which way its normal faces");
+    check(!wallSurface.nearestAcrossAxis({0, 0, 0}, {0, 1, 0}, 5).has_value(),
+          "nearestAcrossAxis still finds nothing along an axis that misses the geometry entirely");
   }
 
   {

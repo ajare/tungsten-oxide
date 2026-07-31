@@ -134,20 +134,21 @@ void TrackCollisionSurface::querySegment(int nodeIndex, const Vec3& from, const 
   }
 }
 
-void TrackCollisionSurface::queryAxisSegment(int nodeIndex, const Vec3& from, const Vec3& to,
-                                             const Vec3& origin, const Vec3& up,
-                                             std::optional<CollisionHit>& best) const {
+void TrackCollisionSurface::queryNearestSegment(int nodeIndex, const Vec3& from, const Vec3& to,
+                                                const Vec3& origin, const Vec3* upFilter,
+                                                std::optional<CollisionHit>& best) const {
   const Node& node = nodes_[nodeIndex];
   if (!segmentBounds(from, to, node.bounds)) return;
   if (node.left >= 0) {
-    queryAxisSegment(node.left, from, to, origin, up, best);
-    queryAxisSegment(node.right, from, to, origin, up, best);
+    queryNearestSegment(node.left, from, to, origin, upFilter, best);
+    queryNearestSegment(node.right, from, to, origin, upFilter, best);
     return;
   }
   for (std::size_t i = node.begin; i < node.begin + node.count; ++i) {
     const int triangleIndex = static_cast<int>(order_[i]);
     auto hit = intersect(triangles_[triangleIndex], triangleIndex, from, to, false);
-    if (!hit || glm::dot(hit->normal, up) <= EPSILON) continue;
+    if (!hit) continue;
+    if (upFilter && glm::dot(hit->normal, *upFilter) <= EPSILON) continue;
     const auto distSq = [&](const Vec3& p) { const Vec3 delta = p - origin; return glm::dot(delta, delta); };
     if (!best || distSq(hit->position) < distSq(best->position))
       best = std::move(hit);
@@ -169,7 +170,19 @@ std::optional<CollisionHit> TrackCollisionSurface::nearestAlongAxis(const Vec3& 
   const Vec3 from = origin + up * maxDistance;
   const Vec3 to = origin - up * maxDistance;
   std::optional<CollisionHit> selected;
-  queryAxisSegment(0, from, to, origin, up, selected);
+  queryNearestSegment(0, from, to, origin, &up, selected);
+  return selected;
+}
+
+std::optional<CollisionHit> TrackCollisionSurface::nearestAcrossAxis(const Vec3& origin,
+                                                                     const Vec3& axis,
+                                                                     double maxDistance) const {
+  if (nodes_.empty() || glm::dot(axis, axis) < EPSILON || maxDistance <= 0) return std::nullopt;
+  const Vec3 dir = normalizeSafe(axis);
+  const Vec3 from = origin + dir * maxDistance;
+  const Vec3 to = origin - dir * maxDistance;
+  std::optional<CollisionHit> selected;
+  queryNearestSegment(0, from, to, origin, nullptr, selected);
   return selected;
 }
 
