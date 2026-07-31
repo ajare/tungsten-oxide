@@ -105,12 +105,12 @@ public:
     if (gmax == 0) gmax = 1;
     if (!closed && g <= 0) {
       auto q = xs(0);
-      Vec3 t = n > 1 ? p.cp[1]->pos.clone().sub(p.cp[0]->pos).normalize() : Vec3(0, 0, 1);
+      Vec3 t = n > 1 ? normalizeSafe(p.cp[1]->pos - p.cp[0]->pos) : Vec3(0, 0, 1);
       return {p.cp[0]->pos, t, roll(0), width(0), q[0], q[1], q[2]};
     }
     if (!closed && g >= n - 1) {
       auto q = xs(1);
-      Vec3 t = n > 1 ? p.cp[n - 1]->pos.clone().sub(p.cp[n - 2]->pos).normalize() : Vec3(0, 0, 1);
+      Vec3 t = n > 1 ? normalizeSafe(p.cp[n - 1]->pos - p.cp[n - 2]->pos) : Vec3(0, 0, 1);
       return {p.cp[n - 1]->pos, t, roll(1), width(1), q[0], q[1], q[2]};
     }
     int seg = (int)std::floor(g);
@@ -119,17 +119,17 @@ public:
     double db[4] = {(-3 + 6 * u - 3 * u2) / 6, (-12 * u + 9 * u2) / 6, (3 + 6 * u - 9 * u2) / 6, (3 * u2) / 6};
     auto wrap = [&](int i) { return closed ? ((i % n) + n) % n : std::max(0, std::min(n - 1, i)); };
     int ids[4] = {wrap(seg - 1), wrap(seg), wrap(seg + 1), wrap(seg + 2)};
-    Vec3 num, dnum;
+    Vec3 num(0.0), dnum(0.0);
     double den = 0, dden = 0;
     for (int k = 0; k < 4; k++) {
       double w = p.cp[ids[k]]->weight, bw = b[k] * w, dbw = db[k] * w;
-      num.addScaledVector(p.cp[ids[k]]->pos, bw);
-      dnum.addScaledVector(p.cp[ids[k]]->pos, dbw);
+      num += p.cp[ids[k]]->pos * bw;
+      dnum += p.cp[ids[k]]->pos * dbw;
       den += bw;
       dden += dbw;
     }
-    Vec3 pos = num.clone().multiplyScalar(1 / den);
-    Vec3 tan = dnum.clone().multiplyScalar(den).addScaledVector(num, -dden).multiplyScalar(1 / (den * den)).normalize();
+    Vec3 pos = num * (1 / den);
+    Vec3 tan = normalizeSafe((dnum * den - num * dden) * (1 / (den * den)));
     double t = g / gmax;
     auto q = xs(t);
     return {pos, tan, roll(t), width(t), q[0], q[1], q[2]};
@@ -144,14 +144,12 @@ public:
     const Sample0 base = baseEval(g);
     double gmax = closed ? n : n - 1;
     if (gmax == 0) gmax = 1;
-    Vec3 h;
-    h.crossVectors(Vec3(0, 1, 0), base.tangent).normalize();
-    Vec3 bn;
-    bn.crossVectors(base.tangent, h).normalize();
-    if (bn.y < 0) bn.negate();
+    Vec3 h = normalizeSafe(glm::cross(Vec3(0, 1, 0), base.tangent));
+    Vec3 bn = normalizeSafe(glm::cross(base.tangent, h));
+    if (bn.y < 0) bn = -bn;
     const double cosine = std::cos(-base.roll), sine = std::sin(-base.roll);
-    const Vec3 edgeRight = h.clone().multiplyScalar(cosine).addScaledVector(bn, sine);
-    return base.pos.clone().addScaledVector(edgeRight, base.width * centerOffsetPercent(g / gmax) / 100.0);
+    const Vec3 edgeRight = h * cosine + bn * sine;
+    return base.pos + edgeRight * (base.width * centerOffsetPercent(g / gmax) / 100.0);
   }
 
   Sample0 eval(double g) const {
@@ -172,20 +170,18 @@ public:
         after = std::min(static_cast<double>(gmax), g + 2.0 * kTangentSampleStep);
       }
     }
-    const Vec3 tangent = shiftedPosition(after).sub(shiftedPosition(before));
-    if (tangent.lengthSq() > 1e-12) result.tangent.copy(tangent).normalize();
+    const Vec3 tangent = shiftedPosition(after) - shiftedPosition(before);
+    if (glm::dot(tangent, tangent) > 1e-12) result.tangent = normalizeSafe(tangent);
     return result;
   }
 };
 Frame frame(const Sample0& s) {
-  Vec3 h;
-  h.crossVectors(Vec3(0, 1, 0), s.tangent).normalize();
-  Vec3 bn;
-  bn.crossVectors(s.tangent, h).normalize();
-  if (bn.y < 0) bn.negate();
+  Vec3 h = normalizeSafe(glm::cross(Vec3(0, 1, 0), s.tangent));
+  Vec3 bn = normalizeSafe(glm::cross(s.tangent, h));
+  if (bn.y < 0) bn = -bn;
   double c = std::cos(-s.roll), si = std::sin(-s.roll);
-  Vec3 er = h.clone().multiplyScalar(c).addScaledVector(bn, si);
-  Vec3 no = bn.clone().multiplyScalar(c).addScaledVector(h, -si).normalize();
+  Vec3 er = h * c + bn * si;
+  Vec3 no = normalizeSafe(bn * c - h * si);
   Frame f;
   f.pos = s.pos;
   f.tangent = s.tangent;
@@ -320,8 +316,8 @@ std::vector<Frame> centerRaw(const PathDefinition& p, int N) {
 double length(const PathDefinition& p) {
   auto f = centerRaw(p, 200);
   double n = 0;
-  for (size_t i = 1; i < f.size(); i++) n += f[i].pos.distanceTo(f[i - 1].pos);
-  if (p.closed) n += f.front().pos.distanceTo(f.back().pos);
+  for (size_t i = 1; i < f.size(); i++) n += glm::distance(f[i].pos, f[i - 1].pos);
+  if (p.closed) n += glm::distance(f.front().pos, f.back().pos);
   return n;
 }
 std::vector<Frame> center(const PathDefinition& p, int N) {
@@ -465,8 +461,8 @@ std::vector<Vec3> removeSelfLoops(std::vector<Vec3> points, const PathDefinition
 Edges edges(const std::vector<Frame>& f, bool closed) {
   Edges e;
   for (auto& x : f) {
-    e.left.push_back(x.pos.clone().addScaledVector(x.edgeRight, -x.halfW));
-    e.right.push_back(x.pos.clone().addScaledVector(x.edgeRight, x.halfW));
+    e.left.push_back(x.pos - x.edgeRight * x.halfW);
+    e.right.push_back(x.pos + x.edgeRight * x.halfW);
   }
   e.left = trim(e.left, f, closed);
   e.right = trim(e.right, f, closed);
@@ -475,8 +471,8 @@ Edges edges(const std::vector<Frame>& f, bool closed) {
 void wallOffsets(std::vector<Frame>& f, const Edges& e) {
   for (size_t i = 0; i < f.size(); i++) {
     auto& x = f[i];
-    x.sLeft = e.left[i].clone().sub(x.pos).dot(x.edgeRight);
-    x.sRight = e.right[i].clone().sub(x.pos).dot(x.edgeRight);
+    x.sLeft = glm::dot(e.left[i] - x.pos, x.edgeRight);
+    x.sRight = glm::dot(e.right[i] - x.pos, x.edgeRight);
   }
 }
 std::vector<double> crossBreak(double c, double k, double w) {
@@ -498,17 +494,16 @@ std::vector<double> crossBreak(double c, double k, double w) {
   return {b.begin(), b.end()};
 }
 Vec3 surface(const Frame& f, const Vec3& l, const Vec3& r, double v) {
-  Vec3 ch = r.clone().sub(l);
-  double w = ch.length();
-  return l.clone().addScaledVector(ch, v).addScaledVector(f.normal, TrackCore::crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, w));
+  Vec3 ch = r - l;
+  double w = glm::length(ch);
+  return l + ch * v + f.normal * TrackCore::crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, w);
 }
 Vec3 triNormal(const Vec3& a, const Vec3& b, const Vec3& c) {
-  Vec3 n;
   // cross(c-a, b-a), not cross(b-a, c-a) -- see TrackMesh.cpp's normalOf() for why this operand
   // order (not the naively expected one) is the one that actually points outward/up rather than
   // into the ground, for the vertex order Builder::tri()'s callers use.
-  n.crossVectors(c.clone().sub(a), b.clone().sub(a)).normalize();
-  if (n.lengthSq() == 0) n.set(0, 1, 0);
+  Vec3 n = normalizeSafe(glm::cross(c - a, b - a));
+  if (glm::dot(n, n) == 0) n = Vec3(0, 1, 0);
   return n;
 }
 struct RenderBake {
@@ -520,9 +515,9 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   if (n < 3) return {raw, sourceEdges};
   std::vector<bool> affected(n, false);
   for (int i = 0; i < n; ++i) {
-    Vec3 left = raw[i].pos.clone().addScaledVector(raw[i].edgeRight, -raw[i].halfW);
-    Vec3 right = raw[i].pos.clone().addScaledVector(raw[i].edgeRight, raw[i].halfW);
-    affected[i] = left.distanceTo(sourceEdges.left[i]) > 1e-6 || right.distanceTo(sourceEdges.right[i]) > 1e-6;
+    Vec3 left = raw[i].pos - raw[i].edgeRight * raw[i].halfW;
+    Vec3 right = raw[i].pos + raw[i].edgeRight * raw[i].halfW;
+    affected[i] = glm::distance(left, sourceEdges.left[i]) > 1e-6 || glm::distance(right, sourceEdges.right[i]) > 1e-6;
   }
   Evaluator evaluator(definition);
   const double gmax = definition.closed ? evaluator.n : std::max(1, evaluator.n - 1);
@@ -555,8 +550,8 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     auto anchorAt = [&](double t) {
       Frame f = frame(evaluator.eval(t * gmax));
       applyReservationGap(f, definition, t, pathLength);
-      const Vec3 left = f.pos.clone().addScaledVector(f.edgeRight, -f.halfW);
-      const Vec3 right = f.pos.clone().addScaledVector(f.edgeRight, f.halfW);
+      const Vec3 left = f.pos - f.edgeRight * f.halfW;
+      const Vec3 right = f.pos + f.edgeRight * f.halfW;
       const double w = std::max(1.0, f.width);
       return Anchor{surface(f, left, right, 0.5 + f.reservationHalfGap / w), f.reservationHalfGap};
     };
@@ -568,10 +563,10 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
           if (depth >= 10) return;
           const double tm = (ta + tb) / 2;
           const Anchor m = anchorAt(tm);
-          const Vec3 chordMiddle = a.boundary.clone().add(b.boundary).multiplyScalar(0.5);
+          const Vec3 chordMiddle = (a.boundary + b.boundary) * 0.5;
           if (std::fabs(a.halfGap - b.halfGap) <= kGapStep &&
-              m.boundary.distanceTo(chordMiddle) <= kBoundaryTolerance &&
-              a.boundary.distanceTo(b.boundary) <= kMaxChord)
+              glm::distance(m.boundary, chordMiddle) <= kBoundaryTolerance &&
+              glm::distance(a.boundary, b.boundary) <= kMaxChord)
             return;
           splitSpan(ta, tm, a, m, depth + 1);
           forced.push_back(tm * gmax);
@@ -640,8 +635,8 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
     std::function<void(double, double, int)> splitCell = [&](double a, double b, int depth) {
       double middle = (a + b) / 2;
       Vec3 pa = evaluator.eval(a).pos, pb = evaluator.eval(b).pos, pm = evaluator.eval(middle).pos;
-      Vec3 chordMiddle = pa.clone().add(pb).multiplyScalar(0.5);
-      if (depth < 10 && (pm.distanceTo(chordMiddle) > 0.1 || pa.distanceTo(pb) > 40)) {
+      Vec3 chordMiddle = (pa + pb) * 0.5;
+      if (depth < 10 && (glm::distance(pm, chordMiddle) > 0.1 || glm::distance(pa, pb) > 40)) {
         splitCell(a, middle, depth + 1);
         values.insert(middle);
         splitCell(middle, b, depth + 1);
@@ -656,8 +651,8 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   auto pushAdaptive = [&](double g) {
     Frame f = frame(evaluator.eval(g));
     applyReservationGap(f, definition, g / gmax, pathLength);
-    out.edges.left.push_back(f.pos.clone().addScaledVector(f.edgeRight, -f.halfW));
-    out.edges.right.push_back(f.pos.clone().addScaledVector(f.edgeRight, f.halfW));
+    out.edges.left.push_back(f.pos - f.edgeRight * f.halfW);
+    out.edges.right.push_back(f.pos + f.edgeRight * f.halfW);
     out.frames.push_back(std::move(f));
     lastG = g;
   };
@@ -737,7 +732,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   const auto& e = render.edges;
   int n = (int)frames.size(), sc = def.closed ? n : n - 1;
   std::vector<double> dist(n);
-  for (int i = 1; i < n; i++) dist[i] = dist[i - 1] + frames[i].pos.distanceTo(frames[i - 1].pos);
+  for (int i = 1; i < n; i++) dist[i] = dist[i - 1] + glm::distance(frames[i].pos, frames[i - 1].pos);
   double avg = 0;
   for (auto& f : frames) avg += std::max(1.0, f.width);
   avg /= n;
@@ -759,7 +754,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
   // there is unsatisfiable, so those rings are wholly solid and the void starts as a true point.
   std::vector<std::pair<double, double>> gapV(n, {0.5, 0.5});
   for (int i = 0; i < n; i++) {
-    br.push_back(crossBreak(frames[i].crossSectionCurvature, frames[i].crossSectionTightness, e.left[i].distanceTo(e.right[i])));
+    br.push_back(crossBreak(frames[i].crossSectionCurvature, frames[i].crossSectionTightness, glm::distance(e.left[i], e.right[i])));
     if (frames[i].reservationHalfGap > 1e-9) {
       const double w = std::max(1.0, frames[i].width);
       gapV[i] = {0.5 - frames[i].reservationHalfGap / w, 0.5 + frames[i].reservationHalfGap / w};
@@ -775,14 +770,14 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     auto upper = std::upper_bound(br[ring].begin(), br[ring].end(), v);
     double hi = *upper, lo = *(upper - 1), t = (v - lo) / (hi - lo);
     Vec3 a = surface(frames[ring], e.left[ring], e.right[ring], lo);
-    return a.lerp(surface(frames[ring], e.left[ring], e.right[ring], hi), t);
+    return glm::mix(a, surface(frames[ring], e.left[ring], e.right[ring], hi), t);
   };
   for (int i = 0; i < sc; i++) {
     int j = def.closed ? (i + 1) % n : i + 1;
     std::set<double> u(br[i].begin(), br[i].end());
     u.insert(br[j].begin(), br[j].end());
     std::vector<double> v(u.begin(), u.end());
-    double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + frames[i].pos.distanceTo(frames[j].pos)) / avg : dist[j] / avg);
+    double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + glm::distance(frames[i].pos, frames[j].pos)) / avg : dist[j] / avg);
     for (size_t k = 0; k + 1 < v.size(); k++) {
       double a = v[k], z = v[k + 1];
       // The sub-quad's four corners, listed as a positively-oriented cycle -- the same winding the
@@ -822,23 +817,23 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     // align in UV space rather than one being invented. That degenerates the end-cap strip (a
     // vertical face, where both corners of an edge would otherwise want the same v and t) to a
     // zero-height texture line, which is a fair trade for staying literally "the same as the road".
-    auto under = [](const Frame& f, Vec3 p) { return p.addScaledVector(f.normal, -f.crossSectionThickness); };
+    auto under = [](const Frame& f, Vec3 p) { return p - f.normal * f.crossSectionThickness; };
     auto ringUnderPoint = [&](int ring, double v) {
       const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
       if (exact != br[ring].end()) return under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], v));
       auto upper = std::upper_bound(br[ring].begin(), br[ring].end(), v);
       const double hi = *upper, lo = *(upper - 1), t = (v - lo) / (hi - lo);
       Vec3 a = under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], lo));
-      return a.lerp(under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], hi)), t);
+      return glm::mix(a, under(frames[ring], surface(frames[ring], e.left[ring], e.right[ring], hi)), t);
     };
     for (int i = 0; i < sc; i++) {
       int j = def.closed ? (i + 1) % n : i + 1;
       // Same t0/t1 formula `top`'s own strip loop uses, including the closed-wrap correction at the
       // seam (j == 0) -- so a shell ring's along-tile position matches the road surface's exactly.
-      double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + frames[i].pos.distanceTo(frames[j].pos)) / avg : dist[j] / avg);
+      double t0 = dist[i] / avg, t1 = (def.closed && j == 0 ? (dist[i] + glm::distance(frames[i].pos, frames[j].pos)) / avg : dist[j] / avg);
       for (int side = 0; side < 2; side++) {
         double v = side;
-        Vec3 a = surface(frames[i], e.left[i], e.right[i], v), c = surface(frames[j], e.left[j], e.right[j], v), au = under(frames[i], a.clone()), cu = under(frames[j], c.clone());
+        Vec3 a = surface(frames[i], e.left[i], e.right[i], v), c = surface(frames[j], e.left[j], e.right[j], v), au = under(frames[i], a), cu = under(frames[j], c);
         if (side == 0) {
           sh.tri(a, au, c, {v, t0}, {v, t0}, {v, t1});
           sh.tri(au, cu, c, {v, t0}, {v, t1}, {v, t1});
@@ -889,9 +884,9 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
         const double t = dist[end] / avg;
         for (std::size_t k = 0; k + 1 < br[end].size(); ++k) {
           Vec3 a = surface(frames[end], e.left[end], e.right[end], br[end][k]);
-          Vec3 b = under(frames[end], a.clone());
+          Vec3 b = under(frames[end], a);
           Vec3 c = surface(frames[end], e.left[end], e.right[end], br[end][k + 1]);
-          Vec3 d = under(frames[end], c.clone());
+          Vec3 d = under(frames[end], c);
           const double v0 = br[end][k], v1 = br[end][k + 1];
           sh.tri(a, b, c, {v0, t}, {v0, t}, {v1, t});
           sh.tri(b, d, c, {v0, t}, {v1, t}, {v1, t});
@@ -924,11 +919,11 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       double si = side.second ? path.centerline[i].sRight : path.centerline[i].sLeft, sj = side.second ? path.centerline[j].sRight : path.centerline[j].sLeft;
       auto fi = curvedSurfaceFrame(Sample{path.centerline[i].pos, path.centerline[i].tangent, path.centerline[i].edgeRight, path.centerline[i].normal, path.centerline[i].halfW, path.centerline[i].sLeft, path.centerline[i].sRight, path.centerline[i].crossSectionCurvature, path.centerline[i].crossSectionTightness}, si);
       auto fj = curvedSurfaceFrame(Sample{path.centerline[j].pos, path.centerline[j].tangent, path.centerline[j].edgeRight, path.centerline[j].normal, path.centerline[j].halfW, path.centerline[j].sLeft, path.centerline[j].sRight, path.centerline[j].crossSectionCurvature, path.centerline[j].crossSectionTightness}, sj);
-      Vec3 a = fi.pos.clone().addScaledVector(fi.normal, .04), b = fj.pos.clone().addScaledVector(fj.normal, .04), at = a.clone().addScaledVector(fi.normal, 1.8), bt = b.clone().addScaledVector(fj.normal, 1.8);
-      const double u0 = run / kRailUvTile, u1 = (run + a.distanceTo(b)) / kRailUvTile;
+      Vec3 a = fi.pos + fi.normal * .04, b = fj.pos + fj.normal * .04, at = a + fi.normal * 1.8, bt = b + fj.normal * 1.8;
+      const double u0 = run / kRailUvTile, u1 = (run + glm::distance(a, b)) / kRailUvTile;
       r.tri(a, b, at, railUv(0.0, u0), railUv(0.0, u1), railUv(1.0, u0));
       r.tri(at, b, bt, railUv(1.0, u0), railUv(0.0, u1), railUv(1.0, u1));
-      run += a.distanceTo(b);
+      run += glm::distance(a, b);
     }
     track.geometry.push_back(std::move(r.b));
   }
@@ -1055,13 +1050,13 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       for (const bool right : {false, true}) {
         const Vec3& a = right ? bi.right : bi.left;
         const Vec3& b = right ? bj.right : bj.left;
-        Vec3 at = a.clone().addScaledVector(bi.normal, region.railHeight);
-        Vec3 bt = b.clone().addScaledVector(bj.normal, region.railHeight);
+        Vec3 at = a + bi.normal * region.railHeight;
+        Vec3 bt = b + bj.normal * region.railHeight;
         double& flankRun = run[right ? 1 : 0];
-        const double u0 = flankRun / uvTile, u1 = (flankRun + a.distanceTo(b)) / uvTile;
+        const double u0 = flankRun / uvTile, u1 = (flankRun + glm::distance(a, b)) / uvTile;
         wall.tri(a, b, at, wallUv(0.0, u0), wallUv(0.0, u1), wallUv(1.0, u0));
         wall.tri(at, b, bt, wallUv(1.0, u0), wallUv(0.0, u1), wallUv(1.0, u1));
-        flankRun += a.distanceTo(b);
+        flankRun += glm::distance(a, b);
       }
     }
     extend(bounds.back().left);
@@ -1074,8 +1069,8 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
       const double dx = b.right.x - b.left.x, dz = b.right.z - b.left.z;
       if (std::hypot(dx, dz) < 1e-9) return;
       addRail(b.left, b.right, outX, outZ);
-      Vec3 lt = b.left.clone().addScaledVector(b.normal, region.railHeight);
-      Vec3 rt = b.right.clone().addScaledVector(b.normal, region.railHeight);
+      Vec3 lt = b.left + b.normal * region.railHeight;
+      Vec3 rt = b.right + b.normal * region.railHeight;
       // Same across/along convention as the flanks, but a cap is its own face rather than a
       // continuation of either flank's run, so its `along` restarts at 0 and spans the void's width
       // here. Keeping the same units means the texture reads at the same scale across the join.
@@ -1097,7 +1092,7 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
     // Capped reservations (only Uncapped carves it) -- it's already solid and already serves as
     // the floor once these sides close it off, so no new floor *render* geometry is needed here.
     if (reservation.interiorMode == ReservationInteriorMode::Capped) {
-      auto under = [](const Bound& b, const Vec3& p) { return p.clone().addScaledVector(b.normal, -b.crossSectionThickness); };
+      auto under = [](const Bound& b, const Vec3& p) { return p - b.normal * b.crossSectionThickness; };
 
       Builder seal;
       seal.b.id = region.id + "-interior-seal";
@@ -1252,13 +1247,13 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
                                                                        static_cast<int>(path.centerline.size()) - 2, false});
       }
       if (incidents.size() != 2) continue;
-      Vec3 average = track.paths[incidents[0].path].centerline[incidents[0].index].normal.clone().add(track.paths[incidents[1].path].centerline[incidents[1].index].normal).normalize();
+      Vec3 average = normalizeSafe(track.paths[incidents[0].path].centerline[incidents[0].index].normal + track.paths[incidents[1].path].centerline[incidents[1].index].normal);
       for (const auto& incident : incidents) track.paths[incident.path].centerline[incident.index].normal = average;
       const Incident& a = incidents[0];
       const Incident& b = incidents[1];
       const Frame& af = track.paths[a.path].centerline[a.index];
       const Frame& bf = track.paths[b.path].centerline[b.index];
-      const bool flipped = a.start == b.start && af.edgeRight.dot(bf.edgeRight) < 0;
+      const bool flipped = a.start == b.start && glm::dot(af.edgeRight, bf.edgeRight) < 0;
       const Vec3 centerPoint = af.pos;
       const double maxHalfWidth = std::max(af.halfW, bf.halfW);
       auto cut = [&](bool right) {
@@ -1383,7 +1378,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
             double nextG = g + direction * step;
             double clampedG = e.closed ? nextG : std::max(0.0, std::min(gm, nextG));
             Vec3 point = e.eval(clampedG).pos;
-            double distance = point.distanceTo(previous);
+            double distance = glm::distance(point, previous);
             if (accumulated + distance >= half)
               return g + direction * step * (distance > 1e-9 ? (half - accumulated) / distance : 0);
             accumulated += distance;
@@ -1419,11 +1414,10 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
             const double vv = (lateral + f.width / 2.0) / f.width;
             const double lift = TrackCore::crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, vv, f.width);
             const double dh = TrackCore::crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, vv, f.width);
-            Vec3 crossT = f.edgeRight.clone().multiplyScalar(f.width).addScaledVector(f.normal, dh);
-            Vec3 normal;
-            normal.crossVectors(f.tangent, crossT).normalize();
-            if (normal.dot(f.normal) < 0) normal.negate();
-            points[ri][ai] = f.pos.clone().addScaledVector(f.edgeRight, lateral).addScaledVector(f.normal, lift).addScaledVector(normal, 0.15);
+            Vec3 crossT = f.edgeRight * f.width + f.normal * dh;
+            Vec3 normal = normalizeSafe(glm::cross(f.tangent, crossT));
+            if (glm::dot(normal, f.normal) < 0) normal = -normal;
+            points[ri][ai] = f.pos + f.edgeRight * lateral + f.normal * lift + normal * 0.15;
           }
         }
         Builder zone;
@@ -1436,7 +1430,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         zone.b.hasUv = true;
         const double uvWidth = z.width / 6.0;
         std::vector<double> rowDistances(rows + 1);
-        for (int ri = 1; ri <= rows; ++ri) rowDistances[ri] = rowDistances[ri - 1] + points[ri][0].distanceTo(points[ri - 1][0]);
+        for (int ri = 1; ri <= rows; ++ri) rowDistances[ri] = rowDistances[ri - 1] + glm::distance(points[ri][0], points[ri - 1][0]);
         for (int ri = 0; ri < rows; ++ri) {
           const double u0 = rowDistances[ri] / 6.0;
           const double u1 = rowDistances[ri + 1] / 6.0;
@@ -1461,7 +1455,8 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       int index = 0;
       double best = INFINITY;
       for (int i = 0; i < static_cast<int>(path.centerline.size()); ++i) {
-        const double d = path.centerline[i].pos.distanceToSquared(anchor);
+        const Vec3 delta = path.centerline[i].pos - anchor;
+        const double d = glm::dot(delta, delta);
         if (d < best) {
           best = d;
           index = i;
@@ -1479,7 +1474,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       const int maxSteps = definition.closed ? static_cast<int>(path.centerline.size()) : static_cast<int>(path.centerline.size()) - 1;
       for (int n = 0; n < maxSteps && (definition.closed || (at + stepDirection >= 0 && at + stepDirection < static_cast<int>(path.centerline.size()))); ++n) {
         const int next = definition.closed ? (at + stepDirection + static_cast<int>(path.centerline.size())) % static_cast<int>(path.centerline.size()) : at + stepDirection;
-        const double segment = path.centerline[at].pos.distanceTo(path.centerline[next].pos);
+        const double segment = glm::distance(path.centerline[at].pos, path.centerline[next].pos);
         if (travelled + segment >= 20 && segment > 0) {
           fraction = (20 - travelled) / segment;
           break;
@@ -1541,9 +1536,9 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
                                                     frameAtTrigger.width);
         double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
         trigger.center =
-            frameAtTrigger.pos.clone().addScaledVector(frameAtTrigger.edgeRight, t.host.lateral).addScaledVector(frameAtTrigger.normal, lift);
-        trigger.fwd = frameAtTrigger.tangent.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.edgeRight, sine).normalize();
-        trigger.right = frameAtTrigger.edgeRight.clone().multiplyScalar(cosine).addScaledVector(frameAtTrigger.tangent, -sine).normalize();
+            frameAtTrigger.pos + frameAtTrigger.edgeRight * t.host.lateral + frameAtTrigger.normal * lift;
+        trigger.fwd = normalizeSafe(frameAtTrigger.tangent * cosine + frameAtTrigger.edgeRight * sine);
+        trigger.right = normalizeSafe(frameAtTrigger.edgeRight * cosine - frameAtTrigger.tangent * sine);
         trigger.up = frameAtTrigger.normal;
       } else {
         continue;
@@ -1560,7 +1555,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         trig.b.materialKey = "Tracks/DefaultTriggerMaterial";
         trig.b.hasUv = true;
         auto corner = [&](double sr, double su) {
-          return trigger.center.clone().addScaledVector(trigger.right, sr * trigger.halfWidth).addScaledVector(trigger.up, su * trigger.height);
+          return trigger.center + trigger.right * (sr * trigger.halfWidth) + trigger.up * (su * trigger.height);
         };
         Vec3 c0 = corner(-1, 0), c1 = corner(1, 0), c2 = corner(1, 1), c3 = corner(-1, 1);
         // In the editor's XZ track convention +right is the driver's left-hand side when looking

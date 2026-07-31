@@ -87,7 +87,7 @@ BatchStats summarize(const GeometryBatch& batch, const std::string& label) {
       out.uvMax[k] = std::max(out.uvMax[k], uv[k]);
       check(std::isfinite(uv[k]), label + ": finite UV");
     }
-    check(std::fabs(vertex.normal.length() - 1.0) <= 1e-9, label + ": unit normal");
+    check(std::fabs(glm::length(vertex.normal) - 1.0) <= 1e-9, label + ": unit normal");
     check(vertex.rgba.r == 1 && vertex.rgba.g == 1 && vertex.rgba.b == 1 && vertex.rgba.a == 1,
           label + ": opaque white RGBA");
   }
@@ -103,10 +103,10 @@ BatchStats summarize(const GeometryBatch& batch, const std::string& label) {
     const Vec3& a = batch.vertices[ia].position;
     const Vec3& b = batch.vertices[ib].position;
     const Vec3& c = batch.vertices[ic].position;
-    const Vec3 u = Vec3().subVectors(b, a);
-    const Vec3 v = Vec3().subVectors(c, a);
-    const Vec3 cross = Vec3().crossVectors(u, v);
-    const double triangleArea = cross.length() / 2.0;
+    const Vec3 u = b - a;
+    const Vec3 v = c - a;
+    const Vec3 cross = glm::cross(u, v);
+    const double triangleArea = glm::length(cross) / 2.0;
     out.area += triangleArea;
     const std::array<double, 3> av{a.x, a.y, a.z}, bv{b.x, b.y, b.z}, cv{c.x, c.y, c.z};
     const std::array<double, 3> cr{cross.x, cross.y, cross.z};

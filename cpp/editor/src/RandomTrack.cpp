@@ -55,7 +55,7 @@ double measureClosedLoopLength(const std::vector<tox::Vec3>& positions) {
   for (std::size_t i = 0; i < centerline.size(); ++i) {
     const tox::Vec3& a = centerline[i].pos;
     const tox::Vec3& b = centerline[(i + 1) % centerline.size()].pos;
-    length += a.distanceTo(b);
+    length += glm::distance(a, b);
   }
   return length;
 }

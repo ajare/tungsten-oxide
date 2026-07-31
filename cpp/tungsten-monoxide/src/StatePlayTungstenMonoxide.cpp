@@ -67,13 +67,12 @@ string formatTime(double seconds) {
 
 void applyShipTransform(mpp::SceneModel3dPtr const& model, tox::Vec3 const& position,
                         tox::Vec3 const& upValue, tox::Vec3 const& forwardValue, double pitch, double bank) {
-  tox::Vec3 up = upValue.clone().normalize();
-  tox::Vec3 forward = forwardValue.clone().addScaledVector(up, -forwardValue.dot(up));
-  if (forward.lengthSq() < 1e-9) forward.set(0, 0, 1);
-  forward.normalize();
-  tox::Vec3 right;
-  right.crossVectors(up, forward).normalize();
-  forward.crossVectors(right, up).normalize();
+  tox::Vec3 up = tox::normalizeSafe(upValue);
+  tox::Vec3 forward = forwardValue + up * -glm::dot(forwardValue, up);
+  if (glm::dot(forward, forward) < 1e-9) forward = tox::Vec3(0, 0, 1);
+  forward = tox::normalizeSafe(forward);
+  tox::Vec3 right = tox::normalizeSafe(glm::cross(up, forward));
+  forward = tox::normalizeSafe(glm::cross(right, up));
 
   glm::mat3 basis(toGlm(right), toGlm(up), toGlm(forward));
   glm::quat orientation = glm::quat_cast(basis);
@@ -233,7 +232,7 @@ void StatePlayTungstenMonoxide::createGameObjects(
     mShipVisualStates[i].groundPos = physics.groundPos;
     mShipVisualStates[i].up = physics.up;
     mShipVisualStates[i].airborne = physics.airborne;
-    applyShipTransform(mShipSceneModels[i], physics.groundPos.clone().addScaledVector(physics.up, 1.0),
+    applyShipTransform(mShipSceneModels[i], physics.groundPos + physics.up * 1.0,
                        physics.up, physics.forward, 0, 0);
   }
   applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
@@ -362,11 +361,11 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     visual.lastVerticalVelocity = physics.verticalVel;
 
     double expectedStep = abs(physics.speed) * frameTime * 1.5 + 0.16;
-    if (visual.groundPos.distanceTo(physics.groundPos) > expectedStep)
-      visual.groundPos.lerp(physics.groundPos, min(1.0, frameTime * 18.0));
+    if (glm::distance(visual.groundPos, physics.groundPos) > expectedStep)
+      visual.groundPos = glm::mix(visual.groundPos, physics.groundPos, min(1.0, frameTime * 18.0));
     else
       visual.groundPos = physics.groundPos;
-    visual.up.lerp(physics.up, min(1.0, frameTime * 18.0)).normalize();
+    visual.up = tox::normalizeSafe(glm::mix(visual.up, physics.up, min(1.0, frameTime * 18.0)));
     if (!landed) {
       visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
       visual.landingBounceVel *= exp(-7.0 * frameTime);
@@ -382,7 +381,7 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
     visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);
     visual.pitch += (physics.speed * 0.004 - visual.pitch) * min(1.0, frameTime * 6.0);
-    tox::Vec3 position = visual.groundPos.clone().addScaledVector(visual.up, hover);
+    tox::Vec3 position = visual.groundPos + visual.up * hover;
     applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, visual.pitch, visual.bank);
   }
 }
@@ -395,12 +394,12 @@ void StatePlayTungstenMonoxide::updateChaseCamera(float frameTime) {
   auto const& physics = mGameSession->ships()[0].physics;
   auto const& visual = mShipVisualStates[0];
   tox::Vec3 up = visual.up;
-  tox::Vec3 forward = physics.forward.clone().addScaledVector(up, -physics.forward.dot(up)).normalize();
-  tox::Vec3 center = visual.groundPos.clone().addScaledVector(up, SHIP_CENTER_HEIGHT);
-  tox::Vec3 position = center.clone().addScaledVector(forward, -CAM_BACK * mCameraZoom).addScaledVector(up, mCameraHeight * mCameraZoom);
-  tox::Vec3 lookAt = center.clone().addScaledVector(forward, LOOK_AT_FORWARD).addScaledVector(up, mLookAtHeight);
+  tox::Vec3 forward = tox::normalizeSafe(physics.forward + up * -glm::dot(physics.forward, up));
+  tox::Vec3 center = visual.groundPos + up * SHIP_CENTER_HEIGHT;
+  tox::Vec3 position = center + forward * (-CAM_BACK * mCameraZoom) + up * (mCameraHeight * mCameraZoom);
+  tox::Vec3 lookAt = center + forward * LOOK_AT_FORWARD + up * mLookAtHeight;
   camera->setPosition(toGlm(position));
-  camera->setOrientation(toGlm(lookAt.clone().sub(position).normalize()), toGlm(up));
+  camera->setOrientation(toGlm(tox::normalizeSafe(lookAt - position)), toGlm(up));
 }
 
 void StatePlayTungstenMonoxide::updateCamera(float frameTime) { updateChaseCamera(frameTime); }

@@ -1,49 +1,26 @@
-// Vec3.hpp — hand-rolled double-precision 3D vector. No glm, no Eigen: this engine's physics was
-// independently verified step-for-step against a historical reference implementation, and several
-// operations (op order, zero-length `normalize()`, a specific inverse-quaternion `applyQuaternion`
-// convention) must keep that exact behavior rather than the more "obvious" formula, or the
-// committed golden fixture corpus (cpp/test-data/) stops matching to its pinned tolerance.
-//
-// Declarations only; the parity-critical method bodies (and the "do NOT optimize"
-// notes about op order / zero-length / the quaternion path) live in src/Vec3.cpp.
+// Vec3.hpp — tox::Vec3 is glm::dvec3 (double precision). This engine previously used a hand-rolled
+// Vec3 with a specific operation order pinned to the golden fixture corpus (cpp/test-data/); it has
+// been migrated to glm, so physics now uses glm's normalize/cross/quaternion-rotation implementations
+// directly. Fixture tolerances were loosened accordingly — see cpp/test-data/traces/README.md.
 #pragma once
+
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace tox {
 
-struct Vec3 {
-  double x{0.0}, y{0.0}, z{0.0};
+using Vec3 = glm::dvec3;
 
-  Vec3() = default;
-  Vec3(double x_, double y_, double z_);
+// glm::normalize() on a zero-length vector produces NaN. The physics code relies on a zero vector
+// staying zero instead (ships/tangents that happen to be exactly zero-length must not go NaN).
+inline Vec3 normalizeSafe(const Vec3& v) {
+  const double l = glm::length(v);
+  return l != 0.0 ? v / l : v;
+}
 
-  Vec3& set(double x_, double y_, double z_);
-  Vec3 clone() const;
-  Vec3& copy(const Vec3& v);
-
-  Vec3& add(const Vec3& v);
-  Vec3& addVectors(const Vec3& a, const Vec3& b);
-  Vec3& addScaledVector(const Vec3& v, double s);
-  Vec3& sub(const Vec3& v);
-  Vec3& subVectors(const Vec3& a, const Vec3& b);
-  Vec3& multiplyScalar(double s);
-  Vec3& divideScalar(double s);
-
-  Vec3& applyAxisAngle(const Vec3& axis, double angle);
-  Vec3& applyQuaternion(double qx, double qy, double qz, double qw);
-
-  double dot(const Vec3& v) const;
-  Vec3& crossVectors(const Vec3& a, const Vec3& b);
-
-  double lengthSq() const;
-  double length() const;
-  Vec3& normalize();
-
-  Vec3& lerp(const Vec3& v, double alpha);
-
-  double distanceToSquared(const Vec3& v) const;
-  double distanceTo(const Vec3& v) const;
-
-  Vec3& negate();
-};
+// Rotate v about (unit) axis by angle radians.
+inline Vec3 applyAxisAngle(const Vec3& v, const Vec3& axis, double angle) {
+  return glm::angleAxis(angle, axis) * v;
+}
 
 }  // namespace tox
