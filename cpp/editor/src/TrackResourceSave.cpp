@@ -37,6 +37,26 @@ bool samePath(const std::filesystem::path& a, const std::filesystem::path& b) {
   return a.lexically_normal() == b.lexically_normal();
 }
 
+// Mirrors Map.cpp's gameplayKind() / MppModelExport.cpp's <TrackMeshes> filter: every kind a ship
+// can physically contact. Any track a ship can drive on must bake at least one such batch, or
+// Map::load's own "TrackMeshes produced no collision triangles" check would fail at game-load
+// time instead -- catch it here, at export time, where it's still easy to fix.
+bool hasCollidableGeometry(const tox::Track& bakedTrack) {
+  for (const tox::GeometryBatch& batch : bakedTrack.geometry) {
+    switch (batch.kind) {
+      case tox::GeometryKind::PathSurface:
+      case tox::GeometryKind::MeshSurface:
+      case tox::GeometryKind::ReservationWall:
+      case tox::GeometryKind::PathRail:
+      case tox::GeometryKind::MeshRail:
+        return true;
+      default:
+        break;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 std::string sanitizeTrackResourceFilenameStem(const std::string& name) {
@@ -73,6 +93,11 @@ TrackSavePlan prepareTrackSave(const TrackDefinition& track, const tox::Track& b
       plan.error = "Unavailable TrackMaterial: " + path.material;
       return plan;
     }
+  }
+
+  if (!hasCollidableGeometry(bakedTrack)) {
+    plan.error = "Track has no drivable surface, wall or rail geometry to export -- add a path or mesh region before saving.";
+    return plan;
   }
 
   const std::string resourceName = binding ? binding->resourceName : defaultResourceName(track);
