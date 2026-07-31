@@ -38,7 +38,7 @@ Sample interpolatedGridFrame(const Path& path, int startIndex, double distanceBe
   for (int n = 0; n < count && remaining > 1e-9; n++) {
     const int candidate = path.closed ? (at + step + count) % count : at + step;
     if (candidate < 0 || candidate >= count) break;
-    const double len = cl[at].pos.distanceTo(cl[candidate].pos);
+    const double len = glm::distance(cl[at].pos, cl[candidate].pos);
     if (remaining <= len && len > 0.0) {
       next = candidate;
       frac = remaining / len;
@@ -53,10 +53,10 @@ Sample interpolatedGridFrame(const Path& path, int startIndex, double distanceBe
   const Frame& a = cl[at];
   const Frame& b = cl[next];
   Sample s;
-  s.pos = a.pos.clone().lerp(b.pos, frac);
-  s.tangent = a.tangent.clone().lerp(b.tangent, frac).normalize();
-  s.edgeRight = a.edgeRight.clone().lerp(b.edgeRight, frac).normalize();
-  s.normal = a.normal.clone().lerp(b.normal, frac).normalize();
+  s.pos = glm::mix(a.pos, b.pos, frac);
+  s.tangent = normalizeSafe(glm::mix(a.tangent, b.tangent, frac));
+  s.edgeRight = normalizeSafe(glm::mix(a.edgeRight, b.edgeRight, frac));
+  s.normal = normalizeSafe(glm::mix(a.normal, b.normal, frac));
   s.sLeft = a.sLeft + (b.sLeft - a.sLeft) * frac;
   s.sRight = a.sRight + (b.sRight - a.sRight) * frac;
   s.crossSectionCurvature = a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * frac;
@@ -75,7 +75,8 @@ std::vector<Pose> startingGridPoses(const Simulation& sim, const Track& track, i
   int startIndex = 0;
   double bestD = std::numeric_limits<double>::infinity();
   for (size_t i = 0; i < path.centerline.size(); i++) {
-    const double d = path.centerline[i].pos.distanceToSquared(anchor);
+    const Vec3 delta = path.centerline[i].pos - anchor;
+    const double d = glm::dot(delta, delta);
     if (d < bestD) {
       bestD = d;
       startIndex = static_cast<int>(i);
@@ -104,7 +105,7 @@ std::vector<Pose> startingGridPoses(const Simulation& sim, const Track& track, i
       surface = curvedSurfaceFrame(canonical, TrackCore::clamp(proj.s, proj.loS, proj.hiS));
     }
 
-    Vec3 forward = canonical.tangent.clone().multiplyScalar(reverse ? -1.0 : 1.0).normalize();
+    Vec3 forward = normalizeSafe(canonical.tangent * (reverse ? -1.0 : 1.0));
     tangentize(forward, surface.normal, forward);
     poses.push_back(Pose{surface.pos, surface.normal, forward});
   }

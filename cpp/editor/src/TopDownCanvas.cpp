@@ -217,7 +217,7 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
   // the same normalization TrackBake.cpp's pathGeometry uses for its own v in [0, 1], just
   // recentred here to match this quad's existing -halfW..+halfW convention.
   auto ringPoint = [&](const tox::Frame& f, const tox::Vec3& axis, double u) {
-    return f.pos.clone().addScaledVector(axis, u * f.halfW);
+    return f.pos + axis * (u * f.halfW);
   };
   // A reservation's gap band in u-space for one ring, degenerating to the zero-width point {0,0}
   // when no reservation is active there (reservationHalfGap defaults to 0), so the corner-wise

@@ -47,15 +47,15 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
 
   const double sgn = p.speed > 0 ? 1.0 : (p.speed < 0 ? -1.0 : 1.0);  // Math.sign(speed || 1)
   const double effectiveTurn = p.turnRate * (1 - 0.35 * speedRatio) * sgn;
-  p.forward.applyAxisAngle(steerAxis, steer * effectiveTurn * dt);
+  p.forward = applyAxisAngle(p.forward, steerAxis, steer * effectiveTurn * dt);
   tangentize(p.forward, steerAxis, p.forward);
 
   const double gripThisFrame = p.grip * (0.5 + 0.5 * (1 - std::min(std::fabs(steer) * speedRatio, 1.0)));
   const double toForward = signedAngleAbout(p.moveDir, p.forward, steerAxis);
-  p.moveDir.applyAxisAngle(steerAxis, toForward * std::min(gripThisFrame * dt, 1.0));
+  p.moveDir = applyAxisAngle(p.moveDir, steerAxis, toForward * std::min(gripThisFrame * dt, 1.0));
   tangentize(p.moveDir, steerAxis, p.forward);
 
-  Vec3 vel = p.moveDir.clone().multiplyScalar(p.speed);
+  Vec3 vel = p.moveDir * p.speed;
   const double vx = vel.x, vz = vel.z;
 
   if (p.airborne) {
@@ -82,11 +82,11 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       az = velocity.y;
       p.speed = std::hypot(ax, az) * weightSpeedRetain(p);
       addImpactJolt(p, before - std::hypot(ax, az));
-      if (p.speed > 1e-6) p.moveDir.set(ax, 0, az).normalize();
+      if (p.speed > 1e-6) p.moveDir = normalizeSafe(Vec3(ax, 0, az));
     }
 
     p.verticalVel -= p.gravity * dt;
-    p.groundPos.set(px, p.groundPos.y + p.verticalVel * dt, pz);
+    p.groundPos = Vec3(px, p.groundPos.y + p.verticalVel * dt, pz);
 
     const MeshRegion* landing = simulation.meshRegionAt(px, pz, p.groundPos.y);
     const double landingY = landing ? landing->elevationAt(px, pz) : 0.0;
@@ -95,7 +95,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       landOnSurface(ship, UP);
       p.landingBounce += std::min(3.2, impactSpeed * 0.09);
       p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-      p.groundPos.set(px, landingY, pz);
+      p.groundPos = Vec3(px, landingY, pz);
       surfaceRenderPos = p.groundPos;
       surfaceNormal = UP;
     } else if (!landing) {
@@ -114,7 +114,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
         landOnSurface(ship, surface.normal);
         p.landingBounce += std::min(3.2, impactSpeed * 0.09);
         p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-        p.groundPos.copy(surface.pos);
+        p.groundPos = surface.pos;
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
       }
@@ -132,7 +132,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       // own rail otherwise flips the car into forward gear on contact.
       const double gear = p.speed < 0.0 ? -1.0 : 1.0;
       p.speed = gear * after * weightSpeedRetain(p);
-      if (after > 1e-6) p.moveDir.set(velocity.x * gear, 0, velocity.y * gear).normalize();
+      if (after > 1e-6) p.moveDir = normalizeSafe(Vec3(velocity.x * gear, 0, velocity.y * gear));
       addImpactJolt(p, before - after);
     }
 
@@ -143,7 +143,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
                                     ? meshRegion
                                     : simulation.meshRegionAt(moved.x, moved.z, leavingY);
     if (stillOn) {
-      p.groundPos.set(moved.x, stillOn->elevationAt(moved.x, moved.z), moved.z);
+      p.groundPos = Vec3(moved.x, stillOn->elevationAt(moved.x, moved.z), moved.z);
       surfaceRenderPos = p.groundPos;
       surfaceNormal = UP;
     } else {
@@ -152,18 +152,18 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       const bool overCorridor = corridorContains(c, moved.x, leavingY, moved.z, projection);
       const SurfaceFrame surface = curvedSurfaceFrame(c, projection.s);
       if (overCorridor && std::fabs(surface.pos.y - leavingY) <= Consts::SURFACE_SNAP_UP) {
-        p.groundPos.copy(surface.pos);
+        p.groundPos = surface.pos;
         tangentize(p.moveDir, surface.normal, p.forward);
         tangentize(p.forward, surface.normal, p.moveDir);
         surfaceRenderPos = surface.pos;
         surfaceNormal = surface.normal;
       } else {
-        beginAirborne(ship, p.moveDir.clone().multiplyScalar(p.speed));
-        p.groundPos.set(moved.x, leavingY, moved.z);
+        beginAirborne(ship, p.moveDir * p.speed);
+        p.groundPos = Vec3(moved.x, leavingY, moved.z);
       }
     }
   } else if (hasTranslation) {
-    Vec3 newPos = p.groundPos.clone().addScaledVector(vel, dt);
+    Vec3 newPos = p.groundPos + vel * dt;
 
     // Central-reservation walls (CENTRAL_RESERVATION_PLAN.md M2, M6): a car driving the main
     // corridor isn't "on" any mesh region yet (an Uncapped reservation never is -- no floor at all;
@@ -200,7 +200,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       const double mag = std::hypot(vel.x, vel.z);
       p.speed = gear * mag * weightSpeedRetain(p);
       addImpactJolt(p, before - mag);
-      if (mag > 1e-6) p.moveDir.set(vel.x * gear, 0, vel.z * gear).normalize();
+      if (mag > 1e-6) p.moveDir = normalizeSafe(Vec3(vel.x * gear, 0, vel.z * gear));
     }
 
     const Sample current = c;
@@ -214,7 +214,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
 
     if (!forceCurrentWall && c.offEnd) {
       beginAirborne(ship, vel);
-      p.groundPos.copy(newPos);
+      p.groundPos = newPos;
     } else {
       const Vec3 er = projection.er;
       const double s = projection.s, loS = projection.loS, hiS = projection.hiS;
@@ -227,8 +227,8 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       double finalS = s;
       if (hitSign) {
         finalS = TrackCore::clamp(s, loS, hiS);
-        Vec3 wallN = er.clone().multiplyScalar((double)hitSign);
-        const double into = vel.dot(wallN);
+        Vec3 wallN = er * (double)hitSign;
+        const double into = glm::dot(vel, wallN);
         // Crossing loS/hiS is first of all a *positional* constraint (finalS, above): it also fires
         // on a car that merely brushed a limit which moved under it, which is what a narrowing
         // section does every frame to anything tracking near its edge. Only an actually
@@ -236,7 +236,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
         // Rewriting them unconditionally (as this did) drained weightSpeedRetain() off the speed of
         // a car with zero wall contact, once per frame for as long as the road kept narrowing.
         if (into > 0) {
-          vel.addScaledVector(wallN, -into * (1 + weightRestitution(p)));
+          vel += wallN * (-into * (1 + weightRestitution(p)));
           addImpactJolt(p, into);
           // Preserve gear, as the reservation wall above does and for the same reason: a plain
           // `vel.length()`/`vel.normalize()` decomposition is always non-negative and re-points
@@ -245,9 +245,9 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
           // positive speed back through zero while grip swings moveDir around to meet forward
           // again -- the car judders, slews sideways and makes almost no headway.
           const double gear = p.speed < 0.0 ? -1.0 : 1.0;
-          const double mag = vel.length();
+          const double mag = glm::length(vel);
           p.speed = gear * mag * weightSpeedRetain(p);
-          if (mag > 1e-6) p.moveDir.copy(vel).multiplyScalar(gear).normalize();
+          if (mag > 1e-6) p.moveDir = normalizeSafe(vel * gear);
         }
       }
 
@@ -265,9 +265,9 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
         // re-clamps the ship every frame and so keeps latching forceCurrentWall on.
         const double along = (newPos.x - c.pos.x) * c.tangent.x + (newPos.y - c.pos.y) * c.tangent.y +
                              (newPos.z - c.pos.z) * c.tangent.z;
-        surface.pos.addScaledVector(c.tangent, along);
+        surface.pos += c.tangent * along;
       }
-      p.groundPos.copy(surface.pos);
+      p.groundPos = surface.pos;
       surfaceRenderPos = surface.pos;
       surfaceNormal = surface.normal;
     }
@@ -308,13 +308,13 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
         p.landingBounce += std::min(3.2, impactSpeed * 0.09);
         p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
       }
-      p.groundPos.copy(contact->position);
+      p.groundPos = contact->position;
       surfaceRenderPos = contact->position;
       surfaceNormal = contact->normal;
       tangentize(p.moveDir, surfaceNormal, p.forward);
       tangentize(p.forward, surfaceNormal, p.moveDir);
     } else if (!p.airborne) {
-      beginAirborne(ship, p.moveDir.clone().multiplyScalar(p.speed));
+      beginAirborne(ship, p.moveDir * p.speed);
       surfaceRenderPos = p.groundPos;
     }
   }
@@ -323,7 +323,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   if (!p.airborne) simulation.detectZoneTriggers(ship, c, meshRegion);
 
   simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);
-  ship.prevTriggerPos.copy(p.groundPos);
+  ship.prevTriggerPos = p.groundPos;
 
   if (p.airborne && p.groundPos.y < simulation.track().trackFloorY) {
     simulation.respawn(ship);

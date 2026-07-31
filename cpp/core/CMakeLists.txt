@@ -27,12 +27,43 @@ else()
   add_compile_options(-ffp-contract=off -Wall -Wextra)
 endif()
 
-# The physics engine itself: Vec3/TrackCore/Track/Ship/Zone/Trigger/Simulation,
+# --- glm (header-only) -------------------------------------------------------
+# Replaces the previous hand-rolled Vec3; double-precision glm::dvec3/dquat match Vec3's prior
+# double precision. glm::normalize()/glm::cross()/etc. use a different internal operation order
+# than the old hand-rolled Vec3, so parity fixture tolerances were loosened accordingly — see
+# cpp/test-data/traces/README.md.
+#
+# cpp/tungsten-monoxide links MassivePolyPusher's prebuilt libraries (ext/massivepolypusher), which
+# vendor their own glm 0.9.6 copy and pass glm-typed values across that prebuilt ABI boundary. A
+# second, differently-versioned glm (e.g. a fresh FetchContent) produces a distinct
+# glm::tvec3<double, Q> type in translation units that see both copies, breaking ODR and failing to
+# link against core's own exported functions. Reuse MassivePolyPusher's vendored copy when it's
+# present (the combined cpp/ configure, and any build alongside tungsten-monoxide) so exactly one
+# glm ABI exists in the whole binary; fall back to FetchContent only for a standalone core/editor
+# configure that never links tungsten-monoxide at all.
+set(TOX_VENDORED_GLM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher/vendor/include")
+if (EXISTS "${TOX_VENDORED_GLM_DIR}/glm/glm.hpp")
+  add_library(glm INTERFACE)
+  add_library(glm::glm ALIAS glm)
+  target_include_directories(glm INTERFACE "${TOX_VENDORED_GLM_DIR}")
+else()
+  include(FetchContent)
+  FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.1
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(glm)
+  # The old hand-rolled Vec3's default constructor zero-initialized; glm 1.0's does not unless this
+  # is defined (MassivePolyPusher's vendored 0.9.6 above zero-inits by default already).
+  target_compile_definitions(glm INTERFACE GLM_FORCE_CTOR_INIT)
+endif()
+
+# The physics engine itself: TrackCore/Track/Ship/Zone/Trigger/Simulation,
 # built once as a static library so anything embedding the engine (the parity
 # replayer today, a future native game host) links `core` instead of recompiling
 # its translation units.
 set(CORE_HEADERS
-  include/Vec3.hpp
   include/TrackCore.hpp
   include/TrackDefinition.hpp
   include/TrackGeometry.hpp
@@ -46,7 +77,6 @@ set(CORE_HEADERS
   include/GameSession.hpp)
 
 add_library(core STATIC
-  src/Vec3.cpp
   src/TrackCore.cpp
   src/Track.cpp
   src/TrackBake.cpp
@@ -60,7 +90,7 @@ add_library(core STATIC
   src/GameSession.cpp
   ${CORE_HEADERS})
 target_include_directories(core PUBLIC include PRIVATE third_party)
-target_link_libraries(core PRIVATE Willpower::Geometry)
+target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower::Geometry)
 
 # Headers carry no build step of their own, but listing them as sources (above)
 # surfaces them in IDE project views; group them under their own filter there

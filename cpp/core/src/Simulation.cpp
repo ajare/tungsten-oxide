@@ -72,34 +72,31 @@ SurfaceFrame curvedSurfaceFrame(const Sample& s, double sOff) {
   const double lo = s.sLeft, hi = s.sRight, span = hi - lo;
   const double v = std::fabs(span) < 1e-6 ? 0.5 : (sOff - lo) / span;
   const double lift = TrackCore::crossSectionHeight(s.crossSectionCurvature, s.crossSectionTightness, v, std::fabs(span));
-  Vec3 pos = s.pos.clone().addScaledVector(s.edgeRight, sOff).addScaledVector(s.normal, lift);
+  Vec3 pos = s.pos + s.edgeRight * sOff + s.normal * lift;
   const double dhdv = TrackCore::crossSectionHeightDerivative(s.crossSectionCurvature, s.crossSectionTightness, v, std::fabs(span));
-  Vec3 crossT = s.edgeRight.clone().multiplyScalar(span).addScaledVector(s.normal, dhdv);
-  Vec3 normal;
-  normal.crossVectors(s.tangent, crossT).normalize();
-  if (normal.dot(s.normal) < 0) normal.negate();
+  Vec3 crossT = s.edgeRight * span + s.normal * dhdv;
+  Vec3 normal = normalizeSafe(glm::cross(s.tangent, crossT));
+  if (glm::dot(normal, s.normal) < 0) normal = -normal;
   return {pos, normal};
 }
 
 // Re-project unit-ish v into the plane tangent to n; fall back when parallel.
 Vec3& tangentize(Vec3& v, const Vec3& n, const Vec3& fallback) {
-  const double d = v.dot(n);
-  Vec3 tmp = v.clone();
-  tmp.addScaledVector(n, -d);
-  if (tmp.lengthSq() < 1e-9) {
-    v.copy(fallback);
+  const double d = glm::dot(v, n);
+  Vec3 tmp = v - n * d;
+  if (glm::dot(tmp, tmp) < 1e-9) {
+    v = fallback;
     return v;
   }
-  v.copy(tmp).normalize();
+  v = normalizeSafe(tmp);
   return v;
 }
 
 double signedAngleAbout(const Vec3& a, const Vec3& b, const Vec3& axis) {
-  const double d = TrackCore::clamp(a.dot(b), -1.0, 1.0);
+  const double d = TrackCore::clamp(glm::dot(a, b), -1.0, 1.0);
   const double ang = std::acos(d);
-  Vec3 cross;
-  cross.crossVectors(a, b);
-  return cross.dot(axis) < 0 ? -ang : ang;
+  Vec3 cross = glm::cross(a, b);
+  return glm::dot(cross, axis) < 0 ? -ang : ang;
 }
 
 void beginAirborne(Ship& ship, const Vec3& vel3D) {
@@ -109,7 +106,7 @@ void beginAirborne(Ship& ship, const Vec3& vel3D) {
   const double horiz = std::hypot(vel3D.x, vel3D.z);
   p.speed = horiz;
   if (horiz > 1e-6)
-    p.moveDir.set(vel3D.x / horiz, 0, vel3D.z / horiz);
+    p.moveDir = Vec3(vel3D.x / horiz, 0, vel3D.z / horiz);
   else
     tangentize(p.moveDir, UP, p.forward);
 }
@@ -220,10 +217,10 @@ Sample Simulation::sampleTrack(double x, double y, double z) const {
   smp.a = best.a;
   smp.b = best.b;
   smp.segT = t;
-  smp.pos.copy(a.pos).lerp(b.pos, t);
-  smp.tangent.copy(a.tangent).lerp(b.tangent, t).normalize();
-  smp.edgeRight.copy(a.edgeRight).lerp(b.edgeRight, t).normalize();
-  smp.normal.copy(a.normal).lerp(b.normal, t).normalize();
+  smp.pos = glm::mix(a.pos, b.pos, t);
+  smp.tangent = normalizeSafe(glm::mix(a.tangent, b.tangent, t));
+  smp.edgeRight = normalizeSafe(glm::mix(a.edgeRight, b.edgeRight, t));
+  smp.normal = normalizeSafe(glm::mix(a.normal, b.normal, t));
   smp.halfW = a.halfW + (b.halfW - a.halfW) * t;
   smp.crossSectionCurvature = a.crossSectionCurvature + (b.crossSectionCurvature - a.crossSectionCurvature) * t;
   smp.crossSectionTightness = a.crossSectionTightness + (b.crossSectionTightness - a.crossSectionTightness) * t;
@@ -350,9 +347,9 @@ void Simulation::fireTrigger(Ship& ship, const Trigger& rec, const std::string& 
   Checkpoint& checkpoint = ship.lastCheckpoint;
   checkpoint.valid = true;
   checkpoint.triggerId = rec.id;
-  checkpoint.pos.copy(rec.center);
-  checkpoint.up.copy(rec.up);
-  checkpoint.forward.copy(rec.fwd).multiplyScalar(dir == "backward" ? -1.0 : 1.0);
+  checkpoint.pos = rec.center;
+  checkpoint.up = rec.up;
+  checkpoint.forward = rec.fwd * (dir == "backward" ? -1.0 : 1.0);
 
   Race& race = ship.race;
   if (rec.role != "finish") {
@@ -382,19 +379,19 @@ void Simulation::clearBoost(Ship& ship) const {
 }
 
 void Simulation::resetTriggers(Ship& ship, const std::string& disarmedId) const {
-  ship.prevTriggerPos.copy(ship.physics.groundPos);
+  ship.prevTriggerPos = ship.physics.groundPos;
   for (const Trigger& tr : track_.triggers) ship.triggerStates[tr.id] = TriggerState{tr.id != disarmedId, 0.0};
 }
 
 void Simulation::placeShipAtPose(Ship& ship, const Pose& pose, const std::string& disarmedId) const {
   Physics& p = ship.physics;
-  p.groundPos.copy(pose.pos);
-  p.visualGroundPos.copy(pose.pos);
-  p.forward.copy(pose.forward);
-  p.moveDir.copy(pose.forward);
-  p.up.copy(pose.up);
-  p.visualUp.copy(pose.up);
-  p.right.crossVectors(pose.up, pose.forward).normalize();
+  p.groundPos = pose.pos;
+  p.visualGroundPos = pose.pos;
+  p.forward = pose.forward;
+  p.moveDir = pose.forward;
+  p.up = pose.up;
+  p.visualUp = pose.up;
+  p.right = normalizeSafe(glm::cross(pose.up, pose.forward));
   p.heading = std::atan2(pose.forward.x, pose.forward.z);
   p.speed = 0;
   p.airborne = false;
@@ -418,7 +415,7 @@ void Simulation::respawn(Ship& ship) const {
 
 void Simulation::launchShip(Ship& ship, double upwardSpeed) const {
   Physics& p = ship.physics;
-  const Vec3 horizontalVelocity = p.moveDir.clone().multiplyScalar(p.speed);
+  const Vec3 horizontalVelocity = p.moveDir * p.speed;
   const double verticalSpeed =
       std::max({Consts::MIN_LAUNCH_UPWARD_SPEED, upwardSpeed, p.verticalVel});
   beginAirborne(ship, {horizontalVelocity.x, verticalSpeed, horizontalVelocity.z});

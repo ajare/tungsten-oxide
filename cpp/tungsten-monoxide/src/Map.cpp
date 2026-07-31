@@ -124,7 +124,7 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
       tox::RenderVertex vertex;
       vertex.position = {readFloat(bytes, 0), readFloat(bytes, 4), readFloat(bytes, 8)};
       vertex.normal = {readFloat(bytes, 12), readFloat(bytes, 16), readFloat(bytes, 20)};
-      if (vertex.normal.lengthSq() < 1e-12)
+      if (glm::dot(vertex.normal, vertex.normal) < 1e-12)
         throw application::resourcesystem::ResourceException(
             map, "listed track mesh '" + name + "' contains an unusable vertex normal.");
       auto const& reference = expected.vertices[v];
@@ -136,7 +136,7 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
           !matchesExportedFloat(reference.normal.z, vertex.normal.z))
         throw application::resourcesystem::ResourceException(
             map, "listed track mesh '" + name + "' vertex data does not match TrackData export geometry.");
-      vertex.normal.normalize();
+      vertex.normal = tox::normalizeSafe(vertex.normal);
       decoded.push_back(vertex);
     }
     for (size_t v = 0; v < decoded.size(); v += 3) {
@@ -202,10 +202,10 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
       throw application::resourcesystem::ResourceException(this, "a starting-grid pose could not be settled onto TrackMeshes.");
     pose.pos = contact->position;
     pose.up = contact->normal;
-    pose.forward.addScaledVector(pose.up, -pose.forward.dot(pose.up));
-    if (pose.forward.lengthSq() < 1e-9)
+    pose.forward += pose.up * -glm::dot(pose.forward, pose.up);
+    if (glm::dot(pose.forward, pose.forward) < 1e-9)
       throw application::resourcesystem::ResourceException(this, "a starting-grid pose has a degenerate forward direction.");
-    pose.forward.normalize();
+    pose.forward = tox::normalizeSafe(pose.forward);
   }
 
   auto meshSpec = trackMeshSpecification();

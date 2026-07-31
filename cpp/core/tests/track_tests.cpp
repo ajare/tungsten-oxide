@@ -300,8 +300,7 @@ int main(int argc, char** argv) {
       Ship airborne = shipAt(simulation, track, {20, y, -35});
       airborne.physics.airborne = true;
       airborne.physics.speed = 80;
-      airborne.physics.moveDir.set(0, 0, 1);
-      simulation.stepPhysics(airborne, 0.1, 0, 0, 0);
+      airborne.physics.moveDir = Vec3(0, 0, 1);      simulation.stepPhysics(airborne, 0.1, 0, 0, 0);
       return airborne;
     };
     const Ship blocked = airborneRun(6);
@@ -325,10 +324,7 @@ int main(int argc, char** argv) {
 
     Track launchTrack = track;
     CollisionTriangle flatRoad;
-    flatRoad.positions[0].set(-1000, 4, -1000);
-    flatRoad.positions[1].set(1000, 4, -1000);
-    flatRoad.positions[2].set(0, 4, 1000);
-    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    flatRoad.positions[0] = Vec3(-1000, 4, -1000);    flatRoad.positions[1] = Vec3(1000, 4, -1000);    flatRoad.positions[2] = Vec3(0, 4, 1000);    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
     launchTrack.collisionSurface =
         std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
     Simulation launchSimulation(launchTrack);
@@ -517,9 +513,7 @@ int main(int argc, char** argv) {
                 interpolatedOffsetTrack.track->paths[0].centerline[interpolatedOffsetTrack.track->paths[0].centerline.size() * 3 / 4].pos.x < -0.1,
             "width center-offset percentage interpolates across Width nodes");
 
-      ship.prevTriggerPos.set(0, 5, 19);
-      ship.physics.groundPos.set(0, 5, 21);
-      simulation.detectTriggers(ship, ship.prevTriggerPos, ship.physics.groundPos);
+      ship.prevTriggerPos = Vec3(0, 5, 19);      ship.physics.groundPos = Vec3(0, 5, 21);      simulation.detectTriggers(ship, ship.prevTriggerPos, ship.physics.groundPos);
       check(ship.lastCheckpoint.valid && ship.lastCheckpoint.triggerId == "mesh-finish" &&
                 !otherShip.lastCheckpoint.valid,
             "mesh-hosted checkpoint uses independent generic trigger state");
@@ -536,9 +530,7 @@ int main(int argc, char** argv) {
         notices.push_back(notice);
       };
       Ship lapShip = shipAt(noticeSim, *effects.track, {0, 5, 0});
-      lapShip.prevTriggerPos.set(0, 5, 19);
-      lapShip.physics.groundPos.set(0, 5, 21);
-      noticeSim.detectTriggers(lapShip, lapShip.prevTriggerPos, lapShip.physics.groundPos);
+      lapShip.prevTriggerPos = Vec3(0, 5, 19);      lapShip.physics.groundPos = Vec3(0, 5, 21);      noticeSim.detectTriggers(lapShip, lapShip.prevTriggerPos, lapShip.physics.groundPos);
       check(notices.size() == 2 && notices[0] == TriggerNotice::Fired && notices[1] == TriggerNotice::LapCompleted,
             "fireTrigger notifies Fired then LapCompleted for a finish crossing with no intermediates");
       check(lapShip.race.laps == 1 && lapShip.race.lapStartedAt == 42.0 &&
@@ -592,7 +584,7 @@ int main(int argc, char** argv) {
       if (triggerGeometry != track.geometry.end()) {
         int uZeroCount = 0, uOneCount = 0;
         for (const auto& vertex : triggerGeometry->vertices) {
-          const double lateral = vertex.position.clone().sub(trigger.center).dot(trigger.right);
+          const double lateral = glm::dot(vertex.position - trigger.center, trigger.right);
           if (vertex.uv.x == 0) {
             ++uZeroCount;
             checkClose(lateral, trigger.halfWidth, 1e-10,
@@ -665,11 +657,11 @@ int main(int argc, char** argv) {
     bool allFinite = true, allUnit = true;
     for (const Pose& pose : poses) {
       if (!std::isfinite(pose.pos.x) || !std::isfinite(pose.pos.y) || !std::isfinite(pose.pos.z)) allFinite = false;
-      if (std::fabs(pose.up.length() - 1.0) > 1e-9 || std::fabs(pose.forward.length() - 1.0) > 1e-9) allUnit = false;
+      if (std::fabs(glm::length(pose.up) - 1.0) > 1e-9 || std::fabs(glm::length(pose.forward) - 1.0) > 1e-9) allUnit = false;
     }
     check(allFinite, "starting grid poses are all finite");
     check(allUnit, "starting grid pose forward/up are unit vectors");
-    check(poses[0].pos.distanceTo(poses[1].pos) > 0.1, "front row grid slots are laterally offset");
+    check(glm::distance(poses[0].pos, poses[1].pos) > 0.1, "front row grid slots are laterally offset");
 
     const std::vector<Ship> roster = ShipFactory::buildRoster(gridSim, track, 8);
     check(roster.size() == 8, "buildRoster produces the requested roster size");
@@ -698,7 +690,7 @@ int main(int argc, char** argv) {
     const Vec3 startPos = session.ships()[0].physics.groundPos;
     std::vector<ControlIntent> idle(1);
     session.step(idle, 1.0 / 60.0);
-    check(session.ships()[0].physics.groundPos.distanceTo(startPos) < 1.0,
+    check(glm::distance(session.ships()[0].physics.groundPos, startPos) < 1.0,
           "an idle intent leaves a parked ship close to its starting-grid pose");
     check(session.sessionTime() > 0.0, "GameSession accumulates a deterministic session clock");
 
@@ -706,7 +698,7 @@ int main(int argc, char** argv) {
     std::vector<ControlIntent> drive(1);
     drive[0].throttle = 1.0;
     for (int frame = 0; frame < 30; frame++) session.step(drive, 1.0 / 60.0);
-    check(session.ships()[0].physics.groundPos.distanceTo(startPos) > 1.0,
+    check(glm::distance(session.ships()[0].physics.groundPos, startPos) > 1.0,
           "throttle moves the ship away from its starting-grid pose");
 
     // ...then an explicit respawn should snap it back (no checkpoint reached
@@ -718,7 +710,7 @@ int main(int argc, char** argv) {
     for (const GameEvent& event : session.events())
       if (event.type == GameEventType::Respawned && !event.automatic) sawExplicitRespawn = true;
     check(sawExplicitRespawn, "an explicit respawn intent fires a non-automatic Respawned event");
-    check(session.ships()[0].physics.groundPos.distanceTo(startPos) < 1.0,
+    check(glm::distance(session.ships()[0].physics.groundPos, startPos) < 1.0,
           "an explicit respawn with no checkpoint reached returns to the starting-grid pose");
   }
 
@@ -1174,7 +1166,7 @@ int main(int argc, char** argv) {
       ring.emplace_back(v[12 * (segments - 1) + 1].position, v[12 * (segments - 1) + 7].position);
 
       std::vector<double> halfGap;
-      for (const auto& r : ring) halfGap.push_back(r.first.distanceTo(r.second) / 2);
+      for (const auto& r : ring) halfGap.push_back(glm::distance(r.first, r.second) / 2);
       double peak = 0;
       for (double h : halfGap) peak = std::max(peak, h);
 
@@ -1193,13 +1185,13 @@ int main(int argc, char** argv) {
       double deepest = 0;
       for (std::size_t k = 0; k < ring.size(); ++k) {
         if (halfGap[k] < 1e-3) continue;
-        const Vec3 l = ring[k].first, span = ring[k].second.clone().sub(l);
-        const double lengthSq = span.lengthSq();
+        const Vec3 l = ring[k].first, span = ring[k].second - l;
+        const double lengthSq = glm::dot(span, span);
         for (const RenderVertex& vertex : surface->vertices) {
-          const Vec3 rel = vertex.position.clone().sub(l);
-          const double s = rel.dot(span) / lengthSq;
+          const Vec3 rel = vertex.position - l;
+          const double s = glm::dot(rel, span) / lengthSq;
           if (s <= 0 || s >= 1) continue;
-          if (rel.distanceTo(span.clone().multiplyScalar(s)) > 1e-6) continue;  // not on this ring
+          if (glm::distance(rel, span * s) > 1e-6) continue;  // not on this ring
           deepest = std::max(deepest, std::min(s, 1 - s) * 2 * halfGap[k]);
         }
       }
@@ -1300,8 +1292,8 @@ int main(int argc, char** argv) {
 
     CollisionTriangle smooth = lower;
     smooth.normals[0] = {0, 1, 0};
-    smooth.normals[1] = Vec3(0, 1, 1).normalize();
-    smooth.normals[2] = Vec3(1, 1, 0).normalize();
+    smooth.normals[1] = glm::normalize(Vec3(0, 1, 1));
+    smooth.normals[2] = glm::normalize(Vec3(1, 1, 0));
     TrackCollisionSurface smoothSurface({smooth});
     auto smoothHit = smoothSurface.nearestAlongAxis({0, 0.1, 0}, {0, 1, 0}, 1);
     check(smoothHit && smoothHit->normal.y < 1.0 && smoothHit->normal.y > 0.7,
@@ -1315,13 +1307,12 @@ int main(int argc, char** argv) {
       Track& track = *loaded.track;
       Simulation analytical(track);
       const Pose start = StartGrid::startingGridPoses(analytical, track, 1).front();
-      Vec3 right;
-      right.crossVectors(start.up, start.forward).normalize();
-      const Vec3 center = start.pos.clone().addScaledVector(start.up, 2.0);
-      const Vec3 a = center.clone().addScaledVector(right, -20).addScaledVector(start.forward, -20);
-      const Vec3 b = center.clone().addScaledVector(right, 20).addScaledVector(start.forward, -20);
-      const Vec3 c = center.clone().addScaledVector(right, 20).addScaledVector(start.forward, 20);
-      const Vec3 d = center.clone().addScaledVector(right, -20).addScaledVector(start.forward, 20);
+      Vec3 right = normalizeSafe(glm::cross(start.up, start.forward));
+      const Vec3 center = start.pos + start.up * 2.0;
+      const Vec3 a = center + right * -20.0 + start.forward * -20.0;
+      const Vec3 b = center + right * 20.0 + start.forward * -20.0;
+      const Vec3 c = center + right * 20.0 + start.forward * 20.0;
+      const Vec3 d = center + right * -20.0 + start.forward * 20.0;
       CollisionTriangle first, second;
       first.positions[0] = a;
       first.positions[1] = b;
@@ -1339,17 +1330,17 @@ int main(int argc, char** argv) {
 
       Ship parked = shipAt(external, track, start.pos, start.forward);
       const StepResult parkedStep = parked.step(external, 1.0 / 120.0, 0, 0, 0);
-      check(std::fabs(parked.physics.groundPos.clone().sub(center).dot(start.up)) < 1e-9 &&
-                !parked.physics.airborne && parkedStep.surfaceNormal.dot(start.up) > 0.999999,
+      check(std::fabs(glm::dot(parked.physics.groundPos - center, start.up)) < 1e-9 &&
+                !parked.physics.airborne && glm::dot(parkedStep.surfaceNormal, start.up) > 0.999999,
             "Ship::step makes an external triangle surface authoritative for parked contact");
 
-      Ship falling = shipAt(external, track, center.clone().addScaledVector(start.up, 2.0), start.forward);
+      Ship falling = shipAt(external, track, center + start.up * 2.0, start.forward);
       falling.physics.airborne = true;
       falling.physics.verticalVel = -10.0;
       falling.prevTriggerPos = falling.physics.groundPos;
       falling.step(external, 0.15, 0, 0, 0);
       check(!falling.physics.airborne &&
-                std::fabs(falling.physics.groundPos.clone().sub(center).dot(start.up)) < 1e-9,
+                std::fabs(glm::dot(falling.physics.groundPos - center, start.up)) < 1e-9,
             "Ship::step lands on an external triangle swept before the analytical road");
     }
   }
@@ -1484,9 +1475,7 @@ int main(int argc, char** argv) {
 
         // Drive it sideways, off the floor and out through the boundary -- the one-directional
         // rail must not block this (only the reverse, track-into-void direction is blocked).
-        ship.physics.forward.set(1, 0, 0);
-        ship.physics.moveDir.set(1, 0, 0);
-        ship.physics.speed = 40.0;
+        ship.physics.forward = Vec3(1, 0, 0);        ship.physics.moveDir = Vec3(1, 0, 0);        ship.physics.speed = 40.0;
         const double startX = ship.physics.groundPos.x;
         bool finite = true;
         for (int i = 0; i < 90 && finite; i++) {
@@ -1574,9 +1563,9 @@ int main(int argc, char** argv) {
             for (const double speed : {40.0, 140.0}) {
               Ship ship = shipAt(sim, *trackPtr, Vec3(14.0 * side, 0.0, 500.0), Vec3(-side, 0, 0));
               Vec3 direction(-side, 0, dirZ);
-              direction.normalize();
-              ship.physics.moveDir.copy(direction);
-              ship.physics.forward.copy(direction);
+              direction = normalizeSafe(direction);
+              ship.physics.moveDir = direction;
+              ship.physics.forward = direction;
               ship.physics.speed = speed;
               for (int i = 0; i < 400; i++) {
                 ship.step(sim, 1.0 / 60.0, 0.0, 0.0, 0.0);

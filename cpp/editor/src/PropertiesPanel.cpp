@@ -359,8 +359,8 @@ bool drawPhysicsSampleInfo(const TopDownView& view, const tox::Track* baked) {
   ImGui::Text("Half width: %.3f", frame.halfW);
   v3Row("Edge right", frame.edgeRight);
   v3Row("Normal", frame.normal);
-  const tox::Vec3 left = frame.pos.clone().addScaledVector(frame.edgeRight, -frame.halfW);
-  const tox::Vec3 right = frame.pos.clone().addScaledVector(frame.edgeRight, frame.halfW);
+  const tox::Vec3 left = frame.pos - frame.edgeRight * frame.halfW;
+  const tox::Vec3 right = frame.pos + frame.edgeRight * frame.halfW;
   v3Row("Left edge", left);
   v3Row("Right edge", right);
   return true;
