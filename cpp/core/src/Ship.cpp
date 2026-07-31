@@ -41,7 +41,15 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
   integrateSpeed(p, dt, throttle, brake);
   const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
 
-  Vec3 surfaceNormal = p.up;
+  // p.up is frozen at spawn/respawn for the rest of a run (see Ship.hpp) -- fine for the analytic
+  // path, which never uses it as a probe axis, but wrong here: on a banked/rolled section, probing
+  // straight along a stale spawn-time "up" increasingly misses the actual (tilted) road surface as
+  // the ship goes around the bank, so it falsely reads as airborne. ship.renderNormal is the field
+  // that exists precisely for "a live, correct-every-frame value to chase instead" (Ship.hpp) --
+  // GameSession updates it from the previous frame's resolved StepResult::surfaceNormal, so it's
+  // the best available estimate of the ship's actual current orientation for this frame's probes.
+  const Vec3 probeAxis = ship.renderNormal;
+  Vec3 surfaceNormal = probeAxis;
   Vec3 surfaceRenderPos = p.groundPos;
   bool railHit = false;  // mesh mode has no rail concept -- walls are ordinary BVH geometry
 
@@ -60,12 +68,30 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 
   if (p.airborne) {
     p.verticalVel -= p.gravity * dt;
-    const Vec3 nextPos = p.groundPos + Vec3(vel.x, p.verticalVel, vel.z) * dt;
+    const Vec3 fullVel(vel.x, p.verticalVel, vel.z);
+    const Vec3 nextPos = p.groundPos + fullVel * dt;
     if (const auto hit = bvh.sweep(p.groundPos, nextPos)) {
-      const double impactSpeed = std::max(0.0, -p.verticalVel);
-      landOnSurface(ship, hit->normal);
-      p.landingBounce += std::min(3.2, impactSpeed * 0.09);
-      p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
+      if (glm::dot(hit->normal, UP) > 0.5) {
+        // An upward-facing surface: a real landing.
+        const double impactSpeed = std::max(0.0, -p.verticalVel);
+        landOnSurface(ship, hit->normal);
+        p.landingBounce += std::min(3.2, impactSpeed * 0.09);
+        p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
+      } else {
+        // A mostly-vertical surface (a wall/rail) hit mid-air -- bounce off it instead of
+        // "landing" sideways on it, and stay airborne. Without this, any wall struck while
+        // airborne (e.g. a ship launched or knocked off the road near a rail) got landOnSurface'd
+        // onto the wall's near-horizontal normal, an obviously wrong grounded state.
+        const double into = glm::dot(fullVel, hit->normal);
+        if (into < 0) {
+          const Vec3 bounced = fullVel + hit->normal * (-into * (1 + weightRestitution(p)));
+          addImpactJolt(p, -into);
+          p.verticalVel = bounced.y;
+          const double horizMag = std::hypot(bounced.x, bounced.z);
+          p.speed = horizMag;
+          if (horizMag > 1e-6) p.moveDir = Vec3(bounced.x / horizMag, 0.0, bounced.z / horizMag);
+        }
+      }
       p.groundPos = hit->position;
       surfaceRenderPos = hit->position;
       surfaceNormal = hit->normal;
@@ -94,7 +120,16 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
     const Vec3 sweepFrom = horizontalSpeed > 1e-6
                                ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
                                : p.groundPos;
-    if (const auto wall = bvh.sweep(sweepFrom, intended)) {
+    // A horizontal sweep at a fixed height can clip through the drivable road surface itself on a
+    // banked or undulating section (the surface just happens to cross this y at some nearby point),
+    // and sweep() has no notion of "wall vs. floor" -- it returns whatever one-sided triangle the
+    // segment crosses first. Reject any hit whose normal is mostly upward: that's the road, not a
+    // wall, and treating it as one snapped the ship's position to that spurious contact point every
+    // single frame (into ~= 0 for a road-normal hit against a horizontal velocity, so the "moving
+    // into the wall" branch below never even fired -- it fell straight to the raw position-snap).
+    auto wall = bvh.sweep(sweepFrom, intended);
+    if (wall && glm::dot(wall->normal, UP) > 0.5) wall.reset();
+    if (wall) {
       const Vec3 wallN = wall->normal;
       const double into = glm::dot(vel, wallN);
       if (into < 0) {
@@ -123,7 +158,7 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
         intended = wall->position;
       }
     }
-    if (const auto ground = bvh.nearestAlongAxis(Vec3(intended.x, p.groundPos.y, intended.z), p.up, 4.0)) {
+    if (const auto ground = bvh.nearestAlongAxis(Vec3(intended.x, p.groundPos.y, intended.z), probeAxis, 4.0)) {
       p.groundPos = ground->position;
       surfaceRenderPos = ground->position;
       surfaceNormal = ground->normal;
@@ -135,14 +170,14 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
       surfaceRenderPos = p.groundPos;
     }
   } else {
-    if (const auto ground = bvh.nearestAlongAxis(p.groundPos, p.up, 4.0)) {
+    if (const auto ground = bvh.nearestAlongAxis(p.groundPos, probeAxis, 4.0)) {
       p.groundPos = ground->position;
       surfaceRenderPos = ground->position;
       surfaceNormal = ground->normal;
     } else {
       beginAirborne(ship, Vec3(0, 0, 0));
       surfaceRenderPos = p.groundPos;
-      surfaceNormal = p.up;
+      surfaceNormal = probeAxis;
     }
   }
 

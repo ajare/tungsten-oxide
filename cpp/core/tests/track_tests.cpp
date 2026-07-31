@@ -403,6 +403,48 @@ int main(int argc, char** argv) {
           "mesh mode wall contact keeps the ship behind the wall surface while still within its "
           "extent (z=" + std::to_string(sliding.physics.groundPos.z) + ")");
 
+    // Regression for a second real bug found via headless investigation against the actual bundled
+    // track: on a banked/sloped road, the horizontal wall-probe (fixed y) can clip through the road
+    // surface itself a short distance ahead -- sweep() has no notion of "wall vs. floor", it just
+    // returns whatever one-sided triangle a segment crosses first. Treating that as a wall snapped
+    // the ship to the same spurious contact point every single frame (into ~= 0 for a road-normal
+    // hit against near-parallel velocity, so it fell straight to the raw position-snap branch,
+    // reproducing the exact "stuck in place, speed climbs to max" symptom) even though there was no
+    // wall there at all -- just a gentle upward slope in the road itself.
+    Track rampTrack = track;
+    CollisionTriangle rampA, rampB;
+    // y = 0.05*z: a ~3-degree upward slope, gentle enough that the ramp's own normal stays close to
+    // UP (as a real banked/graded road section would), which is exactly the case the >0.5 dot-with-
+    // UP threshold needs to still classify correctly.
+    const Vec3 rampNormal = normalizeSafe(Vec3(0, 1, -0.05));
+    rampA.positions[0] = Vec3(-50, -0.5, -10);
+    rampA.positions[1] = Vec3(50, -0.5, -10);
+    rampA.positions[2] = Vec3(50, 15.5, 310);
+    rampB.positions[0] = Vec3(-50, -0.5, -10);
+    rampB.positions[1] = Vec3(50, 15.5, 310);
+    rampB.positions[2] = Vec3(-50, 15.5, 310);
+    rampA.normals[0] = rampA.normals[1] = rampA.normals[2] = rampNormal;
+    rampB.normals[0] = rampB.normals[1] = rampB.normals[2] = rampNormal;
+    rampTrack.collisionSurface =
+        std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{rampA, rampB});
+    Simulation rampSimulation(rampTrack);
+    rampSimulation.setMeshPhysicsEnabled(true);
+
+    Ship ramping = shipAt(rampSimulation, rampTrack, {0, -0.5, 0});
+    bool everStuckOnRamp = false;
+    Vec3 lastRampPos = ramping.physics.groundPos;
+    for (int step = 0; step < 300; ++step) {
+      rampSimulation.stepPhysics(ramping, 1.0 / 60.0, 1, 0, 0);
+      if (step > 5 && glm::length(ramping.physics.groundPos - lastRampPos) < 1e-9) everStuckOnRamp = true;
+      lastRampPos = ramping.physics.groundPos;
+    }
+    check(std::isfinite(ramping.physics.groundPos.z), "mesh mode ramp driving stays finite");
+    check(!everStuckOnRamp,
+          "mesh mode does not mistake a gently sloped road surface for a wall and freeze in place");
+    check(ramping.physics.groundPos.z > 50.0,
+          "mesh mode ship drives up a sloped road normally (z=" +
+              std::to_string(ramping.physics.groundPos.z) + ")");
+
     Ship falling = shipAt(meshSimulation, meshModeTrack, {20, 20, 0});
     falling.physics.airborne = true;
     falling.physics.verticalVel = -15;
