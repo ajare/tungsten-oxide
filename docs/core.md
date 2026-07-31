@@ -1,0 +1,189 @@
+# cpp/core — the track-physics engine
+
+`cpp/core` is a self-contained C++20 static library (target `core`) that loads a schema-10/11 track, bakes its authored spline/mesh data into runtime geometry, and runs the corridor/mesh driving simulation. It has no renderer, no image loader, and no platform/input dependency — see `cpp/README.md` for the build-level contract and public data-flow example. This document is the feature- and physics-level companion to that README: what a track can *contain*, and exactly how the simulation resolves it frame to frame, with pointers into the code.
+
+Domain vocabulary (Track, Path, Control point, Mesh region, Zone, Trigger/Checkpoint, Reservation, etc.) is defined once in `UBIQUITOUS_LANGUAGE.md` and `glossary.md` (both in this directory) — this document uses those terms without redefining them.
+
+## Intended use
+
+`core` is meant to be embedded by a host that supplies input, rendering, and timing:
+
+- `cpp/tungsten-monoxide` is the real playable host (see `docs/tungsten-monoxide.md`) — it drives `core` through `GameSession`.
+- `cpp/app`'s `track_runner` is a minimal headless session/timing smoke host (no rendering, no input, idle ships).
+- `cpp/editor` reuses `core` as a black box purely for baking/validation — it never touches simulation.
+- The `parity`/`raw_parity`/`track_tests`/`random_geometry_parity` CTest targets replay a committed golden-trace corpus against it (see [Numeric contracts and golden-trace testing](#numeric-contracts-and-golden-trace-testing) below).
+
+`core` accepts **schema 10 or 11** JSON and always normalizes/writes schema 11 (`TrackCore::TRACK_SCHEMA_VERSION = 11`, `TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10`, both in `cpp/core/include/TrackCore.hpp`). Schema 10 support exists solely because the golden-trace corpus is permanently pinned at schema 10.
+
+## Track-design features
+
+Authored data lives in `TrackDefinition` (`cpp/core/include/TrackDefinition.hpp`), deliberately kept separate from the compiled runtime records (`Track.hpp`, `TrackMesh.hpp`) — see that header's own opening comment.
+
+### Track
+
+`TrackDefinition` (`TrackDefinition.hpp:198`) is the top-level record: `paths`, `meshAssets`/`meshes`, `textureAssets`, `zones`, `triggers`, `disjointSeams`, `junctions`, `selfIntersectionOverrides`, `handling`, `start`.
+
+- **`handling`** (`HandlingDefinition`, `TrackDefinition.hpp:189`) — `maxSpeed` (140), `accel` (71), `turnSpeed` (137.5 deg/s), `weight` (1000). Copied into every ship by `ShipFactory::applyHandling`. Only these four of the ~12 tunable `Physics` parameters are authorable per track — brake deceleration, friction, grip, gravity, and wall restitution stay at their `Physics` struct defaults (`Ship.hpp:16`).
+- **`start`** (`StartDefinition`, `TrackDefinition.hpp:193`) — `path`, `point` (a control-point index), `reverse`. Anchors the starting grid (`StartGrid::startingGridPoses`) and, if no `role="finish"` checkpoint was authored, the auto-generated finish trigger (`TrackBake.cpp`, `bakeTrack`, ~line 1541).
+- **`samples`** — an authored hint that is largely vestigial; the physics centerline sample count is computed instead (see [Baking](#baking-pipeline)).
+
+### Path
+
+`PathDefinition` (`TrackDefinition.hpp:96`) — one spline ribbon road: `id`, `closed`, `points` (the mixed control-point list), `texture` binding, `material` (a namespace-qualified Willpower `TrackMaterial` name, falling back to the legacy literal `"road"` when empty), and `reservations`.
+
+### Control points
+
+One struct, `TrackPointDefinition` (`TrackDefinition.hpp:21`), four `TrackPointKind`s (`Position | Roll | Width | CrossSection`), separated at bake time by `split()` (`TrackBake.cpp:22`):
+
+| Kind | Fields | Effect |
+|---|---|---|
+| **Position** | `pos`, `weight` (1.0) | The rational-spline control vertex and its NURBS-style rational weight — pulls the curve toward that point. Defines the centerline. |
+| **Roll** | `t`, `roll` (0.0°) | Banking, in degrees, at path-fraction `t`. Converted to radians and used to rotate `edgeRight`/`normal` in `frame()` (`TrackBake.cpp`). |
+| **Width** | `t`, `width` (36.0 m), `centerOffsetPercent` (0.0) | Road chord width, floored at 1.0 m. `centerOffsetPercent` (±50 max) shifts the *baked* road center toward `edgeRight`, independent of the authored position spline. |
+| **CrossSection** | `t`, `curvature` (0.0, ±1 clamp), `tightness` (1.0, [0.2, 4.0] clamp), `thickness` (4.0 m) | The banked "cradle" profile amplitude/sharpness across the road. `thickness` is **render-only** (drives the shell/slab depth) — physics never sees it. |
+
+All three scalar channels (`roll`/`width`/`crossSection`) are interpolated by a shared Catmull-Rom-style helper (`scalar()`, `TrackBake.cpp:40`), with correct wrapping for closed paths.
+
+### Reservations (central-reservation voids)
+
+A void carved from the road between `t0` and `t1`, tapering from each end cap's width to `width` at the midpoint. Full design history in `CENTRAL_RESERVATION_PLAN.md` at the repo root; data model in `ReservationDefinition` (`TrackDefinition.hpp:85`).
+
+- **`widthMode`** — `Fixed` (metres) or `Percent` (0–100% of the road's own local width at that point, so the void tracks an authored width curve).
+- **End caps** (`endCap0`/`endCap1`, `ReservationEndCapStyle`) — **Joined** (tapers to a self-sealing point), **Mitred** (holds the cap width and cuts off square), or **Rounded** (the last `noseLength` metres close as a half-ellipse dome; `noseLength ≤ 0` defaults to `capWidth/2`, a true half-circle).
+- **`interiorMode`** — **Capped** (watertight, with a real landable curved floor built from `MeshFloorTriangle`s) or **Uncapped** (a genuine open shaft with a hole carved in the underside shell — a car falls through).
+- **`wallHeight`** is render-only (falls back to `TrackCore::DEFAULT_RAIL_HEIGHT = 6.0`); **`railClearanceHeight`** is the physics jump-clearance height, deliberately decoupled from it.
+
+Reservations must be authored non-overlapping per path — `reservationHalfGapAt` (`TrackBake.cpp:311`) takes the first span containing `t` as authoritative and does not validate overlap itself (the editor enforces it at authoring time).
+
+### Mesh regions
+
+A flat, rigidly placed drivable area for shapes a swept path can't represent (a paddock, an arena, a jump platform). Two-part model:
+
+- **`MeshAssetDefinition`** (`TrackDefinition.hpp:131`) — reusable Willpower-topology geometry: `MeshVertexDefinition`, `MeshEdgeDefinition` (with a `rail` flag marking guard-rail edges), `MeshPolygonDefinition` (directed edge loops, holes), plus `railHeight` (default 6.0).
+- **`MeshPlacementDefinition`** (`TrackDefinition.hpp:140`) — a rigid 2D transform instancing an asset: `x`, `z`, `rotation` (degrees), and a **single flat `elevation`**. This is why placed mesh regions are always flat platforms (only a Capped reservation gets a genuinely curved floor).
+
+### Zones
+
+`ZoneDefinition` (`TrackDefinition.hpp:158`) — a flat area with an `effect`: `"velocityChange"` (boost, `factor` 1.5 × maxSpeed by default, `duration` 2.0s), `"jump"`, or `"startGrid"`. Hosted on either a path (`t`, `lateral` offset) or a mesh region (`x`, `z`, `rotation`, an oriented rectangle).
+
+> **Note:** `"startGrid"` is authored and survives baking, but nothing currently acts on it at runtime — `Simulation::detectZoneTriggers` (`Simulation.cpp:286`) only handles `"velocityChange"` and `"jump"`; the actual starting grid is derived independently from `TrackDefinition::start`.
+
+### Triggers / checkpoints
+
+`TriggerDefinition` (`TrackDefinition.hpp:173`) — a vertical gate: `type` (`"checkpoint"` or `"dummy"`), `role` (`"finish"` or empty = intermediate), `direction` (`"forward"`/`"backward"`/`"both"`), same path/mesh host duality as zones. A lap requires crossing every intermediate checkpoint before the finish (`Simulation::fireTrigger`, `Simulation.cpp:341`).
+
+### Junctions, disjoint seams, self-intersection overrides
+
+`ConnectionDefinition` (`TrackDefinition.hpp:180`) backs both:
+
+- **Disjoint seams** weld two open-path endpoints — their frame normals are averaged and both edge corners are re-cut at the intersection.
+- **Junctions** mark a branch point, which disables self-intersection processing for every path touching it.
+- **`SelfIntersectionOverrideDefinition`** (`TrackDefinition.hpp:185`) overrides the default collapse-span heuristic for one specific crossing (identified by control-point ids, so it survives resampling).
+
+### Texture assets
+
+`TextureAssetDefinition` (`TrackDefinition.hpp:146`) — `path`, `width`/`height`, `tileWidth`/`tileHeight`. A path's `texture` field (`TextureBindingDefinition`) references an asset id plus a tile index.
+
+## Baking pipeline
+
+Entry: `Track::fromJson`/`fromFile` (`Track.hpp:117`) → `TrackLoader.cpp`'s `normalize()` → `bakeTrack()` (`TrackBake.cpp:1282`) → `compileTrackMeshes()` (`TrackMesh.cpp:301`).
+
+This is the part of the codebase where "analytical" and "geometry/mesh-based" genuinely diverge, and it matters for anyone reasoning about correctness or performance:
+
+### Analytical (closed-form math, no triangles consulted)
+
+| What | Where | How |
+|---|---|---|
+| Spline evaluation | `Evaluator::baseEval`, `TrackBake.cpp:96` | A rational cubic B-spline: uniform basis functions, each control point's `weight` in both numerator and denominator, tangent via the quotient rule. |
+| Signed path curvature | `Evaluator::curvatureAt`, `TrackBake.cpp:146` | Second derivative via the basis functions' second derivative, then `κ = (x'z''−z'x'')/(x'²+z'²)^1.5`. **Editor-only** — exposed as `TrackCore::pathSignedCurvatureAt` (declared `TrackCore.hpp`, body `TrackBake.cpp:1274`), never baked into `Frame`; it's what drives the editor's Camber render mode. |
+| Center-offset shift | `Evaluator::shiftedPosition`/`eval`, `TrackBake.cpp:184` | Guarded by `hasCenterOffset` so zero-offset tracks (the common case) take the historical bit-identical path. |
+| Road frame construction | `frame()`, `TrackBake.cpp:219` | Builds `h = cross(UP, tangent)`, a binormal, then rotates both by `roll` to get `edgeRight`/`normal`. |
+| Cross-section profile | `TrackCore::crossSectionHeight`/`…Derivative`, `TrackCore.cpp:22` | `curvature·(width/2)·(√(1−u²))^tightness` — the banked-cradle shape. |
+| Runtime surface at an offset | `curvedSurfaceFrame`, `Simulation.cpp:71` | `pos + edgeRight·offset + normal·lift`; normal from `cross(tangent, edgeRight·span + normal·dLift/dOffset)`. This is the function physics actually stands ships on when it isn't consulting exported triangles. |
+| Reservation gap width | `reservationHalfGapAt`, `TrackBake.cpp:311` | Closed-form: peak width (Fixed vs. Percent) × a Hermite 0→1→0 taper, then the Mitred shelf or Rounded-ellipse floor. |
+| Edge offsetting/trimming | `edges()`/`trim()`, `TrackBake.cpp:502`/`383` | Offset ±half-width, then collapse backward-running (self-crossing) edge runs to a line intersection. |
+
+**Sample density is adaptive, not fixed.** The physics centerline uses `sampleCount()` (`TrackBake.cpp:373`) = `clamp(driven_length / 6, 400, 2000)` — roughly 6 m spacing regardless of track length; `TrackCore::N_DEFAULT` (400) is only the floor. The separate **render** mesh (`adaptiveRenderBake`, `TrackBake.cpp:573`) uses its own non-uniform ring set via chord-tolerance bisection plus forced rings at reservation boundaries — a materially finer, independent sampling from the physics centerline.
+
+### Geometry / mesh-based (triangles, Willpower topology, or exported collision data)
+
+| What | Where | How |
+|---|---|---|
+| Mesh region topology + triangulation | `TrackMesh.cpp:66` (`buildTopology`), `:143` | `wp::geometry::Mesh/Vertex/Edge/Polygon` — Willpower.Geometry triangulates each polygon (float precision internally, retained back as doubles). |
+| Mesh placement compile | `TrackMesh.cpp:113` | Rigid 2D transform + XZ bounds + outward-facing rail normals (probed 0.01 m inward). Failures are per-asset recoverable — a bad asset produces a `TrackWarning` and is dropped along with every placement referencing it, the track still loads. |
+| Render/collision triangle batches | `TrackBake.cpp:800`–`1015`, `1418`–`1663` | `GeometryBatch`/`GeometryKind` (`TrackGeometry.hpp:20`). The road surface uses smooth per-vertex analytical normals (`triSmooth`); everything else (rails, shell, zones, triggers) uses flat per-triangle normals (`triNormal`). |
+| Reservation void carve | `carveQuad`, `TrackBake.cpp:784` | Corner-wise strict-interior test against each ring's gap band, shared by the top surface and (Uncapped only) the shell underside so both holes agree exactly. |
+| Reservation synthetic mesh region | `reservationGeometry`, `TrackBake.cpp:1042` | Built from the **render** frames, not the physics centerline — the two sample sets must stay consistent or slivers appear at the void boundary. Always `oneWayRails = true`; Capped mode adds a real curved floor. |
+| Exported collision mesh | `TrackCollision.cpp` | A BVH (median split, ≤8 triangles/leaf) over exported triangles, with Möller–Trumbore ray intersection and barycentric-interpolated vertex normals. **Populated only by the game host** — `cpp/tungsten-monoxide/src/Map.cpp` builds it from a `.mppmodel`; JSON-only consumers (the editor, `track_runner`, this library's own tests) leave `Track::collisionSurface` null and physics stays fully analytical. |
+
+### Self-intersection detection and collapse
+
+`removeSelfLoops` (`TrackBake.cpp:424`) — two O(N²) passes over the edge polyline:
+
+1. **Detection** (unbounded, full pairwise scan) — records every crossing with its span into `Track::selfIntersections`, gated by the `detectSelfIntersections` flag on `fromJson`/`fromFile` (default `true`; the editor's live-preview rebake passes `false` mid-drag and reuses its last result).
+2. **Collapse** (iterative, up to `segmentCount` passes each O(N²), so worst case O(N³)) — collapses a crossing when its span ≤ `TrackCore::DEFAULT_SELF_INTERSECTION_SPAN` (100), unless a `SelfIntersectionOverrideDefinition` says otherwise. Skipped entirely for paths touching a junction.
+
+## Physics
+
+`Ship::step` (`cpp/core/src/Ship.cpp:11`) is the whole per-frame algorithm — one call per fixed sub-step (see [GameSession](#gamesession--shipfactory--startgrid) below for how sub-stepping works). Every branch is annotated below with whether it's analytical (closed-form corridor/cross-section math) or geometry-based (consults exported/baked triangles).
+
+### Per-frame flow
+
+1. **Longitudinal integration** (analytical) — `speed += accel·dt` on throttle, `-= brakeDecel·dt` on brake, or friction decay toward zero; clamped to `[maxReverse, effectiveMaxSpeed]`. Boost (`triggerBoost`/`tickBoost`, `Simulation.cpp:10`) raises `effectiveMaxSpeed` for a hold period then a 1-second linear release.
+2. **`Simulation::sampleTrack`** (`Simulation.cpp:140`, analytical) — finds the nearest centerline `Frame` across every path/segment (brute-force O(paths × segments), no spatial index; called up to 3× per step). Returns a blended `Sample` (position, tangent, edgeRight, normal, lateral bounds `sLeft`/`sRight`). Notably this **does not carry reservation, roll, width, or thickness data** — the physics corridor is blind to reservation voids, which is exactly why reservations also get a synthetic one-way-railed mesh region.
+3. **Collision-surface pre-probe** (geometry-based, only if the host supplied one) — while grounded, the steering axis is refined by `TrackCollisionSurface::nearestAlongAxis(pos, up, 4.0)`, a raycast against the exported triangle mesh.
+4. **Ownership** — `Simulation::surfaceOwnerAt` (`Simulation.cpp:276`, analytical height comparison) decides whether the ship is on a mesh region or the path corridor.
+5. **One of three motion branches:**
+   - **Airborne** (`Ship.cpp:61`) — mixed: gravity integration and rail-sliding against nearby mesh regions are geometry-based (mesh queries); if no mesh region's footprint claims the landing (x, z), it falls back to the fully analytical `curvedSurfaceFrame` corridor surface.
+   - **On a mesh region, moving** (`Ship.cpp:122`) — geometry-based: `slideAlongRails` (`TrackMesh.cpp:259`, max 3 iterations per call) against the region's rails, gear-preserving restitution, height sampled at the destination so curved (Capped-reservation) floors are followed.
+   - **On the corridor, moving** (`Ship.cpp:165`) — analytical: reservation one-way-rail collision first (the only path by which a car driving the open road collides with a median), then `curvedSurfaceFrame` wall collision with restitution gated on `dot(velocity, wallNormal) > 0` (so a narrowing road doesn't drain speed every frame it merely brushes the limit).
+6. **Final collision-surface pass** (`Ship.cpp:298`, geometry-based, only if the host supplied one) — a `sweep`/`nearestAlongAxis` raycast against the exported triangle mesh **overrides** the analytical position/normal entirely when it hits. This is what makes the shipped game's contact model materially different from the editor's/`track_runner`'s pure-analytical one — see [Limitations](#limitations).
+7. **Zones/triggers/respawn** — zone detection only while grounded; trigger crossing detection (segment/plane test against each trigger's quad) always; automatic respawn when airborne and below `Track::trackFloorY`.
+
+### Key constants
+
+From `TrackCore.hpp`'s `TrackCore`/`Consts` namespaces and `Ship.hpp`'s `Physics` defaults:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `Physics::maxSpeed` / `accel` / `brakeDecel` / `friction` | 140 / 71 / 115 / 55 | m/s, m/s², m/s², m/s² |
+| `Physics::turnRate` / `grip` | 2.4 rad/s / 3.2 | Steering response |
+| `Physics::wallRestitution` / `weight` / `gravity` | 0.75 / 1000 / 60 | Bounce, mass (scales restitution/speed-retention), m/s² |
+| `TrackCore::COLLISION_WALL_MARGIN` | 1.8 m | Inset from `sLeft`/`sRight` |
+| `Consts::SURFACE_SNAP_UP` | 3.0 m | Max snap-up when leaving a mesh region onto the corridor |
+| `Consts::CORRIDOR_ALONG_TOL` / `SEGMENT_ALONG_TOL` | 8.0 / 0.5 m | Along-track tolerance for corridor/segment membership |
+| `Consts::RESPAWN_FALL_DEPTH` | 100 m | Below `trackFloorY` triggers auto-respawn |
+| `Consts::MAX_PHYSICS_STEP` | 1/120 s | Sub-step size (see below) |
+| `Consts::MIN_LAUNCH_UPWARD_SPEED` | 30 m/s | Floor for a jump-zone launch |
+
+`1 world unit = 1 metre` (`docs/glossary.md`); `maxSpeed` 140 ⇒ 504 km/h.
+
+## GameSession / ShipFactory / StartGrid
+
+The native session layer a real host drives, above raw `Ship::step`:
+
+- **`ControlIntent`** (`GameSession.hpp:18`) — `throttle`, `brake`, `steer`, `respawn`; translated from platform input outside `core`.
+- **`GameSession::step`** (`GameSession.cpp:42`) — clamps `dt` to `MAX_FRAME_DELTA` (0.05s), then splits it into equal sub-steps of at most `Consts::MAX_PHYSICS_STEP` (1/120s) each, calling `Ship::step` once per sub-step. An automatic respawn (fell off-track) breaks the remaining sub-steps for that ship. Emits `GameEvent`s (`TriggerFired`, `CheckpointAccepted`, `LapCompleted`, `Respawned`, `RailHit`) via `events()`.
+- **`ShipFactory`** (`ShipFactory.cpp`) — `applyHandling` copies the track's 4 authorable handling fields (converting `turnSpeed` degrees/s → `turnRate` radians/s); `createRaceState` partitions baked checkpoints into intermediates + the first `role="finish"`; `buildRoster` builds a full ship roster on the starting grid.
+- **`StartGrid`** (`StartGrid.cpp`) — `DEFAULT_SHIP_COUNT = 8`, two-column staggered layout. `startingGridPoses` places each ship analytically via `curvedSurfaceFrame`, then runs 3 fixed-point settle iterations (`sampleTrack` → `projectToSurface` → `curvedSurfaceFrame`) so an idle ship doesn't creep on its first frames.
+
+## Numeric contracts and golden-trace testing
+
+`cpp/test-data/` (a sibling of `core/`) is a fixed, committed regression corpus with **no in-repo regeneration tool** — treat it as append-only. Two layers, replayed by the `parity`/`raw_parity`/`track_tests`/`random_geometry_parity` CTest targets:
+
+- **Baked-world traces** (`traces/`) — 4000 steps of pure runtime math, `atol=rtol=1e-12`, observed worst deviation ~1 ULP.
+- **Raw-track traces** (`traces/raw/`, `traces/raw-session/`) — 1116 steps that force independent load/bake/compile in C++, looser tolerance (ratio gate 0.1). Discrete state (surface IDs, rail hits, airborne/boost/trigger/checkpoint/lap/respawn) must match **exactly**.
+
+Practical effect: several functions are pinned to a specific formula *because of this corpus*, not purely for correctness (e.g. `TrackCore::clamp`'s exact boundary behavior, `Evaluator::eval`'s zero-offset bypass). Reordering floating-point operations in the corridor math is a breaking change; see `cpp/core/CLAUDE.md` before touching any of it.
+
+## Limitations
+
+- **The exported-collision-mesh contact model is opt-in and host-supplied.** Only `cpp/tungsten-monoxide` populates `Track::collisionSurface`; every other consumer (editor, `track_runner`, this library's own tests) runs on the fully analytical corridor/mesh-region model. The two are close but not identical — see `docs/tungsten-monoxide.md`.
+- **`physics.up` is frozen at spawn.** Written only by `placeShipAtPose` and never updated during a run (a deliberate, golden-trace-pinned characteristic — verified bit-identical across a full run in the fixture corpus). `Ship::renderNormal` exists as a live, per-frame-correct substitute for renderers; see `Ship.hpp`.
+- **`sampleTrack` has no spatial index** — a full scan of every segment of every path, per call, up to 3 calls per `Ship::step`. Cost scales with total track length × ship count.
+- **Self-intersection collapse is worst-case O(N³)** per bake (see above); `detectSelfIntersections=false` skips only the detection half, and an empty `selfIntersections` list is indistinguishable from "genuinely none."
+- **The physics corridor is blind to reservations** — `Sample` carries no reservation data, so absent the synthetic one-way-rail mesh region, physics would read a reservation void as solid ground.
+- **Mesh regions are flat** — a single scalar `elevation` per placement; only a Capped reservation gets a genuinely curved floor.
+- **Willpower triangulation runs in `float`** inside an otherwise double-precision pipeline.
+- **`slideAlongRails` caps at 3 iterations per call** — a sufficiently sharp corner can leak through.
+- **Zone effect `"startGrid"` is authored but inert** at runtime (see above).

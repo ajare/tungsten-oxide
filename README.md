@@ -37,13 +37,15 @@ Track files record a schema `version`. Schema 5 doubled the world's unit scale �
 
 ## How it's structured
 
-- `cpp/core/` — native C++20 track engine: strict schema-10/11 loading, spline/mesh baking, renderer-neutral geometry and complete physics.
-- `cpp/editor/` — the native track editor: state, undo/redo, canvas rendering and interaction.
+- `cpp/core/` — native C++20 track engine: strict schema-10/11 loading, spline/mesh baking, renderer-neutral geometry and complete physics. See `docs/core.md`.
+- `cpp/editor/` — the native track editor: state, undo/redo, canvas rendering and interaction. See `docs/editor.md`.
+- `cpp/model-tool/` — standalone 3D-model import/preview/`.mppmodel`-save utility, unrelated to mesh regions above. See `docs/model-tool.md`.
+- `cpp/tungsten-monoxide/` — the playable driving game runtime. See `docs/tungsten-monoxide.md`.
 - `cpp/willpower/` — embedded C++ Willpower topology/triangulation dependency used by the native loader.
 - `assets/` (bundled textures) is shared across the native subprojects and stays at the repo root, as does the `ext/geoemetry-js` submodule.
 - `ext/geoemetry-js/` — a git submodule ([`@willpower/geometry`](https://github.com/ajare/geoemetry-js)), a standalone geometry/mesh library with its own tests and React editor, and the only JavaScript codebase in this repo. It has no bearing on `cpp/` at runtime.
 
-See `CLAUDE.md` for a deeper dive into the track data model and editor/game conventions.
+See `CLAUDE.md` for a deeper dive into the track data model and editor/game conventions, and `docs/core.md`/`docs/editor.md`/`docs/model-tool.md`/`docs/tungsten-monoxide.md` for module-by-module feature and physics documentation.
 
 ## Native C++ engine
 

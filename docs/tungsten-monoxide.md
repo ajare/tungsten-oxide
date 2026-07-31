@@ -1,0 +1,67 @@
+# cpp/tungsten-monoxide — the playable game runtime
+
+`cpp/tungsten-monoxide` builds `TungstenMonoxide.dll`, a Willpower-application game module loaded by `cpp/launcher`. It is the one module in this set that actually plays a track: it loads a Track Resource, drives `cpp/core`'s `GameSession` from real keyboard input, and renders the result with a chase camera and HUD via MassivePolyPusher (`mpp::`).
+
+## Intended use
+
+A minimal but complete playable client for **one hardcoded track**, useful as the reference integration of `core` against a real renderer and as a way to actually drive a track authored in `cpp/editor`. It is a read-only consumer: there is no authoring, no save, and no rebaking here — a `.mppmodel`/JSON pair out of sync with each other simply fails to load (see [Limitations](#limitations)).
+
+## App / state structure
+
+Entry: `src/DLL.cpp` — exports the launcher ABI (`dllGetName`, `dllOnEntry`, resource/definition factory registration). State machine: `Controller → Load → MapLoad → Play → MapUnload → Unload` (`StateControllerTungstenMonoxide.cpp`); the map name (`"NewTrack"` in namespace `"Tracks"`) is currently hardcoded there.
+
+`StatePlayTungstenMonoxide` (`include/StatePlayTungstenMonoxide.h`) derives `applib::StatePlay` and is where everything gameplay-relevant happens:
+
+- **`setup()`** — creates input/camera/entity-management scaffolding, loads all resources referenced by the map, then `createGameObjects()`: fetches the track model, applies debug-visibility toggles, constructs a `tox::GameSession` with the default 8-ship roster, places every ship at the map's starting-grid poses, and creates one `SceneModel3d` per ship (all sharing one loaded ship model).
+- **`updateImpl()`** — `updatePreInput → updateInput → updatePreEntities → updateEntityManagement → updatePostEntities (→ updateShips) → updateCamera (→ updateChaseCamera) → updatePreRenderers → updateScreenFxManagement → updateRenderers`. The actual physics step (`GameSession::step`) happens inside the **input** phase (`updateActions`), not `updatePostEntities` — `updateShips` afterward is purely cosmetic.
+- **`renderImpl()`** — flat ambient + one light, renders the scene, then the HUD.
+- The applib Entity/renderer system is present but effectively bypassed — entity handler callbacks are empty stubs and entity renderers are forced invisible every frame; nothing about ship simulation goes through it.
+
+## Track/model loading — `Map::load()`
+
+`src/Map.cpp`. Requires a directory-based resource location (not zip-backed — `mpp::ModelSerializer` opens files by `ifstream`). Steps:
+
+1. Sanitizes and loads `<TrackData>` via `tox::Track::fromFile()` (schema-10/11 JSON).
+2. Loads `<ModelFile>` via `mpp::ModelSerializer`.
+3. Builds `vector<tox::CollisionTriangle>` from the model's listed **TrackMeshes** and installs it as `Track::collisionSurface` — this is the one place in the whole codebase that populates it (see `docs/core.md`'s analytical-vs-geometry split).
+4. Derives the 8-ship starting grid analytically via `tox::StartGrid::startingGridPoses`, then **settles** each pose onto the just-built collision surface with a `nearestAlongAxis` raycast, replacing position/up with the actual contact and re-orthogonalizing forward.
+5. Builds the render model mesh-by-mesh, resolving each mesh's material through the resource's own dependent-resource list; a mesh with an unresolvable material is skipped with a warning unless it's a listed TrackMesh, in which case it's a fatal load error.
+
+**What "TrackMeshes" means**: the set of `.mppmodel` mesh names declared collision-relevant in the Track Resource's XML definition. It must equal **exactly** the set of baked `PathSurface`/`MeshSurface` geometry-batch ids in the compiled Track — i.e., the drivable road/mesh surfaces. Rails, shells, zone/trigger quads, and reservation walls are render-only here, never collision. Every listed mesh's vertex positions and normals are bit-compared against the TrackData-baked batch (`matchesExportedFloat`) — a mismatch between the `.mppmodel` and the `.json` is a hard load failure, not a warning.
+
+## Ship rendering
+
+`ShipVisualState` (in `StatePlayTungstenMonoxide.h`) is deliberately separate from `tox::Physics` — cosmetic smoothing lives entirely on the render side:
+
+- **Up-vector**: lerps toward `ship.renderNormal` (the live per-step surface normal `core` exposes precisely so a renderer doesn't have to use the frozen `physics.up` — see `docs/core.md`) at rate `dt·18`.
+- **Position**: snaps exactly unless the frame-to-frame delta exceeds a speed-scaled threshold, in which case it lerps rather than teleporting.
+- **Landing**: converts impact velocity into a **spring velocity**, not an instantaneous position offset, so contact doesn't visibly jump on the exact frame physics attaches to a surface.
+- **Bob/bank/pitch**: a sine bob (suppressed while airborne or for an idle AI ship), bank eased toward `-steer · speedRatio`, pitch eased toward a function of speed — all purely cosmetic.
+- `applyShipTransform()` builds an orthonormal basis from up/forward, applies the eased pitch/bank as a local rotation, and scales a shared box model to `(2.4, 0.8, 4.0)` — **there is no real ship mesh**; every ship is a stretched, identically-textured box.
+
+**Camera**: `ReactiveCamera` (`src/ReactiveCamera.cpp`) — `updateChaseCamera()` positions the camera from the ship's *visual* (not raw physics) state, since only the visual up-vector is smoothed. Standard chase-camera math: eye behind and above the ship along its forward/up, look-at ahead of it. Camera-back distance, height, and look-ahead height are runtime-tunable via debug sliders.
+
+## Input / controls
+
+Keyboard only, no gamepad. `W`/`Up` throttle, `S`/`Down` brake, `A`/`Left` and `D`/`Right` steer (binary, not analogue — opposing keys cancel), `R` respawn, `Esc` exit, `J` a debug launch (jump) for ship 0, `F1` toggles the debug panel. Only ship 0 (the player) receives real input; the other 7 ships in the roster receive an idle `ControlIntent` every frame — **there is no AI**, so they sit stationary as grid dressing.
+
+## HUD
+
+Plain text rendering, no sprites/textures: top-left shows per-checkpoint boxes (filled once hit, or during a brief post-lap flash), lap count, current-lap time, and total time; bottom-right shows speed in km/h (`|physics.speed| * 3.6`, per `docs/core.md`'s unit convention) with a "BOOST" indicator while active. A separate debug window (`F1`) exposes render-layer visibility toggles (triggers/rails/reservation walls/wireframe — reservation walls default **visible**, since they're real gameplay geometry, not a debug aid) and live ±20%-range sliders over the player ship's handling constants for tuning exploration (not persisted back to the track).
+
+## Resource system integration
+
+Chain from XML to a playable map: the launcher config names a `Directory` resource location and a `Resources.xml`; that XML declares a `Track`-typed resource in a `Tracks` namespace with dependent material resources and a `<Definition>` carrying `<ModelFile>`/`<TrackData>`/`<TrackMeshes>`. `MapTungstenMonoxideDefinitionFactory` parses that definition; `StateMapLoadTungstenMonoxide` loads the whole `Tracks` namespace (resolving materials → programs → shaders → images first); `Map::load()` then runs as described above, and `StatePlayTungstenMonoxide::createGameObjects()` re-fetches the loaded resource. The ship's own model/material come from a separate `Game`-typed resource, loaded independently and rebuilt as an indexed model (unlike the track's non-indexed export).
+
+## Limitations
+
+- **Read-only.** No authoring, no save, no rebake; a `.mppmodel`/`.json` pair that's drifted out of sync fails to load rather than being repaired.
+- **Single, hardcoded track** — `"NewTrack"`/`"Tracks"` is a literal string in two places; the multi-map transition code path exists but is dead (it references a resource name that doesn't exist in the shipped config).
+- **No AI, no opponents, no multiplayer.** 7 of the 8 spawned ships never move.
+- **No race structure** beyond lap/checkpoint counting — no lap limit, start countdown, finish condition, or results screen. The only way to end a session is `Esc`.
+- **Placeholder ship visuals** — a single scaled box model shared by every ship, one texture, no per-ship identity.
+- **Audio is stubbed** — an FMOD Studio project exists in resources and is enabled in the launcher config, but the update hook that would drive it is empty; there is no engine sound, music, or impact SFX.
+- **The applib Entity/renderer system is unused** — present in the build but bypassed for everything gameplay-relevant.
+- **Input is keyboard-only and digital** — no gamepad, no analogue throttle/steer, no rebinding, no pause.
+- **Load-path constraints**: directory-based resource locations only; track meshes must be the exact 36-byte non-indexed export layout with a matching TrackData batch; auxiliary render geometry with an unresolvable material is silently dropped rather than erroring.
+- The debug physics-tuning sliders mutate the live ship's `tox::Physics` directly — a debugging aid, not a way to save tuning back to the track.

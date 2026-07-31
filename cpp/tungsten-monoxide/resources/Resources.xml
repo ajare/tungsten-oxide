@@ -215,8 +215,8 @@
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">
-                    <ModelFile>NewTrack.mppmodel</ModelFile>
-                    <TrackData>NewTrack.json</TrackData>
+                    <ModelFile>New_Track.mppmodel</ModelFile>
+                    <TrackData>New_Track.json</TrackData>
                     <TrackMeshes>
                         <Mesh>path-0-surface</Mesh>
                     </TrackMeshes>
