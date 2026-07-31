@@ -349,6 +349,46 @@ int main(int argc, char** argv) {
       launchSimulation.stepPhysics(launched, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
     check(!launched.physics.airborne && std::fabs(launched.physics.groundPos.y - 4.0) < 1e-9,
           "launched ship descends and lands normally");
+
+    // Simulation::meshPhysicsEnabled: ground contact, wall collision and airborne landing all come
+    // from the BVH alone, none of the corridor/MeshRegion machinery this whole file otherwise
+    // exercises. flatRoad matches the launch test above; wall is a vertical face at z=-10 whose
+    // normal faces back toward an oncoming ship (as an inner track wall would).
+    Track meshModeTrack = track;
+    CollisionTriangle wall;
+    wall.positions[0] = Vec3(15, 0, -10);
+    wall.positions[1] = Vec3(35, 0, -10);
+    wall.positions[2] = Vec3(25, 12, -10);
+    wall.normals[0] = wall.normals[1] = wall.normals[2] = Vec3(0, 0, -1);
+    meshModeTrack.collisionSurface =
+        std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad, wall});
+    Simulation meshSimulation(meshModeTrack);
+    meshSimulation.setMeshPhysicsEnabled(true);
+
+    Ship driving = shipAt(meshSimulation, meshModeTrack, {20, 4, -25});
+    driving.physics.speed = 40;
+    meshSimulation.stepPhysics(driving, 0.1, 1, 0, 0);
+    check(!driving.physics.airborne && std::fabs(driving.physics.groundPos.y - 4.0) < 1e-6 &&
+              driving.physics.groundPos.z > -25,
+          "mesh mode keeps a driving ship grounded on the BVH road surface");
+
+    Ship intoWall = shipAt(meshSimulation, meshModeTrack, {25, 4, -12});
+    intoWall.physics.speed = 40;
+    const double speedBeforeWall = intoWall.physics.speed;
+    meshSimulation.stepPhysics(intoWall, 0.1, 1, 0, 0);
+    check(intoWall.physics.groundPos.z < -9.5,
+          "mesh mode wall bounce stops the ship at the BVH wall instead of passing through it");
+    check(std::fabs(intoWall.physics.speed) < speedBeforeWall,
+          "mesh mode wall bounce sheds speed on impact");
+
+    Ship falling = shipAt(meshSimulation, meshModeTrack, {20, 20, 0});
+    falling.physics.airborne = true;
+    falling.physics.verticalVel = -15;
+    falling.physics.speed = 0;
+    for (int step = 0; falling.physics.airborne && step < 200; ++step)
+      meshSimulation.stepPhysics(falling, Consts::MAX_PHYSICS_STEP, 0, 0, 0);
+    check(!falling.physics.airborne && std::fabs(falling.physics.groundPos.y - 4.0) < 1e-6,
+          "mesh mode airborne ship lands purely via BVH raycast, with no MeshRegion/corridor check");
   }
   {
     json transformed = readJson(fixtureDir / "transformed-square.json");

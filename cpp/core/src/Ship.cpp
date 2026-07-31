@@ -7,15 +7,9 @@
 #include <optional>
 
 namespace tox {
+namespace {
 
-StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer) {
-  Ship& ship = *this;
-
-  Physics& p = ship.physics;
-  const Vec3 previousPosition = p.groundPos;
-  const bool startedAirborne = p.airborne;
-  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
-
+void integrateSpeed(Physics& p, double dt, double throttle, double brake) {
   if (throttle) {
     p.speed += p.accel * dt;
   } else if (brake) {
@@ -28,6 +22,131 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
       p.speed = std::min(0.0, p.speed + decay);
   }
   p.speed = TrackCore::clamp(p.speed, p.maxReverse, effectiveMaxSpeed(p));
+}
+
+// Debug/experimental alternate physics mode (Simulation::meshPhysicsEnabled): ground contact, wall
+// collision and airborne/landing all come directly from the baked collision BVH instead of the
+// analytic corridor/MeshRegion math the rest of this file uses. No corridor sampling, no
+// MeshRegion ownership/ elevationAt/slideAlongRails -- see docs/MESH_PHYSICS_PLAN.md. Zone/trigger
+// *hosting* still needs a corridor Sample and an owning MeshRegion (Simulation::detectZoneTriggers'
+// signature), so this still computes those as cheap read-only inputs to that gameplay-trigger
+// system; their results are never used for ship positioning here, only Simulation::detectTriggers
+// (checkpoints/finish) is purely position-based and needs nothing from this mode.
+StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, double throttle,
+                           double brake, double steer) {
+  Physics& p = ship.physics;
+  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
+  const TrackCollisionSurface& bvh = *simulation.track().collisionSurface;
+
+  integrateSpeed(p, dt, throttle, brake);
+  const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
+
+  Vec3 surfaceNormal = p.up;
+  Vec3 surfaceRenderPos = p.groundPos;
+  bool railHit = false;  // mesh mode has no rail concept -- walls are ordinary BVH geometry
+
+  const Vec3 steerAxis = p.airborne ? UP : surfaceNormal;
+  const double sgn = p.speed > 0 ? 1.0 : (p.speed < 0 ? -1.0 : 1.0);
+  const double effectiveTurn = p.turnRate * (1 - 0.35 * speedRatio) * sgn;
+  p.forward = applyAxisAngle(p.forward, steerAxis, steer * effectiveTurn * dt);
+  tangentize(p.forward, steerAxis, p.forward);
+
+  const double gripThisFrame = p.grip * (0.5 + 0.5 * (1 - std::min(std::fabs(steer) * speedRatio, 1.0)));
+  const double toForward = signedAngleAbout(p.moveDir, p.forward, steerAxis);
+  p.moveDir = applyAxisAngle(p.moveDir, steerAxis, toForward * std::min(gripThisFrame * dt, 1.0));
+  tangentize(p.moveDir, steerAxis, p.forward);
+
+  const Vec3 vel = p.moveDir * p.speed;
+
+  if (p.airborne) {
+    p.verticalVel -= p.gravity * dt;
+    const Vec3 nextPos = p.groundPos + Vec3(vel.x, p.verticalVel, vel.z) * dt;
+    if (const auto hit = bvh.sweep(p.groundPos, nextPos)) {
+      const double impactSpeed = std::max(0.0, -p.verticalVel);
+      landOnSurface(ship, hit->normal);
+      p.landingBounce += std::min(3.2, impactSpeed * 0.09);
+      p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
+      p.groundPos = hit->position;
+      surfaceRenderPos = hit->position;
+      surfaceNormal = hit->normal;
+    } else {
+      p.groundPos = nextPos;
+      surfaceRenderPos = nextPos;
+      surfaceNormal = UP;
+    }
+  } else if (hasTranslation) {
+    Vec3 intended = p.groundPos + Vec3(vel.x, 0, vel.z) * dt;
+    // Lateral/wall probe: the same one-sided swept query ground contact below and the analytic
+    // path's own airborne landing already use, just run horizontally. sweep() only accepts a hit
+    // the ship is actually moving into (dot(displacement, normal) < 0), which is exactly the
+    // "wall in front of me" case and naturally ignores geometry merely brushed tangentially.
+    if (const auto wall = bvh.sweep(p.groundPos, intended)) {
+      const Vec3 wallN = wall->normal;
+      const double into = glm::dot(vel, wallN);
+      if (into < 0) {
+        Vec3 bounced = vel + wallN * (-into * (1 + weightRestitution(p)));
+        addImpactJolt(p, -into);
+        // Gear-preserving, as every other wall bounce in this file: a plain length/normalize
+        // decomposition is always non-negative and forces the car into forward gear on contact.
+        const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+        const double mag = glm::length(bounced);
+        p.speed = gear * mag * weightSpeedRetain(p);
+        if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
+      }
+      intended = wall->position;
+    }
+    if (const auto ground = bvh.nearestAlongAxis(Vec3(intended.x, p.groundPos.y, intended.z), p.up, 4.0)) {
+      p.groundPos = ground->position;
+      surfaceRenderPos = ground->position;
+      surfaceNormal = ground->normal;
+      tangentize(p.moveDir, surfaceNormal, p.forward);
+      tangentize(p.forward, surfaceNormal, p.moveDir);
+    } else {
+      beginAirborne(ship, vel);
+      p.groundPos = Vec3(intended.x, p.groundPos.y, intended.z);
+      surfaceRenderPos = p.groundPos;
+    }
+  } else {
+    if (const auto ground = bvh.nearestAlongAxis(p.groundPos, p.up, 4.0)) {
+      p.groundPos = ground->position;
+      surfaceRenderPos = ground->position;
+      surfaceNormal = ground->normal;
+    } else {
+      beginAirborne(ship, Vec3(0, 0, 0));
+      surfaceRenderPos = p.groundPos;
+      surfaceNormal = p.up;
+    }
+  }
+
+  tickBoost(ship, dt);
+  const Sample zoneSample = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
+  const MeshRegion* zoneRegion =
+      simulation.surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, zoneSample);
+  if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample, zoneRegion);
+
+  simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);
+  ship.prevTriggerPos = p.groundPos;
+
+  if (p.airborne && p.groundPos.y < simulation.track().trackFloorY) {
+    simulation.respawn(ship);
+    return {surfaceNormal, surfaceRenderPos, true, railHit};
+  }
+  return {surfaceNormal, surfaceRenderPos, false, railHit};
+}
+
+}  // namespace
+
+StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer) {
+  Ship& ship = *this;
+  if (simulation.meshPhysicsEnabled() && simulation.track().collisionSurface)
+    return stepMeshPhysics(ship, simulation, dt, throttle, brake, steer);
+
+  Physics& p = ship.physics;
+  const Vec3 previousPosition = p.groundPos;
+  const bool startedAirborne = p.airborne;
+  const bool hasTranslation = (throttle != 0.0) || (brake != 0.0) || std::fabs(p.speed) > 0.001;
+
+  integrateSpeed(p, dt, throttle, brake);
 
   const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
 
