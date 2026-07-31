@@ -219,6 +219,8 @@
                     <TrackData>New_Track.json</TrackData>
                     <TrackMeshes>
                         <Mesh>path-0-surface</Mesh>
+                        <Mesh>path-0-rail-left</Mesh>
+                        <Mesh>path-0-rail-right</Mesh>
                     </TrackMeshes>
                 </Definition>
             </Definitions>
