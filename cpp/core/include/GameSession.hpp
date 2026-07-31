@@ -60,6 +60,10 @@ public:
   const Simulation& simulation() const { return simulation_; }
   const Track& track() const { return *track_; }
 
+  // Forwards to Simulation::setMeshPhysicsEnabled -- the debug UI's entry point for the
+  // mesh-vs-analytic physics toggle, without exposing broader mutable access to simulation_.
+  void setMeshPhysicsEnabled(bool enabled) { simulation_.setMeshPhysicsEnabled(enabled); }
+
 private:
   std::shared_ptr<Track> track_;
   Simulation simulation_;

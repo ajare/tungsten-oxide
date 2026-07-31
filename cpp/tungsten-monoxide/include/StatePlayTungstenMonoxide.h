@@ -71,6 +71,10 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   // hidden for debugging (e.g. to see the physics wall's alignment without the mesh in the way).
   bool mShowReservationWallsDebug{true};
   bool mShowWireframeDebug{false};
+  // Live toggle for Simulation::meshPhysicsEnabled (docs/MESH_PHYSICS_PLAN.md): when set, every
+  // ship's physics switches to deriving ground/wall/airborne contact purely from the baked
+  // collision BVH instead of the analytic corridor/MeshRegion math, on the very next physics step.
+  bool mMeshPhysicsDebug{false};
   // Snapshot of ship 0's handling-applied physics, taken once in createGameObjects, so the
   // Physics debug tab's slider ranges (+-20%) and Reset buttons have a stable baseline that
   // isn't itself perturbed by earlier slider edits.
