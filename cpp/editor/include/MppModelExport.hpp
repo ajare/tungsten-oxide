@@ -80,8 +80,10 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track,
 // texture definitions.
 //
 // Model and schema-10 JSON filenames are emitted as <ModelFile> and <TrackData>. <TrackMeshes>
-// contains every baked PathSurface/MeshSurface batch id exactly once; Map::load validates those
-// selected .mppmodel triangles against the JSON bake before making them authoritative collision.
+// contains every baked PathSurface/MeshSurface/ReservationWall/PathRail/MeshRail batch id exactly
+// once -- everything a ship can physically contact, i.e. Map.cpp's gameplayKind() set (PathShell
+// stays out -- render-only); Map::load validates those selected .mppmodel triangles against the
+// JSON bake before making them authoritative collision.
 // All paths are resource-directory relative. Starting-grid poses are deliberately not duplicated
 // here: Map::load regenerates and triangle-settles the fixed eight-slot grid from TrackData.
 std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,

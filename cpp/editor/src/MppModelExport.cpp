@@ -274,8 +274,15 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
   xml += "\t\t\t\t\t<ModelFile>" + xmlEscape(mppModelFileName) + "</ModelFile>\n";
   xml += "\t\t\t\t\t<TrackData>" + xmlEscape(trackDataFileName) + "</TrackData>\n";
   xml += "\t\t\t\t\t<TrackMeshes>\n";
+  // Must stay in lock-step with Map.cpp's gameplayKind() (cpp/tungsten-monoxide/src/Map.cpp) --
+  // same set of kinds, same reasoning: everything a ship can physically contact goes into the
+  // collision BVH (drivable surfaces, reservation walls, Path- and MeshRegion-authored rails).
+  // PathShell stays out -- render-only.
   for (const tox::GeometryBatch& batch : bakedTrack.geometry) {
-    if (batch.kind != tox::GeometryKind::PathSurface && batch.kind != tox::GeometryKind::MeshSurface) continue;
+    if (batch.kind != tox::GeometryKind::PathSurface && batch.kind != tox::GeometryKind::MeshSurface &&
+        batch.kind != tox::GeometryKind::ReservationWall && batch.kind != tox::GeometryKind::PathRail &&
+        batch.kind != tox::GeometryKind::MeshRail)
+      continue;
     xml += "\t\t\t\t\t\t<Mesh>" + xmlEscape(batch.id) + "</Mesh>\n";
   }
   xml += "\t\t\t\t\t</TrackMeshes>\n";
