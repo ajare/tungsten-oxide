@@ -11,8 +11,9 @@ analytic curve/corridor math (`Simulation::sampleTrack` /`projectToSurface`
 /`curvedSurfaceFrame`, `MeshRegion::elevationAt`/`slideAlongRails`,
 `meshRegions` bounds checks). Toggleable live, mid-race, from the existing
 in-game debug ImGui overlay in `StatePlayTungstenMonoxide`. Analytic mode
-remains the default and the only mode covered by the golden trace regression
-suite (`cpp/test-data/traces`).
+was the default at the time this plan was written and remains the only mode
+covered by the golden trace regression suite (`cpp/test-data/traces`) — see
+"Decisions locked in" below for the point where the default flipped.
 
 Decisions locked in (see conversation record, not repeated here in detail):
 - Global flag, not per-ship; live-toggleable.
@@ -26,7 +27,13 @@ Decisions locked in (see conversation record, not repeated here in detail):
   export path (today it's analytic/query-only) so it lands in the BVH too.
 - Mesh mode is airborne/landing-pure (BVH raycast only, no
   `meshRegions`/corridor bounds bookkeeping).
-- Default mode is analytic; mesh mode is opt-in via the debug checkbox.
+- Default mode was analytic at merge, with mesh mode opt-in via the debug
+  checkbox — **superseded**: `Simulation::meshPhysicsEnabled_` now defaults
+  to `true` (mesh physics is the shipped default; analytic mode is the
+  live-toggleable fallback). The golden trace regression suite still only
+  covers analytic mode, so `parity`/`raw_parity`/`raw_session_*_parity` pin
+  their `Simulation`/`GameSession` instances to analytic mode explicitly
+  rather than relying on the (now-flipped) default.
 
 Work one step at a time. After each step: build, run `ctest --test-dir
 cpp/build -C Release --output-on-failure`, and commit before moving to the

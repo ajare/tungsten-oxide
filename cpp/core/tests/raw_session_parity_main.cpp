@@ -241,6 +241,9 @@ static int runInitTrace(const json& trace, const std::string& name, double atol,
   auto trackPtr = std::make_shared<Track>(std::move(*loaded.track));
   const int shipCount = trace.at("meta").at("shipCount").get<int>();
   GameSession session(trackPtr, shipCount);
+  // Golden traces were captured under analytic-mode physics; pin explicitly rather than relying
+  // on Simulation's default, which now defaults to mesh physics (see Simulation.hpp).
+  session.setMeshPhysicsEnabled(false);
   compareRoster(name, -1, session.ships(), trace.at("roster"), atol, rtol);
   return 0;
 }
@@ -254,6 +257,9 @@ static int runStepTrace(const json& trace, const std::string& name, double atol,
   auto trackPtr = std::make_shared<Track>(std::move(*loaded.track));
   const int shipCount = trace.at("meta").at("shipCount").get<int>();
   GameSession session(trackPtr, shipCount);
+  // Golden traces were captured under analytic-mode physics; pin explicitly rather than relying
+  // on Simulation's default, which now defaults to mesh physics (see Simulation.hpp).
+  session.setMeshPhysicsEnabled(false);
 
   const auto& steps = trace.at("steps");
   for (size_t i = 0; i < steps.size(); ++i) {

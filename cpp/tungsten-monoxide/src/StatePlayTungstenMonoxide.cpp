@@ -571,7 +571,7 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
       if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
       if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
       if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
-      if (ImGui::Checkbox("Mesh Physics (experimental)", &mMeshPhysicsDebug) && mGameSession)
+      if (ImGui::Checkbox("Mesh Physics", &mMeshPhysicsDebug) && mGameSession)
         mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
       if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
         // Resync on enable so the comparison always starts from "right now", not wherever the

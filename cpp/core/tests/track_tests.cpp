@@ -274,6 +274,7 @@ int main(int argc, char** argv) {
   const auto overlapTrack = Track::fromFile(fixtureDir / "overlapping-elevations.json");
   if (overlapTrack) {
     Simulation simulation(*overlapTrack.track);
+    simulation.setMeshPhysicsEnabled(false);
     const Sample upperSample = simulation.sampleTrack(0, 11, 0);
     const MeshRegion* upper = simulation.surfaceOwnerAt(0, 0, 11, upperSample);
     const Sample lowerSample = simulation.sampleTrack(0, 1, 0);
@@ -290,6 +291,7 @@ int main(int argc, char** argv) {
   if (holeTrack) {
     const Track& track = *holeTrack.track;
     Simulation simulation(track);
+    simulation.setMeshPhysicsEnabled(false);
     Ship ship = shipAt(simulation, track, {20, 4, -25}, {0, 0, -1});
     ship.physics.speed = 60;
     simulation.stepPhysics(ship, 0.1, 0, 0, 0);
@@ -328,6 +330,10 @@ int main(int argc, char** argv) {
     launchTrack.collisionSurface =
         std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
     Simulation launchSimulation(launchTrack);
+    // This diagnostic tests the analytic launch/apex pipeline specifically (distinct from the
+    // dedicated mesh-mode simulation just below, which explicitly opts in) even though
+    // launchTrack carries a collisionSurface -- pin explicitly rather than relying on the default.
+    launchSimulation.setMeshPhysicsEnabled(false);
     Ship launched = shipAt(launchSimulation, launchTrack, {20, 4, -25});
     launchSimulation.launchShip(launched, 5.0);
     check(launched.physics.airborne &&
@@ -510,6 +516,7 @@ int main(int argc, char** argv) {
     const auto loaded = Track::fromJson(transformed.dump());
     if (loaded) {
       Simulation simulation(*loaded.track);
+      simulation.setMeshPhysicsEnabled(false);
       Ship ship = shipAt(simulation, *loaded.track, {120, 8, 35});
       ship.physics.speed = 60;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
@@ -525,6 +532,7 @@ int main(int argc, char** argv) {
     const auto loaded = Track::fromJson(overlap.dump());
     if (loaded) {
       Simulation simulation(*loaded.track);
+      simulation.setMeshPhysicsEnabled(false);
       Ship ship = shipAt(simulation, *loaded.track, {10, 12, 0}, {1, 0, 0});
       ship.physics.speed = 80;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
@@ -536,6 +544,7 @@ int main(int argc, char** argv) {
     const auto bridge = Track::fromFile(fixtureDir / "corridor-mesh-bridge.json");
     if (bridge) {
       Simulation simulation(*bridge.track);
+      simulation.setMeshPhysicsEnabled(false);
       Ship ship = shipAt(simulation, *bridge.track, {0, 0, 35});
       ship.physics.speed = 80;
       simulation.stepPhysics(ship, 0.1, 0, 0, 0);
@@ -589,6 +598,7 @@ int main(int argc, char** argv) {
       check(trigger != effects.track->triggers.end() && trigger->center.y == 5,
             "mesh-hosted trigger compiles at region elevation");
       Simulation simulation(*effects.track);
+      simulation.setMeshPhysicsEnabled(false);
       Ship ship = shipAt(simulation, *effects.track, {0, 5, 0});
       Ship otherShip = shipAt(simulation, *effects.track, {40, 5, 0});
       simulation.stepPhysics(ship, 1.0 / 120.0, 0, 0, 0);
@@ -609,6 +619,7 @@ int main(int argc, char** argv) {
             "jump zone survives loading and baking");
       if (jumpTrack) {
         Simulation jumpSimulation(*jumpTrack.track);
+        jumpSimulation.setMeshPhysicsEnabled(false);
         Ship jumpingShip = shipAt(jumpSimulation, *jumpTrack.track, {0, 5, 0});
         jumpSimulation.stepPhysics(jumpingShip, 1.0 / 120.0, 0, 0, 0);
         check(jumpingShip.physics.airborne && jumpingShip.zoneInside["mesh-jump"] &&
@@ -641,6 +652,7 @@ int main(int argc, char** argv) {
         checkClose(middle.pos.x, 6.0, 1e-9, "constant width center offset shifts baked centerline");
         checkClose(track.triggers[0].center.x, 6.0, 1e-9, "path-hosted trigger follows shifted centerline");
         Simulation offsetSimulation(track);
+        offsetSimulation.setMeshPhysicsEnabled(false);
         Ship offsetShip = shipAt(offsetSimulation, track, {6, 0, 0});
         const Sample offsetSample = offsetSimulation.sampleTrack(6, 0, 0);
         offsetSimulation.detectZoneTriggers(offsetShip, offsetSample, nullptr);
@@ -676,6 +688,7 @@ int main(int argc, char** argv) {
       // intermediates, so one crossing both fires and immediately laps.
       std::vector<TriggerNotice> notices;
       Simulation noticeSim(*effects.track);
+      noticeSim.setMeshPhysicsEnabled(false);
       noticeSim.now = [] { return 42.0; };
       noticeSim.onTriggerFired = [&](Ship&, const Trigger&, const std::string&, TriggerNotice notice) {
         notices.push_back(notice);
@@ -750,6 +763,7 @@ int main(int argc, char** argv) {
       }
     }
     Simulation simulation(track);
+    simulation.setMeshPhysicsEnabled(false);
     Ship ship;
     const Frame& startFrame = path.centerline.front();
     Sample startSample;
@@ -803,6 +817,7 @@ int main(int argc, char** argv) {
     // ship-factory roster, exercised on a closed, reversed-start, banked path
     // with a non-uniform width (30..52) so lateral compression can engage.
     Simulation gridSim(track);
+    gridSim.setMeshPhysicsEnabled(false);
     const std::vector<Pose> poses = StartGrid::startingGridPoses(gridSim, track, 8);
     check(poses.size() == 8, "startingGridPoses produces the requested roster size");
     bool allFinite = true, allUnit = true;
@@ -832,6 +847,7 @@ int main(int argc, char** argv) {
     // scripted intents, not this focused unit test).
     auto trackPtr = std::make_shared<Track>(*pathLoaded.track);
     GameSession session(trackPtr, 1);
+    session.setMeshPhysicsEnabled(false);
     check(session.ships().size() == 1, "GameSession builds the requested roster size");
     if (!session.ships().empty()) {
       check(session.ships()[0].race.finishId == "curve-finish" && session.ships()[0].race.intermediateIds.empty(),
@@ -877,6 +893,9 @@ int main(int argc, char** argv) {
     flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
     overrideTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
     Simulation overrideSim(*overrideTrack);
+    // Pinned false (despite mesh physics now being the default) so the assertion below actually
+    // exercises the override forcing mesh mode against an ambient flag that disagrees with it.
+    overrideSim.setMeshPhysicsEnabled(false);
 
     Ship forcedMesh = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
     forcedMesh.physics.speed = 20;
@@ -1567,6 +1586,7 @@ int main(int argc, char** argv) {
     if (loaded) {
       Track& track = *loaded.track;
       Simulation analytical(track);
+      analytical.setMeshPhysicsEnabled(false);
       const Pose start = StartGrid::startingGridPoses(analytical, track, 1).front();
       Vec3 right = normalizeSafe(glm::cross(start.up, start.forward));
       const Vec3 center = start.pos + start.up * 2.0;
@@ -1588,6 +1608,9 @@ int main(int argc, char** argv) {
       track.collisionSurface = std::make_shared<TrackCollisionSurface>(
           std::vector<CollisionTriangle>{first, second});
       Simulation external(track);
+      // Tests the analytic pipeline's late BVH-authoritative-contact override specifically (see
+      // docs/core.md's "Final collision-surface pass"), not full mesh mode -- pin explicitly.
+      external.setMeshPhysicsEnabled(false);
 
       Ship parked = shipAt(external, track, start.pos, start.forward);
       const StepResult parkedStep = parked.step(external, 1.0 / 120.0, 0, 0, 0);
@@ -1724,6 +1747,7 @@ int main(int argc, char** argv) {
             "M6 capped-landing diag: the reservation region has a floor to land on");
       if (region != trackPtr->meshRegions.end() && !region->polygons.empty()) {
         Simulation sim(*trackPtr);
+        sim.setMeshPhysicsEnabled(false);
         // Straight down the middle of the void's footprint (centerline x=0), at the reservation's
         // own midpoint distance along z -- squarely over the floor, not near an edge.
         Ship ship = shipAt(sim, *trackPtr, Vec3(0.0, region->elevation + 5.0, 700.0), Vec3(0, 0, 1));
@@ -1777,6 +1801,7 @@ int main(int argc, char** argv) {
     if (loaded) {
       auto trackPtr = std::make_shared<Track>(*loaded.track);
       Simulation sim(*trackPtr);
+      sim.setMeshPhysicsEnabled(false);
       const auto reg = std::find_if(trackPtr->meshRegions.begin(), trackPtr->meshRegions.end(),
                                     [](const MeshRegion& r) { return r.id.rfind("reservation-res1", 0) == 0; });
       check(reg != trackPtr->meshRegions.end() && !reg->rails.empty() && !reg->polygons.empty(),
@@ -1868,6 +1893,7 @@ int main(int argc, char** argv) {
     check(static_cast<bool>(loaded), "reverse-gear diag track loads: " + loaded.error);
     if (loaded) {
       Simulation sim(*loaded.track);
+      sim.setMeshPhysicsEnabled(false);
       Ship ship;
       const auto& centerline = loaded.track->paths[0].centerline;
       // Start near the end of the path (past the reservation, t~0.86), offset 3 units laterally
@@ -1937,6 +1963,7 @@ int main(int argc, char** argv) {
     check(static_cast<bool>(loaded), "reverse-width diag track loads: " + loaded.error);
     if (loaded) {
       Simulation sim(*loaded.track);
+      sim.setMeshPhysicsEnabled(false);
       Ship ship;
       const auto& centerline = loaded.track->paths[0].centerline;
       const Frame& startFrame = centerline[static_cast<std::size_t>(std::lround(0.85 * (centerline.size() - 1)))];
@@ -2013,6 +2040,7 @@ int main(int argc, char** argv) {
     check(static_cast<bool>(loaded), "wall-pinning diag track loads: " + loaded.error);
     if (loaded) {
       Simulation sim(*loaded.track);
+      sim.setMeshPhysicsEnabled(false);
       const auto& centerline = loaded.track->paths[0].centerline;
       const Frame& startFrame = centerline[static_cast<std::size_t>(std::lround(0.16 * (centerline.size() - 1)))];
       Sample startSample;
@@ -2084,6 +2112,7 @@ int main(int argc, char** argv) {
     check(static_cast<bool>(loaded), "unsteered-curve diag track loads: " + loaded.error);
     if (loaded) {
       Simulation sim(*loaded.track);
+      sim.setMeshPhysicsEnabled(false);
       const Frame& startFrame = loaded.track->paths[0].centerline[0];
       Sample startSample;
       startSample.pos = startFrame.pos;

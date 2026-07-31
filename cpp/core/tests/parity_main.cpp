@@ -280,6 +280,9 @@ int main(int argc, char** argv) {
       track = loadTrack(trace.at("world"));
     }
     Simulation sim(track);
+    // Golden traces were captured under analytic-mode physics; pin explicitly rather than relying
+    // on Simulation's default, which now defaults to mesh physics (see Simulation.hpp).
+    sim.setMeshPhysicsEnabled(false);
     const double traceAtol = rawTrack ? rawAtol : atol;
     const double traceRtol = rawTrack ? rawRtol : rtol;
     Worst& categoryWorst = rawTrack ? rawWorst : bakedWorst;

@@ -71,11 +71,13 @@ public:
 
   const Track& track() const { return track_; }
 
-  // Debug/experimental toggle: when true, Ship::step derives ground contact, wall collision and
-  // airborne/landing purely from the baked collision BVH (Track::collisionSurface) instead of the
-  // analytic corridor/MeshRegion math. Off by default -- analytic mode is the only mode the golden
-  // trace regression suite covers. Live-toggleable mid-session; a GameSession forwards this from
-  // the in-game debug UI (see StatePlayTungstenMonoxide's Debug tab).
+  // When true, Ship::step derives ground contact, wall collision and airborne/landing purely from
+  // the baked collision BVH (Track::collisionSurface) instead of the analytic corridor/MeshRegion
+  // math. On by default -- mesh physics is the shipped default mode; analytic mode remains
+  // available as a live-toggleable fallback and is what the golden trace regression suite covers
+  // (parity/raw_parity pin Simulation/GameSession to analytic mode explicitly rather than relying
+  // on this default, so the suite's coverage is unaffected by this default's value). A GameSession
+  // forwards this from the in-game debug UI (see StatePlayTungstenMonoxide's Debug tab).
   bool meshPhysicsEnabled() const { return meshPhysicsEnabled_; }
   void setMeshPhysicsEnabled(bool enabled) { meshPhysicsEnabled_ = enabled; }
 
@@ -115,7 +117,7 @@ public:
 
 private:
   const Track& track_;
-  bool meshPhysicsEnabled_{false};
+  bool meshPhysicsEnabled_{true};
 };
 
 }  // namespace tox

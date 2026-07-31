@@ -81,7 +81,9 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   // Live toggle for Simulation::meshPhysicsEnabled (docs/MESH_PHYSICS_PLAN.md): when set, every
   // ship's physics switches to deriving ground/wall/airborne contact purely from the baked
   // collision BVH instead of the analytic corridor/MeshRegion math, on the very next physics step.
-  bool mMeshPhysicsDebug{false};
+  // Mesh physics is now the shipped default (Simulation::meshPhysicsEnabled_ defaults true), so
+  // this starts checked to match the GameSession it mirrors; unchecking falls back to analytic.
+  bool mMeshPhysicsDebug{true};
   // "Show Physics Ghost": renders mGhostShip -- ship 0 stepped every frame with the same input but
   // forced onto whichever physics mode isn't currently active (via GameSession::stepGhost) -- as a
   // wireframe overlay, so the two methods' predicted positions can be compared live. Resynced to
