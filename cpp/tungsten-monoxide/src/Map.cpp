@@ -196,7 +196,9 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 
   auto collisionTriangles = buildCollisionTriangles(this, serializer, *mTrack, mTrackMeshNames);
   if (collisionTriangles.empty())
-    throw application::resourcesystem::ResourceException(this, "TrackMeshes produced no collision triangles.");
+    throw application::resourcesystem::ResourceException(
+        this, "TrackMeshes produced no collision triangles -- this track has no drivable/collidable geometry "
+              "and cannot be loaded; re-export it from the editor after adding a path or mesh region.");
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
   tox::Simulation simulation(*mTrack);
