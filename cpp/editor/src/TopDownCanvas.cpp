@@ -163,6 +163,33 @@ ImU32 elevationFillColor(double y, double minY, double maxY) {
   const int g = static_cast<int>(std::lround(210.0 + (55.0 - 210.0) * t));
   return IM_COL32(r, g, 55, 255);
 }
+// Road-fill color for Camber mode: white at zero (no roll, or a straight/near-straight section
+// with no meaningful turn direction -- |curvature| below kCamberCurvatureEpsilon), blending toward
+// saturated green as the road banks INTO the turn (on-camber) or saturated red as it banks AWAY
+// from the turn (off-camber), reaching full saturation at kCamberSaturationRollRad of roll.
+//
+// `curvature` is TrackCore::pathSignedCurvatureAt's signed value (positive = left turn, i.e. away
+// from cross(UP, tangent) -- see its doc comment). Combined with roll's own sign convention from
+// TrackBake.cpp's frame() (edgeRight = h*cos(-roll) + bn*sin(-roll), where h = cross(UP, tangent)
+// and bn defaults to +up): a positive roll always banks the h/edgeRight side down and the -h side
+// up, regardless of heading. Working through both turn directions against that fixed relationship
+// shows the two verdicts share the SAME sign as (roll * curvature) for off-camber and OPPOSITE
+// signs for on-camber -- e.g. a left turn (positive curvature) with positive roll lowers the
+// outside (right/h) edge, which is banking away from the turn: off-camber.
+constexpr double kCamberSaturationRollRad = 45.0 * std::numbers::pi / 180.0;
+constexpr double kCamberCurvatureEpsilon = 1e-4;  // 1/metres
+ImU32 camberFillColor(double rollRad, double curvature) {
+  if (std::abs(curvature) < kCamberCurvatureEpsilon) return IM_COL32(255, 255, 255, 255);
+  const double t = std::clamp(std::abs(rollRad) / kCamberSaturationRollRad, 0.0, 1.0);
+  const bool onCamber = (rollRad * curvature) < 0.0;
+  const double targetR = onCamber ? 40.0 : 210.0;
+  const double targetG = onCamber ? 210.0 : 50.0;
+  constexpr double targetB = 55.0;
+  const int r = static_cast<int>(std::lround(255.0 + (targetR - 255.0) * t));
+  const int g = static_cast<int>(std::lround(255.0 + (targetG - 255.0) * t));
+  const int b = static_cast<int>(std::lround(255.0 + (targetB - 255.0) * t));
+  return IM_COL32(r, g, b, 255);
+}
 
 // Position-point node fill: blue (low) -> teal -> warm (high). ElevationView.cpp has its own
 // independent copy of this same function for its own node fill, per this codebase's established
@@ -201,13 +228,17 @@ void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& ca
 
 // `mode`: Banked (default) offsets
 // edges by each frame's baked, banked `edgeRight` and fills with a flat color, matching
-// TrackCore.buildEdges' non-flat ribbon fill. Flat/Elevation instead offset by the
+// TrackCore.buildEdges' non-flat ribbon fill. Flat/Elevation/Camber instead offset by the
 // UNROLLED `h` axis (the track's plan-view footprint (width only)
-// without banking distorting the top-down shape) and fill each segment by interpolated roll or
-// elevation (rollFillColor/elevationFillColor) instead of a flat color. `minElev`/`maxElev` are
-// ignored outside Elevation mode.
+// without banking distorting the top-down shape) and fill each segment by interpolated roll,
+// elevation, or camber verdict (rollFillColor/elevationFillColor/camberFillColor) instead of a
+// flat color. `minElev`/`maxElev` are ignored outside Elevation mode. `definition` is the
+// pre-bake PathDefinition backing `path` -- only used in Camber mode, to evaluate analytical
+// curvature via TrackCore::pathSignedCurvatureAt (see that function's doc comment for why this
+// isn't derived from the baked frames themselves).
 void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Path& path,
-                   TopDownView::RenderMode mode, double minElev, double maxElev, bool isCurrent) {
+                   const tox::PathDefinition& definition, TopDownView::RenderMode mode, double minElev, double maxElev,
+                   bool isCurrent) {
   const std::size_t n = path.centerline.size();
   if (n < 2) return;
   const bool flatEdges = mode != TopDownView::RenderMode::Banked;
@@ -240,6 +271,10 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
       fillColor = rollFillColor((fi.roll + fj.roll) * 0.5 * 180.0 / std::numbers::pi);
     } else if (mode == TopDownView::RenderMode::Elevation) {
       fillColor = elevationFillColor((fi.pos.y + fj.pos.y) * 0.5, minElev, maxElev);
+    } else if (mode == TopDownView::RenderMode::Camber) {
+      const double curvatureI = tox::pathSignedCurvatureAt(definition, i, n);
+      const double curvatureJ = tox::pathSignedCurvatureAt(definition, j, n);
+      fillColor = camberFillColor((fi.roll + fj.roll) * 0.5, (curvatureI + curvatureJ) * 0.5);
     }
 
     if (fi.reservationHalfGap <= 1e-9 && fj.reservationHalfGap <= 1e-9) {
@@ -1885,7 +1920,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         }
     }
     for (std::size_t i = 0; i < baked->paths.size(); ++i)
-      drawBakedPath(drawList, canvasOrigin, view, baked->paths[i], view.renderMode(), minElev, maxElev,
+      drawBakedPath(drawList, canvasOrigin, view, baked->paths[i], baked->definition.paths[i], view.renderMode(), minElev, maxElev,
                     static_cast<int>(i) == state.currentPathIndex());
     drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
     drawReservationWalls(drawList, canvasOrigin, view, baked->meshRegions, state.selectedReservationId());

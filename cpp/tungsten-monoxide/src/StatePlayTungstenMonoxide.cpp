@@ -228,12 +228,13 @@ void StatePlayTungstenMonoxide::createGameObjects(
   mShipVisualStates.resize(mGameSession->ships().size());
   for (size_t i = 0; i < mGameSession->ships().size(); ++i) {
     mShipSceneModels.push_back(mScene->add3dModel(mShipModel));
-    auto const& physics = mGameSession->ships()[i].physics;
+    auto const& ship = mGameSession->ships()[i];
+    auto const& physics = ship.physics;
     mShipVisualStates[i].groundPos = physics.groundPos;
-    mShipVisualStates[i].up = physics.up;
+    mShipVisualStates[i].up = ship.renderNormal;
     mShipVisualStates[i].airborne = physics.airborne;
-    applyShipTransform(mShipSceneModels[i], physics.groundPos + physics.up * 1.0,
-                       physics.up, physics.forward, 0, 0);
+    applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * 1.0,
+                       ship.renderNormal, physics.forward, 0, 0);
   }
   applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
 }
@@ -342,7 +343,8 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
 void StatePlayTungstenMonoxide::updateShips(float frameTime) {
   if (!mGameSession) return;
   for (size_t i = 0; i < mGameSession->ships().size(); ++i) {
-    auto const& physics = mGameSession->ships()[i].physics;
+    auto const& ship = mGameSession->ships()[i];
+    auto const& physics = ship.physics;
     auto& visual = mShipVisualStates[i];
     const bool landed = visual.airborne && !physics.airborne;
     if (landed) {
@@ -365,7 +367,7 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
       visual.groundPos = glm::mix(visual.groundPos, physics.groundPos, min(1.0, frameTime * 18.0));
     else
       visual.groundPos = physics.groundPos;
-    visual.up = tox::normalizeSafe(glm::mix(visual.up, physics.up, min(1.0, frameTime * 18.0)));
+    visual.up = tox::normalizeSafe(glm::mix(visual.up, ship.renderNormal, min(1.0, frameTime * 18.0)));
     if (!landed) {
       visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
       visual.landingBounceVel *= exp(-7.0 * frameTime);
