@@ -292,9 +292,11 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 
 }  // namespace
 
-StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer) {
+StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer,
+                      std::optional<bool> meshModeOverride) {
   Ship& ship = *this;
-  if (simulation.meshPhysicsEnabled() && simulation.track().collisionSurface)
+  const bool useMeshPhysics = meshModeOverride.value_or(simulation.meshPhysicsEnabled());
+  if (useMeshPhysics && simulation.track().collisionSurface)
     return stepMeshPhysics(ship, simulation, dt, throttle, brake, steer);
 
   Physics& p = ship.physics;

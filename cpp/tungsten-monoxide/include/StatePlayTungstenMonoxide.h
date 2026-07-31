@@ -43,6 +43,13 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   mpp::SceneModel3dPtr mTrackSceneModel;
   std::vector<mpp::SceneModel3dPtr> mShipSceneModels;
   std::unique_ptr<tox::GameSession> mGameSession;
+  // "Show Physics Ghost" debug feature: a second instance of ship 0's model, driven by
+  // GameSession::stepGhost with whichever physics mode ISN'T currently active, so the two methods'
+  // predicted positions can be compared live. Shares mShipModel (no separate resource), rendered
+  // wireframe-only (the renderer has no translucency primitive to give it a true "ghost" look --
+  // see docs/MESH_PHYSICS_PLAN.md).
+  mpp::SceneModel3dPtr mGhostShipSceneModel;
+  tox::Ship mGhostShip;
 
   struct ShipVisualState {
     tox::Vec3 groundPos;
@@ -75,6 +82,12 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   // ship's physics switches to deriving ground/wall/airborne contact purely from the baked
   // collision BVH instead of the analytic corridor/MeshRegion math, on the very next physics step.
   bool mMeshPhysicsDebug{false};
+  // "Show Physics Ghost": renders mGhostShip -- ship 0 stepped every frame with the same input but
+  // forced onto whichever physics mode isn't currently active (via GameSession::stepGhost) -- as a
+  // wireframe overlay, so the two methods' predicted positions can be compared live. Resynced to
+  // ship 0's current state whenever this flips from off to on, so the comparison always starts from
+  // "right now" rather than wherever it last happened to be.
+  bool mShowPhysicsGhost{false};
   // Snapshot of ship 0's handling-applied physics, taken once in createGameObjects, so the
   // Physics debug tab's slider ranges (+-20%) and Reset buttons have a stable baseline that
   // isn't itself perturbed by earlier slider edits.
@@ -91,6 +104,7 @@ private:
   void applyRailsDebugVisibility() const;
   void applyReservationWallsDebugVisibility() const;
   void applyWireframeDebug() const;
+  void applyGhostVisibility() const;
   void renderShipPhysicsTab() const;
   void renderPhysicsSlider(char const* label, double& value, double initial) const;
 

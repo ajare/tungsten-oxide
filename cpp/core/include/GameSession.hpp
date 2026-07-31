@@ -64,6 +64,16 @@ public:
   // mesh-vs-analytic physics toggle, without exposing broader mutable access to simulation_.
   void setMeshPhysicsEnabled(bool enabled) { simulation_.setMeshPhysicsEnabled(enabled); }
 
+  // Debug/visualization only: advances a single externally-owned "what-if" ship by one rendered
+  // frame, using the same fixed-substep scheme as step() but forced onto whichever physics mode
+  // ISN'T currently active -- so a caller can render it as a "ghost" alongside a real roster ship
+  // running the actual active mode, to see where the other method would have put it. `ghost` is
+  // not a roster member: it isn't touched by step(), doesn't appear in events(), and any
+  // trigger/checkpoint crossing it causes is silently discarded rather than misattributed (see
+  // .cpp -- this session's onTriggerFired recovers a ship index via pointer arithmetic into
+  // ships_, which would be invalid for a ship living outside that vector).
+  void stepGhost(Ship& ghost, const ControlIntent& intent, double dt);
+
 private:
   std::shared_ptr<Track> track_;
   Simulation simulation_;

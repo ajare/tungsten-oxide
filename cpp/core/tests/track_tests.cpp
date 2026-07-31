@@ -865,6 +865,97 @@ int main(int argc, char** argv) {
           "an explicit respawn with no checkpoint reached returns to the starting-grid pose");
   }
 
+  if (pathLoaded) {
+    // Ship::step's meshModeOverride: lets a single call pick a mode regardless of what
+    // Simulation::meshPhysicsEnabled() says. GameSession::stepGhost (tested below) is built on
+    // this; test it directly first since it's the simpler surface.
+    auto overrideTrack = std::make_shared<Track>(*pathLoaded.track);
+    CollisionTriangle flatRoad;
+    flatRoad.positions[0] = Vec3(-1000, 4, -1000);
+    flatRoad.positions[1] = Vec3(1000, 4, -1000);
+    flatRoad.positions[2] = Vec3(0, 4, 1000);
+    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    overrideTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
+    Simulation overrideSim(*overrideTrack);
+
+    Ship forcedMesh = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedMesh.physics.speed = 20;
+    const StepResult meshResult = forcedMesh.step(overrideSim, 1.0 / 60.0, 1, 0, 0, true);
+    check(std::fabs(meshResult.surfaceNormal.y - 1.0) < 1e-9,
+          "meshModeOverride=true uses mesh physics even though meshPhysicsEnabled() is false");
+
+    // Same starting state, opposite override, with meshPhysicsEnabled() itself now flipped to
+    // true too -- so both results below come from the override alone, not from the ambient flag.
+    overrideSim.setMeshPhysicsEnabled(true);
+    Ship forcedMesh2 = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedMesh2.physics.speed = 20;
+    forcedMesh2.step(overrideSim, 1.0 / 60.0, 1, 0, 0, true);
+    Ship forcedAnalytic = shipAt(overrideSim, *overrideTrack, {0, 4, 0});
+    forcedAnalytic.physics.speed = 20;
+    forcedAnalytic.step(overrideSim, 1.0 / 60.0, 1, 0, 0, false);
+    check(glm::distance(forcedMesh2.physics.groundPos, forcedAnalytic.physics.groundPos) > 1e-6,
+          "meshModeOverride selects the mode itself, independent of meshPhysicsEnabled()");
+  }
+
+  if (pathLoaded) {
+    // GameSession::stepGhost: the debug "other physics method" ghost projection. Real ships run
+    // mesh mode (matching the flat road below); the ghost is driven with meshModeOverride's
+    // opposite, i.e. analytic.
+    auto ghostTrack = std::make_shared<Track>(*pathLoaded.track);
+    GameSession probeSession(ghostTrack, 1);
+    const double spawnY = probeSession.ships()[0].physics.groundPos.y;
+    CollisionTriangle flatRoad;
+    flatRoad.positions[0] = Vec3(-1000, spawnY, -1000);
+    flatRoad.positions[1] = Vec3(1000, spawnY, -1000);
+    flatRoad.positions[2] = Vec3(0, spawnY, 1000);
+    flatRoad.normals[0] = flatRoad.normals[1] = flatRoad.normals[2] = UP;
+    ghostTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::vector<CollisionTriangle>{flatRoad});
+
+    GameSession ghostSession(ghostTrack, 1);
+    ghostSession.setMeshPhysicsEnabled(true);
+    Ship ghost = ghostSession.ships()[0];
+    const Ship realShipBefore = ghostSession.ships()[0];
+
+    std::vector<ControlIntent> driveIntent(1);
+    driveIntent[0].throttle = 1.0;
+    driveIntent[0].steer = 0.3;
+    bool everDiverged = false;
+    bool finiteThroughout = true;
+    for (int frame = 0; frame < 90 && finiteThroughout; ++frame) {
+      ghostSession.step(driveIntent, 1.0 / 60.0);
+      ghostSession.stepGhost(ghost, driveIntent[0], 1.0 / 60.0);
+      finiteThroughout = std::isfinite(ghost.physics.groundPos.x) && std::isfinite(ghost.physics.groundPos.y) &&
+                         std::isfinite(ghost.physics.groundPos.z);
+      if (glm::distance(ghost.physics.groundPos, ghostSession.ships()[0].physics.groundPos) > 0.5)
+        everDiverged = true;
+    }
+    check(finiteThroughout, "stepGhost's projected position stays finite while driving");
+    check(everDiverged,
+          "stepGhost visibly diverges from the real ship when driven with the opposite physics mode");
+
+    // Safety: stepGhost must not perturb the real roster or its event stream. `ghost` isn't a
+    // roster member -- if GameSession's onTriggerFired ship-index pointer arithmetic (`&ship -
+    // ships_.data()`) ever ran against it, this would be undefined behavior, not just a wrong
+    // answer, so this checks the callback-suppression itself, not merely its visible effect.
+    check(ghostSession.ships().size() == 1 &&
+              glm::distance(ghostSession.ships()[0].physics.groundPos, realShipBefore.physics.groundPos) > 0.01,
+          "stepGhost does not touch the real roster (it moved only via its own ghostSession.step calls)");
+    const std::size_t eventsAfterGhost = ghostSession.events().size();
+    ghostSession.stepGhost(ghost, driveIntent[0], 1.0 / 60.0);
+    check(ghostSession.events().size() == eventsAfterGhost,
+          "stepGhost never appends to GameSession::events()");
+
+    // Respawn path: must reset the ghost via Ship::respawn without touching the real session.
+    const Vec3 ghostPosBeforeRespawn = ghost.physics.groundPos;
+    const Vec3 startGridPos = ghostSession.ships()[0].startPose.pos;
+    ControlIntent respawnGhost;
+    respawnGhost.respawn = true;
+    ghostSession.stepGhost(ghost, respawnGhost, 1.0 / 60.0);
+    check(glm::distance(ghost.physics.groundPos, startGridPos) < 1.0 &&
+              glm::distance(ghost.physics.groundPos, ghostPosBeforeRespawn) > 0.01,
+          "stepGhost's respawn intent resets the ghost to its starting-grid pose");
+  }
+
   const std::filesystem::path basePath = fixtureDir / "transformed-square.json";
   json base = readJson(basePath);
 

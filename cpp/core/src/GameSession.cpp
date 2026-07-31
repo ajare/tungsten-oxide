@@ -86,4 +86,32 @@ void GameSession::step(const std::vector<ControlIntent>& intents, double dt) {
   }
 }
 
+void GameSession::stepGhost(Ship& ghost, const ControlIntent& intent, double dt) {
+  if (intent.respawn) {
+    ghost.respawn(simulation_);
+    return;
+  }
+
+  // Suppress trigger/checkpoint callbacks for the duration: the constructor wires
+  // simulation_.onTriggerFired to recover a ship index via `&ship - ships_.data()` (see above),
+  // which is undefined behavior for `ghost` since it doesn't live inside ships_. A debug what-if
+  // projection has no legitimate lap/checkpoint state to report anyway.
+  auto savedCallback = std::move(simulation_.onTriggerFired);
+  simulation_.onTriggerFired = nullptr;
+
+  const bool otherMode = !simulation_.meshPhysicsEnabled();
+  const double clamped = std::min(dt, MAX_FRAME_DELTA);
+  const int subSteps = std::max(1, static_cast<int>(std::ceil(clamped / Consts::MAX_PHYSICS_STEP)));
+  const double sdt = clamped / subSteps;
+  for (int s = 0; s < subSteps; s++) {
+    const StepResult r = ghost.step(simulation_, sdt, intent.throttle, intent.brake, intent.steer, otherMode);
+    // Same rule step() itself follows: a respawn already reset renderNormal via placeShipAtPose,
+    // so an r.surfaceNormal computed earlier in this same (now-abandoned) step would be stale.
+    if (!r.respawned) ghost.renderNormal = r.surfaceNormal;
+    if (r.respawned) break;
+  }
+
+  simulation_.onTriggerFired = std::move(savedCallback);
+}
+
 }  // namespace tox
