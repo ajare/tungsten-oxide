@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 
 namespace tox {
 namespace {
@@ -133,6 +134,46 @@ public:
     double t = g / gmax;
     auto q = xs(t);
     return {pos, tan, roll(t), width(t), q[0], q[1], q[2]};
+  }
+
+  // Signed curvature at raw parameter g, from the same rational cubic B-spline baseEval()
+  // evaluates -- but carried one derivative further, via the basis functions' second derivative
+  // w.r.t. u (d2b[]; u = g - seg, so d/dg == d/du here, no chain-rule scaling needed) and the
+  // quotient rule applied twice to pos(g) = num(g)/den(g). Only the sign (and, via the speed^3
+  // normalization, a reparametrization-invariant magnitude) is needed by callers, so this
+  // deliberately ignores centerOffsetPercent's shiftedPosition() detour -- editor-only curvature
+  // for a coloring overlay does not need to match the exact shifted curve pixel-for-pixel.
+  double curvatureAt(double g) const {
+    if (!closed && (g <= 0 || g >= n - 1)) return 0.0;  // baseEval's own clamped endpoints: no
+                                                         // real spline curvature there either.
+    int seg = (int)std::floor(g);
+    double u = g - seg, u2 = u * u;
+    double b[4] = {(1 - 3 * u + 3 * u2 - u * u2) / 6, (4 - 6 * u2 + 3 * u * u2) / 6, (1 + 3 * u + 3 * u2 - 3 * u * u2) / 6, (u * u2) / 6};
+    double db[4] = {(-3 + 6 * u - 3 * u2) / 6, (-12 * u + 9 * u2) / 6, (3 + 6 * u - 9 * u2) / 6, (3 * u2) / 6};
+    double d2b[4] = {1 - u, -2 + 3 * u, 1 - 3 * u, u};
+    auto wrap = [&](int i) { return closed ? ((i % n) + n) % n : std::max(0, std::min(n - 1, i)); };
+    int ids[4] = {wrap(seg - 1), wrap(seg), wrap(seg + 1), wrap(seg + 2)};
+    Vec3 num(0.0), dnum(0.0), d2num(0.0);
+    double den = 0, dden = 0, d2den = 0;
+    for (int k = 0; k < 4; k++) {
+      double w = p.cp[ids[k]]->weight, bw = b[k] * w, dbw = db[k] * w, d2bw = d2b[k] * w;
+      num += p.cp[ids[k]]->pos * bw;
+      dnum += p.cp[ids[k]]->pos * dbw;
+      d2num += p.cp[ids[k]]->pos * d2bw;
+      den += bw;
+      dden += dbw;
+      d2den += d2bw;
+    }
+    if (den == 0) return 0.0;
+    const Vec3 vel = (dnum * den - num * dden) * (1.0 / (den * den));
+    // Second derivative of a quotient q = N/D: q'' = (N''D^2 - 2D'N'D - ND''D + 2ND'^2) / D^3.
+    const Vec3 acc = (d2num * (den * den) - dnum * (2.0 * dden * den) - num * (d2den * den) + num * (2.0 * dden * dden)) *
+                     (1.0 / (den * den * den));
+    const double speedSq = vel.x * vel.x + vel.z * vel.z;
+    if (speedSq < 1e-12) return 0.0;
+    // Signed curvature kappa = (x'z'' - z'x'') / (x'^2+z'^2)^1.5, in the XZ (world-up-relative)
+    // plane -- turning left/right as seen from above, ignoring elevation change/pitch.
+    return (vel.x * acc.z - vel.z * acc.x) / std::pow(speedSq, 1.5);
   }
 
   double centerOffsetPercent(double t) const {
@@ -498,6 +539,25 @@ Vec3 surface(const Frame& f, const Vec3& l, const Vec3& r, double v) {
   double w = glm::length(ch);
   return l + ch * v + f.normal * TrackCore::crossSectionHeight(f.crossSectionCurvature, f.crossSectionTightness, v, w);
 }
+// The road surface's true analytical normal at the same (ring, v) surface() evaluates -- the exact
+// technique Simulation.cpp's curvedSurfaceFrame uses for a ship's own analytical contact normal,
+// reused here so the exported mesh's vertex normals agree with what an unrolled ship standing
+// there would actually read. `ch` (left-to-right edge vector, already the full-width d(position)/dv
+// for the lateral term) combines with the cross-section's own d(height)/dv to give the true
+// tangent-to-tangent cross-product normal, in contrast to triNormal()'s flat per-triangle
+// approximation: two triangles sharing a vertex get the SAME normal here (both evaluate the exact
+// same continuous function at that exact point), where triNormal would give each its own
+// independent facet normal and jump discontinuously between them -- the mechanism behind visible
+// stepping in a ship's contact normal wherever roll changes quickly ring-to-ring.
+Vec3 surfaceNormal(const Frame& f, const Vec3& l, const Vec3& r, double v) {
+  const Vec3 ch = r - l;
+  const double w = glm::length(ch);
+  const double dhdv = TrackCore::crossSectionHeightDerivative(f.crossSectionCurvature, f.crossSectionTightness, v, w);
+  const Vec3 crossT = ch + f.normal * dhdv;
+  Vec3 n = normalizeSafe(glm::cross(f.tangent, crossT));
+  if (glm::dot(n, f.normal) < 0) n = -n;
+  return n;
+}
 Vec3 triNormal(const Vec3& a, const Vec3& b, const Vec3& c) {
   // cross(c-a, b-a), not cross(b-a, c-a) -- see TrackMesh.cpp's normalOf() for why this operand
   // order (not the naively expected one) is the one that actually points outward/up rather than
@@ -703,6 +763,17 @@ struct Builder {
       b.vertices.push_back({v.first, n, v.second, {}});
     }
   }
+  // Like tri(), but with an explicit, independently-computed normal per vertex instead of one flat
+  // face normal for all three -- used only by the road surface's own triangles (pathGeometry's top
+  // builder), whose callers pass surfaceNormal()'s continuous analytical value at each vertex so
+  // two triangles meeting at a shared point agree on the normal there instead of faceting.
+  void triSmooth(const Vec3& a, const Vec3& na, const Vec3& c, const Vec3& nc, const Vec3& d, const Vec3& nd, Vec2d ua = {},
+                Vec2d uc = {}, Vec2d ud = {}) {
+    for (auto& v : std::array<std::tuple<Vec3, Vec3, Vec2d>, 3>{{{a, na, ua}, {c, nc, uc}, {d, nd, ud}}}) {
+      b.indices.push_back((uint32_t)b.vertices.size());
+      b.vertices.push_back({std::get<0>(v), std::get<1>(v), std::get<2>(v), {}});
+    }
+  }
 };
 // Culls a strip sub-quad's four corners -- `ringOf`/`vOf` in the positively-oriented cycle
 // (i,a)(i,z)(j,z)(j,a) -- against each corner's own ring's reservation gap band, calling
@@ -772,6 +843,18 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     Vec3 a = surface(frames[ring], e.left[ring], e.right[ring], lo);
     return glm::mix(a, surface(frames[ring], e.left[ring], e.right[ring], hi), t);
   };
+  // Mirrors ringPoint's own exact-breakpoint/interpolated-fallback structure, but for
+  // surfaceNormal() instead of surface() -- almost every call lands exactly on a breakpoint (v is
+  // always drawn from `br[ring]` itself, see `v` below), so the mix() fallback only ever matters
+  // for a gap-band edge shared between two rings with otherwise-unaligned breakpoints.
+  auto ringNormal = [&](int ring, double v) {
+    const auto exact = std::find(br[ring].begin(), br[ring].end(), v);
+    if (exact != br[ring].end()) return surfaceNormal(frames[ring], e.left[ring], e.right[ring], v);
+    auto upper = std::upper_bound(br[ring].begin(), br[ring].end(), v);
+    double hi = *upper, lo = *(upper - 1), t = (v - lo) / (hi - lo);
+    Vec3 a = surfaceNormal(frames[ring], e.left[ring], e.right[ring], lo);
+    return normalizeSafe(glm::mix(a, surfaceNormal(frames[ring], e.left[ring], e.right[ring], hi), t));
+  };
   for (int i = 0; i < sc; i++) {
     int j = def.closed ? (i + 1) % n : i + 1;
     std::set<double> u(br[i].begin(), br[i].end());
@@ -794,8 +877,9 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       // is what this did) is what makes the void's edge the same per-ring polyline the road's own
       // outer edges are, instead of a staircase quantized to the ring spacing. (See `carveQuad`.)
       carveQuad(ringOf, vOf, gapV, [&](int c0, int c1, int c2) {
-        top.tri(ringPoint(ringOf[c0], vOf[c0]), ringPoint(ringOf[c1], vOf[c1]), ringPoint(ringOf[c2], vOf[c2]),
-                {vOf[c0], uvT[c0]}, {vOf[c1], uvT[c1]}, {vOf[c2], uvT[c2]});
+        top.triSmooth(ringPoint(ringOf[c0], vOf[c0]), ringNormal(ringOf[c0], vOf[c0]), ringPoint(ringOf[c1], vOf[c1]),
+                      ringNormal(ringOf[c1], vOf[c1]), ringPoint(ringOf[c2], vOf[c2]), ringNormal(ringOf[c2], vOf[c2]),
+                      {vOf[c0], uvT[c0]}, {vOf[c1], uvT[c1]}, {vOf[c2], uvT[c2]});
       });
     }
   }
@@ -1183,6 +1267,17 @@ void reservationGeometry(Track& track, const PathDefinition& def, const std::vec
   }
 }
 }  // namespace
+
+// Declared in TrackCore.hpp; lives here because it needs the private spline Evaluator above.
+// `frameIndex`/`frameCount` reuse centerRaw()'s own g-mapping so a curvature sample at frame i
+// lands at exactly the same raw parameter that frame's position/tangent/roll were baked from.
+double pathSignedCurvatureAt(const PathDefinition& path, std::size_t frameIndex, std::size_t frameCount) {
+  if (frameCount == 0) return 0.0;
+  const Evaluator e(path);
+  const double g = path.closed ? (static_cast<double>(frameIndex) / static_cast<double>(frameCount)) * e.n
+                               : (frameCount > 1 ? (static_cast<double>(frameIndex) / static_cast<double>(frameCount - 1)) * (e.n - 1) : 0.0);
+  return e.curvatureAt(g);
+}
 
 bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& error, bool detectSelfIntersections) {
   try {

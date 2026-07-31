@@ -392,6 +392,7 @@ void Simulation::placeShipAtPose(Ship& ship, const Pose& pose, const std::string
   p.up = pose.up;
   p.visualUp = pose.up;
   p.right = normalizeSafe(glm::cross(pose.up, pose.forward));
+  ship.renderNormal = pose.up;
   p.heading = std::atan2(pose.forward.x, pose.forward.z);
   p.speed = 0;
   p.airborne = false;

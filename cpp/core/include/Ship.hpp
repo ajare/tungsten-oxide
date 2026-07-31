@@ -96,6 +96,17 @@ struct Ship {
   Checkpoint lastCheckpoint;
   Race race;
   Pose startPose;
+
+  // Render-only: the last surface normal Ship::step actually resolved this frame (StepResult's own
+  // one, freshly recomputed every step from wherever the ship currently sits -- corridor, mesh
+  // region, or exported collision surface). Deliberately NOT `physics.up`: that field only ever
+  // gets written at spawn/respawn (Simulation::placeShipAtPose) and stays frozen for the rest of a
+  // run -- a deliberate, golden-trace-pinned characteristic of the physics model (verified: the raw
+  // session traces show `up` bit-identical across every step of a run), not something safe to
+  // change there. A renderer chasing that frozen value on a rolled/banked section fights a stale
+  // target while the ship's position correctly follows the bank, which reads as jitter. This field
+  // exists purely so a renderer has a live, correct-every-frame value to chase instead.
+  Vec3 renderNormal{0, 1, 0};
 };
 
 }  // namespace tox

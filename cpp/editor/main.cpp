@@ -88,6 +88,15 @@
 
 namespace {
 
+// Shared by the View menu's "Render Mode" submenu and the toolbar's render-mode combobox, so the
+// two pickers list the same modes in the same order and can't drift apart.
+const std::pair<const char*, editor::TopDownView::RenderMode> kRenderModes[] = {
+    {"Banked edges (lean tint)", editor::TopDownView::RenderMode::Banked},
+    {"Flat width (roll colour)", editor::TopDownView::RenderMode::Flat},
+    {"Flat with elevation colour", editor::TopDownView::RenderMode::Elevation},
+    {"Flat with camber colour", editor::TopDownView::RenderMode::Camber},
+};
+
 // Default export filename stem, sanitized: ASCII word chars only, so runs of anything else
 // collapse to a single underscore.
 std::string sanitizeFilenameStem(const std::string& name) {
@@ -2291,14 +2300,10 @@ int main(int, char**) {
         bool snapToGrid = topDownView.snapToGrid();
         if (ImGui::MenuItem("Snap to Grid", nullptr, &snapToGrid, showGrid)) topDownView.setSnapToGrid(snapToGrid);
         ImGui::Separator();
-        // Render mode.
+        // Render mode. kRenderModes is also what the toolbar's render-mode combobox iterates, so
+        // the two pickers can't drift out of sync with each other.
         if (ImGui::BeginMenu("Render Mode")) {
-          const std::pair<const char*, editor::TopDownView::RenderMode> renderModes[] = {
-              {"Banked edges (lean tint)", editor::TopDownView::RenderMode::Banked},
-              {"Flat width (roll colour)", editor::TopDownView::RenderMode::Flat},
-              {"Flat with elevation colour", editor::TopDownView::RenderMode::Elevation},
-          };
-          for (const auto& [label, mode] : renderModes) {
+          for (const auto& [label, mode] : kRenderModes) {
             if (ImGui::MenuItem(label, nullptr, topDownView.renderMode() == mode)) topDownView.setRenderMode(mode);
           }
           ImGui::EndMenu();
@@ -2600,6 +2605,23 @@ int main(int, char**) {
     const char* modeNames[] = {"Edit", "Create", "Rails"};
     ImGui::SetNextItemWidth(100);
     if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    ImGui::SameLine(0.0f, 14.0f);
+    ImGui::TextUnformatted("Render");
+    ImGui::SameLine();
+    {
+      int renderModeIndex = 0;
+      for (int i = 0; i < static_cast<int>(std::size(kRenderModes)); ++i)
+        if (kRenderModes[i].second == topDownView.renderMode()) renderModeIndex = i;
+      ImGui::SetNextItemWidth(190);
+      if (ImGui::BeginCombo("##renderMode", kRenderModes[renderModeIndex].first)) {
+        for (const auto& [label, mode] : kRenderModes) {
+          const bool selected = mode == topDownView.renderMode();
+          if (ImGui::Selectable(label, selected)) topDownView.setRenderMode(mode);
+          if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+    }
     ImGui::SameLine();
     ImGui::BeginDisabled(!editorState.history().canUndo());
     if (ImGui::Button(ICON_FA_UNDO " Undo")) {

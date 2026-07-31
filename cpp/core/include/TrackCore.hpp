@@ -5,8 +5,24 @@
 // The constants stay in the header (constexpr); the function bodies live in
 // src/TrackCore.cpp.
 #pragma once
+#include <cstddef>
 
 namespace tox {
+
+// Forward-declared to avoid a hard dependency on TrackDefinition.hpp from this otherwise
+// lightweight header; every caller already has PathDefinition in scope.
+struct PathDefinition;
+
+// Signed curvature (1/metres) of the path's centerline at baked frame index `frameIndex` of
+// `frameCount` total samples (matching path.centerline.size()'s own indexing/parametrization),
+// evaluated analytically from the underlying rational spline's first and second derivatives --
+// not approximated by differencing adjacent baked frames. Positive = turning left (away from
+// cross(UP, tangent), i.e. the direction TrackBake.cpp's frame() calls edgeRight/h), negative =
+// turning right, ~0 on a straight or at an open path's clamped endpoint segment (mirroring
+// baseEval's own point-difference tangent there, which carries no real spline curvature either).
+// Editor-only: physics/runtime has no use for this and it is not baked into Frame --
+// implementation lives in TrackBake.cpp alongside the private spline Evaluator it depends on.
+double pathSignedCurvatureAt(const PathDefinition& path, std::size_t frameIndex, std::size_t frameCount);
 namespace TrackCore {
 
 // --- schema/geometry constants ---

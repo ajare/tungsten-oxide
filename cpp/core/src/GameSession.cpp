@@ -63,6 +63,11 @@ void GameSession::step(const std::vector<ControlIntent>& intents, double dt) {
     const double sdt = clamped / subSteps;
     for (int s = 0; s < subSteps; s++) {
       const StepResult r = ship.step(simulation_, sdt, intent.throttle, intent.brake, intent.steer);
+      // Skipped when respawned: Ship::step's own respawn() call already reset renderNormal to the
+      // fresh respawn pose's up via placeShipAtPose, and `r.surfaceNormal` here is stale (computed
+      // earlier in this same step, before the fall-through-floor check triggered the respawn) --
+      // overwriting with it would replace the correct fresh value with the wrong old one.
+      if (!r.respawned) ship.renderNormal = r.surfaceNormal;
       if (r.railHit) {
         GameEvent event;
         event.type = GameEventType::RailHit;

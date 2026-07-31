@@ -139,7 +139,10 @@ class TopDownView {
 
   // Render mode / point-type filters / physics-sample overlay: all view/UI preferences, not track
   // data, so -- like grid/snap above -- they live here rather than in EditorState/undo history.
-  enum class RenderMode { Banked, Flat, Elevation };
+  // Camber colors the flat/unrolled footprint by whether the road banks into (green, on-camber) or
+  // away from (red, off-camber) the turn at that point, using the path's analytical curvature --
+  // see TopDownCanvas.cpp's camberFillColor.
+  enum class RenderMode { Banked, Flat, Elevation, Camber };
 
   RenderMode renderMode() const { return renderMode_; }
   void setRenderMode(RenderMode mode) { renderMode_ = mode; }
