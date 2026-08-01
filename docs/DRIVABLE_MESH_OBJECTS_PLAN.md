@@ -139,17 +139,30 @@ update)
   editor starts and its self-checks pass, but on-canvas Front/Side dragging
   should get a real manual pass before relying on it further. Committed.
 
-**1.3 — Generalize shift+drag-to-rotate**
-- File: `cpp/editor/src/TopDownCanvas.cpp`.
-- Today's rotate gesture (Mesh-region-only, `meshRotating_`, angle
-  convention `atan2(dz, dx)` from the placement's `(x, z)`) is being
-  removed with Mesh regions in Milestone 2. Rebuild the gesture generically
-  here so Milestone 5 can attach it to drivable mesh object placements:
-  `TopDown` → yaw (`atan2(dz, dx)`, matching today's convention), `Front` →
-  pitch, `Side` → roll. No entity uses this yet after Milestone 2 removes
-  Mesh regions and before Milestone 3/5 add drivable mesh objects — land
-  the gesture plumbing here, wire it to a real entity in Milestone 5.
-- Test: `ctest`. Commit.
+**1.3 — Generalize shift+drag-to-rotate** — done
+- Files: `cpp/editor/src/TopDownCanvas.cpp` (`rotateAngleDeg`, a mode-aware
+  wrapper around the existing `angleFromOriginDeg` that feeds it
+  `planeCoords()`-projected origin/cursor positions instead of raw x/z),
+  `cpp/editor/include/EditorState.hpp` (`rotateGestureActive`/
+  `beginRotateGesture`/`dragRotateGestureTo`/`endRotateGesture`: entity-
+  agnostic angle bookkeeping, tracked but not yet applied to anything).
+- Today's Mesh-region-only rotate gesture (`meshRotating_`,
+  `beginMeshRotate`/`dragMeshRotateTo`/`endMeshRotate`, angle convention
+  `atan2(dz, dx)` from the placement's `(x, z)`) is untouched here — it's
+  removed wholesale with Mesh regions in Milestone 2, so rewriting it in
+  place would be wasted work. Instead, a parallel, generic gesture landed:
+  `TopDown` → yaw (`atan2(dz, dx)`, matching today's convention via
+  `planeCoords`'s TopDown mapping), `Front` → pitch (`atan2(dy, dx)`),
+  `Side` → roll (`atan2(dz, dy)`) — same atan2 math as before, just fed
+  whichever plane `ProjectionMode` selects. No entity owns a yaw/pitch/roll
+  field yet (drivable mesh object placements land in Milestone 3), so
+  `beginRotateGesture`/`dragRotateGestureTo`/`endRotateGesture` only track
+  the accumulated angle delta — Milestone 5 wires it to a real placement.
+  `setMode`/`setProjectionMode` both drop an in-flight rotate gesture (and
+  drag), matching the existing "no dangling half-mutation across a mode
+  switch" convention.
+- Test: `ctest` (all 7 suites pass; new plumbing is unused so no behavior
+  change). Committed.
 
 **1.4 — Retire `ElevationView`**
 - Files: `cpp/editor/src/ElevationView.cpp`, `cpp/editor/include/ElevationView.hpp`,

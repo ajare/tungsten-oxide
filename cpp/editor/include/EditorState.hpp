@@ -75,7 +75,17 @@ public:
   SelectedPoint selection() const { return selection_; }
   const std::vector<tox::Vec3>& createDraft() const { return createDraft_; }
   ProjectionMode projectionMode() const { return projectionMode_; }
-  void setProjectionMode(ProjectionMode mode) { projectionMode_ = mode; }
+
+  // Switching planes mid-gesture would silently change what a drag/rotate's axes mean partway
+  // through, so this drops any in-flight drag/rotate the same way setMode() does on an EditMode
+  // switch -- a dangling half-mutation across a plane change is worse than the gesture just ending.
+  void setProjectionMode(ProjectionMode mode) {
+    projectionMode_ = mode;
+    dragging_ = false;
+    dragMutated_ = false;
+    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
+    rotateGestureActive_ = false;
+  }
   bool dragging() const { return dragging_; }
   const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
   bool meshDragging() const { return meshDragging_; }
@@ -156,6 +166,7 @@ public:
     dragging_ = false;
     dragMutated_ = false;
     meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
+    rotateGestureActive_ = false;
     // The picked-edge highlight only means anything inside Rails mode.
     if (mode != EditMode::Rails) selectedRail_.reset();
   }
@@ -1004,6 +1015,35 @@ public:
     meshRotating_ = false;
     meshRotateMutated_ = false;
   }
+
+  // ---- Generic shift+drag-to-rotate gesture plumbing (DRIVABLE_MESH_OBJECTS_PLAN.md
+  // Milestone 1.3) ----
+  //
+  // Entity-agnostic angle bookkeeping for the canvas's shift+drag rotate gesture: TopDown yields
+  // yaw, Front pitch, Side roll (see TopDownCanvas.cpp's rotateAngleDeg, which produces the
+  // (origin-relative) angles fed in here). Unlike beginMeshRotate/dragMeshRotateTo/endMeshRotate
+  // above -- which write straight into a MeshPlacement's `rotation` field and are removed along
+  // with Mesh regions in Milestone 2 -- this tracks only the accumulated angle delta, since no
+  // entity exists yet to own a yaw/pitch/roll field (drivable mesh object placements land in
+  // Milestone 3; Milestone 5 wires this gesture to one). Same offset-preserving convention as
+  // beginMeshRotate: the gap between the drag's start angle and the entity's rotation at mousedown
+  // is preserved for the whole gesture, so the shape doesn't jump to face the cursor.
+  bool rotateGestureActive() const { return rotateGestureActive_; }
+
+  void beginRotateGesture(double originRotationDeg, double startAngleDeg) {
+    rotateGestureOriginDeg_ = originRotationDeg;
+    rotateGestureStartAngleDeg_ = startAngleDeg;
+    rotateGestureActive_ = true;
+  }
+
+  // Returns the rotation to apply -- origin rotation plus the angle delta since gesture start.
+  // Milestone 5's caller writes this into whichever yaw/pitch/roll field the active
+  // ProjectionMode corresponds to; this class doesn't know about that entity yet.
+  double dragRotateGestureTo(double currentAngleDeg) const {
+    return rotateGestureActive_ ? rotateGestureOriginDeg_ + (currentAngleDeg - rotateGestureStartAngleDeg_) : rotateGestureOriginDeg_;
+  }
+
+  void endRotateGesture() { rotateGestureActive_ = false; }
 
   // ---- Rails (EDITOR_CPP_PORT_PLAN.md M5) ----
 
@@ -2360,6 +2400,11 @@ private:
   double meshDragOffsetX_{0.0}, meshDragOffsetZ_{0.0};
   bool meshRotating_{false}, meshRotateMutated_{false};
   double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
+
+  // Generic shift+drag-to-rotate gesture state (see rotateGestureActive() above); unused by any
+  // entity until Milestone 5.
+  bool rotateGestureActive_{false};
+  double rotateGestureOriginDeg_{0.0}, rotateGestureStartAngleDeg_{0.0};
 
   std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;

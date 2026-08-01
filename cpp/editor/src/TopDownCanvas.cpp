@@ -1170,6 +1170,17 @@ double angleFromOriginDeg(double originX, double originZ, double worldX, double 
   return std::atan2(worldZ - originZ, worldX - originX) * 180.0 / std::numbers::pi;
 }
 
+// Shift+drag-to-rotate angle, generalized per ProjectionMode (DRIVABLE_MESH_OBJECTS_PLAN.md
+// Milestone 1.3): TopDown -> yaw (atan2(dz, dx), matching today's mesh-region gesture's
+// convention), Front -> pitch (atan2(dy, dx)), Side -> roll (atan2(dz, dy)). Built on the same
+// planeCoords() projection drag-to-move (1.2) already uses, so all three axes share one convention:
+// the two plane coordinates feed the same atan2 math regardless of which world axes they are.
+double rotateAngleDeg(ProjectionMode mode, const tox::Vec3& origin, const tox::Vec3& worldPos) {
+  const WorldPoint2D o = planeCoords(mode, origin);
+  const WorldPoint2D w = planeCoords(mode, worldPos);
+  return angleFromOriginDeg(o.x, o.z, w.x, w.z);
+}
+
 // Live state for the shift-drag rubber-band gesture. `from` has a value for the entire
 // gesture once armed; `target` is whichever OTHER open endpoint the cursor currently rests on, if
 // any; `currentLocal` is the cursor's canvas-local position, used to draw the free end of the line
