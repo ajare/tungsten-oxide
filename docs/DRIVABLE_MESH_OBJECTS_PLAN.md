@@ -199,12 +199,18 @@ update)
   `TrackDefinition`). A smoke launch of `track_editor.exe` confirmed no
   startup/dock crash and the rewritten check printing `OK`. Committed.
 
-**1.5 — Update editor conventions doc**
+**1.5 — Update editor conventions doc** — done, Milestone 1 complete
 - File: `cpp/editor/CLAUDE.md`.
-- Document `ProjectionMode`, the generalized drag/rotate gestures per mode,
-  and `ElevationView`'s removal, following the existing terse
-  bullet-per-convention style.
-- Commit (docs-only).
+- Added bullets for `ProjectionMode` (toolbar/shortcuts, default, the
+  drop-in-flight-gesture-on-switch behavior), the generalized drag-to-move/
+  rotate math (`planeCoords`/`setPlaneCoords`, `rotateAngleDeg`, and what's
+  still `TopDown`-only pending Milestone 2), and `ElevationView`'s removal
+  (Front mode takes over height editing; right-click-insert not carried
+  forward, with the reasoning). Also fixed a pre-existing doc/code drift
+  noticed while editing this section: the mode-dropdown bullet named a
+  `setEditMode()` that doesn't exist -- the real method is `setMode()`.
+- Commit (docs-only; `ctest` reconfirmed green since this file has no build
+  dependency).
 
 ---
 
