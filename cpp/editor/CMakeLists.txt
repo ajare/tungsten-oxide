@@ -62,7 +62,6 @@ set(GL3W_SOURCES src/gl3w/gl3w.c)
 set(EDITOR_SOURCES
   src/EditorTrackDefinition.cpp
   src/TopDownCanvas.cpp
-  src/ElevationView.cpp
   src/USDExport.cpp
   src/MppModelExport.cpp
   src/TrackResourceDocument.cpp

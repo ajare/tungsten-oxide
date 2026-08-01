@@ -164,16 +164,40 @@ update)
 - Test: `ctest` (all 7 suites pass; new plumbing is unused so no behavior
   change). Committed.
 
-**1.4 — Retire `ElevationView`**
-- Files: `cpp/editor/src/ElevationView.cpp`, `cpp/editor/include/ElevationView.hpp`,
-  `cpp/editor/main.cpp` (panel wiring), `cpp/editor/src/PropertiesPanel.cpp`,
-  `cpp/editor/src/TopDownCanvas.cpp` (`showPositionPoints` cross-wiring).
-- Remove the panel; confirm Front canvas mode (1.2) reaches path control
-  point height editing (today `ElevationView`'s only consumer) end to end,
-  including right-click-to-insert parity (`showPositionPoints` gating) if
-  still relevant in the new mode.
-- Test: `ctest`; manual check that path point height editing still works
-  via Front mode. Commit.
+**1.4 — Retire `ElevationView`** — done
+- Files: `cpp/editor/src/ElevationView.cpp`/`cpp/editor/include/ElevationView.hpp`
+  (deleted), `cpp/editor/CMakeLists.txt` (source list), `cpp/editor/main.cpp`
+  (include, header comment, dock layout simplified to left panel + Top-Down
+  View filling the rest, `elevationVisible`/the "Elevation Profile" window
+  removed, M6 smoke check rewritten), `cpp/editor/src/PropertiesPanel.cpp`
+  (stale comment reference only), `cpp/editor/include/EditorState.hpp`
+  (`dragSelectedElevationTo`/`dragSelectedMeshElevationTo` removed -- dead
+  code once `ElevationView.cpp`, their only callers, is gone).
+- Front canvas mode already reaches position-point height editing end to
+  end as a side effect of Milestone 1.2: `dragSelectedTo`/rendering are
+  generalized per `ProjectionMode`, so a Front-mode drag on a position
+  point already moves `(x, y)` together -- no new drag code was needed
+  here, just removing the now-redundant panel.
+- Right-click-to-insert parity: judged not relevant to carry into
+  Front/Side rather than generalized. `ElevationView`'s own right-click
+  insert was a convenience duplicate of the top-down canvas's *existing*
+  "Add control point" context-menu item (`TopDownCanvas.cpp`, pre-dates
+  this plan) -- inserting a new point is inherently an X/Z-topology
+  operation (`nearestPathPlacement` searches the centerline by X/Z
+  distance, which has no sensible Front/Side analogue), so it stays a
+  TopDown-mode-only affordance; Front/Side are for editing an *existing*
+  point's other axes, not placing new ones.
+- Test: `ctest` (all 7 suites pass). The M6 smoke check (`main.cpp`) was
+  rewritten to drive a position point's height through
+  `setProjectionMode(Front)` + `dragSelectedTo` instead of the retired
+  `dragSelectedElevationTo`, so Front-mode height editing is verified
+  headlessly on every run rather than only by a one-off manual pass --
+  caught and fixed two real bugs while doing so (drag rounds to a 0.1m
+  boundary, so a non-aligned starter-track X needed the same rounding in
+  the expected value; comparing a `const tox::Vec3&` across `undo()`/
+  `redo()` was a dangling reference once those replace the whole
+  `TrackDefinition`). A smoke launch of `track_editor.exe` confirmed no
+  startup/dock crash and the rewritten check printing `OK`. Committed.
 
 **1.5 — Update editor conventions doc**
 - File: `cpp/editor/CLAUDE.md`.

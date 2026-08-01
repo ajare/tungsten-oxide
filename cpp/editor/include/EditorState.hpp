@@ -205,8 +205,7 @@ public:
   // Read-only counterpart to selectPositionAt: the nearest Position point within
   // `pickRadiusWorld` of (planeU, planeV) -- the active ProjectionMode's plane coordinates -- or
   // nullopt, without mutating selection_ -- used to render a hover highlight distinct from the
-  // actual click-driven selection (see TopDownCanvas.cpp/ElevationView.cpp's hover-highlight
-  // rendering).
+  // actual click-driven selection (see TopDownCanvas.cpp's hover-highlight rendering).
   std::optional<SelectedPoint> hoverTestPosition(double planeU, double planeV, double pickRadiusWorld) const {
     return hitTestPosition(planeU, planeV, pickRadiusWorld);
   }
@@ -1230,35 +1229,8 @@ public:
     setPlaneCoords(projectionMode_, point.pos, std::round(planeU * 10.0) / 10.0, std::round(planeV * 10.0) / 10.0);
   }
 
-  // Elevation-view counterpart to dragSelectedTo: same point, same drag lifecycle
-  // (beginDrag/endDrag/one-push-per-gesture), different axis -- shares the same `dragging` state
-  // machine the top-down view's x/z drag uses.
-  void dragSelectedElevationTo(double y) {
-    if (!dragging_ || !selectionInRange()) return;
-    if (!dragMutated_) {
-      history_.push(track_);
-      dragMutated_ = true;
-    }
-    track_.paths[selection_.pathIndex].points[selection_.pointIndex].pos.y = std::round(y * 10.0) / 10.0;
-  }
-
-  // Elevation-view drag for the SELECTED MESH REGION's elevation:
-  // same drag lifecycle and shared dragging_/dragMutated_ state as dragSelectedElevationTo, but a
-  // mesh placement has no `selection_` (mesh/point selection are mutually exclusive -- see
-  // selectMesh/selectPoint), so this reads mutableSelectedMeshPlacement() instead. Rounds to 0.1
-  // precision, same as dragSelectedTo/dragSelectedElevationTo.
-  void dragSelectedMeshElevationTo(double y) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!dragging_ || placement == nullptr) return;
-    if (!dragMutated_) {
-      history_.push(track_);
-      dragMutated_ = true;
-    }
-    placement->elevation = std::round(y * 10.0) / 10.0;
-  }
-
   // On-canvas width-handle drag: same drag lifecycle (beginDrag/endDrag/one-push-per-gesture,
-  // sharing dragging_/dragMutated_ with dragSelectedTo/dragSelectedElevationTo) but for a Width
+  // sharing dragging_/dragMutated_ with dragSelectedTo) but for a Width
   // point's `width` field. The caller (TopDownCanvas.cpp) computes the new width value itself:
   // it needs the baked frame's position/h axis at the point's `t`, which EditorState -- deliberately
   // THE-free -- has no access to (see EditorTrackDefinition.hpp's own header comment on why).
@@ -1593,7 +1565,7 @@ public:
     return true;
   }
 
-  // Numeric-field counterpart to dragSelectedTo/dragSelectedElevationTo for a Position point, for
+  // Numeric-field counterpart to dragSelectedTo for a Position point, for
   // the properties panel's typed X/Y/Z/Weight inputs rather than a canvas drag.
   bool setSelectedPositionFields(double x, double y, double z, double weight) {
     if (!selectionInRange()) return false;

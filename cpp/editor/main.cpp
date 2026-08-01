@@ -11,7 +11,10 @@
 // added Rails mode: click an edge to toggle it as a rail on the shared asset (core doesn't bake
 // unflagged edges, so this one path works from the authored mesh asset instead of a core bake).
 // M6 added the elevation profile side view (ElevationView.hpp/.cpp): a second canvas showing the
-// current path's baked Y profile plus draggable position-point elevation markers, collapsible.
+// current path's baked Y profile plus draggable position-point elevation markers, collapsible --
+// retired by DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1.4: Front canvas projection mode (Milestone
+// 1.2's generalized drag-to-move, applied to TopDownCanvas.cpp's existing position-point handling)
+// takes over height editing, dragging a point's (x, y) directly instead of a separate panel.
 // M7a adds USD export (USDExport.hpp/.cpp, walking core's own baked renderer-neutral
 // tox::Track::geometry batches into .usda Mesh prims -- not a from-scratch surface derivation, see
 // USDExport.hpp) and random-track generation (RandomTrack.hpp/.cpp,
@@ -62,7 +65,6 @@
 #include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
 #include "Track.hpp"
-#include "ElevationView.hpp"
 #include "FileDialog.hpp"
 #include "fontawesome/IconsFontAwesome5.h"
 #include "MaterialCatalog.hpp"
@@ -382,9 +384,12 @@ M5SmokeCheckResult runM5SmokeCheck() {
   return result;
 }
 
-// M6 smoke check: select a position point and drag its elevation, mirroring what
-// ElevationView.cpp's input handling calls (selectPoint + the shared beginDrag/
-// dragSelectedElevationTo/endDrag lifecycle also used by the top-down x/z drag).
+// M6 smoke check, updated for DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1.4: ElevationView is
+// retired, so height editing now goes through Front canvas projection mode's generalized
+// dragSelectedTo (Milestone 1.2) instead of the old Y-only dragSelectedElevationTo -- this proves
+// out end to end that Front mode reaches position-point height editing, the one capability
+// ElevationView provided that nothing else covered (Front's plane is (x, y), so the drag also
+// carries x through unchanged here to confirm the third axis, z, is the only one left alone).
 struct M6SmokeCheckResult {
   bool elevationChanged = false, undone = false, redone = false;
 };
@@ -393,16 +398,25 @@ M6SmokeCheckResult runM6SmokeCheck() {
   M6SmokeCheckResult result;
 
   editor::EditorState state(buildStarterTrack());
+  const double originalX = state.track().paths[0].points[0].pos.x;
   const double originalY = state.track().paths[0].points[0].pos.y;
+  const double originalZ = state.track().paths[0].points[0].pos.z;
+  // dragSelectedTo rounds to a 0.1m boundary (same as every other on-canvas drag), so the expected
+  // x has to go through the same rounding the starter track's non-0.1-aligned coordinates do.
+  const double expectedX = std::round(originalX * 10.0) / 10.0;
   state.selectPoint(0, 0);
+  state.setProjectionMode(editor::ProjectionMode::Front);
   state.beginDrag();
-  state.dragSelectedElevationTo(originalY + 25.0);
+  state.dragSelectedTo(originalX, originalY + 25.0);  // Front plane: (x, y)
   state.endDrag();
-  const double movedY = state.track().paths[0].points[0].pos.y;
-  result.elevationChanged = (movedY == originalY + 25.0);  // +25.0 already lands on a 0.1m boundary
+  // Captured as plain values, not a reference into track_: undo()/redo() below replace the whole
+  // TrackDefinition, which would leave a reference dangling.
+  const tox::Vec3 moved = state.track().paths[0].points[0].pos;
+  // +25.0 already lands on a 0.1m boundary; z must be untouched by a Front-plane drag.
+  result.elevationChanged = (moved.y == originalY + 25.0) && (moved.x == expectedX) && (moved.z == originalZ);
 
   result.undone = state.undo() && state.track().paths[0].points[0].pos.y == originalY;
-  result.redone = state.redo() && state.track().paths[0].points[0].pos.y == movedY;
+  result.redone = state.redo() && state.track().paths[0].points[0].pos.y == moved.y;
 
   return result;
 }
@@ -1632,8 +1646,8 @@ int main(int, char**) {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   // No imgui.ini: the dock layout built once below (menu bar / toolbar / left panel / top-down
-  // top-right / elevation bottom-right) is meant to be the SAME fixed arrangement every launch,
-  // not something that drifts based on whatever a prior session happened to leave docked where.
+  // filling the rest) is meant to be the SAME fixed arrangement every launch, not something that
+  // drifts based on whatever a prior session happened to leave docked where.
   io.IniFilename = nullptr;
 
   ImGui::StyleColorsDark();
@@ -1901,7 +1915,6 @@ int main(int, char**) {
   // while a drag is in progress (see rebake() below).
   std::vector<tox::SelfIntersection> cachedCrossings = bakedResult.track.has_value() ? bakedResult.track->selfIntersections : std::vector<tox::SelfIntersection>{};
   editor::TopDownView topDownView;
-  bool elevationVisible = true;
   int randomSeed = 12345;
   int randomComplexity = 5;
   // Random-track generator ranges: a session-only generator preference (see RandomRangesPanel.hpp),
@@ -2173,8 +2186,8 @@ int main(int, char**) {
       if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) beginSave(io.KeyShift);
     }
 
-    // --- Fixed layout: menu bar, toolbar, dockspace (left panel / top-down top-right / elevation
-    // bottom-right, EDITOR_CPP_PORT_PLAN.md-adjacent UI pass) -------------------------------
+    // --- Fixed layout: menu bar, toolbar, dockspace (left panel / top-down filling the rest,
+    // EDITOR_CPP_PORT_PLAN.md-adjacent UI pass) -------------------------------
     //
     // File/Random/View menu actions below reuse exactly the same EditorState/TopDownView calls
     // the old single "track_editor — status" mega-window made inline; only their container moved
@@ -2681,10 +2694,11 @@ int main(int, char**) {
 
     // Dockspace host: fills the remaining viewport between the toolbar and the status bar. The
     // layout itself (left panel with every property/tool panel tabbed together, top-down view
-    // top-right, elevation profile bottom-right) is built once via DockBuilder on the first frame
-    // only, then never touched again -- io.IniFilename is null (see CreateContext above), so
-    // there's no saved layout to conflict with, and every future launch starts from this exact
-    // same arrangement.
+    // filling the rest) is built once via DockBuilder on the first frame only, then never touched
+    // again -- io.IniFilename is null (see CreateContext above), so there's no saved layout to
+    // conflict with, and every future launch starts from this exact same arrangement. Used to also
+    // split the right side top/bottom for the Elevation Profile panel, retired in
+    // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1.4 -- Top-Down View now takes the whole right side.
     ImGui::SetNextWindowPos(ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y + toolbarHeight));
     ImGui::SetNextWindowSize(ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y - toolbarHeight - statusBarHeight));
     ImGui::SetNextWindowViewport(mainViewport->ID);
@@ -2706,12 +2720,9 @@ int main(int, char**) {
 
       ImGuiID leftId = 0, rightId = 0;
       ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.24f, &leftId, &rightId);
-      ImGuiID topRightId = 0, bottomRightId = 0;
-      ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.7f, &topRightId, &bottomRightId);
 
       ImGui::DockBuilderDockWindow("Panels", leftId);
-      ImGui::DockBuilderDockWindow("Top-Down View", topRightId);
-      ImGui::DockBuilderDockWindow("Elevation Profile", bottomRightId);
+      ImGui::DockBuilderDockWindow("Top-Down View", rightId);
 
       ImGui::DockBuilderFinish(dockspaceId);
     }
@@ -2978,20 +2989,6 @@ int main(int, char**) {
     }
     ImGui::End();
     ImGui::PopStyleVar();
-
-    // The panel can be hidden -- a plain in-session toggle, since there's no settings file yet.
-    ImGui::SetNextWindowSize(ImVec2(900, 260), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Elevation Profile");
-    ImGui::Checkbox("Show", &elevationVisible);
-    if (elevationVisible) {
-      ImGui::Separator();
-      // The currently selected point's path if there is one,
-      // otherwise EditorState::currentPathIndex()'s own fallback (the curve-selector dropdown's
-      // choice, or path 0).
-      const int elevationPathIndex = editorState.track().paths.empty() ? -1 : editorState.currentPathIndex();
-      if (editor::DrawElevationView(editorState, bakedTrack, elevationPathIndex, topDownView.showPositionPoints())) rebake();
-    }
-    ImGui::End();
 
     ImGui::Render();
     int drawableWidth = 0, drawableHeight = 0;
