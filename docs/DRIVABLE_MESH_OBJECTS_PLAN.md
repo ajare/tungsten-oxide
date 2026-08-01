@@ -115,17 +115,29 @@ invariant milestone before the physics-mode work.
   1.2.
 - Test: `ctest` (no behavior change yet — mode unused). Committed.
 
-**1.2 — Generalize drag-to-move math**
-- File: `cpp/editor/src/TopDownCanvas.cpp`.
-- Every place a screen drag delta is applied to world X/Z today needs to
-  project into the active mode's plane instead: `TopDown` → (X, Z) as
-  today, `Front` → (X, Y), `Side` → (Y, Z). Applies to path control points
-  and (once Milestone 3 lands) drivable mesh object placements uniformly —
-  this step only needs the projection math and existing entities (points)
-  to prove it out, since Mesh regions are being removed in Milestone 2
-  before drivable mesh objects exist to test against in Milestone 5.
-- Test: `ctest`; manual drag test of a path control point in each mode.
-  Commit.
+**1.2 — Generalize drag-to-move math** — done (see commit after this plan
+update)
+- Files: `cpp/editor/include/EditorState.hpp` (`planeCoords`/`setPlaneCoords`,
+  generalizing `withinPick`/`hitTestPosition`/`selectPositionAt`/
+  `hoverTestPosition`/`dragSelectedTo` to read/write the active
+  `projectionMode_`'s two axes instead of hardcoded x/z), `cpp/editor/src/TopDownCanvas.cpp`
+  (a matching free `planeCoords` used by `drawAuthoredPositionPoints` so
+  rendering stays in step with hit-testing/dragging).
+- `TopDown` → (X, Z) as today, `Front` → (X, Y), `Side` → (Y, Z); the third
+  axis outside the active plane is left untouched by a drag. `view.screenToWorld`/
+  `worldToScreen` themselves are unchanged (they're plane-agnostic screen<->2D
+  math); only the meaning of the two axes they carry changes with the mode.
+  Scoped to Position points only, per this step's original scope — weld/
+  join-drag/rubber-band endpoint hit-testing (`hitTestOpenEndpoint`) and every
+  non-point hit-test (zones/triggers/road) are still X/Z-only, since Mesh
+  regions are being removed in Milestone 2 and nothing else needs Front/Side
+  yet.
+- Test: `ctest` (all 7 suites pass, including main.cpp's built-in M3 smoke
+  check exercising `dragSelectedTo` in default TopDown mode). Manual
+  interactive drag verification in Front/Side modes was not performed — no
+  GUI session available in this environment; a smoke launch confirmed the
+  editor starts and its self-checks pass, but on-canvas Front/Side dragging
+  should get a real manual pass before relying on it further. Committed.
 
 **1.3 — Generalize shift+drag-to-rotate**
 - File: `cpp/editor/src/TopDownCanvas.cpp`.

@@ -160,11 +160,12 @@ public:
     if (mode != EditMode::Rails) selectedRail_.reset();
   }
 
-  // Returns true if a position point was hit within `pickRadiusWorld` of (worldX, worldZ).
+  // Returns true if a position point was hit within `pickRadiusWorld` of (planeU, planeV) -- the
+  // active ProjectionMode's plane coordinates (see planeCoords), not necessarily world (x, z).
   // Selects it (Edit mode's plain click) but does not start a drag -- call beginDrag separately
   // once the caller knows the mouse is actually moving.
-  bool selectPositionAt(double worldX, double worldZ, double pickRadiusWorld) {
-    const auto hit = hitTestPosition(worldX, worldZ, pickRadiusWorld);
+  bool selectPositionAt(double planeU, double planeV, double pickRadiusWorld) {
+    const auto hit = hitTestPosition(planeU, planeV, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
     // Points/mesh regions/zones/triggers share one selection (props panel).
@@ -191,11 +192,12 @@ public:
   }
 
   // Read-only counterpart to selectPositionAt: the nearest Position point within
-  // `pickRadiusWorld` of (worldX, worldZ), or nullopt, without mutating selection_ -- used to
-  // render a hover highlight distinct from the actual click-driven selection (see
-  // TopDownCanvas.cpp/ElevationView.cpp's hover-highlight rendering).
-  std::optional<SelectedPoint> hoverTestPosition(double worldX, double worldZ, double pickRadiusWorld) const {
-    return hitTestPosition(worldX, worldZ, pickRadiusWorld);
+  // `pickRadiusWorld` of (planeU, planeV) -- the active ProjectionMode's plane coordinates -- or
+  // nullopt, without mutating selection_ -- used to render a hover highlight distinct from the
+  // actual click-driven selection (see TopDownCanvas.cpp/ElevationView.cpp's hover-highlight
+  // rendering).
+  std::optional<SelectedPoint> hoverTestPosition(double planeU, double planeV, double pickRadiusWorld) const {
+    return hitTestPosition(planeU, planeV, pickRadiusWorld);
   }
 
   // Whether the current selection is in range AND a Position point specifically -- used to guard
@@ -1175,15 +1177,17 @@ public:
     dragMutated_ = false;
   }
 
-  void dragSelectedTo(double worldX, double worldZ) {
+  // (planeU, planeV) are screen-drag coordinates already projected into the active
+  // ProjectionMode's plane (see planeCoords/setPlaneCoords) -- TopDown's (x, z), Front's (x, y), or
+  // Side's (y, z). The third axis, outside that plane, is left as-is.
+  void dragSelectedTo(double planeU, double planeV) {
     if (!dragging_ || !selectionInRange()) return;
     if (!dragMutated_) {
       history_.push(track_);
       dragMutated_ = true;
     }
     TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
-    point.pos.x = std::round(worldX * 10.0) / 10.0;
-    point.pos.z = std::round(worldZ * 10.0) / 10.0;
+    setPlaneCoords(projectionMode_, point.pos, std::round(planeU * 10.0) / 10.0, std::round(planeV * 10.0) / 10.0);
   }
 
   // Elevation-view counterpart to dragSelectedTo: same point, same drag lifecycle
@@ -2244,17 +2248,40 @@ private:
       if (ownerCount[edge.id] == 1) edge.rail = true;
   }
 
-  static bool withinPick(const tox::Vec3& p, double worldX, double worldZ, double pickRadiusWorld) {
-    const double dx = p.x - worldX, dz = p.z - worldZ;
-    return (dx * dx + dz * dz) <= pickRadiusWorld * pickRadiusWorld;
+  // Extracts/writes the two axes ProjectionMode's drag/render plane covers: TopDown -> (x, z)
+  // (today's only behavior), Front -> (x, y), Side -> (y, z). Shared by every hit-test/drag helper
+  // below so a screen-space (u, v) from any canvas projection mode maps onto the right pair of
+  // world axes, leaving the third (the one that mode doesn't expose) untouched.
+  static std::pair<double, double> planeCoords(ProjectionMode mode, const tox::Vec3& p) {
+    switch (mode) {
+      case ProjectionMode::Front: return {p.x, p.y};
+      case ProjectionMode::Side: return {p.y, p.z};
+      case ProjectionMode::TopDown:
+      default: return {p.x, p.z};
+    }
   }
 
-  std::optional<SelectedPoint> hitTestPosition(double worldX, double worldZ, double pickRadiusWorld) const {
+  static void setPlaneCoords(ProjectionMode mode, tox::Vec3& p, double u, double v) {
+    switch (mode) {
+      case ProjectionMode::Front: p.x = u; p.y = v; break;
+      case ProjectionMode::Side: p.y = u; p.z = v; break;
+      case ProjectionMode::TopDown:
+      default: p.x = u; p.z = v; break;
+    }
+  }
+
+  bool withinPick(const tox::Vec3& p, double planeU, double planeV, double pickRadiusWorld) const {
+    const auto [pu, pv] = planeCoords(projectionMode_, p);
+    const double du = pu - planeU, dv = pv - planeV;
+    return (du * du + dv * dv) <= pickRadiusWorld * pickRadiusWorld;
+  }
+
+  std::optional<SelectedPoint> hitTestPosition(double planeU, double planeV, double pickRadiusWorld) const {
     for (int pi = 0; pi < static_cast<int>(track_.paths.size()); ++pi) {
       const auto& points = track_.paths[pi].points;
       for (int i = 0; i < static_cast<int>(points.size()); ++i) {
         if (points[i].kind != PointKind::Position) continue;
-        if (withinPick(points[i].pos, worldX, worldZ, pickRadiusWorld)) return SelectedPoint{pi, i};
+        if (withinPick(points[i].pos, planeU, planeV, pickRadiusWorld)) return SelectedPoint{pi, i};
       }
     }
     return std::nullopt;

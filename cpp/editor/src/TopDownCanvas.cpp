@@ -18,6 +18,18 @@
 namespace editor {
 namespace {
 
+// Projects a world position into the active ProjectionMode's 2D drag/render plane -- TopDown
+// (x, z, today's only behavior), Front (x, y), Side (y, z) -- so canvas rendering stays in step
+// with EditorState's own planeCoords (which the drag/hit-test path uses internally).
+WorldPoint2D planeCoords(ProjectionMode mode, const tox::Vec3& p) {
+  switch (mode) {
+    case ProjectionMode::Front: return {p.x, p.y};
+    case ProjectionMode::Side: return {p.y, p.z};
+    case ProjectionMode::TopDown:
+    default: return {p.x, p.z};
+  }
+}
+
 constexpr float kPointRadius = 4.0f;
 constexpr float kPickRadiusPx = 10.0f;
 const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);
@@ -1042,7 +1054,7 @@ std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, cons
 void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
                                 const SelectedPoint& selection, const std::optional<SelectedPoint>& hovered,
                                 const std::optional<EditorState::OpenEndpointRef>& weldTarget,
-                                const std::vector<Connection>& disjointSeams) {
+                                const std::vector<Connection>& disjointSeams, ProjectionMode projectionMode) {
   for (int pi = 0; pi < static_cast<int>(track.paths.size()); ++pi) {
     const Path& path = track.paths[pi];
     const auto& points = path.points;
@@ -1064,7 +1076,8 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
       const bool isEndpoint = !path.closed && (i == firstPosRaw || i == lastPosRaw);
       const bool isDisjoint = std::find_if(disjointSeams.begin(), disjointSeams.end(),
                                            [&](const Connection& s) { return s.pointId == points[i].id; }) != disjointSeams.end();
-      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(points[i].pos.x, points[i].pos.z));
+      const WorldPoint2D plane = planeCoords(projectionMode, points[i].pos);
+      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(plane.x, plane.z));
       const float radius = isSelected ? kPointRadius + 2.0f : kPointRadius;
       // Square = open-path endpoint (join-eligible), circle otherwise.
       if (isEndpoint) {
@@ -1962,7 +1975,8 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     // point nodes so the nodes render on top.
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor);
     drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor);
-    drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget, state.disjointSeams());
+    drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget, state.disjointSeams(),
+                               state.projectionMode());
     drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag);
   }
   // Roll/width/cross-section handles, drawn after position points so they sit on top.
