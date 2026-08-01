@@ -105,13 +105,15 @@ Drivable mesh object placement has no usable Y/Z editing without this; it
 lands first, as `MESH_PHYSICS_PLAN.md` front-loaded its own collision-surface
 invariant milestone before the physics-mode work.
 
-**1.1 — Add `ProjectionMode` state**
-- Files: `cpp/editor/include/EditorState.hpp`, `cpp/editor/src/TopDownCanvas.cpp`.
-- Add `enum class ProjectionMode { TopDown, Front, Side }` alongside the
-  existing `EditMode`. Toolbar control + keyboard shortcut, mirroring how
-  `EditMode` (`E`/`C`/`R`) is wired. Default `TopDown`, matching today's
-  only behavior.
-- Test: `ctest` (no behavior change yet — mode unused). Commit.
+**1.1 — Add `ProjectionMode` state** — done (`a07878f`)
+- Files: `cpp/editor/include/EditorState.hpp`, `cpp/editor/main.cpp` (toolbar
+  combo + `1`/`2`/`3` shortcuts live alongside `E`/`C`/`R`'s existing wiring
+  here, not in `TopDownCanvas.cpp`).
+- Added `enum class ProjectionMode { TopDown, Front, Side }` alongside the
+  existing `EditMode`, with a getter/setter on `EditorState`. Default
+  `TopDown`, matching today's only behavior; mode is otherwise unused until
+  1.2.
+- Test: `ctest` (no behavior change yet — mode unused). Committed.
 
 **1.2 — Generalize drag-to-move math**
 - File: `cpp/editor/src/TopDownCanvas.cpp`.
