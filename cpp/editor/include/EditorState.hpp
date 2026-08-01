@@ -13,6 +13,11 @@
 // decoding and GL upload live in TextureCache.hpp/.cpp instead -- EditorState only ever holds the
 // schema-level TextureAsset record (name/path/dimensions), same separation TopDownCanvas.cpp
 // keeps between authored data and its own rendering.
+//
+// DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1 adds ProjectionMode (TopDown/Front/Side), a
+// canvas-wide state orthogonal to EditMode: it picks which plane screen drags project into, not
+// what a click/drag does semantically. TopDown is today's only behavior; Front/Side exist for
+// drivable mesh object placement but apply to every entity's editing.
 #pragma once
 
 #include <algorithm>
@@ -34,6 +39,14 @@ namespace editor {
 enum class EditMode { Edit,
                       Create,
                       Rails };
+
+// Canvas-wide, orthogonal to EditMode: which plane screen drags project into. TopDown (X/Z, view
+// dir Y = -1) is today's only behavior; Front (X/Y, view dir Z = -1) and Side (Y/Z, view dir X = 1)
+// are added for drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1) but
+// apply to every entity's editing, not just placements.
+enum class ProjectionMode { TopDown,
+                            Front,
+                            Side };
 
 struct SelectedPoint {
   int pathIndex{-1};
@@ -61,6 +74,8 @@ public:
   EditMode mode() const { return mode_; }
   SelectedPoint selection() const { return selection_; }
   const std::vector<tox::Vec3>& createDraft() const { return createDraft_; }
+  ProjectionMode projectionMode() const { return projectionMode_; }
+  void setProjectionMode(ProjectionMode mode) { projectionMode_ = mode; }
   bool dragging() const { return dragging_; }
   const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
   bool meshDragging() const { return meshDragging_; }
@@ -2307,6 +2322,7 @@ private:
   History history_;
   std::vector<std::string> availableMaterials_;  // sorted qualified names; see setAvailableMaterials
   EditMode mode_{EditMode::Edit};
+  ProjectionMode projectionMode_{ProjectionMode::TopDown};
   SelectedPoint selection_;
   bool dragging_{false};
   bool dragMutated_{false};

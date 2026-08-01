@@ -2151,6 +2151,11 @@ int main(int, char**) {
       if (ImGui::IsKeyPressed(ImGuiKey_E)) editorState.setMode(editor::EditMode::Edit);
       if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
       if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
+      // 1/2/3 switch canvas projection mode -- orthogonal to E/C/R's EditMode, so both live on
+      // the global (non-text-input) shortcut set without colliding.
+      if (ImGui::IsKeyPressed(ImGuiKey_1)) editorState.setProjectionMode(editor::ProjectionMode::TopDown);
+      if (ImGui::IsKeyPressed(ImGuiKey_2)) editorState.setProjectionMode(editor::ProjectionMode::Front);
+      if (ImGui::IsKeyPressed(ImGuiKey_3)) editorState.setProjectionMode(editor::ProjectionMode::Side);
       if (ImGui::IsKeyPressed(ImGuiKey_G)) topDownView.setShowGrid(!topDownView.showGrid());
       // Deselect: clears whichever of point/mesh-region/
       // zone/trigger is currently selected -- mirrored by the Edit menu's "Deselect" item below.
@@ -2605,6 +2610,16 @@ int main(int, char**) {
     const char* modeNames[] = {"Edit", "Create", "Rails"};
     ImGui::SetNextItemWidth(100);
     if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    ImGui::SameLine(0.0f, 14.0f);
+    ImGui::TextUnformatted("View");
+    ImGui::SameLine();
+    {
+      int projectionIndex = static_cast<int>(editorState.projectionMode());
+      const char* projectionNames[] = {"Top-down (1)", "Front (2)", "Side (3)"};
+      ImGui::SetNextItemWidth(130);
+      if (ImGui::Combo("##projectionMode", &projectionIndex, projectionNames, 3))
+        editorState.setProjectionMode(static_cast<editor::ProjectionMode>(projectionIndex));
+    }
     ImGui::SameLine(0.0f, 14.0f);
     ImGui::TextUnformatted("Render");
     ImGui::SameLine();
