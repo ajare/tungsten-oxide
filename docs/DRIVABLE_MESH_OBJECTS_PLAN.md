@@ -139,6 +139,57 @@ update)
   editor starts and its self-checks pass, but on-canvas Front/Side dragging
   should get a real manual pass before relying on it further. Committed.
 
+**1.2 follow-up — Full canvas generalization** — done
+- User-reported gap after 1.2 landed: Front/Side still rendered the road,
+  grid-fit bounds, zones/triggers/physics points/crossings/start marker/
+  roll-width-cross-section handles in the XZ plane — only position points
+  had moved, so they floated disconnected from everything else. Explicitly
+  scoped up to "full canvas generalization" (vs. road-only or render-only)
+  after asking the user.
+- Files: `cpp/editor/src/TopDownCanvas.cpp` (the bulk of it), `cpp/editor/include/EditorState.hpp`
+  (`createModeClick`/`extendOpenPathFromEndpoint`/`hitTestOpenEndpoint` now
+  route through `planeCoords`/`setPlaneCoords` too, closing the gap 1.2 left
+  in weld/join-drag and Create-mode point placement).
+- `WorldFrame2D`/`sampleCenterlineAtG` now carry every field (`pos`,
+  `edgeRight`, `h`, `tangent`) pre-projected into the active plane rather
+  than always XZ; because plane projection is linear, offsetting by a
+  projected axis (width/roll handle offsets, zone lateral offsets) gives the
+  same result as projecting a full-3D offset would — no separate per-caller
+  handling needed. A new `rotateAngleDeg`-style helper, `worldToScreenPlane`,
+  is the one conversion every render call site now uses instead of
+  `view.worldToScreen(v.x, v.z)` directly. Generalized: road ribbon
+  (`drawBakedPath`), view auto-fit bounds (`computeViewBounds`), zones (both
+  path- and mesh-hosted outlines), triggers (full 3D gate frame, trivial),
+  physics-sample overlay, self-intersection crossing markers, start marker,
+  roll/width/cross-section handles and their on-canvas drag math, road-click
+  hit-testing, weld/join-drag endpoint search, the right-click "Add control
+  point" context menu (now composes the new point's position via
+  `setPlaneCoords` instead of assuming X/Z), and Create mode's draft points.
+- Deliberately NOT generalized, and gated to TopDown-only: mesh region
+  rendering/hit-testing/drag/rotate and mesh rail rendering/picking
+  (`drawMeshRegions`/`drawReservationWalls`/`drawMeshRails`/`meshRegionAt`/
+  `meshVertexWorld`/`meshEdgeAtWorld`, the mesh-drag branch in
+  `handleEditModeInput`). Two reasons, both already true before this
+  follow-up and unchanged by it: `MeshRegion`'s polygon/rail data is a flat
+  X/Z representation with no stored Y at all, so there's no sound projection
+  to invent; and the whole type is deleted outright in Milestone 2, the very
+  next step, so investing in it now is pure throwaway work. A stale mesh
+  selection surviving a mode switch is explicitly guarded against (mesh drag/
+  rotate only fires in TopDown).
+- Test: `ctest` (all 7 suites green) and a smoke launch of `track_editor.exe`
+  confirming every one of its ~20 built-in self-checks still reports `OK`
+  with zero `MISMATCH`. While investigating a first ctest run's total
+  failure, found `cpp/test-data/` deleted from the working tree by something
+  outside this session's own actions (not a `rm`/`git` command this session
+  ran) — restored immediately via `git checkout -- cpp/test-data` before
+  re-running; confirmed clean and unmodified afterward. Also noticed an
+  untracked, pre-existing (dated before this session) duplicate at
+  `cpp/willpower/test-data/` — left alone as out of scope, flagged to the
+  user. No manual interactive Front/Side verification was possible in this
+  environment (same constraint as 1.2's own note) — this remains the
+  highest-value thing to actually eyeball in the real editor before trusting
+  it further.
+
 **1.3 — Generalize shift+drag-to-rotate** — done
 - Files: `cpp/editor/src/TopDownCanvas.cpp` (`rotateAngleDeg`, a mode-aware
   wrapper around the existing `angleFromOriginDeg` that feeds it

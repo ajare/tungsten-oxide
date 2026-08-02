@@ -30,6 +30,30 @@ WorldPoint2D planeCoords(ProjectionMode mode, const tox::Vec3& p) {
   }
 }
 
+// Inverse of planeCoords: writes (u, v) into the two axes the mode's plane covers, leaving the
+// third axis (not touched by this operation) unchanged. Mirrors EditorState's own private
+// setPlaneCoords -- used here only where a NEW world position has to be built from a click (the
+// context menu's "Add control point"), since every drag/hit-test already routes through
+// EditorState's copy.
+void setPlaneCoords(ProjectionMode mode, tox::Vec3& p, double u, double v) {
+  switch (mode) {
+    case ProjectionMode::Front: p.x = u; p.y = v; break;
+    case ProjectionMode::Side: p.y = u; p.z = v; break;
+    case ProjectionMode::TopDown:
+    default: p.x = u; p.z = v; break;
+  }
+}
+
+// v.x/v.z projected through planeCoords, then fed to worldToScreen -- the single conversion every
+// rendering call site below should use instead of `view.worldToScreen(v.x, v.z)` directly, now that
+// "x, z" no longer always means world X/Z (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1.2's canvas
+// projection-mode generalization, extended past position points to the rest of the canvas per
+// follow-up feedback that Front/Side still rendered everything else in the XZ plane).
+ScreenPoint2D worldToScreenPlane(const TopDownView& view, ProjectionMode mode, const tox::Vec3& v) {
+  const WorldPoint2D p = planeCoords(mode, v);
+  return view.worldToScreen(p.x, p.z);
+}
+
 constexpr float kPointRadius = 4.0f;
 constexpr float kPickRadiusPx = 10.0f;
 const ImU32 kBackgroundColor = IM_COL32(8, 20, 29, 255);
@@ -133,18 +157,24 @@ const ImU32 kTriggerFinishColor = IM_COL32(255, 211, 79, 255);       // #ffd34f
 
 // Authored control points plus every mesh region's baked
 // bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
-TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked) {
+// Projected into the active ProjectionMode's plane so Front/Side auto-fit to the track's actual
+// (x, y)/(y, z) extent instead of its XZ footprint. Mesh-region bounds are TopDown-only: `region.
+// bounds` is a flat X/Z rectangle with no stored Y (MeshRegion's 2D-polygon representation, removed
+// entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2), so there's no sound way to project it into
+// Front/Side, and it's not worth inventing one for a type about to be deleted.
+TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked, ProjectionMode mode) {
   TrackBounds2D bounds{1e300, -1e300, 1e300, -1e300};
   for (const auto& path : track.paths) {
     for (const auto& point : path.points) {
       if (point.kind != PointKind::Position) continue;
-      bounds.minX = std::min(bounds.minX, point.pos.x);
-      bounds.maxX = std::max(bounds.maxX, point.pos.x);
-      bounds.minZ = std::min(bounds.minZ, point.pos.z);
-      bounds.maxZ = std::max(bounds.maxZ, point.pos.z);
+      const WorldPoint2D p = planeCoords(mode, point.pos);
+      bounds.minX = std::min(bounds.minX, p.x);
+      bounds.maxX = std::max(bounds.maxX, p.x);
+      bounds.minZ = std::min(bounds.minZ, p.z);
+      bounds.maxZ = std::max(bounds.maxZ, p.z);
     }
   }
-  if (baked != nullptr) {
+  if (baked != nullptr && mode == ProjectionMode::TopDown) {
     for (const auto& region : baked->meshRegions) {
       bounds.minX = std::min(bounds.minX, region.bounds.minX);
       bounds.maxX = std::max(bounds.maxX, region.bounds.maxX);
@@ -249,11 +279,11 @@ void drawGrid(ImDrawList* drawList, const ImVec2& canvasOrigin, const ImVec2& ca
 // curvature via TrackCore::pathSignedCurvatureAt (see that function's doc comment for why this
 // isn't derived from the baked frames themselves).
 void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Path& path,
-                   const tox::PathDefinition& definition, TopDownView::RenderMode mode, double minElev, double maxElev,
-                   bool isCurrent) {
+                   const tox::PathDefinition& definition, TopDownView::RenderMode renderMode, double minElev, double maxElev,
+                   bool isCurrent, ProjectionMode mode) {
   const std::size_t n = path.centerline.size();
   if (n < 2) return;
-  const bool flatEdges = mode != TopDownView::RenderMode::Banked;
+  const bool flatEdges = renderMode != TopDownView::RenderMode::Banked;
 
   // Local cross-track parameter u in [-1, +1] (left edge .. centerline .. right edge), normalized
   // by each ring's own halfW so a gap band from two different-width rings is directly comparable --
@@ -279,11 +309,11 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
     const tox::Vec3& axisJ = flatEdges ? fj.h : fj.edgeRight;
 
     ImU32 fillColor = kRoadColor;
-    if (mode == TopDownView::RenderMode::Flat) {
+    if (renderMode == TopDownView::RenderMode::Flat) {
       fillColor = rollFillColor((fi.roll + fj.roll) * 0.5 * 180.0 / std::numbers::pi);
-    } else if (mode == TopDownView::RenderMode::Elevation) {
+    } else if (renderMode == TopDownView::RenderMode::Elevation) {
       fillColor = elevationFillColor((fi.pos.y + fj.pos.y) * 0.5, minElev, maxElev);
-    } else if (mode == TopDownView::RenderMode::Camber) {
+    } else if (renderMode == TopDownView::RenderMode::Camber) {
       const double curvatureI = tox::pathSignedCurvatureAt(definition, i, n);
       const double curvatureJ = tox::pathSignedCurvatureAt(definition, j, n);
       fillColor = camberFillColor((fi.roll + fj.roll) * 0.5, (curvatureI + curvatureJ) * 0.5);
@@ -294,10 +324,10 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
       const tox::Vec3 leftI = ringPoint(fi, axisI, -1.0), rightI = ringPoint(fi, axisI, 1.0);
       const tox::Vec3 leftJ = ringPoint(fj, axisJ, -1.0), rightJ = ringPoint(fj, axisJ, 1.0);
       const ImVec2 quad[4] = {
-          toAbsolute(canvasOrigin, view.worldToScreen(leftI.x, leftI.z)),
-          toAbsolute(canvasOrigin, view.worldToScreen(leftJ.x, leftJ.z)),
-          toAbsolute(canvasOrigin, view.worldToScreen(rightJ.x, rightJ.z)),
-          toAbsolute(canvasOrigin, view.worldToScreen(rightI.x, rightI.z)),
+          toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, leftI)),
+          toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, leftJ)),
+          toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, rightJ)),
+          toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, rightI)),
       };
       drawList->AddConvexPolyFilled(quad, 4, fillColor);
       continue;
@@ -334,7 +364,7 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
       if (solidCount <= 2) continue;
       auto pointAt = [&](int c) {
         const tox::Vec3 p = ringPoint(*ringOf[c], *axisOf[c], uOf[c]);
-        return toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z));
+        return toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, p));
       };
       if (solidCount == 4) {
         const ImVec2 quad[4] = {pointAt(0), pointAt(1), pointAt(2), pointAt(3)};
@@ -348,7 +378,7 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
 
   std::vector<ImVec2> centerline;
   centerline.reserve(n);
-  for (const auto& frame : path.centerline) centerline.push_back(toAbsolute(canvasOrigin, view.worldToScreen(frame.pos.x, frame.pos.z)));
+  for (const auto& frame : path.centerline) centerline.push_back(toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, frame.pos)));
   drawList->AddPolyline(centerline.data(), static_cast<int>(centerline.size()),
                         isCurrent ? kCurrentPathCenterlineColor : kCenterlineColor, path.closed ? ImDrawFlags_Closed : ImDrawFlags_None,
                         isCurrent ? kCurrentPathCenterlineThickness : kCenterlineThickness);
@@ -361,7 +391,7 @@ void drawBakedPath(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
 // doesn't exist (aux point selected, no
 // selection, or an open path's boundary point in that direction).
 void drawSegmentHighlight(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track* baked,
-                          const std::optional<EditorState::SegmentRef>& segment, ImU32 color) {
+                          const std::optional<EditorState::SegmentRef>& segment, ImU32 color, ProjectionMode mode) {
   if (!segment.has_value() || baked == nullptr) return;
   if (segment->pathIndex < 0 || segment->pathIndex >= static_cast<int>(baked->paths.size())) return;
   const tox::Path& path = baked->paths[segment->pathIndex];
@@ -369,7 +399,7 @@ void drawSegmentHighlight(ImDrawList* drawList, const ImVec2& canvasOrigin, cons
   if (segment->i < 0 || segment->i >= n || n < 2) return;
   const tox::Vec3& a = path.anchors[segment->i];
   const tox::Vec3& b = path.anchors[(segment->i + 1) % n];
-  drawList->AddLine(toAbsolute(canvasOrigin, view.worldToScreen(a.x, a.z)), toAbsolute(canvasOrigin, view.worldToScreen(b.x, b.z)), color,
+  drawList->AddLine(toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, a)), toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, b)), color,
                     kSegmentHighlightThickness);
 }
 
@@ -433,23 +463,37 @@ void drawReservationWalls(ImDrawList* drawList, const ImVec2& canvasOrigin, cons
 // Maps a path parameter g in [0, gMax] to an interpolated centerline frame, given core's own
 // sampling convention: closed paths sample N points spanning [0, gMax) (wrapping), open paths
 // sample N points spanning [0, gMax] inclusive of both ends.
-// `hX/hZ` is the UNROLLED horizontal axis (roll/width/cross-section handles are drawn along this,
-// not the banked `edgeRight`); `width`/`roll` (radians) are the frame's own baked values. `tangentX/
-// tangentZ` is the raw (un-normalized-in-XZ) driven-direction tangent, added for the start-marker
-// arrow -- the only current consumer, so it's fine if its magnitude
-// isn't unit length; the arrow only ever uses atan2 on it.
+//
+// Every direction/position field is stored ALREADY PROJECTED into the active ProjectionMode's
+// plane (see planeCoords) -- `x`/`z` is a plane position, not necessarily world X/Z; `hX`/`hZ` is
+// the UNROLLED horizontal axis (roll/width/cross-section handles are drawn along this, not the
+// banked `edgeRight`) projected the same way; `width`/`roll` (radians) are the frame's own baked
+// scalars, unaffected by projection. `tangentX/tangentZ` is the raw (un-normalized) driven-
+// direction tangent, projected the same way, added for the start-marker arrow -- the only current
+// consumer, so it's fine if its magnitude isn't unit length; the arrow only ever uses atan2 on it.
+// Projection is a linear map (picking 2 of 3 coordinates), so projecting each of pos/edgeRight/h/
+// tangent independently and then doing the surrounding math (offsets, drag deltas, dot products)
+// entirely within the projected plane is exactly the "restricted to the 2D plane the user's mouse
+// actually lives in" behavior every other on-canvas gesture in this file already wants -- it is NOT
+// the same as projecting a full-3D computation's result, but that's the correct choice here, not an
+// approximation of it.
 struct WorldFrame2D {
   double x{0.0}, z{0.0}, rightX{1.0}, rightZ{0.0}, hX{1.0}, hZ{0.0}, width{1.0}, roll{0.0}, tangentX{0.0}, tangentZ{1.0};
 };
 
-WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
+WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax, ProjectionMode mode) {
   const std::size_t n = centerline.size();
   if (n == 0) return {};
+  auto project = [&](const tox::Vec3& pos, const tox::Vec3& right, const tox::Vec3& h, const tox::Vec3& tangent, double width, double roll) {
+    const WorldPoint2D p = planeCoords(mode, pos);
+    const WorldPoint2D r = planeCoords(mode, right);
+    const WorldPoint2D hh = planeCoords(mode, h);
+    const WorldPoint2D t = planeCoords(mode, tangent);
+    return WorldFrame2D{p.x, p.z, r.x, r.z, hh.x, hh.z, width, roll, t.x, t.z};
+  };
   if (n == 1) {
     const tox::Frame& only = centerline[0];
-    return {only.pos.x, only.pos.z, only.edgeRight.x, only.edgeRight.z,
-            only.h.x, only.h.z, only.width, only.roll,
-            only.tangent.x, only.tangent.z};
+    return project(only.pos, only.edgeRight, only.h, only.tangent, only.width, only.roll);
   }
   const double frac = gMax > 0.0 ? std::clamp(g, 0.0, gMax) / gMax : 0.0;
   const double indexF = frac * static_cast<double>(closed ? n : n - 1);
@@ -465,16 +509,8 @@ WorldFrame2D sampleCenterlineAtG(const std::vector<tox::Frame>& centerline, bool
   }
   const tox::Frame& a = centerline[index0];
   const tox::Frame& b = centerline[index1];
-  return {a.pos.x + (b.pos.x - a.pos.x) * t,
-          a.pos.z + (b.pos.z - a.pos.z) * t,
-          a.edgeRight.x + (b.edgeRight.x - a.edgeRight.x) * t,
-          a.edgeRight.z + (b.edgeRight.z - a.edgeRight.z) * t,
-          a.h.x + (b.h.x - a.h.x) * t,
-          a.h.z + (b.h.z - a.h.z) * t,
-          a.width + (b.width - a.width) * t,
-          a.roll + (b.roll - a.roll) * t,
-          a.tangent.x + (b.tangent.x - a.tangent.x) * t,
-          a.tangent.z + (b.tangent.z - a.tangent.z) * t};
+  return project(a.pos + (b.pos - a.pos) * t, a.edgeRight + (b.edgeRight - a.edgeRight) * t, a.h + (b.h - a.h) * t,
+                a.tangent + (b.tangent - a.tangent) * t, a.width + (b.width - a.width) * t, a.roll + (b.roll - a.roll) * t);
 }
 
 const ImU32 kStartMarkerColor = IM_COL32(141, 255, 157, 255);  // '#8dff9d'
@@ -486,13 +522,14 @@ constexpr float kStartMarkerHeadSpreadRad = 0.4f;
 // reverse is set), with a "START" label. Samples the baked centerline via sampleCenterlineAtG,
 // like every other on-canvas frame lookup in this file -- an accepted approximation at
 // editor zoom (see this file's header comment above WorldFrame2D).
-void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked, const Start& start) {
+void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked, const Start& start,
+                     ProjectionMode mode) {
   if (start.path < 0 || start.path >= static_cast<int>(baked.paths.size())) return;
   const tox::Path& path = baked.paths[start.path];
   if (path.centerline.empty()) return;
   const int n = static_cast<int>(path.centerline.size());
   const double gMax = path.closed ? n : n - 1;
-  const WorldFrame2D f = sampleCenterlineAtG(path.centerline, path.closed, static_cast<double>(start.point), gMax);
+  const WorldFrame2D f = sampleCenterlineAtG(path.centerline, path.closed, static_cast<double>(start.point), gMax, mode);
 
   double dirX = f.tangentX, dirZ = f.tangentZ;
   if (start.reverse) {
@@ -524,7 +561,7 @@ void drawStartMarker(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
 // this file's existing "approximate but imperceptible at editor zoom" ethos (see this file's header
 // comment above WorldFrame2D).
 double dragAuxTAlongTangent(const std::vector<tox::Frame>& centerline, bool closed, double currentT, double worldX, double worldZ,
-                            const WorldFrame2D& f) {
+                            const WorldFrame2D& f, ProjectionMode mode) {
   constexpr double kEps = 1e-4;
   double tMinus = currentT - kEps, tPlus = currentT + kEps;
   if (closed) {
@@ -534,8 +571,8 @@ double dragAuxTAlongTangent(const std::vector<tox::Frame>& centerline, bool clos
     tMinus = std::clamp(tMinus, 0.0, 1.0);
     tPlus = std::clamp(tPlus, 0.0, 1.0);
   }
-  const WorldFrame2D a = sampleCenterlineAtG(centerline, closed, tMinus, 1.0);
-  const WorldFrame2D b = sampleCenterlineAtG(centerline, closed, tPlus, 1.0);
+  const WorldFrame2D a = sampleCenterlineAtG(centerline, closed, tMinus, 1.0, mode);
+  const WorldFrame2D b = sampleCenterlineAtG(centerline, closed, tPlus, 1.0, mode);
   double dt = tPlus - tMinus;
   if (closed && dt <= 0.0) dt += 1.0;
   const double dx = b.x - a.x, dz = b.z - a.z;
@@ -555,17 +592,23 @@ double dragAuxTAlongTangent(const std::vector<tox::Frame>& centerline, bool clos
 }
 
 // Rotated rectangle for a mesh-hosted zone; zone.rotation is already radians (baked that way in
-// TrackBake.cpp), unlike the degrees the rest of this file works in for placements/edges.
-std::vector<WorldPoint2D> meshZoneOutline(const tox::Zone& zone) {
+// TrackBake.cpp), unlike the degrees the rest of this file works in for placements/edges. A
+// mesh-hosted zone has no stored Y (its schema is a flat X/Z rectangle, `zone.x`/`zone.z` only) --
+// each corner is built as a full Vec3 with y=0 before projecting, so Front/Side draw it as the
+// (mathematically honest) zero-height line a Y-less rectangle actually is, rather than skipping it.
+std::vector<WorldPoint2D> meshZoneOutline(const tox::Zone& zone, ProjectionMode mode) {
   const double cosine = std::cos(zone.rotation), sine = std::sin(zone.rotation);
-  auto corner = [&](double x, double z) { return WorldPoint2D{zone.x + x * cosine - z * sine, zone.z + x * sine + z * cosine}; };
+  auto corner = [&](double x, double z) { return planeCoords(mode, tox::Vec3(zone.x + x * cosine - z * sine, 0.0, zone.z + x * sine + z * cosine)); };
   return {corner(-zone.halfLength, -zone.halfWidth), corner(zone.halfLength, -zone.halfWidth), corner(zone.halfLength, zone.halfWidth),
           corner(-zone.halfLength, zone.halfWidth)};
 }
 
 // Left rail (gLo..gHi at lateral-halfWidth) followed by the reversed right rail, mirroring
-// zoneOutlineWorld's `strip.left` then reversed `strip.right` assembly exactly.
-std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zone& zone) {
+// zoneOutlineWorld's `strip.left` then reversed `strip.right` assembly exactly. sample.x/z and
+// sample.rightX/rightZ already come out of sampleCenterlineAtG projected into `mode`'s plane, and
+// since projection is linear, offsetting by rightX/rightZ here produces exactly the same result as
+// projecting a full-3D offset would -- no separate handling needed for Front/Side.
+std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zone& zone, ProjectionMode mode) {
   if (zone.hostPathIndex < 0 || zone.hostPathIndex >= static_cast<int>(baked.paths.size())) return {};
   const auto& centerline = baked.paths[zone.hostPathIndex].centerline;
   if (centerline.empty()) return {};
@@ -573,7 +616,7 @@ std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zo
   std::vector<WorldPoint2D> left(kRows + 1), right(kRows + 1);
   for (int i = 0; i <= kRows; ++i) {
     const double g = zone.gLo + (zone.gHi - zone.gLo) * (static_cast<double>(i) / kRows);
-    const WorldFrame2D sample = sampleCenterlineAtG(centerline, zone.closed, g, zone.gMax);
+    const WorldFrame2D sample = sampleCenterlineAtG(centerline, zone.closed, g, zone.gMax, mode);
     left[i] = {sample.x + sample.rightX * (zone.lateral - zone.halfWidth), sample.z + sample.rightZ * (zone.lateral - zone.halfWidth)};
     right[i] = {sample.x + sample.rightX * (zone.lateral + zone.halfWidth), sample.z + sample.rightZ * (zone.lateral + zone.halfWidth)};
   }
@@ -583,8 +626,8 @@ std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zo
   return outline;
 }
 
-std::vector<WorldPoint2D> zoneOutlineWorld(const tox::Track& baked, const tox::Zone& zone) {
-  return zone.kind == "mesh" ? meshZoneOutline(zone) : pathZoneOutline(baked, zone);
+std::vector<WorldPoint2D> zoneOutlineWorld(const tox::Track& baked, const tox::Zone& zone, ProjectionMode mode) {
+  return zone.kind == "mesh" ? meshZoneOutline(zone, mode) : pathZoneOutline(baked, zone, mode);
 }
 
 bool pointInWorldPolygon(const std::vector<WorldPoint2D>& points, double x, double z) {
@@ -598,9 +641,9 @@ bool pointInWorldPolygon(const std::vector<WorldPoint2D>& points, double x, doub
 }
 
 void drawZones(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
-               const std::optional<std::string>& selectedZoneId) {
+               const std::optional<std::string>& selectedZoneId, ProjectionMode mode) {
   for (const auto& zone : baked.zones) {
-    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(baked, zone);
+    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(baked, zone, mode);
     if (outline.size() < 3) continue;
     std::vector<ImVec2> screen;
     screen.reserve(outline.size());
@@ -618,10 +661,10 @@ void drawZones(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownVi
 
 // Topmost zone under a world point, mirroring zoneAtTop's reverse iteration (later-added zones
 // draw on top).
-const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worldZ) {
+const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worldZ, ProjectionMode mode) {
   if (baked == nullptr) return nullptr;
   for (auto it = baked->zones.rbegin(); it != baked->zones.rend(); ++it) {
-    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(*baked, *it);
+    const std::vector<WorldPoint2D> outline = zoneOutlineWorld(*baked, *it, mode);
     if (outline.size() >= 3 && pointInWorldPolygon(outline, worldX, worldZ)) return &*it;
   }
   return nullptr;
@@ -640,14 +683,15 @@ struct NearestPathPlacement {
 // world position. Approximated off the baked centerline's own discrete samples rather than a
 // fine-grained live spline evaluator (same tradeoff already accepted for zone/trigger outlines --
 // no evaluator is exposed to cpp/editor).
-std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked, double worldX, double worldZ) {
+std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked, double worldX, double worldZ, ProjectionMode mode) {
   if (baked == nullptr) return std::nullopt;
   int bestPath = -1, bestIndex = -1;
   double bestDistSq = std::numeric_limits<double>::infinity();
   for (int pi = 0; pi < static_cast<int>(baked->paths.size()); ++pi) {
     const auto& centerline = baked->paths[pi].centerline;
     for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
-      const double dx = centerline[i].pos.x - worldX, dz = centerline[i].pos.z - worldZ;
+      const WorldPoint2D p = planeCoords(mode, centerline[i].pos);
+      const double dx = p.x - worldX, dz = p.z - worldZ;
       const double distSq = dx * dx + dz * dz;
       if (distSq < bestDistSq) {
         bestDistSq = distSq;
@@ -661,7 +705,12 @@ std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked
   const tox::Frame& frame = path.centerline[bestIndex];
   const int n = static_cast<int>(path.centerline.size());
   const double t = path.closed ? static_cast<double>(bestIndex) / n : static_cast<double>(bestIndex) / std::max(1, n - 1);
-  const double lateral = (worldX - frame.pos.x) * frame.edgeRight.x + (worldZ - frame.pos.z) * frame.edgeRight.z;
+  // Lateral offset computed entirely within the active plane -- pos/edgeRight both projected via
+  // planeCoords first, same "linear projection commutes with the surrounding math" reasoning as
+  // sampleCenterlineAtG's own header comment.
+  const WorldPoint2D framePos = planeCoords(mode, frame.pos);
+  const WorldPoint2D frameRight = planeCoords(mode, frame.edgeRight);
+  const double lateral = (worldX - framePos.x) * frameRight.x + (worldZ - framePos.z) * frameRight.z;
   return NearestPathPlacement{bestPath, t, lateral, &frame};
 }
 
@@ -676,14 +725,15 @@ std::optional<NearestPathPlacement> nearestPathPlacement(const tox::Track* baked
 
 // Nearest baked centerline frame (across all paths) to a world point, within `pickRadiusWorld`.
 std::optional<TopDownView::PhysicsSampleRef> physicsPointAtWorld(const tox::Track* baked, double worldX, double worldZ,
-                                                                 double pickRadiusWorld) {
+                                                                 double pickRadiusWorld, ProjectionMode mode) {
   if (baked == nullptr) return std::nullopt;
   std::optional<TopDownView::PhysicsSampleRef> best;
   double bestDistSq = pickRadiusWorld * pickRadiusWorld;
   for (int pi = 0; pi < static_cast<int>(baked->paths.size()); ++pi) {
     const auto& centerline = baked->paths[pi].centerline;
     for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
-      const double dx = centerline[i].pos.x - worldX, dz = centerline[i].pos.z - worldZ;
+      const WorldPoint2D p = planeCoords(mode, centerline[i].pos);
+      const double dx = p.x - worldX, dz = p.z - worldZ;
       const double distSq = dx * dx + dz * dz;
       if (distSq < bestDistSq) {
         bestDistSq = distSq;
@@ -694,13 +744,13 @@ std::optional<TopDownView::PhysicsSampleRef> physicsPointAtWorld(const tox::Trac
   return best;
 }
 
-void drawPhysicsPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked) {
+void drawPhysicsPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked, ProjectionMode mode) {
   const auto& sel = view.physicsSelection();
   for (int pi = 0; pi < static_cast<int>(baked.paths.size()); ++pi) {
     const auto& centerline = baked.paths[pi].centerline;
     for (int i = 0; i < static_cast<int>(centerline.size()); ++i) {
       const bool isSelected = sel.has_value() && sel->pathIndex == pi && sel->frameIndex == i;
-      const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(centerline[i].pos.x, centerline[i].pos.z));
+      const ImVec2 screen = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, centerline[i].pos));
       drawList->AddCircleFilled(screen, isSelected ? 5.0f : 2.2f, isSelected ? kPhysicsSelectedColor : kPhysicsPointColor);
       if (isSelected) drawList->AddCircle(screen, 5.0f, IM_COL32(255, 255, 255, 255), 0, 2.0f);
     }
@@ -738,12 +788,12 @@ bool crossingIsCollapsed(CrossingState state) { return state == CrossingState::A
 // or nullptr -- a linear search over the crossing cache. Returns a pointer into
 // `baked->selfIntersections` (stable for the
 // lifetime of this frame's bake) rather than a copy, since the caller only needs side/a/b.
-const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopDownView& view, const ImVec2& mouseLocal) {
+const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopDownView& view, const ImVec2& mouseLocal, ProjectionMode mode) {
   if (baked == nullptr) return nullptr;
   const tox::SelfIntersection* best = nullptr;
   float bestDistSq = kCrossingHitRadiusPx * kCrossingHitRadiusPx;
   for (const auto& crossing : baked->selfIntersections) {
-    const ScreenPoint2D s = view.worldToScreen(crossing.point.x, crossing.point.z);
+    const ScreenPoint2D s = worldToScreenPlane(view, mode, crossing.point);
     const float dx = mouseLocal.x - static_cast<float>(s.x), dy = mouseLocal.y - static_cast<float>(s.y);
     const float distSq = dx * dx + dy * dy;
     if (distSq <= bestDistSq) {
@@ -758,12 +808,12 @@ const tox::SelfIntersection* crossingAtLocal(const tox::Track* baked, const TopD
 // (with a small center pip) = kept, including the dark contrast halo so markers stay visible over
 // any ribbon/centerline color.
 void drawCrossings(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
-                   const std::vector<SelfIntersectionOverride>& overrides) {
+                   const std::vector<SelfIntersectionOverride>& overrides, ProjectionMode mode) {
   for (const auto& crossing : baked.selfIntersections) {
     const CrossingState state = crossingStateFor(crossing, overrides);
     const bool collapsed = crossingIsCollapsed(state);
     const ImU32 color = crossingColor(state);
-    const ImVec2 screen = toAbsolute(canvasOrigin, view.worldToScreen(crossing.point.x, crossing.point.z));
+    const ImVec2 screen = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, crossing.point));
     drawList->AddCircleFilled(screen, 9.0f, kCrossingHaloColor);
     if (collapsed) drawList->AddCircleFilled(screen, 6.5f, color);
     drawList->AddCircle(screen, 6.5f, color, 0, 2.5f);
@@ -783,21 +833,21 @@ ImU32 triggerColor(const tox::Trigger& trigger) {
 }
 
 void drawTriggers(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track& baked,
-                  const std::optional<std::string>& selectedTriggerId, const std::optional<std::string>& hoveredTriggerId) {
+                  const std::optional<std::string>& selectedTriggerId, const std::optional<std::string>& hoveredTriggerId,
+                  ProjectionMode mode) {
   for (const auto& trigger : baked.triggers) {
-    const ImVec2 a = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x - trigger.right.x * trigger.halfWidth,
-                                                                 trigger.center.z - trigger.right.z * trigger.halfWidth));
-    const ImVec2 b = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x + trigger.right.x * trigger.halfWidth,
-                                                                 trigger.center.z + trigger.right.z * trigger.halfWidth));
+    const ImVec2 a = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, trigger.center - trigger.right * trigger.halfWidth));
+    const ImVec2 b = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, trigger.center + trigger.right * trigger.halfWidth));
     const bool isSelected = selectedTriggerId.has_value() && *selectedTriggerId == trigger.id;
     const bool isHovered = hoveredTriggerId.has_value() && *hoveredTriggerId == trigger.id;
     const ImU32 color = triggerColor(trigger);
     drawList->AddLine(a, b, color, isSelected ? 4.0f : 2.5f);
 
-    const ImVec2 center = toAbsolute(canvasOrigin, view.worldToScreen(trigger.center.x, trigger.center.z));
+    const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, trigger.center));
     constexpr float kArrowLen = 14.0f;
+    const WorldPoint2D fwdPlane = planeCoords(mode, trigger.fwd);
     auto drawArrow = [&](double sign) {
-      const double dx = trigger.fwd.x * sign, dz = trigger.fwd.z * sign;
+      const double dx = fwdPlane.x * sign, dz = fwdPlane.z * sign;
       const double len = std::hypot(dx, dz);
       if (len <= 0.0) return;
       const ImVec2 tip(center.x + static_cast<float>(dx / len * kArrowLen), center.y + static_cast<float>(dz / len * kArrowLen));
@@ -870,12 +920,12 @@ double distanceSqToSegment(double px, double pz, double ax, double az, double bx
 // Topmost trigger under a world point within `tolWorld`, mirroring triggerAtTop's reverse
 // iteration (later-added triggers draw on top) and its distToScreenSegment-based 8px pick radius
 // (converted to world units by the caller, same convention as meshEdgeAtWorld's tolWorld).
-const tox::Trigger* triggerAtWorld(const tox::Track* baked, double worldX, double worldZ, double tolWorld) {
+const tox::Trigger* triggerAtWorld(const tox::Track* baked, double worldX, double worldZ, double tolWorld, ProjectionMode mode) {
   if (baked == nullptr) return nullptr;
   for (auto it = baked->triggers.rbegin(); it != baked->triggers.rend(); ++it) {
-    const double ax = it->center.x - it->right.x * it->halfWidth, az = it->center.z - it->right.z * it->halfWidth;
-    const double bx = it->center.x + it->right.x * it->halfWidth, bz = it->center.z + it->right.z * it->halfWidth;
-    if (std::sqrt(distanceSqToSegment(worldX, worldZ, ax, az, bx, bz)) <= tolWorld) return &*it;
+    const WorldPoint2D a = planeCoords(mode, it->center - it->right * it->halfWidth);
+    const WorldPoint2D b = planeCoords(mode, it->center + it->right * it->halfWidth);
+    if (std::sqrt(distanceSqToSegment(worldX, worldZ, a.x, a.z, b.x, b.z)) <= tolWorld) return &*it;
   }
   return nullptr;
 }
@@ -969,7 +1019,7 @@ ImVec2 crossSectionHandleScreen(const TopDownView& view, const WorldFrame2D& f, 
 }
 
 void drawAuxPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
-                   const tox::Track* baked, int currentPathIndex, const SelectedPoint& selection) {
+                   const tox::Track* baked, int currentPathIndex, const SelectedPoint& selection, ProjectionMode mode) {
   if (currentPathIndex < 0 || currentPathIndex >= static_cast<int>(track.paths.size())) return;
   if (baked == nullptr || currentPathIndex >= static_cast<int>(baked->paths.size())) return;
   const Path& path = track.paths[currentPathIndex];
@@ -983,7 +1033,7 @@ void drawAuxPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
     if (point.kind == PointKind::Width && !view.showWidthPoints()) continue;
     if (point.kind == PointKind::CrossSection && !view.showCrossSectionPoints()) continue;
 
-    const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0);
+    const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0, mode);
     const bool isSelected = selection.pathIndex == currentPathIndex && selection.pointIndex == i;
     const ImVec2 center = toAbsolute(canvasOrigin, view.worldToScreen(f.x, f.z));
     const float handleRadius = isSelected ? 7.0f : 5.0f;
@@ -1018,7 +1068,7 @@ void drawAuxPoints(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDo
 // `pickRadiusPx`, on the current path -- checked in a fixed priority order (cross-section, width,
 // roll), all three before a position-point hit.
 std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, const tox::Track* baked, int currentPathIndex,
-                                              const TopDownView& view, const ImVec2& mouseLocal, float pickRadiusPx) {
+                                              const TopDownView& view, const ImVec2& mouseLocal, float pickRadiusPx, ProjectionMode mode) {
   if (currentPathIndex < 0 || currentPathIndex >= static_cast<int>(track.paths.size())) return std::nullopt;
   if (baked == nullptr || currentPathIndex >= static_cast<int>(baked->paths.size())) return std::nullopt;
   const Path& path = track.paths[currentPathIndex];
@@ -1037,7 +1087,7 @@ std::optional<SelectedPoint> auxHandleAtLocal(const TrackDefinition& track, cons
     for (int i = 0; i < static_cast<int>(path.points.size()); ++i) {
       const TrackPoint& point = path.points[i];
       if (point.kind != kind) continue;
-      const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(centerline, path.closed, point.t, 1.0, mode);
       if (kind == PointKind::Roll) {
         if (within(rollHandleScreen(view, f, point.roll))) return SelectedPoint{currentPathIndex, i};
       } else if (kind == PointKind::Width) {
@@ -1117,11 +1167,12 @@ void drawAuthoredPositionPoints(ImDrawList* drawList, const ImVec2& canvasOrigin
   }
 }
 
-void drawCreateDraft(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::Vec3>& draft) {
+void drawCreateDraft(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::Vec3>& draft,
+                     ProjectionMode mode) {
   if (draft.empty()) return;
   std::vector<ImVec2> screen;
   screen.reserve(draft.size());
-  for (const auto& p : draft) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(p.x, p.z)));
+  for (const auto& p : draft) screen.push_back(toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, p)));
   if (screen.size() > 1) drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), kCreateDraftColor, ImDrawFlags_None, 2.0f);
   for (const auto& s : screen) drawList->AddCircleFilled(s, kPointRadius, kCreateDraftColor);
 }
@@ -1142,7 +1193,7 @@ const tox::MeshRegion* meshRegionAt(const tox::Track* baked, double worldX, doub
 // every other clickable thing (points/mesh regions/zones/triggers), since the ribbon is the largest,
 // least-specific target on the canvas -- same "biggest thing loses to anything smaller drawn on top
 // of it" precedent as meshRegionAt going last among those.
-std::optional<int> pathAtWorld(const tox::Track* baked, double worldX, double worldZ, double edgeTolWorld) {
+std::optional<int> pathAtWorld(const tox::Track* baked, double worldX, double worldZ, double edgeTolWorld, ProjectionMode mode) {
   if (baked == nullptr) return std::nullopt;
   std::optional<int> best;
   double bestDistSq = std::numeric_limits<double>::infinity();
@@ -1155,7 +1206,9 @@ std::optional<int> pathAtWorld(const tox::Track* baked, double worldX, double wo
       const std::size_t t = (s + 1) % n;
       const tox::Frame& fa = path.centerline[s];
       const tox::Frame& fb = path.centerline[t];
-      const double distSq = distanceSqToSegment(worldX, worldZ, fa.pos.x, fa.pos.z, fb.pos.x, fb.pos.z);
+      const WorldPoint2D pa = planeCoords(mode, fa.pos);
+      const WorldPoint2D pb = planeCoords(mode, fb.pos);
+      const double distSq = distanceSqToSegment(worldX, worldZ, pa.x, pa.z, pb.x, pb.z);
       const double tol = std::max(fa.halfW, fb.halfW) + edgeTolWorld;
       if (distSq <= tol * tol && distSq < bestDistSq) {
         bestDistSq = distSq;
@@ -1200,6 +1253,7 @@ struct JoinDragPreview {
 bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
                          const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered, bool itemActive,
                          std::optional<EditorState::OpenEndpointRef>& outWeldTarget, JoinDragPreview& outJoinDrag) {
+  const ProjectionMode mode = state.projectionMode();
   bool mutated = false;
   outWeldTarget = std::nullopt;
   outJoinDrag = JoinDragPreview{};
@@ -1248,14 +1302,14 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // Roll/width/cross-section handles win over a position-point
     // hit, checked in priority order (crossSection, then width, then roll, all
     // before a position-point check).
-    const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx);
+    const auto auxHit = auxHandleAtLocal(state.track(), baked, state.currentPathIndex(), view, mouseLocal, kPickRadiusPx, mode);
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     // Self-intersection crossing markers: a click cycles the
     // crossing's override instead of selecting/dragging anything -- checked before a position-point
     // hit, and skipped entirely while shift is held, since shift is reserved for the
     // rubber-band gesture above.
     const tox::SelfIntersection* crossingHit =
-        !ImGui::GetIO().KeyShift ? crossingAtLocal(baked, view, mouseLocal) : nullptr;
+        !ImGui::GetIO().KeyShift ? crossingAtLocal(baked, view, mouseLocal, mode) : nullptr;
     if (auxHit.has_value()) {
       state.selectPoint(auxHit->pathIndex, auxHit->pointIndex);
       view.clearPhysicsSelection();
@@ -1268,7 +1322,8 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       // Physics sample points (debug overlay): picked after
       // authored control points so editing is never obstructed, but before zones/triggers/mesh
       // regions. Read-only: selecting one just shows its baked values, no drag.
-      const auto physicsHit = view.showPhysicsPoints() ? physicsPointAtWorld(baked, world.x, world.z, kPickRadiusPx / view.scale()) : std::nullopt;
+      const auto physicsHit =
+          view.showPhysicsPoints() ? physicsPointAtWorld(baked, world.x, world.z, kPickRadiusPx / view.scale(), mode) : std::nullopt;
       if (physicsHit.has_value()) {
         view.selectPhysicsSample(physicsHit->pathIndex, physicsHit->frameIndex);
         state.clearSelection();
@@ -1280,16 +1335,19 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         // Zones checked before mesh regions: a zone is usually the smaller, more specific thing
         // drawn on top of a region it sits on (a boost pad on a mesh plaza, say), so it should win
         // a click over the region beneath it.
-        const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z);
+        const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z, mode);
         if (zone != nullptr) {
           state.selectZone(zone->id);
         } else {
           // Triggers: gate lines, picked alongside zones (before the big mesh regions).
-          const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld);
+          const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
           if (trigger != nullptr) {
             state.selectTrigger(trigger->id);
           } else {
-            const tox::MeshRegion* region = meshRegionAt(baked, world.x, world.z);
+            // Mesh-region hit-testing is TopDown-only: MeshRegion's polygons are a flat X/Z
+            // representation with no Y to project (see computeViewBounds's comment), and the type
+            // is removed entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2.
+            const tox::MeshRegion* region = mode == ProjectionMode::TopDown ? meshRegionAt(baked, world.x, world.z) : nullptr;
             if (region != nullptr) {
               state.selectMesh(region->id);
             } else {
@@ -1302,7 +1360,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
               // Clicking the road itself (see pathAtWorld's
               // comment): picked last since it's the biggest, least-specific target on the
               // canvas. Selects that curve as "current" for the panels/dropdown.
-              const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld);
+              const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
               if (pathHit.has_value()) {
                 state.setCurrentPathIndex(*pathHit);
               }
@@ -1420,13 +1478,13 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         state.beginDrag();
         view.freezeBounds(preDragBounds);
       }
-      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0, mode);
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
       // Tangential component moves the point along the curve (see
       // dragAuxTAlongTangent's comment), computed from the SAME frame/mouse position as the
       // perpendicular value above, before either mutator fires this frame.
-      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f);
+      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f, mode);
       state.dragSelectedWidthTo(std::round(std::abs(dist) * 2.0 * 10.0) / 10.0);
       state.dragSelectedAuxTTo(newT);
       mutated = true;
@@ -1443,11 +1501,11 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         state.beginDrag();
         view.freezeBounds(preDragBounds);
       }
-      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0, mode);
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
       const double roll = f.width > 0.0 ? (dist / f.width) * 180.0 : 0.0;
-      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f);
+      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f, mode);
       state.dragSelectedRollTo(std::round(roll * 10.0) / 10.0);
       state.dragSelectedAuxTTo(newT);
       mutated = true;
@@ -1463,11 +1521,11 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         state.beginDrag();
         view.freezeBounds(preDragBounds);
       }
-      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, path.closed, point.t, 1.0, mode);
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       const double dist = (world.x - f.x) * f.hX + (world.z - f.z) * f.hZ;
       const double curvature = f.width > 0.0 ? dist / (f.width / 2.0) : 0.0;
-      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f);
+      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, path.closed, point.t, world.x, world.z, f, mode);
       state.dragSelectedCurvatureTo(std::round(curvature * 100.0) / 100.0);
       state.dragSelectedAuxTTo(newT);
       mutated = true;
@@ -1496,9 +1554,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         view.freezeBounds(preDragBounds);
       }
       const bool closed = state.track().paths[pathIndex].closed;
-      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, closed, trigger->host.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[pathIndex].centerline, closed, trigger->host.t, 1.0, mode);
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, closed, trigger->host.t, world.x, world.z, f);
+      const double newT = dragAuxTAlongTangent(baked->paths[pathIndex].centerline, closed, trigger->host.t, world.x, world.z, f, mode);
       state.dragSelectedTriggerTTo(newT);
       mutated = true;
     }
@@ -1519,7 +1577,11 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // Left-drag-on-empty-space pan -- decided at mousedown (see
     // panDragActive's own comment above), not just "nothing happens to be selected right now".
     view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
-  } else if (draggingGesture && state.selectedMeshId().has_value()) {
+  } else if (draggingGesture && state.selectedMeshId().has_value() && mode == ProjectionMode::TopDown) {
+    // TopDown-only, like every other mesh-region interaction (see meshRegionAt's own comment): a
+    // mesh region can still be selected from a prior TopDown session even after switching planes
+    // (mode switches don't clear object selection, only in-flight gestures), so this guard matters,
+    // not just meshRegionAt's own pick gate.
     const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
     const bool rotate = ImGui::GetIO().KeyShift;
     if (!state.meshDragging() && !state.meshRotating()) {
@@ -1553,13 +1615,13 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
 // kWeldTargetColor) and snapped to the target endpoint's own position once hovering a valid drop
 // point. No-op if the gesture isn't active.
 void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const tox::Track* baked,
-                      const JoinDragPreview& joinDrag) {
+                      const JoinDragPreview& joinDrag, ProjectionMode mode) {
   if (!joinDrag.from.has_value() || baked == nullptr) return;
   if (joinDrag.from->pathIndex < 0 || joinDrag.from->pathIndex >= static_cast<int>(baked->paths.size())) return;
   const auto& fromAnchors = baked->paths[joinDrag.from->pathIndex].anchors;
   if (fromAnchors.empty()) return;
   const tox::Vec3& fromPos = joinDrag.from->atEnd ? fromAnchors.back() : fromAnchors.front();
-  const ImVec2 from = toAbsolute(canvasOrigin, view.worldToScreen(fromPos.x, fromPos.z));
+  const ImVec2 from = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, fromPos));
 
   ImVec2 to = toAbsolute(canvasOrigin, joinDrag.currentLocal);
   ImU32 color = kJoinDragFreeColor;
@@ -1567,7 +1629,7 @@ void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const To
     const auto& targetAnchors = baked->paths[joinDrag.target->pathIndex].anchors;
     if (!targetAnchors.empty()) {
       const tox::Vec3& targetPos = joinDrag.target->atEnd ? targetAnchors.back() : targetAnchors.front();
-      to = toAbsolute(canvasOrigin, view.worldToScreen(targetPos.x, targetPos.z));
+      to = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, targetPos));
       color = kWeldTargetColor;
     }
   }
@@ -1613,9 +1675,11 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 // {x,x,z,z} bounds; TopDownView::focusOn floors that to a fixed minimum span rather than zooming
 // to infinity. Returns nullopt if nothing is selected, or a selected id/index no longer resolves
 // (stale selection, or `baked` not ready yet).
-std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, const tox::Track* baked) {
+std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, const tox::Track* baked, ProjectionMode mode) {
   if (state.selectedMeshId().has_value()) {
-    if (baked == nullptr) return std::nullopt;
+    // TopDown-only: MeshRegion's flat X/Z bounds have no Y to project into Front/Side (see
+    // computeViewBounds's comment) -- deleted entirely in Milestone 2 anyway.
+    if (baked == nullptr || mode != ProjectionMode::TopDown) return std::nullopt;
     for (const auto& region : baked->meshRegions)
       if (region.id == *state.selectedMeshId()) return TrackBounds2D{region.bounds.minX, region.bounds.maxX, region.bounds.minZ, region.bounds.maxZ};
     return std::nullopt;
@@ -1624,7 +1688,7 @@ std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, cons
     if (baked == nullptr) return std::nullopt;
     for (const auto& zone : baked->zones) {
       if (zone.id != *state.selectedZoneId()) continue;
-      const std::vector<WorldPoint2D> outline = zoneOutlineWorld(*baked, zone);
+      const std::vector<WorldPoint2D> outline = zoneOutlineWorld(*baked, zone, mode);
       if (outline.empty()) return std::nullopt;
       TrackBounds2D b{outline[0].x, outline[0].x, outline[0].z, outline[0].z};
       for (const auto& p : outline) {
@@ -1641,9 +1705,9 @@ std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, cons
     if (baked == nullptr) return std::nullopt;
     for (const auto& trigger : baked->triggers) {
       if (trigger.id != *state.selectedTriggerId()) continue;
-      const double ax = trigger.center.x - trigger.right.x * trigger.halfWidth, az = trigger.center.z - trigger.right.z * trigger.halfWidth;
-      const double bx = trigger.center.x + trigger.right.x * trigger.halfWidth, bz = trigger.center.z + trigger.right.z * trigger.halfWidth;
-      return TrackBounds2D{std::min(ax, bx), std::max(ax, bx), std::min(az, bz), std::max(az, bz)};
+      const WorldPoint2D a = planeCoords(mode, trigger.center - trigger.right * trigger.halfWidth);
+      const WorldPoint2D b = planeCoords(mode, trigger.center + trigger.right * trigger.halfWidth);
+      return TrackBounds2D{std::min(a.x, b.x), std::max(a.x, b.x), std::min(a.z, b.z), std::max(a.z, b.z)};
     }
     return std::nullopt;
   }
@@ -1655,14 +1719,15 @@ std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, cons
     const TrackPoint& point = path.points[sel.pointIndex];
     double x, z;
     if (point.kind == PointKind::Position) {
-      x = point.pos.x;
-      z = point.pos.z;
+      const WorldPoint2D p = planeCoords(mode, point.pos);
+      x = p.x;
+      z = p.z;
     } else {
       // Roll/width/crossSection points have no `pos` of their own -- positioned by `t` along the
       // baked centerline instead, same as the aux-handle rendering/dragging code above.
       if (baked == nullptr || sel.pathIndex >= static_cast<int>(baked->paths.size()) || baked->paths[sel.pathIndex].centerline.empty())
         return std::nullopt;
-      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[sel.pathIndex].centerline, path.closed, point.t, 1.0);
+      const WorldFrame2D f = sampleCenterlineAtG(baked->paths[sel.pathIndex].centerline, path.closed, point.t, 1.0, mode);
       x = f.x;
       z = f.z;
     }
@@ -1674,14 +1739,15 @@ std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, cons
 }  // namespace
 
 bool FocusOnSelection(TopDownView& view, const EditorState& state, const tox::Track* baked) {
-  const auto target = selectedObjectBounds(state, baked);
+  const auto target = selectedObjectBounds(state, baked, state.projectionMode());
   if (!target.has_value()) return false;
-  view.focusOn(*target, computeViewBounds(state.track(), baked));
+  view.focusOn(*target, computeViewBounds(state.track(), baked, state.projectionMode()));
   return true;
 }
 
 bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked, std::optional<WorldPoint2D>* hoveredWorldOut) {
-  const TrackBounds2D bounds = computeViewBounds(state.track(), baked);
+  const ProjectionMode mode = state.projectionMode();
+  const TrackBounds2D bounds = computeViewBounds(state.track(), baked, mode);
 
   ImGui::BeginChild("TopDownCanvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   const ImVec2 canvasOrigin = ImGui::GetCursorScreenPos();
@@ -1763,7 +1829,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(22, 52, 74, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(31, 76, 107, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(44, 106, 158, 255));
-    ImGui::BeginDisabled(!selectedObjectBounds(state, baked).has_value());
+    ImGui::BeginDisabled(!selectedObjectBounds(state, baked, mode).has_value());
     if (ImGui::Button("Object", ImVec2(kControlWidth, 0))) FocusOnSelection(view, state, baked);
     ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
@@ -1826,13 +1892,14 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (ImGui::BeginPopup("TopDownContextMenu")) {
         // Add control point: Position/Roll/Width/Cross-section -- seeded from the nearest baked
         // centerline frame's actual current value at that point (not a schema default).
-        const std::optional<NearestPathPlacement> nearPlacement = nearestPathPlacement(baked, contextMenuWorld.x, contextMenuWorld.z);
+        const std::optional<NearestPathPlacement> nearPlacement = nearestPathPlacement(baked, contextMenuWorld.x, contextMenuWorld.z, mode);
         ImGui::TextDisabled("Add control point");
         ImGui::BeginDisabled(!nearPlacement.has_value());
         // Position: `t` (a curve-parametric fraction from the baked centerline's discrete samples)
-        // reconstructs the approximate segment index via `g = t * gMax`. World X/Z
-        // are the exact click position (not the nearest sample's); elevation is the nearest
-        // baked frame's Y.
+        // reconstructs the approximate segment index via `g = t * gMax`. The click's plane
+        // coordinates (contextMenuWorld.x/.z, already the active mode's (u, v)) go into the two
+        // axes that plane covers; the third axis -- outside the click, e.g. Y in TopDown -- comes
+        // from the nearest baked frame instead of a schema default.
         if (ImGui::MenuItem("Position")) {
           const Path& authoredPath = state.track().paths[nearPlacement->pathIndex];
           const int n = EditorState::positionCount(authoredPath);
@@ -1840,10 +1907,9 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
           const double g = nearPlacement->t * gMax;
           const int insertAt = authoredPath.closed ? (static_cast<int>(std::floor(g)) + 1) % (n + 1)
                                                    : std::min(n, static_cast<int>(std::floor(g)) + 1);
-          if (state
-                  .insertPositionOnSegment(nearPlacement->pathIndex, insertAt, contextMenuWorld.x, nearPlacement->frame->pos.y,
-                                           contextMenuWorld.z)
-                  .has_value())
+          tox::Vec3 insertPos = nearPlacement->frame->pos;
+          setPlaneCoords(mode, insertPos, contextMenuWorld.x, contextMenuWorld.z);
+          if (state.insertPositionOnSegment(nearPlacement->pathIndex, insertAt, insertPos.x, insertPos.y, insertPos.z).has_value())
             mutated = true;
         }
         if (ImGui::MenuItem("Roll")) {
@@ -1945,10 +2011,15 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     for (std::size_t i = 0; i < baked->paths.size(); ++i)
       drawBakedPath(drawList, canvasOrigin, view, baked->paths[i], baked->definition.paths[i], view.renderMode(), minElev, maxElev,
-                    static_cast<int>(i) == state.currentPathIndex());
-    drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
-    drawReservationWalls(drawList, canvasOrigin, view, baked->meshRegions, state.selectedReservationId());
-    drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId());
+                    static_cast<int>(i) == state.currentPathIndex(), mode);
+    // Mesh regions/reservation walls/rails are TopDown-only: MeshRegion's polygon/rail data is a
+    // flat X/Z representation with no stored Y (see computeViewBounds's comment), and the type is
+    // removed entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2 -- not worth projecting.
+    if (mode == ProjectionMode::TopDown) {
+      drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
+      drawReservationWalls(drawList, canvasOrigin, view, baked->meshRegions, state.selectedReservationId());
+    }
+    drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId(), mode);
     // Hover highlight (distinct from click-driven selection, new functionality -- triggers
     // previously only ever showed a selected/unselected state): only meaningful in Edit mode, the
     // only mode where a plain click on a trigger does anything, mirrors the same gate
@@ -1956,23 +2027,23 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     std::optional<std::string> hoveredTriggerId;
     if (hovered && state.mode() == EditMode::Edit) {
       const WorldPoint2D hoverWorld = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-      const tox::Trigger* hoveredTrigger = triggerAtWorld(baked, hoverWorld.x, hoverWorld.z, pickRadiusWorld);
+      const tox::Trigger* hoveredTrigger = triggerAtWorld(baked, hoverWorld.x, hoverWorld.z, pickRadiusWorld, mode);
       if (hoveredTrigger != nullptr) hoveredTriggerId = hoveredTrigger->id;
     }
-    drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId);
-    if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked);
+    drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId, mode);
+    if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked, mode);
     // Self-intersection crossing markers, drawn right after the
     // physics-point dots and before the start marker, and
     // before the authored point draw further below, so markers never occlude editable handles.
-    drawCrossings(drawList, canvasOrigin, view, *baked, state.track().selfIntersectionOverrides);
+    drawCrossings(drawList, canvasOrigin, view, *baked, state.track().selfIntersectionOverrides, mode);
     // Start marker + direction arrow, drawn right after
     // the physics-point dots and before the selected-segment highlights. EditorState's own
     // mutators already call its private clampStart() after every structural edit, so track().start
     // is valid here without needing to re-clamp (drawStartMarker itself defensively bounds-checks
     // the path index and clamps `point`'s corresponding g via sampleCenterlineAtG regardless).
-    drawStartMarker(drawList, canvasOrigin, view, *baked, state.track().start);
+    drawStartMarker(drawList, canvasOrigin, view, *baked, state.track().start, mode);
   }
-  drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
+  if (mode == ProjectionMode::TopDown) drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   if (view.showPositionPoints()) {
     // Hover highlight (distinct from click-driven selection): only meaningful in Edit mode, the
     // only mode where a plain click on a position point does anything (Create mode's clicks build
@@ -1984,15 +2055,15 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     }
     // Selected point's adjacent segments: drawn before the
     // point nodes so the nodes render on top.
-    drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor);
-    drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor);
+    drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedIncomingSegment(), kIncomingSegmentColor, mode);
+    drawSegmentHighlight(drawList, canvasOrigin, view, baked, state.selectedOutgoingSegment(), kOutgoingSegmentColor, mode);
     drawAuthoredPositionPoints(drawList, canvasOrigin, view, state.track(), state.selection(), hoveredPosition, weldTarget, state.disjointSeams(),
-                               state.projectionMode());
-    drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag);
+                               mode);
+    drawJoinDragLine(drawList, canvasOrigin, view, baked, joinDrag, mode);
   }
   // Roll/width/cross-section handles, drawn after position points so they sit on top.
-  drawAuxPoints(drawList, canvasOrigin, view, state.track(), baked, state.currentPathIndex(), state.selection());
-  if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft());
+  drawAuxPoints(drawList, canvasOrigin, view, state.track(), baked, state.currentPathIndex(), state.selection(), mode);
+  if (state.mode() == EditMode::Create) drawCreateDraft(drawList, canvasOrigin, view, state.createDraft(), mode);
 
   // Merges channel 1 (the zoom control, submitted early for interaction priority -- see the
   // comment where ChannelsSplit was called) back on top of channel 0 (everything drawn above).

@@ -615,7 +615,8 @@ public:
         if (p == excludePathIndex && atEnd == excludeAtEnd) continue;
         const TrackPoint* point = atEnd ? lastPosition(path) : firstPosition(path);
         if (point == nullptr) continue;
-        const double dx = point->pos.x - worldX, dz = point->pos.z - worldZ;
+        const auto [pu, pv] = planeCoords(projectionMode_, point->pos);
+        const double dx = pu - worldX, dz = pv - worldZ;
         const double distSq = dx * dx + dz * dz;
         if (distSq <= bestDistSq) {
           bestDistSq = distSq;
@@ -628,9 +629,10 @@ public:
 
   // Shift-drag-into-empty-space release action: extends an open
   // path by appending (atEnd=true) or prepending (atEnd=false) a new position point at
-  // (worldX, worldZ), inheriting the dragged endpoint's own current Y -- there's no on-curve
-  // sample to inherit from beyond the curve's own end. Delegates to insertPositionOnSegment,
-  // which already pushes undo and selects the new point.
+  // (worldX, worldZ) -- the active ProjectionMode's plane coordinates -- inheriting the dragged
+  // endpoint's own current value on the third axis, outside that plane (there's no on-curve sample
+  // to inherit from beyond the curve's own end). Delegates to insertPositionOnSegment, which
+  // already pushes undo and selects the new point.
   std::optional<int> extendOpenPathFromEndpoint(int pathIndex, bool atEnd, double worldX, double worldZ) {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
     const Path& path = track_.paths[pathIndex];
@@ -638,7 +640,9 @@ public:
     const TrackPoint* fromPoint = atEnd ? lastPosition(path) : firstPosition(path);
     if (fromPoint == nullptr) return std::nullopt;
     const int insertAt = atEnd ? positionCount(path) : 0;
-    return insertPositionOnSegment(pathIndex, insertAt, worldX, fromPoint->pos.y, worldZ);
+    tox::Vec3 newPos = fromPoint->pos;
+    setPlaneCoords(projectionMode_, newPos, worldX, worldZ);
+    return insertPositionOnSegment(pathIndex, insertAt, newPos.x, newPos.y, newPos.z);
   }
 
   // ---- Disjoint / reconnect ----
@@ -1783,7 +1787,11 @@ public:
       if (withinPick(createDraft_.front(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(true);
       if (createDraft_.size() > 1 && withinPick(createDraft_.back(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(false);
     }
-    createDraft_.emplace_back(std::round(snappedX * 10.0) / 10.0, 0.0, std::round(snappedZ * 10.0) / 10.0);
+    // The third axis outside the active plane defaults to 0 -- matching TopDown's own
+    // longstanding behavior of starting every fresh draft point at y=0 regardless of anything else.
+    tox::Vec3 pos(0.0, 0.0, 0.0);
+    setPlaneCoords(projectionMode_, pos, std::round(snappedX * 10.0) / 10.0, std::round(snappedZ * 10.0) / 10.0);
+    createDraft_.push_back(pos);
     return false;
   }
   bool createModeClick(double worldX, double worldZ, double pickRadiusWorld) {
