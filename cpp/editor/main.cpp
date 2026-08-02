@@ -2725,7 +2725,7 @@ int main(int, char**) {
       ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.24f, &leftId, &rightId);
 
       ImGui::DockBuilderDockWindow("Panels", leftId);
-      ImGui::DockBuilderDockWindow("Top-Down View", rightId);
+      ImGui::DockBuilderDockWindow("View", rightId);
 
       ImGui::DockBuilderFinish(dockspaceId);
     }
@@ -2962,7 +2962,7 @@ int main(int, char**) {
     ImGui::End();
 
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Top-Down View");
+    ImGui::Begin("View");
     std::optional<editor::WorldPoint2D> hoveredWorld;
     if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack, &hoveredWorld)) rebake();
     ImGui::End();
