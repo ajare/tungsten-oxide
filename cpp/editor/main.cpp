@@ -390,6 +390,9 @@ M5SmokeCheckResult runM5SmokeCheck() {
 // out end to end that Front mode reaches position-point height editing, the one capability
 // ElevationView provided that nothing else covered (Front's plane is (x, y), so the drag also
 // carries x through unchanged here to confirm the third axis, z, is the only one left alone).
+// Milestone 1.2's follow-up fix negates the plane's Y slot (EditorState::setPlaneCoords) so
+// dragging "up" on screen raises Y instead of lowering it -- the drag's v argument below is
+// therefore -(targetY), not targetY.
 struct M6SmokeCheckResult {
   bool elevationChanged = false, undone = false, redone = false;
 };
@@ -407,7 +410,7 @@ M6SmokeCheckResult runM6SmokeCheck() {
   state.selectPoint(0, 0);
   state.setProjectionMode(editor::ProjectionMode::Front);
   state.beginDrag();
-  state.dragSelectedTo(originalX, originalY + 25.0);  // Front plane: (x, y)
+  state.dragSelectedTo(originalX, -(originalY + 25.0));  // Front plane: (x, -y)
   state.endDrag();
   // Captured as plain values, not a reference into track_: undo()/redo() below replace the whole
   // TrackDefinition, which would leave a reference dangling.

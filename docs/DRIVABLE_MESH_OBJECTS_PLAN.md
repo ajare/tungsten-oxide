@@ -190,6 +190,32 @@ update)
   highest-value thing to actually eyeball in the real editor before trusting
   it further.
 
+**1.2 follow-up 2 — Side view axis orientation** — done, user-reported bug
+  after the above landed
+- Files: `cpp/editor/src/TopDownCanvas.cpp` and `cpp/editor/include/EditorState.hpp`
+  (both `planeCoords`/`setPlaneCoords` copies).
+- Two bugs in one: (1) Side's plane was `(y, z)` — height (Y) landed on the
+  HORIZONTAL screen axis, not vertical, so Side didn't read as a side
+  elevation view at all. Corrected to `(z, -y)`: Z (the "along the track"
+  axis when looking along Side's view direction, X = 1) is horizontal,
+  matching X's role in Front/TopDown. (2) Both Front and Side had an
+  unnoticed sign bug even where Y *was* already the vertical slot (Front):
+  `worldToScreen`'s second argument increases the screen Y pixel coordinate
+  DOWNWARD, so feeding it raw (unnegated) world Y meant moving UP in world
+  space drew LOWER on screen — backwards from every "elevation view"
+  convention. Both modes now negate Y in their second plane slot. TopDown's
+  own `(x, z)` (Z down = existing, unreported, left alone) is unchanged.
+- `setPlaneCoords` (the write/drag-back direction) updated to match:
+  Front now writes `x=u, y=-v`; Side now writes `z=u, y=-v`.
+- The M6 smoke check (`main.cpp`, Front-mode height drag) needed its
+  expected `v` argument negated to match the new sign convention;
+  updated and reconfirmed `OK`.
+- Test: `ctest` (all 7 suites green) and a `track_editor.exe` smoke launch
+  (zero `MISMATCH` across every self-check). No manual interactive
+  verification possible in this environment (same recurring constraint) —
+  still the thing to actually look at before trusting Side/Front further.
+  Committed.
+
 **1.3 — Generalize shift+drag-to-rotate** — done
 - Files: `cpp/editor/src/TopDownCanvas.cpp` (`rotateAngleDeg`, a mode-aware
   wrapper around the existing `angleFromOriginDeg` that feeds it

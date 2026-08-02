@@ -2269,13 +2269,19 @@ private:
   }
 
   // Extracts/writes the two axes ProjectionMode's drag/render plane covers: TopDown -> (x, z)
-  // (today's only behavior), Front -> (x, y), Side -> (y, z). Shared by every hit-test/drag helper
-  // below so a screen-space (u, v) from any canvas projection mode maps onto the right pair of
-  // world axes, leaving the third (the one that mode doesn't expose) untouched.
+  // (today's only behavior, an existing convention left alone), Front -> (x, -y), Side -> (z, -y).
+  // Shared by every hit-test/drag helper below so a screen-space (u, v) from any canvas projection
+  // mode maps onto the right pair of world axes, leaving the third (the one that mode doesn't
+  // expose) untouched. Y is negated in both Front and Side: the second slot here feeds
+  // TopDownCanvas.cpp's worldToScreen as its screen-Y-bound argument, which increases the pixel
+  // coordinate DOWNWARD -- without the negation, moving up in world Y would draw lower on screen.
+  // Side's first slot is Z, not Y: looking along Side's view direction (X = 1) at the YZ plane, Z
+  // is the "along the track" axis that belongs on the horizontal screen axis, matching X's role for
+  // Front and TopDown. Mirrors TopDownCanvas.cpp's own free planeCoords/setPlaneCoords.
   static std::pair<double, double> planeCoords(ProjectionMode mode, const tox::Vec3& p) {
     switch (mode) {
-      case ProjectionMode::Front: return {p.x, p.y};
-      case ProjectionMode::Side: return {p.y, p.z};
+      case ProjectionMode::Front: return {p.x, -p.y};
+      case ProjectionMode::Side: return {p.z, -p.y};
       case ProjectionMode::TopDown:
       default: return {p.x, p.z};
     }
@@ -2283,8 +2289,8 @@ private:
 
   static void setPlaneCoords(ProjectionMode mode, tox::Vec3& p, double u, double v) {
     switch (mode) {
-      case ProjectionMode::Front: p.x = u; p.y = v; break;
-      case ProjectionMode::Side: p.y = u; p.z = v; break;
+      case ProjectionMode::Front: p.x = u; p.y = -v; break;
+      case ProjectionMode::Side: p.z = u; p.y = -v; break;
       case ProjectionMode::TopDown:
       default: p.x = u; p.z = v; break;
     }

@@ -19,12 +19,18 @@ namespace editor {
 namespace {
 
 // Projects a world position into the active ProjectionMode's 2D drag/render plane -- TopDown
-// (x, z, today's only behavior), Front (x, y), Side (y, z) -- so canvas rendering stays in step
-// with EditorState's own planeCoords (which the drag/hit-test path uses internally).
+// (x, z, today's only behavior, Z increasing = screen down, an existing convention left alone),
+// Front (x, -y), Side (z, -y). Both Front and Side put Y (height) in the SECOND (screen-Y-bound,
+// via worldToScreen) slot, negated: worldToScreen's second argument increases the screen Y pixel
+// coordinate DOWNWARD, so without the negation, moving up in world Y would draw lower on screen --
+// the opposite of every "elevation view" convention (and of TopDown's own Z-down convention, which
+// nobody expects to mean "up"). Side's first slot is Z, not Y: looking along Side's view direction
+// (X = 1) at the YZ plane, Z is the "along the track" axis that belongs on the horizontal screen
+// axis, exactly as X is for Front and TopDown. Mirrors EditorState's own private planeCoords.
 WorldPoint2D planeCoords(ProjectionMode mode, const tox::Vec3& p) {
   switch (mode) {
-    case ProjectionMode::Front: return {p.x, p.y};
-    case ProjectionMode::Side: return {p.y, p.z};
+    case ProjectionMode::Front: return {p.x, -p.y};
+    case ProjectionMode::Side: return {p.z, -p.y};
     case ProjectionMode::TopDown:
     default: return {p.x, p.z};
   }
@@ -37,8 +43,8 @@ WorldPoint2D planeCoords(ProjectionMode mode, const tox::Vec3& p) {
 // EditorState's copy.
 void setPlaneCoords(ProjectionMode mode, tox::Vec3& p, double u, double v) {
   switch (mode) {
-    case ProjectionMode::Front: p.x = u; p.y = v; break;
-    case ProjectionMode::Side: p.y = u; p.z = v; break;
+    case ProjectionMode::Front: p.x = u; p.y = -v; break;
+    case ProjectionMode::Side: p.z = u; p.y = -v; break;
     case ProjectionMode::TopDown:
     default: p.x = u; p.z = v; break;
   }
