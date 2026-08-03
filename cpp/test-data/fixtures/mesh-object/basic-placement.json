@@ -1,0 +1,85 @@
+{
+  "version": 12,
+  "name": "Fixture - drivable mesh object placement",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": { "maxSpeed": 140, "accel": 71, "turnSpeed": 137.5, "weight": 1000 },
+  "meshObjects": [
+    {
+      "id": "platform-1",
+      "modelId": "ramp.mppmodel",
+      "x": 100.0,
+      "y": 5.0,
+      "z": 200.0,
+      "yaw": 90.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
+    }
+  ],
+  "zones": [
+    {
+      "id": "platform-boost",
+      "effect": "velocityChange",
+      "width": 12,
+      "length": 20,
+      "factor": 1.5,
+      "duration": 2.0,
+      "host": {
+        "kind": "meshObject",
+        "meshObjectId": "platform-1",
+        "localPosition": { "x": 3.0, "y": 0.0, "z": 0.0 },
+        "localYaw": 15.0
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "id": "platform-checkpoint",
+      "type": "checkpoint",
+      "role": "intermediate",
+      "width": 10,
+      "height": 8,
+      "rotation": 0,
+      "direction": "both",
+      "host": {
+        "kind": "meshObject",
+        "meshObjectId": "platform-1",
+        "localPosition": { "x": 0.0, "y": 0.0, "z": 0.0 }
+      }
+    },
+    {
+      "id": "checkpoint-finish",
+      "type": "checkpoint",
+      "role": "finish",
+      "width": 24,
+      "height": 12,
+      "rotation": 0,
+      "direction": "forward",
+      "host": { "kind": "path", "pathId": "path-main", "t": 0.0487653 }
+    }
+  ],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "textureAssets": {},
+  "paths": [
+    {
+      "id": "path-main",
+      "closed": false,
+      "points": [
+        { "type": "position", "id": "p0", "pos": [0, 0, -120], "weight": 1 },
+        { "type": "position", "id": "p1", "pos": [0, 0, -40], "weight": 1 },
+        { "type": "position", "id": "p2", "pos": [0, 0, 40], "weight": 1 },
+        { "type": "position", "id": "p3", "pos": [0, 0, 120], "weight": 1 },
+        { "type": "width", "t": 0, "width": 24 },
+        { "type": "width", "t": 1, "width": 24 },
+        { "type": "roll", "t": 0, "roll": 0 },
+        { "type": "roll", "t": 1, "roll": 0 },
+        { "type": "crossSection", "t": 0, "curvature": 0, "tightness": 1, "thickness": 4 },
+        { "type": "crossSection", "t": 1, "curvature": 0, "tightness": 1, "thickness": 4 }
+      ]
+    }
+  ]
+}

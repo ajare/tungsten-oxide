@@ -615,15 +615,19 @@ after Milestone 4 lands.
   axis) all load and compile correctly. `ctest` green (all 4 suites).
   Commit.
 
-**3.6 — Loader fixtures**
-- File: `cpp/test-data/fixtures`.
-- New fixture(s): a track referencing a drivable mesh object placement,
-  validating 3.1/3.5's schema/round-trip and host-surface resolution.
-  There is no core-side geometry compile path to validate here (see
-  architecture note) — host-side resolution (3.3/3.4) needs a real
-  `.mppmodel` and is validated manually/via Milestone 6's headless tool
-  instead, not this fixture corpus.
-- Test: `ctest`. Commit.
+**3.6 — Loader fixtures** — done
+- File: `cpp/test-data/fixtures/mesh-object/basic-placement.json` (new).
+- One placement, one meshObject-hosted zone, one meshObject-hosted
+  trigger, plus an ordinary path and its auto-finish checkpoint —
+  validates 3.1/3.5's schema/round-trip and host-surface resolution via
+  `Track::fromFile` (the file-I/O path, not just the inline `fromJson`
+  string checks 3.5 already added). There is no core-side geometry
+  compile path to validate here (see architecture note) — host-side
+  resolution (3.3/3.4) needs a real `.mppmodel` and is validated
+  manually/via Milestone 6's headless tool instead, not this fixture
+  corpus.
+- Test: `track_tests.cpp` loads the fixture and confirms the placement,
+  zone, and trigger all compile. `ctest` green (all 4 suites). Commit.
 
 ---
 

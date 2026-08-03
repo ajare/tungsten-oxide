@@ -494,6 +494,21 @@ int main(int argc, char** argv) {
       }
     }
   }
+  {
+    // Same scenario as the inline check above, but as a committed fixture file
+    // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.6) -- exercises Track::fromFile's file-I/O path,
+    // not just fromJson's string path, and gives Milestone 6's eventual headless tool (and anyone
+    // else) a real on-disk example of the schema to point at.
+    const auto loaded = Track::fromFile(fixtureDir / "mesh-object" / "basic-placement.json");
+    check(static_cast<bool>(loaded), "the mesh-object fixture loads: " + loaded.error);
+    if (loaded) {
+      check(loaded.track->definition.meshObjects.size() == 1, "the fixture's placement round-trips");
+      check(std::any_of(loaded.track->zones.begin(), loaded.track->zones.end(), [](const Zone& z) { return z.kind == "meshObject"; }),
+            "the fixture's meshObject-hosted zone compiles");
+      check(std::any_of(loaded.track->triggers.begin(), loaded.track->triggers.end(), [](const Trigger& t) { return t.id == "platform-checkpoint"; }),
+            "the fixture's meshObject-hosted trigger compiles");
+    }
+  }
 
   {
     CollisionTriangle lower;
