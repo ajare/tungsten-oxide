@@ -470,7 +470,7 @@ Revised per the architecture note above: `core` only ever carries placements
 as authored data (3.1/3.2/3.5/3.6); all `.mppmodel` loading/transform/merge
 work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
 
-**3.1 — Authored placement type**
+**3.1 — Authored placement type** — done (`99bcaef`)
 - Files: `cpp/core/include/TrackDefinition.hpp`,
   `cpp/editor/include/EditorTrackDefinition.hpp`.
 - New type, `DrivableMeshObjectPlacementDefinition { id; modelId;
@@ -478,20 +478,30 @@ work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
   both places, same split every other authored type already uses),
   referencing an external `.mppmodel` by `modelId` (per the storage
   decision) rather than embedding geometry. Added to
-  `TrackDefinition::meshObjects` (or similar name), parsed/serialized by
-  `TrackLoader.cpp` and `EditorTrackDefinition.cpp` like every other
-  authored list.
+  `TrackDefinition::meshObjects`, parsed/serialized by `TrackLoader.cpp`
+  and `EditorTrackDefinition.cpp` like every other authored list.
 - Test: `ctest` (schema addition only, unused elsewhere yet). Commit.
 
-**3.2 — Confirm the host can reach placements with no compile step**
+**3.2 — Confirm the host can reach placements with no compile step** — done, no code change
 - File: `cpp/core/include/Track.hpp`.
 - No geometry compile happens here by design (see architecture note) —
-  confirm `Track::definition.meshObjects` (the normalized placement list
-  from 3.1) is reachable off a loaded `Track` as-is via the existing
-  `definition` field (`Track.hpp:90`) with no additional code. This step is
-  a checkpoint, not new implementation, unless that assumption turns out
-  wrong once 3.1 lands.
-- Test: `ctest`. Commit only if any change was actually needed.
+  confirmed by inspection: `TrackLoader.cpp:458` does `track.definition =
+  normalize(data, ...)`, a direct unfiltered assignment of the whole
+  normalized `TrackDefinition`, so `Track::definition.meshObjects` is
+  already reachable off a loaded `Track` with zero additional code.
+- Test: existing `ctest` suite (already green, no new test needed for a
+  checkpoint with no code change).
+
+**Reordering note (added when starting 3.3):** attempting 3.3 surfaced that
+it depends on infrastructure that doesn't exist yet — resolving `modelId`
+into a loadable resource needs a brand-new `Resource` subclass (mirroring
+`MaterialResource`) plus editor-side `<DependentResource>` XML emission
+(neither exists), and the per-sub-mesh collidable flag 3.3 reads is
+Milestone 4's output, not built yet. Rather than build that resource-type
+plumbing early or write untestable logic, **Milestone 4 is done first**
+(user-confirmed reordering) — it's what actually produces the `.mppmodel`
+content and collidable-flag metadata 3.3 needs to point at. 3.3/3.4 resume
+after Milestone 4 lands.
 
 **3.3 — Host-side collision-mesh resolution**
 - File: `cpp/tungsten-monoxide/src/Map.cpp`.
