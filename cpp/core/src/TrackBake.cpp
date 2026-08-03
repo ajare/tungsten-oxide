@@ -15,6 +15,31 @@
 namespace tox {
 namespace {
 constexpr double PI = 3.14159265358979323846, DEG2RAD = PI / 180.0;
+
+// Drivable mesh object placement transforms (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5), used
+// only to resolve a Zone/Trigger host-surface position -- core never loads the referenced
+// `.mppmodel`, so this never touches actual geometry, just the placement's own 6-DOF transform.
+// Mirrors cpp/tungsten-monoxide/src/Map.cpp's placementTransformPosition/Normal exactly (same
+// yaw-about-Y, then pitch-about-X, then roll-about-Z convention), reimplemented independently since
+// core and tungsten-monoxide don't share this kind of file-local helper across binaries.
+Vec3 placementTransformPosition(const DrivableMeshObjectPlacementDefinition& placement, const Vec3& local) {
+  Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
+  Vec3 rotated = applyAxisAngle(scaled, Vec3(0.0, 1.0, 0.0), placement.rotation.x * DEG2RAD);
+  rotated = applyAxisAngle(rotated, Vec3(1.0, 0.0, 0.0), placement.rotation.y * DEG2RAD);
+  rotated = applyAxisAngle(rotated, Vec3(0.0, 0.0, 1.0), placement.rotation.z * DEG2RAD);
+  return rotated + placement.position;
+}
+
+// A pure direction (no translation, no inverse-scale -- unlike a surface normal, an orientation
+// axis rotates with scale applied directly, not its inverse-transpose): scale then rotate, same
+// order/convention as placementTransformPosition above.
+Vec3 placementTransformDirection(const DrivableMeshObjectPlacementDefinition& placement, const Vec3& local) {
+  Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
+  Vec3 rotated = applyAxisAngle(scaled, Vec3(0.0, 1.0, 0.0), placement.rotation.x * DEG2RAD);
+  rotated = applyAxisAngle(rotated, Vec3(1.0, 0.0, 0.0), placement.rotation.y * DEG2RAD);
+  rotated = applyAxisAngle(rotated, Vec3(0.0, 0.0, 1.0), placement.rotation.z * DEG2RAD);
+  return rotated;
+}
 struct Parts {
   std::vector<const TrackPointDefinition*> cp, roll, width, cross;
 };
@@ -1153,8 +1178,14 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
     std::map<std::string, int> pathIds;
     for (size_t i = 0; i < track.definition.paths.size(); i++)
       pathIds.emplace(track.definition.paths[i].id, static_cast<int>(i));
-    // Every zone is path-hosted now (mesh-hosted zones were removed along with MeshRegion,
-    // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
+    std::map<std::string, const DrivableMeshObjectPlacementDefinition*> meshObjectsById;
+    for (const auto& placement : track.definition.meshObjects) meshObjectsById.emplace(placement.id, &placement);
+
+    // A zone or trigger hosted on a drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md
+    // Milestone 3.5) only ever needs the placement's own 6-DOF transform -- never the referenced
+    // .mppmodel's actual triangles, which core never loads (see the plan's "`.mppmodel` loading is
+    // host-only" architecture note) -- so this is ordinary compile-time math, the same shape as the
+    // old flat 2D Mesh-region host branch Milestone 2 removed, just generalized to 3D.
     for (auto& z : track.definition.zones) {
       if (z.host.kind == "path") {
         int pi = pathIds[z.host.pathId];
@@ -1231,6 +1262,23 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
           }
         }
         track.geometry.push_back(std::move(zone.b));
+      } else if (z.host.kind == "meshObject") {
+        const auto placementIt = meshObjectsById.find(z.host.meshObjectId);
+        if (placementIt == meshObjectsById.end()) continue;
+        const Vec3 worldPos = placementTransformPosition(*placementIt->second, z.host.localPosition);
+        Zone o;
+        o.id = z.id;
+        o.kind = "meshObject";
+        o.effect = z.effect;
+        o.factor = z.factor;
+        o.duration = z.duration;
+        o.x = worldPos.x;
+        o.z = worldPos.z;
+        o.rotation = placementIt->second->rotation.x * DEG2RAD + z.host.localYaw * DEG2RAD;
+        o.halfLength = z.length / 2;
+        o.halfWidth = z.width / 2;
+        track.zones.push_back(o);
+        // No render geometry for a meshObject-hosted zone yet -- see Track.hpp's Zone doc comment.
       }
     }
     std::vector<TriggerDefinition> triggerDefinitions = track.definition.triggers;
@@ -1304,8 +1352,8 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       trigger.direction = t.direction;
       trigger.halfWidth = std::max(0.25, t.width / 2);
       trigger.height = std::max(0.25, t.height);
-      // Every trigger is path-hosted now (mesh-hosted triggers were removed along with MeshRegion,
-      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
+      // Path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5,
+      // restoring the host-surface capability the old Mesh-region host provided).
       if (t.host.kind == "path") {
         int pi = pathIds[t.host.pathId];
         Evaluator evaluator(track.definition.paths[pi]);
@@ -1324,6 +1372,18 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         trigger.fwd = normalizeSafe(frameAtTrigger.tangent * cosine + frameAtTrigger.edgeRight * sine);
         trigger.right = normalizeSafe(frameAtTrigger.edgeRight * cosine - frameAtTrigger.tangent * sine);
         trigger.up = frameAtTrigger.normal;
+      } else if (t.host.kind == "meshObject") {
+        const auto placementIt = meshObjectsById.find(t.host.meshObjectId);
+        if (placementIt == meshObjectsById.end()) continue;
+        const auto& placement = *placementIt->second;
+        // Local right/fwd rotated by t.rotation about local up, exactly mirroring the path
+        // branch's own tangent/edgeRight rotation above, substituting local Z (fwd) for tangent
+        // and local X (right) for edgeRight.
+        const double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
+        trigger.center = placementTransformPosition(placement, t.host.localPosition);
+        trigger.fwd = normalizeSafe(placementTransformDirection(placement, Vec3(sine, 0.0, cosine)));
+        trigger.right = normalizeSafe(placementTransformDirection(placement, Vec3(cosine, 0.0, -sine)));
+        trigger.up = normalizeSafe(placementTransformDirection(placement, Vec3(0.0, 1.0, 0.0)));
       } else {
         continue;
       }

@@ -47,10 +47,17 @@ struct Path {
   std::vector<Frame> centerline;
 };
 
-// A compiled path-hosted effect zone. Mesh-hosted zones (kind == "mesh") were removed along with
-// MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- every Zone is path-hosted now, so
-// `kind` is always "path"; it stays a string rather than being dropped so a future host-surface
-// variant (Milestone 3.5's drivable mesh object placements) has a discriminator to reuse.
+// A compiled zone, path-hosted (`kind == "path"`, `gLo`/`gHi`/`gMax`/`closed`/`lateral` valid) or
+// drivable-mesh-object-hosted (`kind == "meshObject"`, `x`/`z`/`rotation`/`halfLength`/`halfWidth`
+// valid instead -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5, restoring the flat-rectangle host
+// capability the old Mesh-region host provided, generalized off a placement's transform instead of
+// a MeshRegion's own x/z/rotation). `rotation` is the placement's yaw, in radians, plus the host's
+// own `localYaw` offset -- see TrackBake.cpp. A meshObject-hosted zone gets no render geometry
+// (unlike the path-hosted case, which emits a `ZoneSurface` batch) -- deliberately deferred, since
+// core has no geometry for the referenced model to place a visual quad against without loading it,
+// which it never does (see the plan's "`.mppmodel` loading is host-only" architecture note); the
+// zone is still fully functional for physics, just visually absent until a future milestone adds
+// host-side (or editor-side) rendering for it.
 struct Zone {
   std::string id;
   std::string kind;
@@ -60,6 +67,7 @@ struct Zone {
   double gLo{0.0}, gHi{0.0}, gMax{1.0};
   bool closed{true};
   double lateral{0.0}, halfWidth{0.0};
+  double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};
 };
 
 // A compiled trigger gate: baked world-space frame (center + right/up/fwd) and

@@ -259,12 +259,19 @@ TrackDefinition normalize(const json& data) {
       zone.effect = effect == "startGrid" ? "startGrid" : effect == "jump" ? "jump" : "velocityChange";
       zone.width = std::max(0.5, numberOr(raw, "width", 24.0));
       zone.length = std::max(0.5, numberOr(raw, "length", 40.0));
-      // Mesh-hosted zones were removed along with MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md
-      // Milestone 2); every zone is path-hosted now.
-      zone.host.kind = "path";
-      zone.host.pathId = stringOr(host, "pathId");
-      zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-      zone.host.lateral = numberOr(host, "lateral", 0.0);
+      // Path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5).
+      if (stringOr(host, "kind") == "meshObject") {
+        zone.host.kind = "meshObject";
+        zone.host.meshObjectId = stringOr(host, "meshObjectId");
+        const json& local = host.contains("localPosition") && host.at("localPosition").is_object() ? host.at("localPosition") : empty;
+        zone.host.localPosition = tox::Vec3(numberOr(local, "x", 0.0), numberOr(local, "y", 0.0), numberOr(local, "z", 0.0));
+        zone.host.localYaw = numberOr(host, "localYaw", 0.0);
+      } else {
+        zone.host.kind = "path";
+        zone.host.pathId = stringOr(host, "pathId");
+        zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+        zone.host.lateral = numberOr(host, "lateral", 0.0);
+      }
       if (zone.effect == "velocityChange") {
         zone.factor = clampCoerced(raw, "factor", 0.1, 5.0, 1.5);
         zone.duration = clampCoerced(raw, "duration", 0.1, 30.0, 2.0);
@@ -291,11 +298,18 @@ TrackDefinition normalize(const json& data) {
       trigger.rotation = numberOr(raw, "rotation", 0.0);
       trigger.autoWidth = raw.contains("autoWidth") && jsonTruthy(raw.at("autoWidth"));
       if (trigger.type == "checkpoint") trigger.role = stringOr(raw, "role") == "finish" ? "finish" : "intermediate";
-      // Same "always path-hosted now" note as zones above.
-      trigger.host.kind = "path";
-      trigger.host.pathId = stringOr(host, "pathId");
-      trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-      trigger.host.lateral = numberOr(host, "lateral", 0.0);
+      // Same path/meshObject split as zones above.
+      if (stringOr(host, "kind") == "meshObject") {
+        trigger.host.kind = "meshObject";
+        trigger.host.meshObjectId = stringOr(host, "meshObjectId");
+        const json& local = host.contains("localPosition") && host.at("localPosition").is_object() ? host.at("localPosition") : empty;
+        trigger.host.localPosition = tox::Vec3(numberOr(local, "x", 0.0), numberOr(local, "y", 0.0), numberOr(local, "z", 0.0));
+      } else {
+        trigger.host.kind = "path";
+        trigger.host.pathId = stringOr(host, "pathId");
+        trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+        trigger.host.lateral = numberOr(host, "lateral", 0.0);
+      }
       out.triggers.push_back(std::move(trigger));
     }
   }
@@ -391,7 +405,12 @@ json meshObjectToJson(const DrivableMeshObjectPlacement& placement) {
 }
 
 json zoneToJson(const Zone& zone) {
-  json host = json{{"kind", "path"}, {"pathId", zone.host.pathId}, {"t", zone.host.t}, {"lateral", zone.host.lateral}};
+  json host = zone.host.kind == "meshObject"
+                  ? json{{"kind", "meshObject"},
+                        {"meshObjectId", zone.host.meshObjectId},
+                        {"localPosition", json{{"x", zone.host.localPosition.x}, {"y", zone.host.localPosition.y}, {"z", zone.host.localPosition.z}}},
+                        {"localYaw", zone.host.localYaw}}
+                  : json{{"kind", "path"}, {"pathId", zone.host.pathId}, {"t", zone.host.t}, {"lateral", zone.host.lateral}};
   json out = {{"id", zone.id}, {"effect", zone.effect}, {"width", zone.width}, {"length", zone.length}, {"host", std::move(host)}};
   if (zone.effect == "velocityChange") {
     out["factor"] = zone.factor;
@@ -401,7 +420,12 @@ json zoneToJson(const Zone& zone) {
 }
 
 json triggerToJson(const Trigger& trigger) {
-  json host = json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}, {"lateral", trigger.host.lateral}};
+  json host = trigger.host.kind == "meshObject"
+                  ? json{{"kind", "meshObject"},
+                        {"meshObjectId", trigger.host.meshObjectId},
+                        {"localPosition",
+                         json{{"x", trigger.host.localPosition.x}, {"y", trigger.host.localPosition.y}, {"z", trigger.host.localPosition.z}}}}
+                  : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}, {"lateral", trigger.host.lateral}};
   json out = {{"id", trigger.id},
               {"type", trigger.type},
               {"direction", trigger.direction},

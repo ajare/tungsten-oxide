@@ -116,13 +116,18 @@ struct DrivableMeshObjectPlacementDefinition {
   Vec3 scale{1.0, 1.0, 1.0};
 };
 
-// `kind` is always "path" now -- the mesh-hosted variant (meshId + x/z/rotation) was removed along
-// with MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); kept as a string discriminator for
-// Milestone 3.5's eventual drivable-mesh-object-hosted variant to reuse.
+// `kind` is `"path"` (`pathId`/`t`/`lateral` valid) or `"meshObject"` (`meshObjectId`/
+// `localPosition`/`localYaw` valid instead -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5).
+// `localPosition`/`localYaw` are in the referenced placement's own local space (before its 6-DOF
+// transform), so the zone moves and rotates along with the placement automatically -- unlike the
+// old flat 2D Mesh-region host, which stored an absolute world x/z/rotation directly.
 struct ZoneHostDefinition {
   std::string kind{"path"};
   std::string pathId;
   double t{0.5}, lateral{0.0};
+  std::string meshObjectId;
+  Vec3 localPosition;
+  double localYaw{0.0};
 };
 
 struct ZoneDefinition {
@@ -134,11 +139,16 @@ struct ZoneDefinition {
   ZoneHostDefinition host;
 };
 
-// Same "always path now" note as ZoneHostDefinition above.
+// Same path/meshObject split as ZoneHostDefinition above. A meshObject-hosted trigger's own facing
+// comes from TriggerDefinition::rotation (an additional yaw on top of the placement's own), not a
+// second host-local field here -- the trigger's compiled center/right/up/fwd frame already needed
+// no host-kind-specific fields at all (Track.hpp's Trigger), so only the position offset is new.
 struct TriggerHostDefinition {
   std::string kind{"path"};
   std::string pathId;
   double t{0.5}, lateral{0.0};
+  std::string meshObjectId;
+  Vec3 localPosition;
 };
 
 struct TriggerDefinition {

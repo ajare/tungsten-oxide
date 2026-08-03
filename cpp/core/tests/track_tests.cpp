@@ -435,6 +435,65 @@ int main(int argc, char** argv) {
     check(loaded && loaded.track->definition.zones.empty(), "dangling zone host is dropped");
     check(loaded && loaded.track->definition.triggers.size() == 1, "dangling trigger host is dropped without disturbing valid Finish");
   }
+  {
+    // A zone/trigger hosted on a drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md
+    // Milestone 3.5): resolves purely from the placement's own 6-DOF transform, no `.mppmodel`
+    // involved (core never loads one -- see the plan's "`.mppmodel` loading is host-only"
+    // architecture note).
+    json input = base;
+    input["meshObjects"] = json::array({json{{"id", "platform-1"},
+                                             {"modelId", "ramp.mppmodel"},
+                                             {"x", 100.0},
+                                             {"y", 5.0},
+                                             {"z", 200.0},
+                                             {"yaw", 90.0},
+                                             {"pitch", 0.0},
+                                             {"roll", 0.0},
+                                             {"scaleX", 1.0},
+                                             {"scaleY", 1.0},
+                                             {"scaleZ", 1.0}}});
+    input["zones"].push_back({{"id", "platform-boost"},
+                              {"effect", "velocityChange"},
+                              {"width", 12},
+                              {"length", 20},
+                              {"factor", 1.5},
+                              {"duration", 2.0},
+                              {"host", {{"kind", "meshObject"}, {"meshObjectId", "platform-1"}, {"localPosition", {{"x", 3.0}, {"y", 0.0}, {"z", 0.0}}}, {"localYaw", 15.0}}}});
+    input["triggers"].push_back({{"id", "platform-checkpoint"},
+                                 {"type", "checkpoint"},
+                                 {"role", "intermediate"},
+                                 {"width", 10},
+                                 {"height", 8},
+                                 {"rotation", 0},
+                                 {"direction", "both"},
+                                 {"host", {{"kind", "meshObject"}, {"meshObjectId", "platform-1"}, {"localPosition", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}}}}});
+    const auto loaded = Track::fromJson(input.dump());
+    check(static_cast<bool>(loaded), "a track with a drivable mesh object placement loads: " + loaded.error);
+    if (loaded) {
+      const auto& definition = loaded.track->definition;
+      check(definition.meshObjects.size() == 1 && definition.meshObjects[0].id == "platform-1", "the placement round-trips");
+      const auto zoneIt = std::find_if(loaded.track->zones.begin(), loaded.track->zones.end(),
+                                       [](const Zone& z) { return z.id == "platform-boost"; });
+      check(zoneIt != loaded.track->zones.end() && zoneIt->kind == "meshObject", "the meshObject-hosted zone compiles");
+      if (zoneIt != loaded.track->zones.end()) {
+        // Placement at (100, 5, 200), local offset (3, 0, 0): a rotation about Y preserves length,
+        // so the resolved world position must sit exactly `localPosition`'s magnitude (3) from the
+        // placement's own position, in the XZ plane -- true regardless of the yaw's exact sign
+        // convention (deliberately not asserting a specific x/z split here, only this invariant).
+        const double dx = zoneIt->x - 100.0, dz = zoneIt->z - 200.0;
+        checkClose(std::sqrt(dx * dx + dz * dz), 3.0, 1e-9, "meshObject-hosted zone world position is 3m from the placement, matching localPosition's length");
+      }
+      const auto triggerIt = std::find_if(loaded.track->triggers.begin(), loaded.track->triggers.end(),
+                                          [](const Trigger& t) { return t.id == "platform-checkpoint"; });
+      check(triggerIt != loaded.track->triggers.end(), "the meshObject-hosted trigger compiles");
+      if (triggerIt != loaded.track->triggers.end()) {
+        checkClose(triggerIt->center.x, 100.0, 1e-9, "meshObject-hosted trigger world center.x resolves from the placement transform");
+        checkClose(triggerIt->center.z, 200.0, 1e-9, "meshObject-hosted trigger world center.z resolves from the placement transform");
+        check(std::isfinite(triggerIt->right.x) && std::fabs(glm::length(triggerIt->right) - 1.0) < 1e-9,
+              "meshObject-hosted trigger gets a unit-length right axis");
+      }
+    }
+  }
 
   {
     CollisionTriangle lower;

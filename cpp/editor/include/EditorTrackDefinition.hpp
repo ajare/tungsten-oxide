@@ -111,13 +111,17 @@ struct DrivableMeshObjectPlacement {
   tox::Vec3 scale{1.0, 1.0, 1.0};
 };
 
-// `kind` is always "path" now -- the mesh-hosted variant was removed along with MeshRegion
-// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); kept as a string discriminator for Milestone 3.5's
-// eventual drivable-mesh-object-hosted variant to reuse.
+// `kind` is `"path"` (`pathId`/`t`/`lateral` valid) or `"meshObject"` (`meshObjectId`/
+// `localPosition`/`localYaw` valid instead -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5, mirrors
+// core's tox::ZoneHostDefinition). `localPosition`/`localYaw` are in the referenced placement's own
+// local space, so the zone moves/rotates with the placement automatically.
 struct ZoneHost {
   std::string kind{"path"};
   std::string pathId;
   double t{0.5}, lateral{0.0};
+  std::string meshObjectId;
+  tox::Vec3 localPosition;
+  double localYaw{0.0};
 };
 
 struct Zone {
@@ -129,11 +133,13 @@ struct Zone {
   ZoneHost host;
 };
 
-// Same "always path now" note as ZoneHost above.
+// Same path/meshObject split as ZoneHost above (mirrors core's tox::TriggerHostDefinition).
 struct TriggerHost {
   std::string kind{"path"};
   std::string pathId;
   double t{0.5}, lateral{0.0};
+  std::string meshObjectId;
+  tox::Vec3 localPosition;
 };
 
 struct Trigger {

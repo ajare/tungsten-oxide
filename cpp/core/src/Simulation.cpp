@@ -261,7 +261,19 @@ void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample) const {
   Physics& p = ship.physics;
   for (const Zone& z : track_.zones) {
     bool inside = false;
-    if (sample.pathIndex == z.hostPathIndex) {
+    if (z.kind == "meshObject") {
+      // World-space rectangle test against the placement's own transform
+      // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5) -- independent of `sample`/`hostPathIndex`,
+      // since core has no "which placement is the ship standing on" concept at all (unlike the old
+      // MeshRegion-ownership check this replaces): a placement's actual collision geometry is
+      // host-supplied and never loaded here (see the plan's "`.mppmodel` loading is host-only"
+      // architecture note), so this only ever tests position, not surface ownership.
+      const double dx = p.groundPos.x - z.x, dz = p.groundPos.z - z.z;
+      const double cosine = std::cos(z.rotation), sine = std::sin(z.rotation);
+      const double localX = dx * cosine + dz * sine;
+      const double localZ = -dx * sine + dz * cosine;
+      inside = std::fabs(localX) <= z.halfLength && std::fabs(localZ) <= z.halfWidth;
+    } else if (sample.pathIndex == z.hostPathIndex) {
       const Projection proj = projectToSurface(sample, p.groundPos.x, p.groundPos.y, p.groundPos.z);
       inside = TrackCore::zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
                std::fabs(proj.s - z.lateral) <= z.halfWidth;

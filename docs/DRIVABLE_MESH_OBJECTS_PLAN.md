@@ -578,25 +578,42 @@ after Milestone 4 lands.
   a visual check would otherwise be the only way to catch). `ctest`
   (unaffected suites still green). Commit.
 
-**3.5 — Host-surface support (core-side, no `.mppmodel` involved)**
-- Files: wherever 2.4 removed the Mesh-region host-surface variant
-  (`cpp/core/include/Track.hpp`'s `Zone`/`Trigger`,
-  `TrackDefinition.hpp`'s `ZoneHostDefinition`/`TriggerHostDefinition`,
-  and their editor mirrors).
-- Add a drivable-mesh-object-placement host-surface variant (`host.kind ==
-  "meshObject"`, referencing a placement id by name) so Zones/Triggers can
-  attach to a placement, restoring the capability Mesh regions provided.
-  This only ever needs the placement's own transform (position/rotation,
-  now 6-DOF instead of the old flat 2D `x`/`z`/`rotation`) to place the
-  zone/trigger in world space — never the referenced model's actual
-  triangles — so it's ordinary `TrackBake.cpp` compile work, same shape as
-  the old mesh-hosted branch 2.4 removed, not something that needs the
-  host's `.mppmodel` loading at all. Whether the ship is actually grounded
-  there at runtime is separately decided by mesh-mode physics against the
-  host-built BVH, exactly as before.
-- Test: `ctest`; a zone hosted on a drivable mesh object placement loads
-  and resolves its world position from the placement's transform
-  correctly. Commit.
+**3.5 — Host-surface support (core-side, no `.mppmodel` involved)** — done
+- Files: `Track.hpp` (`Zone` gains `x`/`z`/`rotation`/`halfLength` for the
+  meshObject case; `Trigger` needed no new fields at all — its compiled
+  `center`/`right`/`up`/`fwd` frame was already host-agnostic),
+  `TrackDefinition.hpp` (`ZoneHostDefinition`/`TriggerHostDefinition` gain
+  `meshObjectId`/`localPosition`(/`localYaw` for zones only)),
+  `TrackLoader.cpp`, `TrackBake.cpp` (new `placementTransformPosition`/
+  `placementTransformDirection` helpers, mirroring
+  `cpp/tungsten-monoxide/src/Map.cpp`'s own — reimplemented independently,
+  not shared, since core and the host don't share code), `Simulation.cpp`
+  (`detectZoneTriggers` gains a `z.kind == "meshObject"` branch: a
+  world-space rectangle test against `p.groundPos`, restoring the old
+  MeshRegion-hosted zone's exact math minus the "same region" ownership
+  check, which has no equivalent now that core holds no placement
+  geometry at all), and the editor mirrors
+  (`EditorTrackDefinition.hpp`/`.cpp`, `ZonesPanel.cpp`/`TriggersPanel.cpp`
+  — editable, not yet creatable from these panels, since there's no
+  placement picker until Milestone 5).
+- `localPosition`/`localYaw` are in the placement's own *local* space
+  (unlike the old Mesh-region host's absolute world `x`/`z`/`rotation`),
+  so the zone/trigger moves and rotates along with the placement
+  automatically.
+- **Known gap, deliberately deferred**: a meshObject-hosted zone gets no
+  render geometry (no `ZoneSurface` batch) — `core` has no geometry for
+  the referenced model to place a visual quad against without loading it,
+  which it never does. Functionally complete for physics, just invisible
+  in the editor/game until a later milestone adds rendering for it. A
+  meshObject-hosted trigger has no such gap — its existing gate-quad
+  render code was already host-kind-agnostic.
+- Test: `track_tests.cpp` — a track with a placement, a zone hosted on it
+  (verifying the resolved world position sits exactly `localPosition`'s
+  length from the placement's own position — deliberately not asserting a
+  specific x/z split, to stay agnostic to yaw's exact sign convention),
+  and a trigger hosted on it (verifying `center` and a unit-length `right`
+  axis) all load and compile correctly. `ctest` green (all 4 suites).
+  Commit.
 
 **3.6 — Loader fixtures**
 - File: `cpp/test-data/fixtures`.
