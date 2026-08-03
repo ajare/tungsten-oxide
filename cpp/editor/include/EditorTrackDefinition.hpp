@@ -99,6 +99,18 @@ struct TextureAsset {
   int width{1}, height{1}, tileWidth{1}, tileHeight{1};
 };
 
+// Mirrors core's tox::DrivableMeshObjectPlacementDefinition (DRIVABLE_MESH_OBJECTS_PLAN.md
+// Milestone 3). `modelId` references a `.mppmodel` resource by id; neither the editor nor core ever
+// loads that file (see the plan's "`.mppmodel` loading is host-only" architecture note) -- this is
+// pure authored placement data, resolved into actual geometry only by the game host at runtime.
+// `rotation` is yaw/pitch/roll in degrees, applied in that order.
+struct DrivableMeshObjectPlacement {
+  std::string id, modelId;
+  tox::Vec3 position;
+  tox::Vec3 rotation;
+  tox::Vec3 scale{1.0, 1.0, 1.0};
+};
+
 // `kind` is always "path" now -- the mesh-hosted variant was removed along with MeshRegion
 // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); kept as a string discriminator for Milestone 3.5's
 // eventual drivable-mesh-object-hosted variant to reuse.
@@ -165,6 +177,7 @@ struct TrackDefinition {
   int samples{400};
   std::vector<Path> paths;
   std::map<std::string, TextureAsset> textureAssets;
+  std::vector<DrivableMeshObjectPlacement> meshObjects;
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
   std::vector<Connection> disjointSeams, junctions;

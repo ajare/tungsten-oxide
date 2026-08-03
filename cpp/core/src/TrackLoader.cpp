@@ -327,6 +327,28 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
     if (asset == out.textureAssets.end() || path.texture->tile >= textureTileCount(asset->second)) path.texture.reset();
   }
 
+  // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3): pure authored
+  // data, carried through unchanged -- core never loads or compiles the referenced `.mppmodel`
+  // (see the plan's "`.mppmodel` loading is host-only" architecture note).
+  if (data.contains("meshObjects") && data.at("meshObjects").is_array()) {
+    std::size_t i = 0;
+    for (const auto& raw : data.at("meshObjects")) {
+      ++i;
+      if (!raw.is_object()) continue;
+      DrivableMeshObjectPlacementDefinition placement;
+      placement.id = stringOr(raw, "id", "mo" + std::to_string(i));
+      if (placement.id.empty()) placement.id = "mo" + std::to_string(i);
+      placement.modelId = stringOr(raw, "modelId");
+      if (placement.modelId.empty()) continue;
+      placement.position = Vec3(numberOr(raw, "x", 0.0), numberOr(raw, "y", 0.0), numberOr(raw, "z", 0.0));
+      placement.rotation =
+          Vec3(numberOr(raw, "yaw", 0.0), numberOr(raw, "pitch", 0.0), numberOr(raw, "roll", 0.0));
+      placement.scale = Vec3(std::max(1e-6, numberOr(raw, "scaleX", 1.0)), std::max(1e-6, numberOr(raw, "scaleY", 1.0)),
+                             std::max(1e-6, numberOr(raw, "scaleZ", 1.0)));
+      out.meshObjects.push_back(std::move(placement));
+    }
+  }
+
   if (data.contains("zones") && data.at("zones").is_array()) {
     std::size_t i = 0;
     for (const auto& raw : data.at("zones")) {

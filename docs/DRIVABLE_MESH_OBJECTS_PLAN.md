@@ -40,11 +40,12 @@ re-litigated here.
   flag. The editor does not get its own per-sub-mesh flag inspector.
 - **Collision flag representation.** A per-named-sub-mesh **orthogonal**
   flag (collidable vs. decorative), independent of `GeometryKind` — not a
-  new enum value per combination. Render/export classification still needs
-  one new `GeometryKind` (`MeshObjectSurface`) for drivable-mesh-object
-  batches generally; the collidable flag is an *additional* gate on top of
-  that kind when building `TrackCollisionSurface`, not a replacement for
-  kind-based classification.
+  new enum value per combination. *(Superseded by the "`.mppmodel` loading
+  is host-only" architecture note below Milestone 2: since `core` never
+  produces geometry batches for a placement at all, the originally-planned
+  `GeometryKind::MeshObjectSurface` doesn't apply — the flag lives directly
+  in the referenced `.mppmodel`'s own per-sub-mesh metadata instead, read
+  by the host. See Milestone 3.3.)*
 - **Normals.** Auto-recomputed at import from winding order, computed
   smoothly *across* a model's sub-meshes (not isolated per sub-mesh) —
   never trust the source file's normals. No manifold/topology validation
@@ -92,6 +93,52 @@ re-litigated here.
   same capability repeatedly (Milestones 6–8) and should make it a
   permanent fixture rather than reinventing it each time — see Milestone
   6.0.
+
+## Architecture note added when starting Milestone 3: `.mppmodel` loading is host-only, never in `core`
+
+`cpp/core` has no renderer, no image loader, and (confirmed while starting
+Milestone 3.2) no model-loading dependency of any kind — the only existing
+way to read a `.mppmodel` file is `mpp::ModelSerializer`, a MassivePolyPusher
+engine class coupled to `mpp::ResourceManager`; linking that into `core`
+would contradict its documented design. There is also no lightweight
+from-scratch `.mppmodel` *reader* anywhere in the repo to reuse instead
+(`cpp/editor/src/MppModelExport.cpp` is a from-scratch *writer* only).
+
+Rather than build a new native reader, this branch keeps `.mppmodel` loading
+exactly where it already lives: `cpp/tungsten-monoxide/src/Map.cpp`, the only
+place any `.mppmodel` is loaded today, and the same place that already
+populates `Track::collisionSurface` for every gameplay-relevant triangle on
+the track — every other consumer (`core`, the editor, `track_runner`, this
+library's own tests) already runs with `collisionSurface` null and no
+geometry for the road's own collision mesh, so extending that same
+"host-supplied, everyone else does without" split to drivable mesh objects
+adds no new precedent, just more content going through it.
+
+Concretely: `core` (`TrackDefinition.hpp`/`Track.hpp`) carries a drivable
+mesh object placement as pure authored data — `modelId` plus its 6-DOF
+transform — through loading/normalization/round-trip, and nothing else.
+`Track::definition` already retains the normalized `TrackDefinition`
+unmodified (`Track.hpp:90`), so no new compiled representation is needed for
+the host to read placements back out. `Map.cpp` is the only place that ever
+opens a placement's referenced `.mppmodel`, transforms its sub-meshes by the
+placement's transform, and merges the result into its existing
+`buildCollisionTriangles`/rendering pipeline. Zone/Trigger hosting on a
+placement (3.5) stays core-side despite this: it only ever needed the
+placement's own transform (exactly like the old flat 2D Mesh-region host did
+with `x`/`z`/`rotation`), never the referenced model's actual triangles, so
+it composes with host-supplied grounding the same way it always did — the
+zone's footprint math is core's job, whether the ship is actually grounded
+there comes from the BVH the host built.
+
+One casualty of this: the `GeometryKind::MeshObjectSurface` render/export
+kind named in the "Collision flag representation" decision above assumed
+`core`/`TrackBake.cpp` would produce classified geometry batches for
+placements the way it does for the road. Since `core` now never produces any
+geometry for a placement at all, that kind doesn't apply as originally
+scoped — the collidable/decorative flag lives entirely in the *referenced*
+`.mppmodel`'s own per-sub-mesh metadata (written by `model-tool`, Milestone
+4) for `Map.cpp` to read directly; Milestone 3.3 below reflects this instead
+of introducing an unused `GeometryKind` value.
 
 Work one step at a time. After each step: build, run `ctest --test-dir
 cpp/build -C Release --output-on-failure`, and commit before moving to the
@@ -417,60 +464,91 @@ schema/codebase simultaneously.
 
 ---
 
-## Milestone 3 — Drivable mesh object schema & core compile pipeline
+## Milestone 3 — Drivable mesh object schema (`core`) & host-side resolution (`tungsten-monoxide`)
+
+Revised per the architecture note above: `core` only ever carries placements
+as authored data (3.1/3.2/3.5/3.6); all `.mppmodel` loading/transform/merge
+work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
 
 **3.1 — Authored placement type**
-- File: `cpp/editor/include/EditorTrackDefinition.hpp`.
-- New type, e.g. `DrivableMeshObjectPlacement { modelId; position{x,y,z};
-  rotation{yaw,pitch,roll}; scale; name/id }`, referencing an external
-  `.mppmodel` by `modelId` (per the storage decision) rather than embedding
-  geometry.
-- Test: `ctest` (schema addition only, unused). Commit.
+- Files: `cpp/core/include/TrackDefinition.hpp`,
+  `cpp/editor/include/EditorTrackDefinition.hpp`.
+- New type, `DrivableMeshObjectPlacementDefinition { id; modelId;
+  position{x,y,z}; rotation{yaw,pitch,roll}; scale{x,y,z} }` (mirrored in
+  both places, same split every other authored type already uses),
+  referencing an external `.mppmodel` by `modelId` (per the storage
+  decision) rather than embedding geometry. Added to
+  `TrackDefinition::meshObjects` (or similar name), parsed/serialized by
+  `TrackLoader.cpp` and `EditorTrackDefinition.cpp` like every other
+  authored list.
+- Test: `ctest` (schema addition only, unused elsewhere yet). Commit.
 
-**3.2 — Runtime compiled representation**
-- Files: `cpp/core/include/TrackMesh.hpp` (or a new header, since
-  `MeshRegion` is gone), `cpp/core/src/TrackMesh.cpp`.
-- Load the referenced `.mppmodel`'s sub-meshes, apply the placement's 6-DOF
-  transform (position/rotation/scale) to positions and normals, producing
-  world-space triangle data per instance. This is instancing, not
-  triangulation — the source mesh arrives already triangulated from
-  `model-tool` (Milestone 4), unlike the old Willpower.Geometry 2D-polygon
-  compile path this replaces.
-- Test: `ctest`. Commit.
+**3.2 — Confirm the host can reach placements with no compile step**
+- File: `cpp/core/include/Track.hpp`.
+- No geometry compile happens here by design (see architecture note) —
+  confirm `Track::definition.meshObjects` (the normalized placement list
+  from 3.1) is reachable off a loaded `Track` as-is via the existing
+  `definition` field (`Track.hpp:90`) with no additional code. This step is
+  a checkpoint, not new implementation, unless that assumption turns out
+  wrong once 3.1 lands.
+- Test: `ctest`. Commit only if any change was actually needed.
 
-**3.3 — Per-sub-mesh collidable flag → BVH**
-- Files: `cpp/core/src/TrackMesh.cpp`, `cpp/tungsten-monoxide/src/Map.cpp`
-  (`buildCollisionTriangles`/`gameplayKind()`).
-- Only sub-meshes flagged collidable (per Milestone 4's model-tool-authored
-  flag) contribute `CollisionTriangle`s to `TrackCollisionSurface`;
-  non-collidable sub-meshes still compile to renderable geometry
-  (`GeometryKind::MeshObjectSurface`, new) but are excluded from
-  `Map.cpp`'s BVH build. `gameplayKind()`'s existing kind-based filter gets
-  an additional flag check specifically for this kind — not a new enum
-  value per drivable/decorative combination.
-- Test: `ctest`; a fixture with one collidable and one decorative sub-mesh
-  in the same model confirms only the flagged one lands in
-  `collisionTriangles`. Commit.
+**3.3 — Host-side collision-mesh resolution**
+- File: `cpp/tungsten-monoxide/src/Map.cpp`.
+- For each placement in the loaded track's `definition.meshObjects`, load
+  its referenced `.mppmodel` (the same `mpp::ModelSerializer` path
+  `Map::load` already uses for the track's own model — cache by `modelId`
+  so multiple placements sharing one model parse it once), apply the
+  placement's 6-DOF transform to each sub-mesh's vertex positions/normals,
+  and merge the collidable sub-meshes' resulting triangles into
+  `buildCollisionTriangles`'s output alongside the track's own collision
+  triangles. The collidable-vs-decorative flag is read directly off the
+  referenced model's own per-sub-mesh metadata (written by `model-tool`,
+  Milestone 4) — there is no `core`/`TrackBake.cpp`-produced classification
+  to consult, since `core` never touches this geometry (no new
+  `GeometryKind` needed here, unlike the original draft of this step).
+- Test: `ctest`; a fixture model with one collidable and one decorative
+  sub-mesh confirms only the flagged one lands in `collisionTriangles`.
+  Commit.
 
-**3.4 — Export lock-step**
-- File: `cpp/editor/src/MppModelExport.cpp`.
-- Add `MeshObjectSurface` to the `<TrackMeshes>` selection set, keeping
-  lock-step with 3.3's `gameplayKind()` change per the existing "these two
-  must stay in lock-step" invariant.
-- Test: `ctest`; export/reload round trip. Commit.
+**3.4 — Host-side rendering**
+- File: `cpp/tungsten-monoxide/src/Map.cpp` (or wherever it hands
+  loaded geometry to the renderer).
+- Instantiate each placement's referenced model at its transform through
+  the existing MassivePolyPusher rendering pipeline — ordinary model
+  instancing, reusing whatever `Map.cpp` already does to get the track's
+  own model on screen, just parameterized by the placement's transform.
+- Test: manual visual check (this codebase has no headless rendering test).
+  `ctest`. Commit.
 
-**3.5 — Host-surface support**
-- Files: wherever 2.4 removed the Mesh-region host-surface variant.
-- Add a drivable-mesh-object-placement host-surface variant so
-  Zones/Triggers can attach to a placement by id, restoring the capability
-  Mesh regions provided.
+**3.5 — Host-surface support (core-side, no `.mppmodel` involved)**
+- Files: wherever 2.4 removed the Mesh-region host-surface variant
+  (`cpp/core/include/Track.hpp`'s `Zone`/`Trigger`,
+  `TrackDefinition.hpp`'s `ZoneHostDefinition`/`TriggerHostDefinition`,
+  and their editor mirrors).
+- Add a drivable-mesh-object-placement host-surface variant (`host.kind ==
+  "meshObject"`, referencing a placement id by name) so Zones/Triggers can
+  attach to a placement, restoring the capability Mesh regions provided.
+  This only ever needs the placement's own transform (position/rotation,
+  now 6-DOF instead of the old flat 2D `x`/`z`/`rotation`) to place the
+  zone/trigger in world space — never the referenced model's actual
+  triangles — so it's ordinary `TrackBake.cpp` compile work, same shape as
+  the old mesh-hosted branch 2.4 removed, not something that needs the
+  host's `.mppmodel` loading at all. Whether the ship is actually grounded
+  there at runtime is separately decided by mesh-mode physics against the
+  host-built BVH, exactly as before.
 - Test: `ctest`; a zone hosted on a drivable mesh object placement loads
-  and resolves its host correctly. Commit.
+  and resolves its world position from the placement's transform
+  correctly. Commit.
 
 **3.6 — Loader fixtures**
 - File: `cpp/test-data/fixtures`.
-- New fixture(s): a track referencing a drivable mesh object placement
-  (validates 3.1–3.4's schema/compile path end to end).
+- New fixture(s): a track referencing a drivable mesh object placement,
+  validating 3.1/3.5's schema/round-trip and host-surface resolution.
+  There is no core-side geometry compile path to validate here (see
+  architecture note) — host-side resolution (3.3/3.4) needs a real
+  `.mppmodel` and is validated manually/via Milestone 6's headless tool
+  instead, not this fixture corpus.
 - Test: `ctest`. Commit.
 
 ---

@@ -225,6 +225,26 @@ TrackDefinition normalize(const json& data) {
     }
   }
 
+  // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3): pure authored
+  // data, round-tripped as-is -- neither the editor nor core ever loads the referenced `.mppmodel`.
+  if (data.contains("meshObjects") && data.at("meshObjects").is_array()) {
+    std::size_t i = 0;
+    for (const auto& raw : data.at("meshObjects")) {
+      ++i;
+      if (!raw.is_object()) continue;
+      DrivableMeshObjectPlacement placement;
+      placement.id = stringOr(raw, "id", "mo" + std::to_string(i));
+      if (placement.id.empty()) placement.id = "mo" + std::to_string(i);
+      placement.modelId = stringOr(raw, "modelId");
+      placement.position = tox::Vec3(numberOr(raw, "x", 0.0), numberOr(raw, "y", 0.0), numberOr(raw, "z", 0.0));
+      placement.rotation =
+          tox::Vec3(numberOr(raw, "yaw", 0.0), numberOr(raw, "pitch", 0.0), numberOr(raw, "roll", 0.0));
+      placement.scale = tox::Vec3(std::max(1e-6, numberOr(raw, "scaleX", 1.0)), std::max(1e-6, numberOr(raw, "scaleY", 1.0)),
+                                  std::max(1e-6, numberOr(raw, "scaleZ", 1.0)));
+      out.meshObjects.push_back(std::move(placement));
+    }
+  }
+
   if (data.contains("zones") && data.at("zones").is_array()) {
     std::size_t i = 0;
     for (const auto& raw : data.at("zones")) {
@@ -356,6 +376,20 @@ json pathToJson(const Path& path) {
   return out;
 }
 
+json meshObjectToJson(const DrivableMeshObjectPlacement& placement) {
+  return json{{"id", placement.id},
+              {"modelId", placement.modelId},
+              {"x", placement.position.x},
+              {"y", placement.position.y},
+              {"z", placement.position.z},
+              {"yaw", placement.rotation.x},
+              {"pitch", placement.rotation.y},
+              {"roll", placement.rotation.z},
+              {"scaleX", placement.scale.x},
+              {"scaleY", placement.scale.y},
+              {"scaleZ", placement.scale.z}};
+}
+
 json zoneToJson(const Zone& zone) {
   json host = json{{"kind", "path"}, {"pathId", zone.host.pathId}, {"t", zone.host.t}, {"lateral", zone.host.lateral}};
   json out = {{"id", zone.id}, {"effect", zone.effect}, {"width", zone.width}, {"length", zone.length}, {"host", std::move(host)}};
@@ -432,6 +466,9 @@ std::string toJson(const TrackDefinition& track) {
   for (const auto& [id, asset] : track.textureAssets)
     textureAssets[id] = json{{"name", asset.name}, {"path", asset.path}, {"width", asset.width}, {"height", asset.height}, {"tileWidth", asset.tileWidth}, {"tileHeight", asset.tileHeight}};
 
+  json meshObjects = json::array();
+  for (const auto& placement : track.meshObjects) meshObjects.push_back(meshObjectToJson(placement));
+
   json zones = json::array();
   for (const auto& zone : track.zones) zones.push_back(zoneToJson(zone));
 
@@ -461,6 +498,7 @@ std::string toJson(const TrackDefinition& track) {
                         {"accel", track.handling.accel},
                         {"turnSpeed", track.handling.turnSpeed},
                         {"weight", track.handling.weight}}},
+      {"meshObjects", std::move(meshObjects)},
       {"zones", std::move(zones)},
       {"triggers", std::move(triggers)},
       {"disjointSeams", std::move(disjointSeams)},
