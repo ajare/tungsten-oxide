@@ -550,15 +550,33 @@ after Milestone 4 lands.
   triangle counts/positions land in `TrackCollisionSurface` as expected.
   `ctest` (unaffected suites still green). Commit.
 
-**3.4 — Host-side rendering**
-- File: `cpp/tungsten-monoxide/src/Map.cpp` (or wherever it hands
-  loaded geometry to the renderer).
-- Instantiate each placement's referenced model at its transform through
-  the existing MassivePolyPusher rendering pipeline — ordinary model
-  instancing, reusing whatever `Map.cpp` already does to get the track's
-  own model on screen, just parameterized by the placement's transform.
-- Test: manual visual check (this codebase has no headless rendering test).
-  `ctest`. Commit.
+**3.4 — Host-side rendering** — done
+- File: `cpp/tungsten-monoxide/src/Map.cpp`.
+- Not true GPU instancing (`mpp::ProgrammaticModelStream` doesn't expose a
+  per-instance-transform API this app found) — instead, each placement's
+  every sub-mesh (both collidable and decorative; a decorative sub-mesh
+  still renders, it just isn't in the BVH) is expanded from the referenced
+  model's real indexed triangles into the same flat non-indexed 36-byte
+  layout the road's own meshes already use, with the placement's 6-DOF
+  transform baked into the vertex data (CPU-side pre-transform), then
+  added to the *same* `modelStream`/`mMppResource` the road's own meshes
+  populate — ordinary model data, not a separate resource per placement.
+  Mesh names are namespaced `"meshobject-<placement id>-<sub-mesh name>"`
+  so multiple placements sharing one model (or a name collision with a
+  road mesh) can't collide in the shared stream. Reuses the same
+  `modelCache` 3.3 populated, so a model already loaded for collision
+  purposes isn't reopened from disk for rendering.
+- Materials resolve exactly like the road's own meshes do
+  (`resolveMaterialMppName`, i.e. must already be declared as a
+  `<DependentResource>` on the Track resource) — an unresolved material
+  warns and skips that one sub-mesh rather than failing the whole load,
+  matching the road's own existing behavior.
+- Test: `TungstenMonoxide.dll` builds clean; manual visual check not
+  possible in this environment (no GPU/display) — same caveat as 3.3,
+  deferred to Milestone 6.0's headless tool (which won't itself validate
+  rendering, but will at least confirm loading/transform correctness that
+  a visual check would otherwise be the only way to catch). `ctest`
+  (unaffected suites still green). Commit.
 
 **3.5 — Host-surface support (core-side, no `.mppmodel` involved)**
 - Files: wherever 2.4 removed the Mesh-region host-surface variant

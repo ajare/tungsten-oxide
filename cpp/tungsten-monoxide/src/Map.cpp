@@ -351,6 +351,95 @@ vector<tox::CollisionTriangle> buildMeshObjectCollisionTriangles(Map* map, tox::
   return triangles;
 }
 
+// Rendering (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.4): every sub-mesh of every placement --
+// collidable AND decorative, unlike buildMeshObjectCollisionTriangles above; a decorative sub-mesh
+// still renders, it just isn't in the BVH -- expanded from the referenced model's real indexed
+// triangles into the same flat non-indexed 36-byte layout the road's own meshes already use
+// (trackMeshSpecification()), so it can go into the very same `modelStream` as ordinary model
+// instancing. Position/normal are transformed by the placement; uv/colour pass through unchanged.
+// Mesh names are namespaced by placement id ("meshobject-<placement id>-<sub-mesh name>") so
+// multiple placements sharing one model, or a sub-mesh name that happens to collide with one of the
+// road's own mesh names, never collide in the single shared `modelStream`.
+void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
+                                  mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream,
+                                  std::map<string, shared_ptr<MeshObjectModel>>& cache) {
+  for (auto const& placement : track.definition.meshObjects) {
+    auto cached = cache.find(placement.modelId);
+    if (cached == cache.end()) {
+      filesystem::path const modelPath = safeRelativePath(map, root, placement.modelId, "modelId");
+      cached = cache.emplace(placement.modelId, loadMeshObjectModel(map, resourceMgr, modelPath)).first;
+    }
+    MeshObjectModel& model = *cached->second;
+
+    for (size_t meshIndex = 0; meshIndex < model.serializer.getMeshCount(); ++meshIndex) {
+      if (model.serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles) continue;
+
+      string const rawName = model.serializer.getName(meshIndex);
+      string materialMppName;
+      try {
+        materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
+      } catch (exception const& error) {
+        logger->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                     "'): " + error.what());
+        continue;
+      }
+
+      size_t vertexCount, stride;
+      shared_ptr<const int8_t> data;
+      model.serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
+      if (stride != 36) {
+        logger->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                     "'): unsupported vertex stride.");
+        continue;
+      }
+
+      // Transform once per source vertex (not per expanded triangle corner) -- cheaper, and keeps
+      // this a direct mirror of buildMeshObjectCollisionTriangles's own per-vertex transform pass.
+      vector<int8_t> transformed(vertexCount * stride);
+      for (size_t v = 0; v < vertexCount; ++v) {
+        auto const src = data.get() + v * stride;
+        tox::Vec3 const worldPos = placementTransformPosition(placement, tox::Vec3(readFloat(src, 0), readFloat(src, 4), readFloat(src, 8)));
+        tox::Vec3 const worldNormal =
+            tox::normalizeSafe(placementTransformNormal(placement, tox::Vec3(readFloat(src, 12), readFloat(src, 16), readFloat(src, 20))));
+        auto dst = transformed.data() + v * stride;
+        float const posF[3] = {static_cast<float>(worldPos.x), static_cast<float>(worldPos.y), static_cast<float>(worldPos.z)};
+        float const normalF[3] = {static_cast<float>(worldNormal.x), static_cast<float>(worldNormal.y), static_cast<float>(worldNormal.z)};
+        memcpy(dst, posF, 12);
+        memcpy(dst + 12, normalF, 12);
+        memcpy(dst + 24, src + 24, 12);  // uv (8 bytes) + colour (4 bytes), unchanged
+      }
+
+      vector<uint32_t> indices;
+      if (model.indexStreamIds[meshIndex] == kMeshObjectNoIndexStream) {
+        indices.resize(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v) indices[v] = static_cast<uint32_t>(v);
+      } else {
+        int const indexWidth = model.serializer.getIndexWidth(meshIndex);
+        size_t const indexCount = static_cast<size_t>(model.serializer.getPrimitiveCount(meshIndex)) * 3;
+        shared_ptr<const uint8_t> const indexData = model.serializer.getIndexData(meshIndex);
+        indices.resize(indexCount);
+        uint8_t const* p = indexData.get();
+        size_t const bytesPerIndex = static_cast<size_t>(indexWidth) / 8;
+        for (size_t k = 0; k < indexCount; ++k) {
+          uint32_t index = 0;
+          memcpy(&index, p, bytesPerIndex);
+          indices[k] = index;
+          p += bytesPerIndex;
+        }
+      }
+
+      // Expand indexed -> flat non-indexed (trackMeshSpecification() sets setIndexedVertices(false),
+      // matching every other mesh already in this modelStream).
+      vector<int8_t> flat(indices.size() * stride);
+      for (size_t k = 0; k < indices.size(); ++k) memcpy(flat.data() + k * stride, transformed.data() + static_cast<size_t>(indices[k]) * stride, stride);
+
+      string const meshName = "meshobject-" + placement.id + "-" + rawName;
+      auto meshId = modelStream->createMesh(meshName, meshSpec, materialMppName, 16);
+      modelStream->addVertexData(meshId, flat);
+    }
+  }
+}
+
 }  // namespace
 
 Map::Map(string const& name, string const& namesp, string const& source,
@@ -442,6 +531,10 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     vector<int8_t> bytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
     modelStream->addVertexData(meshId, bytes);
   }
+
+  // Drivable mesh object placements (Milestone 3.4): reuses `modelCache` from the collision-mesh
+  // pass above, so a model already loaded there isn't reopened from disk here.
+  appendMeshObjectRenderMeshes(this, mwLogger, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache);
 
   mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
   mMppResource->acquire(this);
