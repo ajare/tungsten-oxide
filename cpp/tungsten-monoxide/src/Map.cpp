@@ -3,6 +3,8 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <set>
 
 #include <mpp/ModelSerializer.h>
@@ -160,6 +162,195 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
   return triangles;
 }
 
+// --- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3) ---------------
+//
+// core never loads or compiles a placement's referenced .mppmodel -- Track::definition.meshObjects
+// carries only authored data (modelId + 6-DOF transform), per the plan's "`.mppmodel` loading is
+// host-only" architecture note. This is the one place it's actually resolved: `modelId` is a
+// filename relative to the same directory-based resource location as the track's own ModelFile/
+// TrackData (resolved via safeRelativePath, exactly like those two), not a declared
+// <DependentResource> -- there's no need for the generic named-resource-dependency machinery
+// materials use (that exists to support cross-Map GPU resource sharing/refcounting; a placement's
+// model is loaded fresh per Map::load() instead, cached only within that one call by modelId so
+// multiple placements sharing one model parse it once, matching the plan's own 3.3 wording).
+
+// Mirrors cpp/model-tool/include/CollidableFlag.hpp's naming convention exactly, but reimplemented
+// independently: model-tool and tungsten-monoxide share no code, only this file-format convention
+// (same "two independent consumers, one documented format" precedent as gameplayKind()'s own
+// lock-step comment with the editor's MppModelExport.cpp).
+constexpr char kDecorativeMeshNameSuffix[] = "~decorative";
+bool meshNameIsCollidable(string const& name) {
+  size_t const suffixLen = sizeof(kDecorativeMeshNameSuffix) - 1;
+  if (name.size() < suffixLen) return true;
+  return name.compare(name.size() - suffixLen, suffixLen, kDecorativeMeshNameSuffix) != 0;
+}
+
+// Local-to-world position: scale, then rotate (yaw about Y, then pitch about X, then roll about Z
+// -- DrivableMeshObjectPlacementDefinition's own documented convention), then translate.
+tox::Vec3 placementTransformPosition(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& local) {
+  tox::Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
+  constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+  tox::Vec3 rotated = tox::applyAxisAngle(scaled, tox::Vec3(0.0, 1.0, 0.0), placement.rotation.x * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(1.0, 0.0, 0.0), placement.rotation.y * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(0.0, 0.0, 1.0), placement.rotation.z * kDegToRad);
+  return rotated + placement.position;
+}
+
+// Local-to-world normal: the inverse-transpose of scale-then-rotate. Rotation is orthogonal (its
+// own inverse-transpose); a diagonal scale matrix's inverse-transpose is just 1/scale component-
+// wise -- so this divides by scale BEFORE rotating (the opposite order from position), then
+// renormalizes to undo scale's effect on magnitude.
+tox::Vec3 placementTransformNormal(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& localNormal) {
+  tox::Vec3 unscaled(placement.scale.x != 0.0 ? localNormal.x / placement.scale.x : localNormal.x,
+                     placement.scale.y != 0.0 ? localNormal.y / placement.scale.y : localNormal.y,
+                     placement.scale.z != 0.0 ? localNormal.z / placement.scale.z : localNormal.z);
+  constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+  tox::Vec3 rotated = tox::applyAxisAngle(unscaled, tox::Vec3(0.0, 1.0, 0.0), placement.rotation.x * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(1.0, 0.0, 0.0), placement.rotation.y * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(0.0, 0.0, 1.0), placement.rotation.z * kDegToRad);
+  return tox::normalizeSafe(rotated);
+}
+
+// A mesh written with no index stream (a real, legitimate shape -- see
+// cpp/model-tool/src/MppModelImport.cpp's own extensive comment on this exact case, which this
+// mirrors) makes ModelSerializer::getIndexData()/getIndexWidth() undefined behavior to call at
+// all: there is no public accessor that safely exposes a mesh's raw indexStream id, so it has to
+// be read directly off disk first, mirroring ModelSerializer::readHeader/readDirectory/readMesh
+// byte-for-byte. In practice every placement model comes from model-tool, which always writes real
+// indices (never this sentinel) -- this guard exists so a hand-crafted or differently-tooled file
+// fails loudly with a clear error instead of risking a native crash.
+constexpr uint32_t kMeshObjectNoIndexStream = 0xFFFFFFFFu;
+
+uint32_t readRawU32(ifstream& fp, Map* map, string const& utf8Path) {
+  uint32_t value = 0;
+  fp.read(reinterpret_cast<char*>(&value), sizeof(value));
+  if (!fp) throw application::resourcesystem::ResourceException(map, "unexpected end of file while reading mesh metadata from '" + utf8Path + "'.");
+  return value;
+}
+
+void skipRawString(ifstream& fp, Map* map, string const& utf8Path) {
+  uint32_t const len = readRawU32(fp, map, utf8Path);
+  fp.seekg(static_cast<streamoff>(len), ios::cur);
+  if (!fp) throw application::resourcesystem::ResourceException(map, "unexpected end of file while reading mesh metadata from '" + utf8Path + "'.");
+}
+
+vector<uint32_t> readMeshObjectIndexStreamIds(Map* map, string const& utf8Path, size_t meshCount) {
+  ifstream fp(utf8Path, ios::binary);
+  if (!fp) throw application::resourcesystem::ResourceException(map, "could not reopen '" + utf8Path + "' to inspect mesh metadata.");
+
+  fp.seekg(12, ios::beg);  // Header: 4-byte magic + u16 + u16 + u32.
+  uint32_t meshMetadataStart = 0;
+  for (int entryIndex = 0; entryIndex < 6; ++entryIndex) {
+    uint32_t const type = readRawU32(fp, map, utf8Path);
+    uint32_t const startOffset = readRawU32(fp, map, utf8Path);
+    readRawU32(fp, map, utf8Path);  // endOffset, unused
+    readRawU32(fp, map, utf8Path);  // count, unused
+    if (type == 5) meshMetadataStart = startOffset;  // Directory::Entry::Type::MeshMetadata
+  }
+
+  fp.seekg(meshMetadataStart, ios::beg);
+  vector<uint32_t> indexStreamIds;
+  indexStreamIds.reserve(meshCount);
+  for (size_t i = 0; i < meshCount; ++i) {
+    skipRawString(fp, map, utf8Path);  // name
+    readRawU32(fp, map, utf8Path);      // primitiveType
+    readRawU32(fp, map, utf8Path);      // primitiveCount
+    skipRawString(fp, map, utf8Path);  // material
+    uint32_t const numVertexBuffers = readRawU32(fp, map, utf8Path);
+    for (uint32_t v = 0; v < numVertexBuffers; ++v) readRawU32(fp, map, utf8Path);  // vertex buffer ids
+    indexStreamIds.push_back(readRawU32(fp, map, utf8Path));                        // indexStream
+  }
+  return indexStreamIds;
+}
+
+// One referenced drivable-mesh-object source file, loaded once and shared by every placement whose
+// modelId names it.
+struct MeshObjectModel {
+  mpp::ModelSerializer serializer;
+  vector<uint32_t> indexStreamIds;
+};
+
+shared_ptr<MeshObjectModel> loadMeshObjectModel(Map* map, mpp::ResourceManager* resourceMgr, filesystem::path const& path) {
+  auto model = make_shared<MeshObjectModel>();
+  model->serializer = mpp::ModelSerializer(resourceMgr);
+  try {
+    model->serializer.load(path.string());
+  } catch (exception const& error) {
+    throw application::resourcesystem::ResourceException(map, "failed to load drivable mesh object model '" + path.string() + "': " + error.what());
+  }
+  model->indexStreamIds = readMeshObjectIndexStreamIds(map, path.string(), model->serializer.getMeshCount());
+  return model;
+}
+
+// Every collidable sub-mesh's triangles, transformed into world space by its placement, across
+// every placement in `track.definition.meshObjects`. `nextSurfaceId` is threaded through (not
+// reset) so every triangle in the final BVH -- the road's own plus every placement's -- carries a
+// unique id; `cache` persists across calls within one Map::load() so a model referenced by several
+// placements is only read from disk once.
+vector<tox::CollisionTriangle> buildMeshObjectCollisionTriangles(Map* map, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
+                                                                 int& nextSurfaceId, std::map<string, shared_ptr<MeshObjectModel>>& cache) {
+  vector<tox::CollisionTriangle> triangles;
+  for (auto const& placement : track.definition.meshObjects) {
+    auto cached = cache.find(placement.modelId);
+    if (cached == cache.end()) {
+      filesystem::path const modelPath = safeRelativePath(map, root, placement.modelId, "modelId");
+      cached = cache.emplace(placement.modelId, loadMeshObjectModel(map, resourceMgr, modelPath)).first;
+    }
+    MeshObjectModel& model = *cached->second;
+
+    for (size_t meshIndex = 0; meshIndex < model.serializer.getMeshCount(); ++meshIndex) {
+      if (!meshNameIsCollidable(model.serializer.getName(meshIndex))) continue;
+      if (model.serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles) continue;
+
+      size_t vertexCount, stride;
+      shared_ptr<const int8_t> data;
+      model.serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
+      if (stride != 36) continue;  // not this app's fixed layout -- see cpp/model-tool/docs, skip rather than fail the whole map
+
+      vector<tox::Vec3> positions(vertexCount), normals(vertexCount);
+      for (size_t v = 0; v < vertexCount; ++v) {
+        auto const bytes = data.get() + v * stride;
+        tox::Vec3 localPos(readFloat(bytes, 0), readFloat(bytes, 4), readFloat(bytes, 8));
+        tox::Vec3 localNormal(readFloat(bytes, 12), readFloat(bytes, 16), readFloat(bytes, 20));
+        positions[v] = placementTransformPosition(placement, localPos);
+        normals[v] = placementTransformNormal(placement, localNormal);
+      }
+
+      vector<uint32_t> indices;
+      if (model.indexStreamIds[meshIndex] == kMeshObjectNoIndexStream) {
+        indices.resize(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v) indices[v] = static_cast<uint32_t>(v);
+      } else {
+        int const indexWidth = model.serializer.getIndexWidth(meshIndex);
+        size_t const indexCount = static_cast<size_t>(model.serializer.getPrimitiveCount(meshIndex)) * 3;
+        shared_ptr<const uint8_t> const indexData = model.serializer.getIndexData(meshIndex);
+        indices.resize(indexCount);
+        uint8_t const* p = indexData.get();
+        size_t const bytesPerIndex = static_cast<size_t>(indexWidth) / 8;
+        for (size_t k = 0; k < indexCount; ++k) {
+          uint32_t index = 0;
+          memcpy(&index, p, bytesPerIndex);
+          indices[k] = index;
+          p += bytesPerIndex;
+        }
+      }
+
+      for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        tox::CollisionTriangle triangle;
+        triangle.surfaceId = nextSurfaceId;
+        for (int corner = 0; corner < 3; ++corner) {
+          uint32_t const index = indices[t + static_cast<size_t>(corner)];
+          triangle.positions[corner] = positions[index];
+          triangle.normals[corner] = tox::normalizeSafe(normals[index]);
+        }
+        triangles.push_back(triangle);
+      }
+      ++nextSurfaceId;
+    }
+  }
+  return triangles;
+}
+
 }  // namespace
 
 Map::Map(string const& name, string const& namesp, string const& source,
@@ -199,6 +390,17 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     throw application::resourcesystem::ResourceException(
         this, "TrackMeshes produced no collision triangles -- this track has no drivable/collidable geometry "
               "and cannot be loaded; re-export it from the editor after adding a path or mesh region.");
+
+  // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.3): merged into the
+  // same BVH as the road's own collision triangles above, each collidable sub-mesh transformed by
+  // its placement. `modelCache` is scoped to this one load() call -- nothing outside it needs a
+  // loaded placement model, so there's no reason to keep it (or the mpp::ModelSerializer instances
+  // it owns) alive any longer than building this BVH takes.
+  int nextSurfaceId = static_cast<int>(mTrackMeshNames.size());
+  map<string, shared_ptr<MeshObjectModel>> modelCache;
+  auto meshObjectTriangles = buildMeshObjectCollisionTriangles(this, *mTrack, root, resourceMgr, nextSurfaceId, modelCache);
+  collisionTriangles.insert(collisionTriangles.end(), make_move_iterator(meshObjectTriangles.begin()), make_move_iterator(meshObjectTriangles.end()));
+
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
   tox::Simulation simulation(*mTrack);

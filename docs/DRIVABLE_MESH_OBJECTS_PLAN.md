@@ -493,33 +493,62 @@ work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
   checkpoint with no code change).
 
 **Reordering note (added when starting 3.3):** attempting 3.3 surfaced that
-it depends on infrastructure that doesn't exist yet — resolving `modelId`
-into a loadable resource needs a brand-new `Resource` subclass (mirroring
-`MaterialResource`) plus editor-side `<DependentResource>` XML emission
-(neither exists), and the per-sub-mesh collidable flag 3.3 reads is
-Milestone 4's output, not built yet. Rather than build that resource-type
-plumbing early or write untestable logic, **Milestone 4 is done first**
+the per-sub-mesh collidable flag it reads is Milestone 4's output, not built
+yet — the "needs a brand-new `Resource` subclass mirroring `MaterialResource`
+plus editor-side `<DependentResource>` XML emission" concern raised at the
+time turned out to be a false alarm (see 3.3's own entry below: `modelId`
+resolves as a plain relative filename, like `ModelFile` already does, with no
+resource-dependency machinery needed at all) — but the collidable-flag
+dependency on Milestone 4 was real, so the reorder was still the right call.
+Rather than write logic that couldn't be exercised against real
+collidable/decorative content yet, **Milestone 4 is done first**
 (user-confirmed reordering) — it's what actually produces the `.mppmodel`
 content and collidable-flag metadata 3.3 needs to point at. 3.3/3.4 resume
 after Milestone 4 lands.
 
-**3.3 — Host-side collision-mesh resolution**
+**3.3 — Host-side collision-mesh resolution** — done
 - File: `cpp/tungsten-monoxide/src/Map.cpp`.
-- For each placement in the loaded track's `definition.meshObjects`, load
-  its referenced `.mppmodel` (the same `mpp::ModelSerializer` path
-  `Map::load` already uses for the track's own model — cache by `modelId`
-  so multiple placements sharing one model parse it once), apply the
-  placement's 6-DOF transform to each sub-mesh's vertex positions/normals,
-  and merge the collidable sub-meshes' resulting triangles into
-  `buildCollisionTriangles`'s output alongside the track's own collision
-  triangles. The collidable-vs-decorative flag is read directly off the
-  referenced model's own per-sub-mesh metadata (written by `model-tool`,
-  Milestone 4) — there is no `core`/`TrackBake.cpp`-produced classification
-  to consult, since `core` never touches this geometry (no new
-  `GeometryKind` needed here, unlike the original draft of this step).
-- Test: `ctest`; a fixture model with one collidable and one decorative
-  sub-mesh confirms only the flagged one lands in `collisionTriangles`.
-  Commit.
+- **Turned out simpler than the reordering note above assumed**: no new
+  `Resource` subclass or `<DependentResource>` XML wiring was needed after
+  all. `modelId` is resolved the same way `mModelFileName`/
+  `mTrackDataFileName` already are — a filename relative to the Track
+  resource's own directory-based location, via the existing
+  `safeRelativePath()` helper — not through the generic named-resource-
+  dependency system materials use (that machinery exists for cross-Map GPU
+  resource sharing/refcounting, which a placement model doesn't need: it's
+  loaded fresh, cached only within one `Map::load()` call by `modelId` so a
+  model referenced by several placements is read from disk once, per a
+  local `map<string, shared_ptr<MeshObjectModel>>` — exactly the earlier
+  draft's own "cache by modelId" wording, just without the resource-system
+  detour the reordering note assumed was required).
+- For each placement, loads its referenced `.mppmodel` via
+  `mpp::ModelSerializer` (the same class `Map::load` already uses for the
+  track's own model), decodes each sub-mesh's collidable/decorative flag by
+  reading `model-tool`'s naming-convention marker directly off the mesh
+  name (`meshNameIsCollidable()` — reimplements
+  `cpp/model-tool/include/CollidableFlag.hpp`'s exact convention
+  independently, since model-tool and tungsten-monoxide share no code, only
+  the file-format convention itself, same "two independent consumers, one
+  documented format" precedent as `gameplayKind()`'s own lock-step comment
+  with the editor's exporter), applies the placement's 6-DOF transform to
+  each collidable sub-mesh's vertex positions/normals
+  (`placementTransformPosition`/`placementTransformNormal` — scale-then-
+  rotate for positions, the correct inverse-transpose treatment for normals
+  under non-uniform scale), expands indexed triangles (mirroring
+  `MppModelImport.cpp`'s own defensive no-index-stream handling), and
+  merges the resulting `CollisionTriangle`s into the same list
+  `buildCollisionTriangles` produces for the road, before building
+  `TrackCollisionSurface`. No new `GeometryKind` was needed, as the earlier
+  note anticipated — the flag lives entirely in the referenced file's mesh
+  names, never in anything `core`/`TrackBake.cpp` produces.
+- Test: `TungstenMonoxide.dll` builds clean; **could not verify end-to-end**
+  in this environment (no GPU/display, and this codebase's own established
+  pattern — see the top-level Decisions list's "All physics testing is
+  headless" entry — is to validate exactly this kind of behavior via
+  Milestone 6.0's headless diagnostic tool, not by hand here). Revisit once
+  6.0 exists: build a real placement + referenced `.mppmodel` and confirm
+  triangle counts/positions land in `TrackCollisionSurface` as expected.
+  `ctest` (unaffected suites still green). Commit.
 
 **3.4 — Host-side rendering**
 - File: `cpp/tungsten-monoxide/src/Map.cpp` (or wherever it hands
