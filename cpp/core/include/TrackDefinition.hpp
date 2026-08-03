@@ -69,28 +69,20 @@ struct ReservationEndCap {
 enum class ReservationWidthMode { Fixed,
                                   Percent };
 
-// Whether a reservation's interior is sealed watertight (Capped) or a genuine open shaft through
-// the road slab (Uncapped) -- CENTRAL_RESERVATION_PLAN.md M6. Capped additionally gives the
-// reservation's synthetic MeshRegion a real, landable floor (polygons/triangles, not just rails);
-// Uncapped stays exactly as reservations have always behaved (no floor, a car falls through).
-enum class ReservationInteriorMode { Capped,
-                                     Uncapped };
-
 // A central reservation: a void carved out of the road between t0 and t1, tapering from
 // `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint
 // (CENTRAL_RESERVATION_PLAN.md). t0 < t1, both in [0,1]. endCap0 governs the t0 end, endCap1 the
-// t1 end. `wallHeight` <= 0 means "use TrackCore::DEFAULT_RAIL_HEIGHT" (also what a file predating
-// this field means) -- the wall's render geometry only; see `railClearanceHeight` for the physics
-// side, which used to read this same value but is now independent (M6).
+// t1 end. The void is carved purely into the road surface/underside (TrackBake.cpp's pathGeometry)
+// -- no collision wall is built around it (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2 removed the
+// synthetic MeshRegion that used to back the reservation's wall/floor physics, including the
+// Capped-interior special case, with no interim replacement; a car can currently drive straight
+// off the void's edge in analytic mode). Milestone 5 is expected to replace reservations with real
+// drivable mesh object placements, which will restore collidable walls.
 struct ReservationDefinition {
   std::string id;
-  double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
+  double t0{0.0}, t1{0.0}, width{0.0};
   ReservationWidthMode widthMode{ReservationWidthMode::Fixed};
   ReservationEndCap endCap0, endCap1;
-  // M6: Capped/Uncapped interior, and the physics jump-clearance height (<= 0 means the engine
-  // default, same convention as wallHeight) -- decoupled from wallHeight's visual-only role.
-  ReservationInteriorMode interiorMode{ReservationInteriorMode::Capped};
-  double railClearanceHeight{0.0};
 };
 
 struct PathDefinition {
@@ -106,53 +98,18 @@ struct PathDefinition {
   std::vector<ReservationDefinition> reservations;
 };
 
-struct MeshVertexDefinition {
-  int id{-1};
-  double x{0.0}, y{0.0};
-};
-
-struct MeshEdgeDefinition {
-  int id{-1};
-  int vertex0{-1}, vertex1{-1};
-  bool rail{false};
-};
-
-struct DirectedMeshEdgeDefinition {
-  int edge{-1}, v0{-1}, v1{-1};
-};
-
-struct MeshPolygonDefinition {
-  int id{-1};
-  std::vector<DirectedMeshEdgeDefinition> edges;
-  std::vector<int> holes;
-  bool hole{false};
-};
-
-struct MeshAssetDefinition {
-  std::string id;
-  std::string name;
-  double railHeight{6.0};
-  std::vector<MeshVertexDefinition> vertices;
-  std::vector<MeshEdgeDefinition> edges;
-  std::vector<MeshPolygonDefinition> polygons;
-};
-
-struct MeshPlacementDefinition {
-  std::string id;
-  std::string assetId;
-  double x{0.0}, z{0.0}, rotation{0.0}, elevation{0.0};
-};
-
 struct TextureAssetDefinition {
   std::string id, name, path;
   int width{1}, height{1}, tileWidth{1}, tileHeight{1};
 };
 
+// `kind` is always "path" now -- the mesh-hosted variant (meshId + x/z/rotation) was removed along
+// with MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); kept as a string discriminator for
+// Milestone 3.5's eventual drivable-mesh-object-hosted variant to reuse.
 struct ZoneHostDefinition {
   std::string kind{"path"};
-  std::string pathId, meshId;
+  std::string pathId;
   double t{0.5}, lateral{0.0};
-  double x{0.0}, z{0.0}, rotation{0.0};
 };
 
 struct ZoneDefinition {
@@ -164,10 +121,11 @@ struct ZoneDefinition {
   ZoneHostDefinition host;
 };
 
+// Same "always path now" note as ZoneHostDefinition above.
 struct TriggerHostDefinition {
   std::string kind{"path"};
-  std::string pathId, meshId;
-  double t{0.5}, lateral{0.0}, x{0.0}, z{0.0};
+  std::string pathId;
+  double t{0.5}, lateral{0.0};
 };
 
 struct TriggerDefinition {
@@ -200,8 +158,6 @@ struct TrackDefinition {
   std::string name{"Untitled Track"};
   int samples{400};
   std::vector<PathDefinition> paths;
-  std::map<std::string, MeshAssetDefinition> meshAssets;
-  std::vector<MeshPlacementDefinition> meshes;
   std::map<std::string, TextureAssetDefinition> textureAssets;
   std::vector<ZoneDefinition> zones;
   std::vector<TriggerDefinition> triggers;

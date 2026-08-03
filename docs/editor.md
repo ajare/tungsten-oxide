@@ -6,13 +6,13 @@ Domain vocabulary as in `UBIQUITOUS_LANGUAGE.md`/`glossary.md` (both in this dir
 
 ## Intended use
 
-Author and edit complete tracks — paths, mesh regions, reservations, zones, triggers, texture/material assignment — then save them as a Track Resource (a schema-11 JSON + generated `.mppmodel` pair registered in a Resources XML) that `cpp/tungsten-monoxide` can load and play. It is an authoring tool only: it never runs gameplay simulation, and there is no in-editor 3D preview (see [Limitations](#limitations)).
+Author and edit complete tracks — paths, reservations, zones, triggers, texture/material assignment — then save them as a Track Resource (a schema-12 JSON + generated `.mppmodel` pair registered in a Resources XML) that `cpp/tungsten-monoxide` can load and play. It is an authoring tool only: it never runs gameplay simulation, and there is no in-editor 3D preview (see [Limitations](#limitations)).
 
 ## Architecture
 
-- **`EditorState`** (`include/EditorState.hpp`, header-only, ~2300 lines) wraps one mutable `EditorTrackDefinition` (`track_`), an undo/redo `History`, the current `EditMode`, and independent selection state for points, mesh regions, zones, triggers, reservations, and rails. `EditorTrackDefinition` (`include/EditorTrackDefinition.hpp`) is a deliberately separate type from `tox::TrackDefinition` — the editor owns both JSON directions independently so `core`'s loader strictness (e.g. requiring 4+ position points per path) never blocks a half-drawn track.
+- **`EditorState`** (`include/EditorState.hpp`, header-only) wraps one mutable `EditorTrackDefinition` (`track_`), an undo/redo `History`, the current `EditMode`, and independent selection state for points, zones, triggers, and reservations. `EditorTrackDefinition` (`include/EditorTrackDefinition.hpp`) is a deliberately separate type from `tox::TrackDefinition` — the editor owns both JSON directions independently so `core`'s loader strictness (e.g. requiring 4+ position points per path) never blocks a half-drawn track.
 - **`History`** (`include/EditorHistory.hpp`) — whole-track deep-clone snapshots, not diffs, capped at 30 (`kMaxHistory`). Every discrete mutation pushes before mutating; continuous gestures (dragging, typing) push once at gesture start, so one drag = one undo step.
-- **Edit modes** (`EditMode { Edit, Create, Rails }`) — all mode changes go through `EditorState::setMode()`, so the `E`/`C`/`R` shortcuts and the toolbar dropdown can't drift apart. **Edit** is where everything is selectable/draggable (mesh regions are hit-tested *last*, so a large region never steals a click from a control point drawn on top of it). **Create** appends spline points on left-click, closes/finishes on clicking near the first/last point. **Rails** is modal — only mesh edges are pickable, so flagging a rail can't be confused with any other selection.
+- **Edit modes** (`EditMode { Edit, Create }`) — all mode changes go through `EditorState::setMode()`, so the `E`/`C` shortcuts and the toolbar dropdown can't drift apart. **Edit** is where everything is selectable/draggable. **Create** appends spline points on left-click, closes/finishes on clicking near the first/last point. A third mode, **Rails**, existed for placed-mesh rail-edge flagging; it was removed along with `MeshRegion`/`MeshAsset` (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2).
 
 ## Track-design authoring features
 
@@ -24,24 +24,15 @@ Author and edit complete tracks — paths, mesh regions, reservations, zones, tr
 - **Point-type conversion** re-seeds a converted aux point from its neighbors via a non-uniform Catmull-Rom matching `core`'s own scalar evaluation.
 - **Path topology**: `joinPathEndpoints`, `extendOpenPathFromEndpoint`, `makeDisjoint`/`reconnectDisjoint`, `splitSelectedPoint`. Two on-canvas gestures: plain drag-to-weld (drag one open endpoint onto another), and shift-drag rubber-band (never moves the source point; releasing on a target joins, releasing in empty space extends the path).
 - Panel: `src/CurvesPanel.cpp` (curve list, join form, junctions/disjoint-seam tables); typed-field panel: `src/PropertiesPanel.cpp` (per-point-kind fields, a live cross-section-profile preview drawn with `core`'s own `crossSectionHeight`).
-
-### Mesh regions
-
-Placement is a rigid 2D transform: drag moves it; **shift+drag rotates it about its own placement origin** (`EditorState::meshRotating_`) — the rotate branch records the offset between the drag-start angle and the placement's rotation at mousedown so the shape doesn't jump to face the cursor. Panel: `src/MeshPanel.cpp` (x/z/elevation/rotation, shared asset's rail height, an "existing mesh regions" table for regions hidden behind others or panned off-screen).
-
-Import: File ▸ Import Mesh…, File ▸ Paste Mesh, and canvas right-click ▸ Paste Mesh — all through `importMeshFromJsonText`, differing only in placement center (view center / world origin / click point). Mesh assets are 2D geometry-JS documents (`{vertices, edges, polygons}`); see [Limitations](#limitations) for what this does *not* support.
+- **Elevation editing**: `ProjectionMode { TopDown, Front, Side }` picks which plane a canvas drag projects into — dragging a position point in Front mode moves its `(x, y)` directly, replacing the retired separate elevation-profile side view.
 
 ### Reservations
 
-Panel: `src/ReservationsPanel.cpp` — `t0`/`t1` (%), width mode (Fixed m / Percent, converting the stored number in place when you switch), a resolved "~N m at midpoint" readout, wall height (visual only), interior mode (Capped/Uncapped), rail clearance height (physics-only, independent of wall height), and per-end style/cap-width/nose-length controls. Switching an end to Rounded seeds a visible default nose length (40 m) rather than the bake's geometric default (`width/2`), which would be imperceptible at authoring zoom. Rendered in a distinct violet so a reservation wall reads differently from a real mesh rail.
+Panel: `src/ReservationsPanel.cpp` — `t0`/`t1` (%), width mode (Fixed m / Percent, converting the stored number in place when you switch), a resolved "~N m at midpoint" readout, and per-end style/cap-width/nose-length controls. Switching an end to Rounded seeds a visible default nose length (40 m) rather than the bake's geometric default (`width/2`), which would be imperceptible at authoring zoom. A reservation only carves the road void now — the wall-height/interior-mode/rail-clearance-height controls (and the mesh-rail preview line they configured) were removed along with `MeshRegion` (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2), with no interim replacement; the canvas draws no reservation-wall preview anymore either.
 
 ### Zones and triggers
 
-Zones (`velocityChange`/boost, `jump`, `startGrid`) and triggers (dummy/checkpoint, with finish-role promotion enforcing at-most-one-finish) are add/edit/delete via `src/ZonesPanel.cpp`/`src/TriggersPanel.cpp` plus canvas right-click submenus, all **path-hosted only** for creation — mesh-hosted zones/triggers load, render, and edit fine but can't be authored from scratch (core keeps its spline evaluator private, so the editor has no way to continuously re-project a drag onto the nearest path). A checkpoint's `width` can auto-track the host path's baked road width at its `t`.
-
-### Rails
-
-Two distinct concepts: **mesh edge rails** live on the shared `MeshAsset` (not the placement), so toggling one flips it for every placed instance of that asset — Rails mode picks and toggles them. **Reservation rails** are the one-way boundary the reservation system generates automatically.
+Zones (`velocityChange`/boost, `jump`, `startGrid`) and triggers (dummy/checkpoint, with finish-role promotion enforcing at-most-one-finish) are add/edit/delete via `src/ZonesPanel.cpp`/`src/TriggersPanel.cpp` plus canvas right-click submenus, all path-hosted. A checkpoint's `width` can auto-track the host path's baked road width at its `t`. Mesh-hosted zones/triggers (the mesh-region host-surface variant) were removed along with `MeshRegion` (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2); `host.kind` stays a string discriminator (always `"path"` now) for a future drivable-mesh-object-hosted variant to reuse.
 
 ### Texture assets and materials
 
@@ -60,17 +51,13 @@ Requested per-bake from `core` (skipped mid-drag, reusing the last result so mar
 - **Elevation** — unrolled, filled by elevation (compared across the *whole track*, not just the drawn path, so colors are comparable path-to-path).
 - **Camber** — unrolled, filled white at zero roll/curvature, green when the road banks *into* the turn (on-camber), red when it banks *away* (off-camber). Uses `core`'s analytical `TrackCore::pathSignedCurvatureAt`, not curvature derived from baked frames — see `docs/core.md`.
 
-### Elevation view
-
-`src/ElevationView.cpp` — a second canvas: x = true cumulative arc length along the baked centerline (not authored point order, so the profile aligns with point handles even under reordering), y = world elevation. Supports click-select, elevation dragging, and right-click-to-insert a position point.
-
 ### Start point and grid
 
 `Start{path, point, reverse}` — set via the Properties panel or Track Properties panel; re-anchored by point id across edits. The `startGrid` zone effect is a separate, purely visual marker mechanism.
 
 ### Random track generation
 
-`include/RandomTrack.hpp`/`src/RandomTrack.cpp` — a deterministic generator (seed + complexity + tunable ranges, all editable in `src/RandomRangesPanel.cpp`) producing either a single N-turn loop or a loop split by generated mesh-section jump platforms/ramps. It bakes each candidate open-path endpoint through `core`'s real `Track::fromJson` rather than approximating, preserving the "reuse core as a black box" rule. Used both as a content generator and as the basis for several of the editor's own startup self-checks.
+`include/RandomTrack.hpp`/`src/RandomTrack.cpp` — a deterministic generator (seed + complexity + tunable ranges, all editable in `src/RandomRangesPanel.cpp`) producing a single N-turn loop with rolling hills, curvature-based banking, and boost zones. Used both as a content generator and as the basis for several of the editor's own startup self-checks. A second, mesh-section code path (splitting the loop into open paths joined by generated jump platforms/ramps) was removed along with `MeshAsset`/`MeshPlacement` (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2); the generator is single-loop-only now.
 
 ## Save / load workflow
 
@@ -85,10 +72,9 @@ Design of record: `docs/adr/0002-track-resource-save-load.md` ("Accepted and imp
 
 ## Limitations
 
-- **No 3D preview.** Only two canvases exist — top-down and elevation profile. Visual validation of the actual baked surface happens by exporting to USD or `.mppmodel` and opening it elsewhere.
+- **No 3D preview.** Only one canvas exists, in one of three projection modes (top-down, front, side). Visual validation of the actual baked surface happens by exporting to USD or `.mppmodel` and opening it elsewhere.
 - **The top-down ribbon is an explicit approximation**, not the real render mesh: it walks ~6 m physics-sample rings rather than the finely-subdivided adaptive render mesh, and several interactions (tangent-projected dragging, segment-index reconstruction from `t`) are documented in-code as "close enough at editor zoom," not exact.
-- **No 3D model import.** Mesh assets are 2D `{vertices, edges, polygons}` documents; there's no OBJ/FBX/glTF/USD import (USD is export-only), no mesh-asset library/browse panel, and no in-editor geometry editing beyond per-edge rail flags and per-placement transform.
-- **Mesh-hosted zones/triggers can't be authored from scratch** (see above) — only path-hosted creation is wired up.
+- **No placed-object authoring of any kind.** Mesh regions (placed 2D `{vertices, edges, polygons}` assets, with per-edge rail flags and per-placement transform) were removed entirely (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2), with no interim replacement; `DRIVABLE_MESH_OBJECTS_PLAN.md`'s later milestones plan a 3D drivable-mesh-object system in their place.
 - **Shared/disjoint point-id aliasing is unimplemented** in the editor — that's `core`'s loader's job.
 - **Undo is coarse**: whole-track snapshots capped at 30 steps; view state (zoom, pan, grid, render mode, point filters) is deliberately outside history and not undoable.
 - **No layout persistence** — the dock layout rebuilds identically every launch.

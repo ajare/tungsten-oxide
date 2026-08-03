@@ -1,24 +1,23 @@
 # Native C++ track engine
 
 `cpp/core` is a C++20 static library that independently loads and runs complete
-schema-10 tracks. `cpp/willpower` provides the embedded Willpower.Common and Willpower.Geometry
-libraries used for mesh topology validation and triangulation.
+schema-10 through schema-12 tracks. `cpp/willpower` provides the embedded Willpower.Common library.
 
 ## Capabilities
 
-- strict schema-10 JSON/file loading with structured recoverable warnings;
+- strict schema-10/12 JSON/file loading with structured recoverable warnings;
 - rational spline evaluation, adaptive physics/render sampling, seams, walls,
   cross-sections, shells and guard rails;
-- placed mesh polygons, holes, double-precision containment/bounds/rails and
-  Willpower triangulation;
 - renderer-neutral indexed batches with positions, normals, UVs, white RGBA,
   semantic material keys and texture tile metadata;
-- complete path/mesh simulation including surface ownership, two-sided swept
-  rail collision, transitions, airborne landing, zones, checkpoints and respawn;
-- legacy baked-world and current-schema raw-track parity against a committed golden trace corpus.
+- complete path simulation including two-sided swept rail collision,
+  transitions, airborne landing, zones, checkpoints and respawn;
+- legacy baked-world parity against a committed golden trace corpus.
 
-The loader accepts only version 10. Migration and native saving/editing are not
-part of the runtime API.
+The loader accepts versions 10 through 12. Migration and native saving/editing are not
+part of the runtime API. Mesh regions (placed mesh assets, authored via `meshAssets`/`meshes`) were
+removed entirely in schema 12 (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2) — a track still
+authoring them fails to load with an explicit error.
 
 ## Build and test
 
@@ -52,10 +51,13 @@ ctest --test-dir cpp/build-core -C Release --output-on-failure
 CTest entries:
 
 - `parity` — unchanged 4000-step baked-world runtime gate;
-- `raw_parity` — 12 independently loaded/baked tracks, 1116 steps;
-- `track_tests` — loader, bake, topology, geometry and simulation scenarios;
-- `random_geometry_parity` — five seeded random schema-10 JSON tracks independently baked in C++
-  and compared against a committed geometry-summary fixture.
+- `track_tests` — loader, bake, geometry and simulation scenarios, plus a hard-break check for
+  the removed `meshAssets`/`meshes` fields.
+
+`raw_parity`/`raw_session_init_parity`/`raw_session_step_parity`/`random_geometry_parity` are
+currently disabled: every fixture they replay references the `meshAssets`/`meshes` fields removed
+in schema 12 (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2) and now hard-fails to load. Milestone 7
+plans new mesh-mode-appropriate golden traces to restore this coverage.
 
 The fixture/trace corpus under `cpp/test-data/` is a fixed, committed regression suite; there is no
 in-repo tool to regenerate it, so treat it as append-only unless you're prepared to hand-author or
@@ -90,21 +92,20 @@ if (!loaded) {
   // Report loaded.error and stop.
   return;
 }
-// loaded.warnings may contain recoverable skipped-mesh diagnostics.
+// loaded.warnings may contain recoverable diagnostics.
 const tox::Track& track = *loaded.track;
 tox::Simulation simulation(track);
 ```
 
 `Track::definition` retains normalized authored runtime data. Compiled data is
-kept separately in `Track::paths`, `meshRegions`, `zones`, `triggers`, and
-`geometry`. `GeometryBatch` is graphics-API-neutral; no renderer or image loader
+kept separately in `Track::paths`, `zones`, `triggers`, and `geometry`.
+`GeometryBatch` is graphics-API-neutral; no renderer or image loader
 is linked into `core`.
 
 Important headers:
 
 - `TrackDefinition.hpp` — normalized authored schema subset;
 - `Track.hpp` — compiled paths, effects, gates and loading result;
-- `TrackMesh.hpp` — compiled mesh records and collision queries;
 - `TrackGeometry.hpp` — renderer-neutral vertex/batch contract;
 - `Simulation.hpp` / `Ship.hpp` — runtime physics API and state;
 - `TrackCore.hpp` / `Vec3.hpp` — shared parity-sensitive math.

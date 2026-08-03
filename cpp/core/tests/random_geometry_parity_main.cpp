@@ -153,7 +153,6 @@ int main(int argc, char** argv) {
     const json& oracle = expected.at(file);
     const Track& track = *loaded.track;
     check(track.paths.size() == oracle.at("pathCount").get<std::size_t>(), label + " path count");
-    check(track.meshRegions.size() == oracle.at("placementCount").get<std::size_t>(), label + " mesh placement count");
     check(track.geometry.size() == oracle.at("batchCount").get<std::size_t>(), label + " geometry batch count");
     check(oracle.at("warningCount").get<int>() == 0, label + " reference bake has no warnings");
 

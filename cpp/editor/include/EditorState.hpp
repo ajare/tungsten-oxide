@@ -1,11 +1,10 @@
-// EditorState.hpp — mode/selection/drag/create-draft state for point editing: editMode/
+﻿// EditorState.hpp â€” mode/selection/drag/create-draft state for point editing: editMode/
 // selectedPointId/dragging/createDraft plus setEditMode/nodeAtTop/deleteSelected/createModeClick.
-// M4 adds mesh placement select/drag/rotate/delete: selectedMeshId/meshDragOffset/meshRotateStart
-// and the drag branches in TopDownCanvas.cpp's mousedown handler.
-//
-// M5 adds rail-edge toggling (toggleRailEdge), via TrackMesh.toggleRailEdge and railSel:
-// rails live on the shared MeshAsset, not the placement, so toggling one flips it for every placed
-// instance of that asset.
+// M4/M5 added mesh region placement (select/drag/rotate/delete) and Rails mode (rail-edge
+// toggling on a shared MeshAsset) -- both removed along with MeshRegion/MeshAsset/MeshPlacement
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); selection is a 3-way exclusive point/zone/trigger
+// concept now, not 4-way. Milestone 3/5 add a new drivable-mesh-object-placement selection concept
+// from scratch rather than reviving this one.
 //
 // M7b adds texture asset registration/deletion/tile-sizing and per-path texture assignment:
 // addTextureAsset/deleteTextureAsset/clampTextureTileSize/clearInvalidTextureAssignments/
@@ -37,8 +36,7 @@
 namespace editor {
 
 enum class EditMode { Edit,
-                      Create,
-                      Rails };
+                      Create };
 
 // Canvas-wide, orthogonal to EditMode: which plane screen drags project into. TopDown (X/Z, view
 // dir Y = -1) is today's only behavior; Front (X/Y, view dir Z = -1) and Side (Y/Z, view dir X = 1)
@@ -52,12 +50,6 @@ struct SelectedPoint {
   int pathIndex{-1};
   int pointIndex{-1};
   bool valid() const { return pathIndex >= 0 && pointIndex >= 0; }
-};
-
-// The picked-edge highlight -- meaningful only in Rails mode.
-struct SelectedRail {
-  std::string meshId;  // placement id, so the highlight follows a specific placed instance
-  int edgeId{-1};
 };
 
 class EditorState {
@@ -83,13 +75,9 @@ public:
     projectionMode_ = mode;
     dragging_ = false;
     dragMutated_ = false;
-    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
     rotateGestureActive_ = false;
   }
   bool dragging() const { return dragging_; }
-  const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
-  bool meshDragging() const { return meshDragging_; }
-  bool meshRotating() const { return meshRotating_; }
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
   const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
   const std::optional<std::string>& selectedReservationId() const { return selectedReservationId_; }
@@ -134,12 +122,6 @@ public:
     return nullptr;
   }
 
-  const MeshPlacement* findMeshPlacement(const std::string& id) const {
-    for (const auto& placement : track_.meshes)
-      if (placement.id == id) return &placement;
-    return nullptr;
-  }
-
   History& history() { return history_; }
 
   // Push the current state onto the opposite stack, restore
@@ -165,10 +147,7 @@ public:
     createDraft_.clear();
     dragging_ = false;
     dragMutated_ = false;
-    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
     rotateGestureActive_ = false;
-    // The picked-edge highlight only means anything inside Rails mode.
-    if (mode != EditMode::Rails) selectedRail_.reset();
   }
 
   // Returns true if a position point was hit within `pickRadiusWorld` of (planeU, planeV) -- the
@@ -180,7 +159,6 @@ public:
     if (!hit) return false;
     selection_ = *hit;
     // Points/mesh regions/zones/triggers share one selection (props panel).
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
     return true;
@@ -197,7 +175,6 @@ public:
   // selected" precedence.
   void deselectAll() {
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
   }
@@ -235,17 +212,6 @@ public:
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::CrossSection;
   }
 
-  // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
-
-  void selectMesh(const std::string& placementId) {
-    selectedMeshId_ = placementId;
-    selection_ = {};
-    selectedZoneId_.reset();
-    selectedTriggerId_.reset();
-  }
-
-  void clearMeshSelection() { selectedMeshId_.reset(); }
-
   // ---- Zones ----
   //
   // Full add/edit-fields/delete via a dedicated panel (ZonesPanel.hpp/.cpp),
@@ -254,14 +220,12 @@ public:
   // continuously re-project the mouse onto the nearest path -- there is no spline evaluator
   // exposed to cpp/editor for that (core
   // keeps its own Evaluator private to TrackBake.cpp), so reproducing that exactly would mean
-  // porting or exposing one. Only path-hosted zone creation is wired up in the panel (the common
-  // case: boost pads/start grids on a driven path); mesh-hosted zones can still be loaded, viewed,
-  // selected and edited, just not created from scratch here.
+  // porting or exposing one. Every zone is path-hosted now (mesh-hosted zones were removed along
+  // with MeshRegion, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
   void selectZone(const std::string& id) {
     selectedZoneId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedTriggerId_.reset();
   }
 
@@ -332,7 +296,6 @@ public:
   void selectTrigger(const std::string& id) {
     selectedTriggerId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
   }
 
@@ -445,7 +408,6 @@ public:
   void selectReservation(const std::string& id) {
     selectedReservationId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
   }
@@ -888,149 +850,16 @@ public:
     return true;
   }
 
-  // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
-  // (x, z), unrotated, selecting it. There is no asset-authoring UI yet, so the caller is
-  // responsible for the asset already existing.
-  bool placeMeshAsset(const std::string& assetId, double x, double z) {
-    if (!track_.meshAssets.count(assetId)) return false;
-    history_.push(track_);
-    MeshPlacement placement;
-    placement.id = newMeshPlacementId();
-    placement.assetId = assetId;
-    placement.x = std::round(x * 10.0) / 10.0;
-    placement.z = std::round(z * 10.0) / 10.0;
-    const std::string placedId = placement.id;
-    track_.meshes.push_back(std::move(placement));
-    selectMesh(placedId);
-    return true;
-  }
-
-  // Registers a freshly parsed mesh (EDITOR_NATIVE_FILE_IO_PLAN.md M9, e.g. from
-  // parseMeshAssetJson) under a fresh id derived from `name`, rails every boundary edge by
-  // default (mirrors railBoundaryEdges -- an imported region should be enclosed the instant it
-  // lands, not a bare rim the ship slides straight off), and drops one placement of it centred at
-  // (centerWorldX, centerWorldZ) -- the caller passes either the current view centre (toolbar
-  // import) or a click position (paste-from-context-menu), mirroring addMeshAsset's `at` param.
-  // Returns the new asset id.
-  std::string importMeshAsset(MeshAsset asset, const std::string& name, double centerWorldX, double centerWorldZ) {
-    railBoundaryEdgesOf(asset);
-
-    history_.push(track_);
-    const std::string assetId = uniqueMeshAssetId(name);
-    asset.id = assetId;
-    asset.name = assetId;
-
-    double minX = std::numeric_limits<double>::infinity(), maxX = -std::numeric_limits<double>::infinity();
-    double minY = std::numeric_limits<double>::infinity(), maxY = -std::numeric_limits<double>::infinity();
-    for (const auto& v : asset.vertices) {
-      minX = std::min(minX, v.x);
-      maxX = std::max(maxX, v.x);
-      minY = std::min(minY, v.y);
-      maxY = std::max(maxY, v.y);
-    }
-    const double centroidX = std::isfinite(minX) ? (minX + maxX) / 2.0 : 0.0;
-    const double centroidY = std::isfinite(minY) ? (minY + maxY) / 2.0 : 0.0;
-
-    track_.meshAssets.emplace(assetId, std::move(asset));
-
-    MeshPlacement placement;
-    placement.id = newMeshPlacementId();
-    placement.assetId = assetId;
-    placement.x = std::round((centerWorldX - centroidX) * 10.0) / 10.0;
-    placement.z = std::round((centerWorldZ - centroidY) * 10.0) / 10.0;
-    const std::string placedId = placement.id;
-    track_.meshes.push_back(std::move(placement));
-    selectMesh(placedId);
-    return assetId;
-  }
-
-  // Parses `text` (a file's contents or the clipboard) as a mesh export and imports it via
-  // importMeshAsset if it parses -- the shared path behind both the toolbar's Import/Paste Mesh
-  // buttons and the top-down canvas's right-click "Paste Mesh". Returns
-  // the parse error, or nullopt on success.
-  std::optional<std::string> importMeshFromJsonText(const std::string& text, const std::string& name, double centerWorldX,
-                                                    double centerWorldZ) {
-    MeshAssetParseResult parsed = parseMeshAssetJson(text);
-    if (!parsed.asset) return parsed.error;
-    importMeshAsset(std::move(*parsed.asset), name, centerWorldX, centerWorldZ);
-    return std::nullopt;
-  }
-
-  // One pushUndo() per drag gesture, mirroring dragSelectedTo. `worldX`/`worldZ` is the mouse's
-  // world position at drag start; the offset to the placement's current x/z is preserved for the
-  // whole gesture so the shape doesn't jump to the cursor.
-  void beginMeshDrag(double worldX, double worldZ) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!placement) return;
-    meshDragOffsetX_ = placement->x - worldX;
-    meshDragOffsetZ_ = placement->z - worldZ;
-    meshDragging_ = true;
-    meshDragMutated_ = false;
-  }
-
-  // `worldX`/`worldZ` here is already offset+snapped by the caller (moved = snapWorldXZ({x: w.x +
-  // offset.dx, z: w.z + offset.dz}) before assigning placement.x/z) -- see meshDragOffsetX/Z below
-  // for the raw offset a caller needs to do that.
-  void dragMeshTo(double worldX, double worldZ) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!meshDragging_ || !placement) return;
-    if (!meshDragMutated_) {
-      history_.push(track_);
-      meshDragMutated_ = true;
-    }
-    placement->x = std::round(worldX * 10.0) / 10.0;
-    placement->z = std::round(worldZ * 10.0) / 10.0;
-  }
-
-  double meshDragOffsetX() const { return meshDragOffsetX_; }
-  double meshDragOffsetZ() const { return meshDragOffsetZ_; }
-
-  void endMeshDrag() {
-    meshDragging_ = false;
-    meshDragMutated_ = false;
-  }
-
-  // Shift+drag rotate: `startAngleDeg` is the mouse's angle-from-placement-origin at drag start
-  // (atan2(dz, dx) in degrees, matching TrackMesh's localToWorld convention). The offset between
-  // that and the placement's rotation at
-  // mousedown is preserved for the whole gesture, so the shape doesn't jump to face the cursor the
-  // instant the drag begins (CLAUDE.md's editor-conventions note on this exact interaction).
-  void beginMeshRotate(double startAngleDeg) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!placement) return;
-    meshRotateOriginRotation_ = placement->rotation;
-    meshRotateStartAngle_ = startAngleDeg;
-    meshRotating_ = true;
-    meshRotateMutated_ = false;
-  }
-
-  void dragMeshRotateTo(double currentAngleDeg) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!meshRotating_ || !placement) return;
-    if (!meshRotateMutated_) {
-      history_.push(track_);
-      meshRotateMutated_ = true;
-    }
-    placement->rotation = meshRotateOriginRotation_ + (currentAngleDeg - meshRotateStartAngle_);
-  }
-
-  void endMeshRotate() {
-    meshRotating_ = false;
-    meshRotateMutated_ = false;
-  }
-
   // ---- Generic shift+drag-to-rotate gesture plumbing (DRIVABLE_MESH_OBJECTS_PLAN.md
   // Milestone 1.3) ----
   //
   // Entity-agnostic angle bookkeeping for the canvas's shift+drag rotate gesture: TopDown yields
   // yaw, Front pitch, Side roll (see TopDownCanvas.cpp's rotateAngleDeg, which produces the
-  // (origin-relative) angles fed in here). Unlike beginMeshRotate/dragMeshRotateTo/endMeshRotate
-  // above -- which write straight into a MeshPlacement's `rotation` field and are removed along
-  // with Mesh regions in Milestone 2 -- this tracks only the accumulated angle delta, since no
+  // (origin-relative) angles fed in here). Tracks only the accumulated angle delta, since no
   // entity exists yet to own a yaw/pitch/roll field (drivable mesh object placements land in
-  // Milestone 3; Milestone 5 wires this gesture to one). Same offset-preserving convention as
-  // beginMeshRotate: the gap between the drag's start angle and the entity's rotation at mousedown
-  // is preserved for the whole gesture, so the shape doesn't jump to face the cursor.
+  // Milestone 3; Milestone 5 wires this gesture to one). The gap between the drag's start angle
+  // and the entity's rotation at mousedown is preserved for the whole gesture, so the shape
+  // doesn't jump to face the cursor.
   bool rotateGestureActive() const { return rotateGestureActive_; }
 
   void beginRotateGesture(double originRotationDeg, double startAngleDeg) {
@@ -1047,32 +876,6 @@ public:
   }
 
   void endRotateGesture() { rotateGestureActive_ = false; }
-
-  // ---- Rails (EDITOR_CPP_PORT_PLAN.md M5) ----
-
-  const std::optional<SelectedRail>& selectedRail() const { return selectedRail_; }
-
-  // Flips a shared MeshAsset edge's rail flag -- rails live on the asset, not the placement, so
-  // toggling one affects every placed instance of that asset at once (mirrors
-  // TrackMesh.toggleRailEdge). `meshId` is the placement the edge was picked through, kept only
-  // for the selection highlight. Returns false if the asset/edge no longer exist.
-  bool toggleRailEdge(const std::string& meshId, const std::string& assetId, int edgeId) {
-    const auto assetIt = track_.meshAssets.find(assetId);
-    if (assetIt == track_.meshAssets.end()) return false;
-    const auto edgeIt = std::find_if(assetIt->second.edges.begin(), assetIt->second.edges.end(),
-                                     [&](const MeshEdge& e) { return e.id == edgeId; });
-    if (edgeIt == assetIt->second.edges.end()) return false;
-    history_.push(track_);
-    edgeIt->rail = !edgeIt->rail;
-    selectedMeshId_ = meshId;
-    selection_ = {};
-    selectedZoneId_.reset();
-    selectedTriggerId_.reset();
-    selectedRail_ = SelectedRail{meshId, edgeId};
-    return true;
-  }
-
-  void clearRailSelection() { selectedRail_.reset(); }
 
   // ---- Texture assets (M7b) ----
 
@@ -1173,39 +976,6 @@ public:
     if (path.material == qualifiedName) return false;
     history_.push(track_);
     path.material = qualifiedName;
-    return true;
-  }
-
-  bool deleteSelectedMesh() {
-    if (!selectedMeshId_.has_value()) return false;
-    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
-                                 [&](const MeshPlacement& m) { return m.id == *selectedMeshId_; });
-    if (it == track_.meshes.end()) return false;
-    history_.push(track_);
-    track_.meshes.erase(it);
-    selectedMeshId_.reset();
-    return true;
-  }
-
-  // Mutates the mesh placement by id via `mutate`, pushing one undo step first -- mirrors editZone.
-  // X/Z/elevation/rotation are all free-form number fields (no clamp on any of them), so unlike
-  // editZone there's nothing to re-clamp afterward.
-  template <typename Mutate>
-  bool editMeshPlacement(const std::string& id, Mutate&& mutate) {
-    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(), [&](const MeshPlacement& m) { return m.id == id; });
-    if (it == track_.meshes.end()) return false;
-    history_.push(track_);
-    mutate(*it);
-    return true;
-  }
-
-  // Rail height lives on the shared MeshAsset, not the placement -- setting it here affects every
-  // placement of that asset at once (same sharing toggleRailEdge already relies on).
-  bool setMeshAssetRailHeight(const std::string& assetId, double height) {
-    const auto it = track_.meshAssets.find(assetId);
-    if (it == track_.meshAssets.end()) return false;
-    history_.push(track_);
-    it->second.railHeight = std::max(0.0, height);
     return true;
   }
 
@@ -1323,7 +1093,6 @@ public:
     // is ever selected at a time), so picking one clears the other three. This one had been
     // missing the zone/trigger reset (only mesh was cleared), so clicking a roll/width/cross-
     // section handle while a zone or trigger was selected left both "selected" simultaneously.
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
   }
@@ -1881,19 +1650,9 @@ private:
     dragging_ = false;
     dragMutated_ = false;
     createDraft_.clear();
-    selectedMeshId_.reset();
-    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
-    selectedRail_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
     explicitCurrentPathIndex_ = 0;
-  }
-
-  MeshPlacement* mutableSelectedMeshPlacement() {
-    if (!selectedMeshId_.has_value()) return nullptr;
-    for (auto& placement : track_.meshes)
-      if (placement.id == *selectedMeshId_) return &placement;
-    return nullptr;
   }
 
   // Mirrors TrackMesh.uniqueAssetId, ported for texture asset ids: strip a trailing extension,
@@ -1930,18 +1689,6 @@ private:
     for (int i = 2;; ++i) {
       std::string candidate = base + "-" + std::to_string(i);
       if (!track_.textureAssets.count(candidate)) return candidate;
-    }
-  }
-
-  // Mirrors TrackMesh.uniqueAssetId: same sanitizeAssetId scheme as texture ids, deduped against
-  // mesh asset ids instead -- a re-import of the same file always yields a fresh asset rather than
-  // disturbing existing placements.
-  std::string uniqueMeshAssetId(const std::string& filename) const {
-    const std::string base = sanitizeAssetId(filename);
-    if (!track_.meshAssets.count(base)) return base;
-    for (int i = 2;; ++i) {
-      std::string candidate = base + "-" + std::to_string(i);
-      if (!track_.meshAssets.count(candidate)) return candidate;
     }
   }
 
@@ -2025,11 +1772,6 @@ private:
     // tox::ReservationWidthMode. The old floor of 1.0 only made sense as a minimum metres value;
     // Percent just needs a valid percentage.
     r.width = r.widthMode == ReservationWidthMode::Percent ? std::clamp(r.width, 0.0, 100.0) : std::max(1.0, r.width);
-    // wallHeight/railClearanceHeight <= 0 means "use the engine default" (see
-    // tox::ReservationDefinition), so only clamp away negative values, not zero. Independent of
-    // each other since CENTRAL_RESERVATION_PLAN.md M6.
-    r.wallHeight = std::max(0.0, r.wallHeight);
-    r.railClearanceHeight = std::max(0.0, r.railClearanceHeight);
     // End-cap width never widens past the reservation's own midpoint width (a Mitred/Rounded end
     // narrower than the reservation makes a taper; wider would make it flare out instead). Only
     // enforceable here in Fixed mode, where `r.width` is metres -- in Percent mode it's a 0-100
@@ -2090,13 +1832,6 @@ private:
       for (const auto& point : path.points)
         if (point.kind == PointKind::Position && !point.id.empty()) used.insert(point.id);
     return firstUnusedId("p", used);
-  }
-
-  // "m" prefix (not "mesh").
-  std::string newMeshPlacementId() const {
-    std::set<std::string> used;
-    for (const auto& placement : track_.meshes) used.insert(placement.id);
-    return firstUnusedId("m", used);
   }
 
   // "z" prefix for zones.
@@ -2230,19 +1965,16 @@ private:
                        [&](const SelfIntersectionOverride& o) { return !positionIds.count(o.a) || !positionIds.count(o.b); }),
         track_.selfIntersectionOverrides.end());
 
-    std::set<std::string> pathIds, meshIds;
+    std::set<std::string> pathIds;
     for (const auto& p : track_.paths) pathIds.insert(p.id);
-    for (const auto& m : track_.meshes) meshIds.insert(m.id);
-    track_.zones.erase(std::remove_if(track_.zones.begin(), track_.zones.end(),
-                                      [&](const Zone& z) {
-                                        return z.host.kind == "mesh" ? !meshIds.count(z.host.meshId) : !pathIds.count(z.host.pathId);
-                                      }),
-                       track_.zones.end());
-    track_.triggers.erase(std::remove_if(track_.triggers.begin(), track_.triggers.end(),
-                                         [&](const Trigger& t) {
-                                           return t.host.kind == "mesh" ? !meshIds.count(t.host.meshId) : !pathIds.count(t.host.pathId);
-                                         }),
-                          track_.triggers.end());
+    // Every zone/trigger is path-hosted now (mesh-hosted zones/triggers were removed along with
+    // MeshRegion, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
+    track_.zones.erase(
+        std::remove_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return !pathIds.count(z.host.pathId); }),
+        track_.zones.end());
+    track_.triggers.erase(
+        std::remove_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return !pathIds.count(t.host.pathId); }),
+        track_.triggers.end());
     if (!track_.triggers.empty() &&
         std::none_of(track_.triggers.begin(), track_.triggers.end(),
                      [](const Trigger& t) { return t.type == "checkpoint" && t.role == "finish"; })) {
@@ -2252,20 +1984,6 @@ private:
           break;
         }
     }
-  }
-
-  // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
-  // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
-  // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
-  // edge->polygon backrefs, since editor::MeshAsset (unlike wp::geometry::Mesh) doesn't retain
-  // those -- equivalent as long as no polygon lists the same edge twice, which a valid mesh export
-  // never does.
-  static void railBoundaryEdgesOf(MeshAsset& asset) {
-    std::map<int, int> ownerCount;
-    for (const auto& polygon : asset.polygons)
-      for (const auto& directed : polygon.edges) ++ownerCount[directed.edge];
-    for (auto& edge : asset.edges)
-      if (ownerCount[edge.id] == 1) edge.rail = true;
   }
 
   // Extracts/writes the two axes ProjectionMode's drag/render plane covers: TopDown -> (x, z)
@@ -2381,18 +2099,11 @@ private:
   bool dragMutated_{false};
   std::vector<tox::Vec3> createDraft_;
 
-  std::optional<std::string> selectedMeshId_;
-  bool meshDragging_{false}, meshDragMutated_{false};
-  double meshDragOffsetX_{0.0}, meshDragOffsetZ_{0.0};
-  bool meshRotating_{false}, meshRotateMutated_{false};
-  double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
-
   // Generic shift+drag-to-rotate gesture state (see rotateGestureActive() above); unused by any
   // entity until Milestone 5.
   bool rotateGestureActive_{false};
   double rotateGestureOriginDeg_{0.0}, rotateGestureStartAngleDeg_{0.0};
 
-  std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;
   std::optional<std::string> selectedTriggerId_;
   std::optional<std::string> selectedReservationId_;

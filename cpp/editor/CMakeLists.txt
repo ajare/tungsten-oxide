@@ -1,6 +1,6 @@
 # cpp/editor — the native ImGui/SDL2/OpenGL track editor. Sits alongside cpp/core and
-# cpp/willpower and links both: `core` for schema-10 loading/baking/preview (reused unmodified as a
-# black box) and `Willpower::Geometry` transitively through `core` for mesh topology.
+# cpp/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
+# as a black box) and `Willpower::Common` directly for material catalog parsing.
 #
 # Dear ImGui (docking branch) and its SDL2/OpenGL3 backends, plus the gl3w GL loader, are copied
 # into include/ and src/ rather than pulled in as a submodule/FetchContent — see the
@@ -76,7 +76,6 @@ set(EDITOR_SOURCES
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp
   src/ReservationsPanel.cpp
-  src/MeshPanel.cpp
   src/CurvesPanel.cpp
   src/HandlingPanel.cpp
   src/RandomRangesPanel.cpp

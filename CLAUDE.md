@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A native C++ (CMake/MSVC) racing track editor and driving game engine, all under `cpp/`. There is no browser/JS implementation in this repo; the physics core, track loading/baking, mesh topology, and renderer-neutral geometry are all C++ from the ground up.
+A native C++ (CMake/MSVC) racing track editor and driving game engine, all under `cpp/`. There is no browser/JS implementation in this repo; the physics core, track loading/baking, and renderer-neutral geometry are all C++ from the ground up.
 
-- `cpp/core/` — the track-physics engine: schema-10 JSON loading, spline/mesh baking, `Simulation`/`Ship` physics, renderer-neutral geometry. See "Physics core" below.
+- `cpp/core/` — the track-physics engine: schema-10/12 JSON loading, spline baking, `Simulation`/`Ship` physics, renderer-neutral geometry. See "Physics core" below.
 - `cpp/editor/` — `track_editor`, the native ImGui/SDL2/OpenGL track editor. See "Editor conventions" below and `EDITOR_CPP_PORT_PLAN.md`.
 - `cpp/app/` — `track_runner`, a headless CLI session host.
 - `cpp/launcher/`, `cpp/applib/`, `cpp/tungsten-monoxide/`, `cpp/model-tool/` — see `cpp/CMakeLists.txt`'s header comment for the full tree and each subproject's own docs.
-- `cpp/willpower/` — the Willpower geometry/math libraries (`Willpower.Common`, `Willpower.Geometry`, ...), used at load time for mesh topology and triangulation.
+- `cpp/willpower/` — the Willpower geometry/math libraries (`Willpower.Common`, `Willpower.Geometry`, ...). `cpp/core` no longer uses `Willpower.Geometry` (its only use, mesh topology/triangulation, was removed with `MeshRegion` — `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2); it's still used by `cpp/applib`/`cpp/tungsten-monoxide`.
 - `assets/` — bundled track textures (`assets/track/`, plus a loose `assets/test-1.png` fixture), read by `cpp/editor/src/TextureCache.cpp`'s `findAssetsDir()`. Stays at the repo root as a sibling of `cpp/`. Bundled `TextureAsset.path` values are stored relative to the repo root (e.g. `"assets/track/foo.png"`).
 - `ext/geoemetry-js/` — a git submodule (`@willpower/geometry`, https://github.com/ajare/geoemetry-js), a separate self-contained ES-module mesh/geometry library with its own `package.json`, tests, and a React/Vite editor. This is the one JavaScript codebase still in the repo; it is not part of the track app and has no bearing on `cpp/`. See `ext/geoemetry-js/README.md` for its own commands (`npm test`, `npm --prefix editor/ui run dev`, etc.) and codebase map. `cpp/willpower` references it only for vendored-copy provenance notes, not as a runtime dependency.
 

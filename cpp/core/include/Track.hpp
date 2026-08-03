@@ -13,7 +13,6 @@
 #include "TrackDefinition.hpp"
 #include "TrackCollision.hpp"
 #include "TrackGeometry.hpp"
-#include "TrackMesh.hpp"
 
 namespace tox {
 
@@ -48,14 +47,16 @@ struct Path {
   std::vector<Frame> centerline;
 };
 
-// A compiled path- or mesh-hosted effect zone.
+// A compiled path-hosted effect zone. Mesh-hosted zones (kind == "mesh") were removed along with
+// MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- every Zone is path-hosted now, so
+// `kind` is always "path"; it stays a string rather than being dropped so a future host-surface
+// variant (Milestone 3.5's drivable mesh object placements) has a discriminator to reuse.
 struct Zone {
   std::string id;
   std::string kind;
   std::string effect;  // "velocityChange" | "jump" | "startGrid"
   double factor{0.0}, duration{0.0};
-  int hostPathIndex{0}, hostRegionIndex{-1};
-  double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};
+  int hostPathIndex{0};
   double gLo{0.0}, gHi{0.0}, gMax{1.0};
   bool closed{true};
   double lateral{0.0}, halfWidth{0.0};
@@ -93,7 +94,6 @@ struct Track {
   double trackFloorY{-1e9};
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
-  std::vector<MeshRegion> meshRegions;
   std::vector<GeometryBatch> geometry;
   // Optional external road triangles supplied by a native Track resource.
   // JSON-only consumers leave this null and retain analytical collision.

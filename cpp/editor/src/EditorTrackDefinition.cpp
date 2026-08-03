@@ -18,10 +18,12 @@ namespace {
 
 using nlohmann::json;
 
-constexpr int kSchemaVersion = 11;
+// 12: Mesh regions (meshAssets/meshes, mesh-hosted zone/trigger host) removed
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- mirrors TrackCore::TRACK_SCHEMA_VERSION.
+constexpr int kSchemaVersion = 12;
 // Oldest schema version still readable (no reservations field, always empty) -- mirrors
 // TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED (CENTRAL_RESERVATION_PLAN.md M0). The editor always
-// writes kSchemaVersion; reading stays lenient across the one-version gap.
+// writes kSchemaVersion; reading stays lenient across the version gap.
 constexpr int kSchemaVersionMinSupported = 10;
 
 bool finite(double value) { return std::isfinite(value); }
@@ -154,80 +156,12 @@ Path normalizePath(const json& raw, double topLevelCurvature) {
       reservation.t1 = clampNumber(numberOr(source, "t1", 0.0), 0.0, 1.0);
       reservation.widthMode = stringOr(source, "widthMode") == "percent" ? ReservationWidthMode::Percent : ReservationWidthMode::Fixed;
       reservation.width = std::max(0.0, numberOr(source, "width", 0.0));
-      reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
-      reservation.interiorMode = stringOr(source, "interiorMode") == "uncapped" ? ReservationInteriorMode::Uncapped : ReservationInteriorMode::Capped;
-      reservation.railClearanceHeight = std::max(0.0, numberOr(source, "railClearanceHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
       reservation.endCap1 = parseEndCap(source, "endCap1");
       path.reservations.push_back(std::move(reservation));
     }
   }
   return path;
-}
-
-// Returns `raw.attributes` re-serialized verbatim if it's an object, else "{}" -- the fallback
-// used for both the "no attributes key at all" and "malformed attributes" cases, matching
-// normalizeMeshAsset's general lean-forward-on-malformed-input posture elsewhere in this function.
-std::string attributesJsonOf(const json& raw) {
-  return raw.is_object() && raw.contains("attributes") && raw.at("attributes").is_object() ? raw.at("attributes").dump() : "{}";
-}
-
-std::optional<MeshAsset> normalizeMeshAsset(const std::string& id, const json& entry) {
-  if (!entry.is_object()) return std::nullopt;
-  const json& mesh = entry.contains("mesh") && entry.at("mesh").is_object() ? entry.at("mesh") : entry;
-  if (!mesh.contains("vertices") || !mesh.at("vertices").is_array() || !mesh.contains("polygons") || !mesh.at("polygons").is_array())
-    return std::nullopt;
-
-  MeshAsset asset;
-  asset.id = id;
-  asset.name = stringOr(entry, "name", id);
-  asset.railHeight = std::max(0.0, numberOr(entry, "railHeight", 6.0));
-  for (const auto& raw : mesh.at("vertices")) {
-    if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("position") ||
-        !raw.at("position").is_object())
-      continue;
-    const json& pos = raw.at("position");
-    asset.vertices.push_back({raw.at("id").get<int>(), numberOr(pos, "x", 0.0), numberOr(pos, "y", 0.0), attributesJsonOf(raw)});
-  }
-  if (mesh.contains("edges") && mesh.at("edges").is_array()) {
-    for (const auto& raw : mesh.at("edges")) {
-      if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("vertices") ||
-          !raw.at("vertices").is_array() || raw.at("vertices").size() != 2)
-        continue;
-      // "rail" is peeled off into its own structured field (Rails mode reads/writes it directly);
-      // everything else in `attributes` is preserved opaquely and merged back in on serialize.
-      bool rail = false;
-      json rest = json::object();
-      if (raw.contains("attributes") && raw.at("attributes").is_object()) {
-        rest = raw.at("attributes");
-        if (rest.contains("rail")) {
-          rail = jsonTruthy(rest.at("rail"));
-          rest.erase("rail");
-        }
-      }
-      asset.edges.push_back(
-          {raw.at("id").get<int>(), raw.at("vertices")[0].get<int>(), raw.at("vertices")[1].get<int>(), rail, rest.dump()});
-    }
-  }
-  for (const auto& raw : mesh.at("polygons")) {
-    if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("edges") || !raw.at("edges").is_array())
-      continue;
-    MeshPolygon polygon;
-    polygon.id = raw.at("id").get<int>();
-    polygon.hole = raw.value("hole", false);
-    polygon.attributesJson = attributesJsonOf(raw);
-    for (const auto& directed : raw.at("edges")) {
-      if (!directed.is_object() || !directed.contains("edge") || !directed.contains("v0") || !directed.contains("v1")) continue;
-      polygon.edges.push_back({directed.at("edge").get<int>(), directed.at("v0").get<int>(), directed.at("v1").get<int>()});
-    }
-    // Always read `holes` as present-but-possibly-empty (mirrors geometry-js's Mesh.toJSON, which
-    // always emits the key) rather than only when non-empty.
-    if (raw.contains("holes") && raw.at("holes").is_array())
-      for (const auto& hole : raw.at("holes"))
-        if (hole.is_number_integer()) polygon.holes.push_back(hole.get<int>());
-    asset.polygons.push_back(std::move(polygon));
-  }
-  return asset;
 }
 
 Connection normalizeConnection(const json& raw) {
@@ -251,6 +185,14 @@ TrackDefinition normalize(const json& data) {
       (data.at("version").get<int>() < kSchemaVersionMinSupported || data.at("version").get<int>() > kSchemaVersion))
     throw std::runtime_error("unsupported track schema version; the editor only reads schema " + std::to_string(kSchemaVersionMinSupported) +
                              "-" + std::to_string(kSchemaVersion) + " and writes schema " + std::to_string(kSchemaVersion));
+  // Hard break, no migration (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2, mirrors
+  // TrackLoader.cpp's core-side check): Mesh regions were removed entirely, not silently dropped.
+  if ((data.contains("meshAssets") && !data.at("meshAssets").empty()) ||
+      (data.contains("meshes") && !data.at("meshes").empty()))
+    throw std::runtime_error(
+        "this track uses Mesh regions (meshAssets/meshes), a feature removed in schema " +
+        std::to_string(kSchemaVersion) +
+        "; re-author it without placed mesh assets, or use a track saved before this feature was removed");
 
   TrackDefinition out;
   out.version = kSchemaVersion;
@@ -283,33 +225,6 @@ TrackDefinition normalize(const json& data) {
     }
   }
 
-  if (data.contains("meshAssets") && data.at("meshAssets").is_object()) {
-    for (auto it = data.at("meshAssets").begin(); it != data.at("meshAssets").end(); ++it) {
-      if (it.key().empty()) continue;
-      auto asset = normalizeMeshAsset(it.key(), it.value());
-      if (asset) out.meshAssets.emplace(it.key(), std::move(*asset));
-    }
-  }
-  if (data.contains("meshes") && data.at("meshes").is_array()) {
-    std::size_t i = 0;
-    for (const auto& raw : data.at("meshes")) {
-      ++i;
-      if (!raw.is_object() || !raw.contains("asset") || !raw.at("asset").is_string() || raw.at("asset").get_ref<const std::string&>().empty())
-        continue;
-      MeshPlacement placement;
-      placement.id = stringOr(raw, "id", "m" + std::to_string(i));
-      if (placement.id.empty()) placement.id = "m" + std::to_string(i);
-      placement.assetId = raw.at("asset").get<std::string>();
-      placement.x = numberOr(raw, "x", 0.0);
-      placement.z = numberOr(raw, "z", 0.0);
-      placement.rotation = numberOr(raw, "rotation", 0.0);
-      placement.elevation = numberOr(raw, "elevation", 0.0);
-      // Unlike core, a placement referencing a missing asset is still kept (rather than dropped)
-      // -- the asset may simply not have finished importing yet in an in-progress edit.
-      out.meshes.push_back(std::move(placement));
-    }
-  }
-
   if (data.contains("zones") && data.at("zones").is_array()) {
     std::size_t i = 0;
     for (const auto& raw : data.at("zones")) {
@@ -324,18 +239,12 @@ TrackDefinition normalize(const json& data) {
       zone.effect = effect == "startGrid" ? "startGrid" : effect == "jump" ? "jump" : "velocityChange";
       zone.width = std::max(0.5, numberOr(raw, "width", 24.0));
       zone.length = std::max(0.5, numberOr(raw, "length", 40.0));
-      if (stringOr(host, "kind") == "mesh") {
-        zone.host.kind = "mesh";
-        zone.host.meshId = stringOr(host, "meshId");
-        zone.host.x = numberOr(host, "x", 0.0);
-        zone.host.z = numberOr(host, "z", 0.0);
-        zone.host.rotation = numberOr(host, "rotation", 0.0);
-      } else {
-        zone.host.kind = "path";
-        zone.host.pathId = stringOr(host, "pathId");
-        zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-        zone.host.lateral = numberOr(host, "lateral", 0.0);
-      }
+      // Mesh-hosted zones were removed along with MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md
+      // Milestone 2); every zone is path-hosted now.
+      zone.host.kind = "path";
+      zone.host.pathId = stringOr(host, "pathId");
+      zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+      zone.host.lateral = numberOr(host, "lateral", 0.0);
       if (zone.effect == "velocityChange") {
         zone.factor = clampCoerced(raw, "factor", 0.1, 5.0, 1.5);
         zone.duration = clampCoerced(raw, "duration", 0.1, 30.0, 2.0);
@@ -362,17 +271,11 @@ TrackDefinition normalize(const json& data) {
       trigger.rotation = numberOr(raw, "rotation", 0.0);
       trigger.autoWidth = raw.contains("autoWidth") && jsonTruthy(raw.at("autoWidth"));
       if (trigger.type == "checkpoint") trigger.role = stringOr(raw, "role") == "finish" ? "finish" : "intermediate";
-      if (stringOr(host, "kind") == "mesh") {
-        trigger.host.kind = "mesh";
-        trigger.host.meshId = stringOr(host, "meshId");
-        trigger.host.x = numberOr(host, "x", 0.0);
-        trigger.host.z = numberOr(host, "z", 0.0);
-      } else {
-        trigger.host.kind = "path";
-        trigger.host.pathId = stringOr(host, "pathId");
-        trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-        trigger.host.lateral = numberOr(host, "lateral", 0.0);
-      }
+      // Same "always path-hosted now" note as zones above.
+      trigger.host.kind = "path";
+      trigger.host.pathId = stringOr(host, "pathId");
+      trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+      trigger.host.lateral = numberOr(host, "lateral", 0.0);
       out.triggers.push_back(std::move(trigger));
     }
   }
@@ -439,13 +342,6 @@ json pathToJson(const Path& path) {
       // Omitted (rather than always writing "fixed") when Fixed, matching the loader's default and
       // every pre-existing reservation's file shape.
       if (reservation.widthMode == ReservationWidthMode::Percent) entry["widthMode"] = "percent";
-      // Omitted (rather than always writing 0) when unset, matching the loader's "<= 0 means
-      // engine default" reading and every pre-existing reservation's file shape.
-      if (reservation.wallHeight > 0.0) entry["wallHeight"] = reservation.wallHeight;
-      // Omitted (rather than always writing "capped") when Capped, matching the loader's default.
-      // Every reservation authored before M6 means Capped now, not merely "unspecified."
-      if (reservation.interiorMode == ReservationInteriorMode::Uncapped) entry["interiorMode"] = "uncapped";
-      if (reservation.railClearanceHeight > 0.0) entry["railClearanceHeight"] = reservation.railClearanceHeight;
       // Omitted (rather than always writing style "joined") when Joined, matching the loader's
       // parseEndCap default and every pre-existing reservation's file shape.
       auto endCapJson = [](const ReservationEndCap& cap) {
@@ -460,55 +356,8 @@ json pathToJson(const Path& path) {
   return out;
 }
 
-// Parses an attributesJson blob back to an object, tolerating anything that isn't valid JSON (it
-// is always writer-controlled -- see MeshVertex/MeshEdge/MeshPolygon's doc comments -- so this
-// only guards against a hand-edited or otherwise corrupted in-memory value).
-json parseAttributes(const std::string& attributesJson) {
-  try {
-    json parsed = json::parse(attributesJson);
-    return parsed.is_object() ? parsed : json::object();
-  } catch (const std::exception&) {
-    return json::object();
-  }
-}
-
-json meshAssetToJson(const MeshAsset& asset) {
-  json vertices = json::array();
-  for (const auto& v : asset.vertices)
-    vertices.push_back(json{{"id", v.id}, {"position", json{{"x", v.x}, {"y", v.y}}}, {"attributes", parseAttributes(v.attributesJson)}});
-  json edges = json::array();
-  for (const auto& e : asset.edges) {
-    // Re-merge the structured `rail` field back into the preserved attribute bag: present (true)
-    // when railed, omitted entirely when not.
-    json attributes = parseAttributes(e.attributesJson);
-    if (e.rail)
-      attributes["rail"] = true;
-    else
-      attributes.erase("rail");
-    edges.push_back(json{{"id", e.id}, {"vertices", json::array({e.vertex0, e.vertex1})}, {"attributes", std::move(attributes)}});
-  }
-  json polygons = json::array();
-  for (const auto& p : asset.polygons) {
-    json directedEdges = json::array();
-    for (const auto& d : p.edges) directedEdges.push_back(json{{"edge", d.edge}, {"v0", d.v0}, {"v1", d.v1}});
-    // holes/attributes are always emitted, even empty -- geometry-js's Mesh.toJSON always writes
-    // both keys, so omitting them on an empty/default value
-    // would itself be a divergence from the reference format.
-    polygons.push_back(json{{"id", p.id},
-                            {"edges", std::move(directedEdges)},
-                            {"holes", p.holes},
-                            {"hole", p.hole},
-                            {"attributes", parseAttributes(p.attributesJson)}});
-  }
-  return json{{"name", asset.name},
-              {"railHeight", asset.railHeight},
-              {"mesh", json{{"vertices", std::move(vertices)}, {"edges", std::move(edges)}, {"polygons", std::move(polygons)}}}};
-}
-
 json zoneToJson(const Zone& zone) {
-  json host = zone.host.kind == "mesh"
-                  ? json{{"kind", "mesh"}, {"meshId", zone.host.meshId}, {"x", zone.host.x}, {"z", zone.host.z}, {"rotation", zone.host.rotation}}
-                  : json{{"kind", "path"}, {"pathId", zone.host.pathId}, {"t", zone.host.t}, {"lateral", zone.host.lateral}};
+  json host = json{{"kind", "path"}, {"pathId", zone.host.pathId}, {"t", zone.host.t}, {"lateral", zone.host.lateral}};
   json out = {{"id", zone.id}, {"effect", zone.effect}, {"width", zone.width}, {"length", zone.length}, {"host", std::move(host)}};
   if (zone.effect == "velocityChange") {
     out["factor"] = zone.factor;
@@ -518,10 +367,7 @@ json zoneToJson(const Zone& zone) {
 }
 
 json triggerToJson(const Trigger& trigger) {
-  json host =
-      trigger.host.kind == "mesh"
-          ? json{{"kind", "mesh"}, {"meshId", trigger.host.meshId}, {"x", trigger.host.x}, {"z", trigger.host.z}}
-          : json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}, {"lateral", trigger.host.lateral}};
+  json host = json{{"kind", "path"}, {"pathId", trigger.host.pathId}, {"t", trigger.host.t}, {"lateral", trigger.host.lateral}};
   json out = {{"id", trigger.id},
               {"type", trigger.type},
               {"direction", trigger.direction},
@@ -582,20 +428,6 @@ std::string toJson(const TrackDefinition& track) {
   json paths = json::array();
   for (const auto& path : track.paths) paths.push_back(pathToJson(path));
 
-  // Only assets a placement still references are written out. Otherwise an
-  // imported-then-deleted mesh accumulates in the file forever.
-  json meshAssets = json::object();
-  {
-    std::set<std::string> referenced;
-    for (const auto& placement : track.meshes) referenced.insert(placement.assetId);
-    for (const auto& [id, asset] : track.meshAssets)
-      if (referenced.count(id)) meshAssets[id] = meshAssetToJson(asset);
-  }
-
-  json meshes = json::array();
-  for (const auto& m : track.meshes)
-    meshes.push_back(json{{"id", m.id}, {"asset", m.assetId}, {"x", m.x}, {"z", m.z}, {"rotation", m.rotation}, {"elevation", m.elevation}});
-
   json textureAssets = json::object();
   for (const auto& [id, asset] : track.textureAssets)
     textureAssets[id] = json{{"name", asset.name}, {"path", asset.path}, {"width", asset.width}, {"height", asset.height}, {"tileWidth", asset.tileWidth}, {"tileHeight", asset.tileHeight}};
@@ -634,8 +466,6 @@ std::string toJson(const TrackDefinition& track) {
       {"disjointSeams", std::move(disjointSeams)},
       {"junctions", std::move(junctions)},
       {"selfIntersectionOverrides", std::move(selfIntersectionOverrides)},
-      {"meshAssets", std::move(meshAssets)},
-      {"meshes", std::move(meshes)},
       {"textureAssets", std::move(textureAssets)},
       {"paths", std::move(paths)},
   };
@@ -646,20 +476,6 @@ void toFile(const TrackDefinition& track, const std::filesystem::path& path) {
   std::ofstream output(path, std::ios::binary);
   if (!output) throw std::runtime_error("cannot open track file for writing: " + path.string());
   output << toJson(track);
-}
-
-MeshAssetParseResult parseMeshAssetJson(const std::string& text) {
-  if (text.find_first_not_of(" \t\r\n") == std::string::npos) return {std::nullopt, "nothing to import (the clipboard is empty)"};
-  json data;
-  try {
-    data = json::parse(text);
-  } catch (const std::exception& error) {
-    return {std::nullopt, std::string("not valid JSON (") + error.what() + ")"};
-  }
-  auto asset = normalizeMeshAsset(std::string(), data);
-  if (!asset) return {std::nullopt, "no vertices/polygons array found -- is this a geometry-js mesh?"};
-  if (asset->vertices.empty() || asset->polygons.empty()) return {std::nullopt, "mesh contains no usable polygons"};
-  return {std::move(asset), {}};
 }
 
 }  // namespace editor

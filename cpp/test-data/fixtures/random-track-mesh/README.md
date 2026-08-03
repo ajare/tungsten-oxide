@@ -7,6 +7,11 @@ metadata.
 
 This is a fixed, committed regression corpus; there is no in-repo tool to regenerate it.
 
+**Currently disabled** (`cpp/core/CMakeLists.txt`'s `random_geometry_parity` `add_test` is commented
+out): every fixture here authors `meshAssets`/`meshes`/mesh-hosted zones, all removed in schema 12
+(`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2), so they now hard-fail to load. Left in place as
+committed history pending Milestone 7's mesh-mode-appropriate replacement traces.
+
 Each source JSON has a matching `expected/geometry-summary.json`, a recorded reference bake.
 `random_geometry_parity` independently loads each JSON in C++ and compares:
 

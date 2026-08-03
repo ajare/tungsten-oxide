@@ -26,11 +26,14 @@ double pathSignedCurvatureAt(const PathDefinition& path, std::size_t frameIndex,
 namespace TrackCore {
 
 // --- schema/geometry constants ---
-constexpr int TRACK_SCHEMA_VERSION = 11;
+// 12: Mesh regions (meshAssets/meshes, and the mesh-hosted zone/trigger host variant) removed
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- TrackLoader.cpp hard-errors if a track still
+// references them, rather than silently dropping the fields.
+constexpr int TRACK_SCHEMA_VERSION = 12;
 // Oldest schema version the native loader still accepts (no reservations field, always empty).
 // CENTRAL_RESERVATION_PLAN.md M0: the committed golden fixture corpus under cpp/test-data/ is
 // permanently schema 10, so the loader must keep reading it even though C++ now writes/normalizes
-// to 11.
+// to the current version.
 constexpr int TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10;
 constexpr int N_DEFAULT = 400;
 constexpr double COLLISION_WALL_MARGIN = 1.8;

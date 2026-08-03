@@ -28,3 +28,9 @@ track tolerance documented in `CLAUDE.md`.
 `manifest.json` records scenario activity so generation fails if a fixture stops
 exercising its intended branch. This corpus is a fixed, committed regression suite; there is no
 in-repo tool to regenerate it.
+
+**Currently disabled** (`cpp/core/CMakeLists.txt`'s `raw_parity`/`raw_session_init_parity`/
+`raw_session_step_parity` `add_test`s are commented out): every fixture here (and in
+`../raw-session/`) authors `meshAssets`/`meshes`, removed in schema 12
+(`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2), so they now hard-fail to load. Left in place as
+committed history pending Milestone 7's mesh-mode-appropriate replacement traces.

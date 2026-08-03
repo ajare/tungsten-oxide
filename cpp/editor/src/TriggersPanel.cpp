@@ -88,24 +88,14 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
     const bool dirChanged = ImGui::Combo("Direction", &dirIndex, dirNames, 3);
     changed |= dirChanged;
 
-    double t = trigger->host.t * 100.0, lateral = trigger->host.lateral, hostX = trigger->host.x, hostZ = trigger->host.z;
-    if (isPath) {
-      ImGui::Text("Host path: %s", trigger->host.pathId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Position (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    } else {
-      ImGui::Text("Host mesh: %s", trigger->host.meshId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    }
+    double t = trigger->host.t * 100.0, lateral = trigger->host.lateral;
+    ImGui::Text("Host path: %s", trigger->host.pathId.c_str());
+    ImGui::SetNextItemWidth(120);
+    changed |= ImGui::InputDouble("Position (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(120);
+    changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
 
     if (changed) {
       mutated |= state.editTrigger(id, [&](Trigger& target) {
@@ -115,13 +105,8 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
         target.autoWidth = autoWidth;
         target.direction = dirNames[dirIndex];
         if (isCheckpoint) target.role = role;
-        if (target.host.kind == "path") {
-          target.host.t = t / 100.0;
-          target.host.lateral = lateral;
-        } else {
-          target.host.x = hostX;
-          target.host.z = hostZ;
-        }
+        target.host.t = t / 100.0;
+        target.host.lateral = lateral;
       });
     }
     ImGui::BeginDisabled(isFinish);

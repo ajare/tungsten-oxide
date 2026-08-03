@@ -41,28 +41,13 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
     }
 
     double t = zone->host.t * 100.0, lateral = zone->host.lateral;
-    double hostX = zone->host.x, hostZ = zone->host.z, rotation = zone->host.rotation;
-    const bool isPath = zone->host.kind == "path";
-    if (isPath) {
-      ImGui::Text("Host path: %s", zone->host.pathId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("T (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    } else {
-      ImGui::Text("Host mesh: %s", zone->host.meshId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Rotation (deg)", &rotation, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    }
+    ImGui::Text("Host path: %s", zone->host.pathId.c_str());
+    ImGui::SetNextItemWidth(120);
+    changed |= ImGui::InputDouble("T (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(120);
+    changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
 
     if (changed) {
       mutated |= state.editZone(id, [&](Zone& target) {
@@ -72,14 +57,8 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
           target.factor = factor;
           target.duration = duration;
         }
-        if (target.host.kind == "path") {
-          target.host.t = t / 100.0;
-          target.host.lateral = lateral;
-        } else {
-          target.host.x = hostX;
-          target.host.z = hostZ;
-          target.host.rotation = rotation;
-        }
+        target.host.t = t / 100.0;
+        target.host.lateral = lateral;
       });
     }
     if (ImGui::Button("Delete Zone")) {

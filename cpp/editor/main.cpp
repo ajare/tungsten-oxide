@@ -35,6 +35,9 @@
 // wraps CF_UNICODETEXT for the paste path. M10 adds TexturePanel.cpp's "Browse..." button next to
 // "Load Bundled Textures", reusing M7b's readImageSize/addTextureAsset with FileDialog.hpp's
 // Open dialog -- almost entirely wiring.
+// DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2 later removed everything M4/M5/M9 added above (mesh
+// region placement/drag/rotate, Rails mode, mesh JSON import/paste) along with MeshRegion itself;
+// M6/M7/M8/M10's own work is unaffected.
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -79,7 +82,6 @@
 #include "ZonesPanel.hpp"
 #include "TriggersPanel.hpp"
 #include "ReservationsPanel.hpp"
-#include "MeshPanel.hpp"
 #include "CurvesPanel.hpp"
 #include "TopDownCanvas.hpp"
 #include "TopDownView.hpp"
@@ -195,21 +197,6 @@ editor::TrackDefinition buildStarterTrack() {
   track.triggers.push_back(checkpoint("starter-cp2", "intermediate", 0.5025, "both"));
   track.triggers.push_back(checkpoint("starter-cp3", "intermediate", 0.7525, "both"));
 
-  // There's no mesh-asset import UI yet (EDITOR_CPP_PORT_PLAN.md M4 is placement, not authoring),
-  // so a single hardcoded 80x40m rectangle is the only asset available to place -- enough to
-  // exercise placement/drag/rotate/delete and core's mesh baking end to end.
-  editor::MeshAsset testAsset;
-  testAsset.id = "test-rect";
-  testAsset.name = "Test Rectangle";
-  testAsset.railHeight = 6.0;
-  testAsset.vertices = {{0, -40.0, -20.0}, {1, 40.0, -20.0}, {2, 40.0, 20.0}, {3, -40.0, 20.0}};
-  testAsset.edges = {{0, 0, 1, false}, {1, 1, 2, false}, {2, 2, 3, false}, {3, 3, 0, false}};
-  editor::MeshPolygon polygon;
-  polygon.id = 0;
-  polygon.edges = {{0, 0, 1}, {1, 1, 2}, {2, 2, 3}, {3, 3, 0}};
-  testAsset.polygons = {polygon};
-  track.meshAssets.emplace(testAsset.id, std::move(testAsset));
-
   return track;
 }
 
@@ -322,67 +309,8 @@ M3SmokeCheckResult runM3SmokeCheck() {
   return result;
 }
 
-// M4 smoke check: place/select/drag/rotate/delete a mesh placement, and confirm core's own mesh
-// baking (tox::Track::meshRegions, via the unmodified Track::fromJson bake) picks up the move.
-struct M4SmokeCheckResult {
-  bool placed = false, dragMoved = false, rotateApplied = false, deleted = false;
-  bool bakedRegionMoved = false;
-};
-
-M4SmokeCheckResult runM4SmokeCheck() {
-  M4SmokeCheckResult result;
-
-  editor::EditorState state(buildStarterTrack());
-  result.placed = state.placeMeshAsset("test-rect", 1600.0, 0.0) && state.selectedMeshId().has_value();
-
-  state.beginMeshDrag(1600.0, 0.0);
-  state.dragMeshTo(1650.0, 30.0);
-  state.endMeshDrag();
-  const editor::MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
-  result.dragMoved = placement != nullptr && placement->x == 1650.0 && placement->z == 30.0;
-
-  state.beginMeshRotate(0.0);
-  state.dragMeshRotateTo(90.0);
-  state.endMeshRotate();
-  placement = state.findMeshPlacement(*state.selectedMeshId());
-  result.rotateApplied = placement != nullptr && placement->rotation == 90.0;
-
-  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
-  result.bakedRegionMoved = baked && baked.track->meshRegions.size() == 1 &&
-                            baked.track->meshRegions[0].bounds.minX > 1600.0;  // shifted right of the placement point
-
-  result.deleted = state.deleteSelectedMesh() && !state.selectedMeshId().has_value() && state.track().meshes.empty();
-
-  return result;
-}
-
-// M5 smoke check: toggle a rail edge directly (mirrors clicking it in Rails mode), confirm it
-// flips the shared asset's edge (not a per-placement copy), undo restores it, and that
-// meshEdgeAtWorld's hit-testing (exercised via toggleRailEdge's caller in TopDownCanvas.cpp) would
-// find the same edge from its world-space midpoint.
-struct M5SmokeCheckResult {
-  bool toggled = false, undone = false, redone = false, selectionSet = false;
-};
-
-M5SmokeCheckResult runM5SmokeCheck() {
-  M5SmokeCheckResult result;
-
-  editor::EditorState state(buildStarterTrack());
-  state.placeMeshAsset("test-rect", 1600.0, 0.0);
-  const std::string meshId = *state.selectedMeshId();
-
-  // Edge 0 connects vertices (0,-40,-20) and (1,40,-20) -- its local midpoint (0,-20) sits at
-  // world (1600, -20) for an unrotated placement at (1600, 0).
-  result.toggled = state.toggleRailEdge(meshId, "test-rect", 0);
-  const auto& asset = state.track().meshAssets.at("test-rect");
-  const bool flaggedAfterToggle = asset.edges[0].rail;
-  result.selectionSet = state.selectedRail().has_value() && state.selectedRail()->meshId == meshId && state.selectedRail()->edgeId == 0;
-
-  result.undone = state.undo() && !state.track().meshAssets.at("test-rect").edges[0].rail;
-  result.redone = state.redo() && state.track().meshAssets.at("test-rect").edges[0].rail == flaggedAfterToggle;
-
-  return result;
-}
+// M4/M5 smoke checks (mesh placement select/drag/rotate/delete, rail-edge toggling) were removed
+// along with MeshRegion/MeshAsset/MeshPlacement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
 // M6 smoke check, updated for DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1.4: ElevationView is
 // retired, so height editing now goes through Front canvas projection mode's generalized
@@ -456,40 +384,10 @@ M7aSmokeCheckResult runM7aSmokeCheck() {
   return result;
 }
 
-// M7c smoke check: unlike M7a's fixed seed/complexity (which may or may not roll mesh sections),
-// this scans seeds at complexity 10 (mesh section chance is highest there) until it finds one that
-// actually produces cuts, then confirms the result bakes cleanly with multiple paths, at least one
-// mesh asset/placement, and no warnings -- exercising the mesh-section branch specifically, not
-// just whichever branch a fixed seed happens to land on.
-struct M7cSmokeCheckResult {
-  bool foundMeshSectionSeed = false;
-  bool bakeOk = false;
-  std::size_t pathCount = 0, meshAssetCount = 0, meshPlacementCount = 0, warningCount = 0;
-};
-
-M7cSmokeCheckResult runM7cSmokeCheck() {
-  M7cSmokeCheckResult result;
-
-  // Seed 1 at complexity 10 (mesh-section chance is highest there) is a known-good, deterministic
-  // pick that rolls at least one cut and bakes cleanly -- checked once with a broad seed scan
-  // during development (there is a rare short-ordinary-path edge case in this generator's own
-  // separation math, unrelated to this seed).
-  for (std::uint32_t seed = 1; seed <= 64; ++seed) {
-    const editor::TrackDefinition random = editor::generateRandomTrack(10, seed);
-    if (random.meshAssets.empty()) continue;  // this seed rolled the no-cuts single-loop branch
-    const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(random));
-    if (!baked) continue;  // the rare short-segment edge case; try the next seed
-    result.foundMeshSectionSeed = true;
-    result.pathCount = random.paths.size();
-    result.meshAssetCount = random.meshAssets.size();
-    result.meshPlacementCount = random.meshes.size();
-    result.bakeOk = true;
-    result.warningCount = baked.warnings.size();
-    break;
-  }
-
-  return result;
-}
+// M7c's mesh-section-branch smoke check was removed: RandomTrack.cpp's mesh-section generation
+// (splitting the loop into paths joined by placed-mesh-asset jump platforms) is gone along with
+// MeshAsset/MeshPlacement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- generateRandomTrack now
+// always takes the closed-loop/no-cuts branch M7a originally scoped this to.
 
 // M7b smoke check: register a texture asset against one of the repo's real checked-in images
 // (assets/test-1.png, stored as "../assets/test-1.png" -- see TextureCache.cpp's get()), assign it
@@ -532,56 +430,8 @@ M7bSmokeCheckResult runM7bSmokeCheck() {
   return result;
 }
 
-// M9 smoke check: parse a bare geometry-js mesh export (no track/asset wrapper, no pre-flagged
-// rail edges), import it through EditorState::importMeshFromJsonText the same way the toolbar's
-// Import Mesh button does, and confirm it registers a new asset, rails every boundary edge by
-// default (mirrors TrackMesh.railBoundaryEdges), and bakes cleanly through core's unmodified
-// loader. Also checks parseMeshAssetJson rejects non-mesh JSON, mirroring parseMeshJSON's never-
-// throws contract.
-struct M9SmokeCheckResult {
-  bool parsedFromJson = false, imported = false, railedBoundary = false, bakesCleanly = false, badJsonRejected = false;
-};
-
-M9SmokeCheckResult runM9SmokeCheck() {
-  M9SmokeCheckResult result;
-
-  const std::string meshJson = R"({
-    "vertices": [
-      {"id": 0, "position": {"x": -10, "y": -10}},
-      {"id": 1, "position": {"x": 10, "y": -10}},
-      {"id": 2, "position": {"x": 10, "y": 10}},
-      {"id": 3, "position": {"x": -10, "y": 10}}
-    ],
-    "edges": [
-      {"id": 0, "vertices": [0, 1]},
-      {"id": 1, "vertices": [1, 2]},
-      {"id": 2, "vertices": [2, 3]},
-      {"id": 3, "vertices": [3, 0]}
-    ],
-    "polygons": [
-      {"id": 0, "edges": [{"edge":0,"v0":0,"v1":1},{"edge":1,"v0":1,"v1":2},{"edge":2,"v0":2,"v1":3},{"edge":3,"v0":3,"v1":0}]}
-    ]
-  })";
-  result.parsedFromJson = editor::parseMeshAssetJson(meshJson).asset.has_value();
-
-  editor::EditorState state(buildStarterTrack());
-  const std::size_t assetsBefore = state.track().meshAssets.size();
-  const auto error = state.importMeshFromJsonText(meshJson, "test-import.json", 2000.0, 0.0);
-  result.imported = !error.has_value() && state.track().meshAssets.size() == assetsBefore + 1 && state.selectedMeshId().has_value();
-
-  if (result.imported) {
-    const auto* placement = state.findMeshPlacement(*state.selectedMeshId());
-    const auto& asset = state.track().meshAssets.at(placement->assetId);
-    result.railedBoundary = std::all_of(asset.edges.begin(), asset.edges.end(), [](const editor::MeshEdge& e) { return e.rail; });
-  }
-
-  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
-  result.bakesCleanly = static_cast<bool>(baked) && baked.warnings.empty();
-
-  result.badJsonRejected = !editor::parseMeshAssetJson("not json").asset.has_value() && !editor::parseMeshAssetJson("{}").asset.has_value();
-
-  return result;
-}
+// M9's mesh-JSON-import smoke check was removed along with parseMeshAssetJson/
+// importMeshFromJsonText/MeshAsset (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
 // Parity-fix smoke check: regression coverage for the fixes that silently corrupted or lost
 // authored data rather than crashing or misformatting. A few related fixes are too
@@ -589,7 +439,6 @@ M9SmokeCheckResult runM9SmokeCheck() {
 struct ParitySmokeCheckResult {
   bool noIdCollisionOnCreate = false, drawnPathBakesAsDrawn = false;
   bool startPointPreservedOnDelete = false, startClampedInRange = false;
-  bool orphanedMeshAssetPruned = false;
 };
 
 ParitySmokeCheckResult runParitySmokeCheck() {
@@ -657,14 +506,8 @@ ParitySmokeCheckResult runParitySmokeCheck() {
     result.startClampedInRange = state.track().start.point < positionCount;
   }
 
-  // Finding 5: an asset no placement references anymore must not survive export.
-  {
-    editor::EditorState state(buildStarterTrack());
-    state.placeMeshAsset("test-rect", 1600.0, 0.0);
-    state.deleteSelectedMesh();
-    const std::string json = editor::toJson(state.track());
-    result.orphanedMeshAssetPruned = json.find("test-rect") == std::string::npos;
-  }
+  // Finding 5 (an orphaned mesh asset must not survive export) was removed along with
+  // MeshAsset/MeshPlacement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
   return result;
 }
@@ -1184,16 +1027,14 @@ Gap14SmokeCheckResult runGap14SmokeCheck() {
 // Gap-8 smoke check: the random-ranges panel.
 // `generateRandomTrack` already accepted a `RandomTrackRanges` parameter (M7a/M7c); main.cpp
 // simply never passed anything but the `{}` default until this gap's UI wiring. Confirms a custom
-// range actually reaches the generator -- pinning turnsMin == turnsMax forces the single-loop
-// variant's control-point count to that exact value regardless of complexity (`n` in
-// generateRandomTrack, RandomTrack.cpp:283, collapses to `turnsMin` when the range has zero
-// width), and disabling mesh sections (meshChanceMax=0, maxMeshSections=0) keeps the whole track a
-// single loop so the count is unambiguous -- and that the default-constructed ranges still bake
-// cleanly (regression check: this is what every prior random-track call implicitly used). The
-// panel's own field-clamping (`sanitize`, a direct port of sanitizeRandomRanges) is UI-only logic
-// exercised through ImGui widgets with no headless entry point, consistent with how the other gap
-// panels (Zones/Triggers/Properties) aren't unit-tested directly either -- only the
-// EditorState/generator side each one drives is.
+// range actually reaches the generator -- pinning turnsMin == turnsMax forces the generator's
+// control-point count to that exact value regardless of complexity (`n` in generateRandomTrack
+// collapses to `turnsMin` when the range has zero width) -- and that the default-constructed
+// ranges still bake cleanly (regression check: this is what every prior random-track call
+// implicitly used). The panel's own field-clamping (`sanitize`, a direct port of
+// sanitizeRandomRanges) is UI-only logic exercised through ImGui widgets with no headless entry
+// point, consistent with how the other gap panels (Zones/Triggers/Properties) aren't unit-tested
+// directly either -- only the EditorState/generator side each one drives is.
 struct Gap8SmokeCheckResult {
   bool customTurnCountRespected = false, defaultRangesStillBake = false;
 };
@@ -1203,8 +1044,6 @@ Gap8SmokeCheckResult runGap8SmokeCheck() {
 
   editor::RandomTrackRanges fixedTurns;
   fixedTurns.turnsMin = fixedTurns.turnsMax = 9;
-  fixedTurns.meshChanceMin = fixedTurns.meshChanceMax = 0.0;
-  fixedTurns.maxMeshSections = 0;
   const editor::TrackDefinition track = editor::generateRandomTrack(5, 777u, fixedTurns);
   int positionCount = 0;
   if (!track.paths.empty())
@@ -1703,17 +1542,6 @@ int main(int, char**) {
                m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
-  const M4SmokeCheckResult m4Smoke = runM4SmokeCheck();
-  std::fprintf(stdout, "M4 smoke check: place=%s drag=%s rotate=%s bakedRegionMoved=%s delete=%s\n",
-               m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH", m4Smoke.rotateApplied ? "OK" : "MISMATCH",
-               m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH", m4Smoke.deleted ? "OK" : "MISMATCH");
-  std::fflush(stdout);
-
-  const M5SmokeCheckResult m5Smoke = runM5SmokeCheck();
-  std::fprintf(stdout, "M5 smoke check: toggle=%s selectionSet=%s undo=%s redo=%s\n", m5Smoke.toggled ? "OK" : "MISMATCH",
-               m5Smoke.selectionSet ? "OK" : "MISMATCH", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
-  std::fflush(stdout);
-
   const M6SmokeCheckResult m6Smoke = runM6SmokeCheck();
   std::fprintf(stdout, "M6 smoke check: elevationDrag=%s undo=%s redo=%s\n", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
                m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
@@ -1739,27 +1567,11 @@ int main(int, char**) {
                m7bSmoke.deleted ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
-  const M7cSmokeCheckResult m7cSmoke = runM7cSmokeCheck();
-  std::fprintf(stdout, "M7c smoke check: foundMeshSectionSeed=%s bake=%s (%zu paths, %zu mesh assets, %zu placements, %zu warnings)\n",
-               m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED (no seed in [1,200] rolled a mesh section)",
-               m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount, m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount,
-               m7cSmoke.warningCount);
-  std::fflush(stdout);
-
-  const M9SmokeCheckResult m9Smoke = runM9SmokeCheck();
-  std::fprintf(stdout, "M9 smoke check: parse=%s import=%s railedBoundary=%s bakesCleanly=%s badJsonRejected=%s\n",
-               m9Smoke.parsedFromJson ? "OK" : "MISMATCH", m9Smoke.imported ? "OK" : "MISMATCH",
-               m9Smoke.railedBoundary ? "OK" : "MISMATCH", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
-               m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
-  std::fflush(stdout);
-
   const ParitySmokeCheckResult paritySmoke = runParitySmokeCheck();
   std::fprintf(stdout,
-               "Parity-fix smoke check: noIdCollision=%s drawnPathBakesAsDrawn=%s startPreserved=%s startClamped=%s "
-               "orphanAssetPruned=%s\n",
+               "Parity-fix smoke check: noIdCollision=%s drawnPathBakesAsDrawn=%s startPreserved=%s startClamped=%s\n",
                paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH",
-               paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH",
-               paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
+               paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const Gap1SmokeCheckResult gap1Smoke = runGap1SmokeCheck();
@@ -1937,9 +1749,9 @@ int main(int, char**) {
     statusMessage = std::move(message);
     statusExpiresAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   };
-  // Idle status-bar content, shown whenever no timed showStatus() message is active: the four
-  // point/mesh-region/zone/trigger selection slots are mutually exclusive (EditorState.hpp's own
-  // selectXAt()/clearXSelection() calls all reset the other three), so checking them in this order
+  // Idle status-bar content, shown whenever no timed showStatus() message is active: the three
+  // point/zone/trigger selection slots are mutually exclusive (EditorState.hpp's own
+  // selectXAt()/clearXSelection() calls all reset the other two), so checking them in this order
   // and returning on the first match never misses or double-reports a selection.
   auto describeSelection = [&]() -> std::string {
     if (const editor::SelectedPoint sel = editorState.selection(); sel.valid()) {
@@ -1950,14 +1762,6 @@ int main(int, char**) {
         case editor::PointKind::Width: return "Width point selected";
         case editor::PointKind::CrossSection: return "Cross-section point selected";
       }
-    }
-    if (const auto& meshId = editorState.selectedMeshId(); meshId.has_value()) {
-      std::string assetName = *meshId;
-      if (const editor::MeshPlacement* placement = editorState.findMeshPlacement(*meshId)) {
-        if (const auto it = editorState.track().meshAssets.find(placement->assetId); it != editorState.track().meshAssets.end())
-          assetName = it->second.name;
-      }
-      return "Mesh region selected: " + assetName;
     }
     if (const auto& zoneId = editorState.selectedZoneId(); zoneId.has_value()) {
       const editor::Zone* zone = editorState.findZone(*zoneId);
@@ -2161,13 +1965,12 @@ int main(int, char**) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    // E/C/R switch mode, Ctrl+Z/Ctrl+Y undo/redo -- all global
+    // E/C switch mode, Ctrl+Z/Ctrl+Y undo/redo -- all global
     // since there's no text-input widget yet that would need to steal these keys.
     if (!io.WantTextInput) {
       if (ImGui::IsKeyPressed(ImGuiKey_E)) editorState.setMode(editor::EditMode::Edit);
       if (ImGui::IsKeyPressed(ImGuiKey_C)) editorState.setMode(editor::EditMode::Create);
-      if (ImGui::IsKeyPressed(ImGuiKey_R)) editorState.setMode(editor::EditMode::Rails);
-      // 1/2/3 switch canvas projection mode -- orthogonal to E/C/R's EditMode, so both live on
+      // 1/2/3 switch canvas projection mode -- orthogonal to E/C's EditMode, so both live on
       // the global (non-text-input) shortcut set without colliding.
       if (ImGui::IsKeyPressed(ImGuiKey_1)) editorState.setProjectionMode(editor::ProjectionMode::TopDown);
       if (ImGui::IsKeyPressed(ImGuiKey_2)) editorState.setProjectionMode(editor::ProjectionMode::Front);
@@ -2217,50 +2020,6 @@ int main(int, char**) {
             } catch (const std::exception& error) {
               showStatus(std::string("Export failed: ") + error.what());
             }
-          }
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Place Test Mesh")) {
-          // Placed just outside the starter circle (radius ~1333m) so it's never accidentally on
-          // top of the track -- there's no asset library/drag-from-palette UI yet (M4 is
-          // placement, not authoring), so this is the only way to get a mesh region onto the
-          // canvas at all.
-          if (editorState.placeMeshAsset("test-rect", 1600.0, 0.0)) rebake();
-        }
-        // Import Mesh and the right-click "Paste Mesh" in TopDownCanvas.cpp
-        // share EditorState::importMeshFromJsonText with the menu item below.
-        if (ImGui::MenuItem("Import Mesh...")) {
-          const editor::FileDialogResult picked = editor::showOpenFileDialog(L"Import Mesh JSON", {{L"Mesh JSON (*.json)", L"*.json"}});
-          if (picked.ok) {
-            std::ifstream input(picked.path, std::ios::binary);
-            if (!input) {
-              // Previously fell through to importMeshFromJsonText with empty text, which reported
-              // the clipboard-flavoured "nothing to import (the clipboard is empty)" for a file
-              // that simply couldn't be opened.
-              showStatus("Mesh import failed: could not open " + editor::pathToUtf8(picked.path));
-            } else {
-              std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-              const editor::WorldPoint2D center = topDownView.center();
-              const auto error = editorState.importMeshFromJsonText(text, editor::pathToUtf8(picked.path.filename()), center.x, center.z);
-              if (error)
-                showStatus("Mesh import failed: " + *error);
-              else
-                rebake();
-            }
-          }
-        }
-        if (ImGui::MenuItem("Paste Mesh")) {
-          // Unlike Import Mesh (centred on the current view) and the right-click paste (centred
-          // on the click), the menu paste has no position to centre on -- mirrors
-          // importMeshFromClipboard's own `at = {x:0,z:0}` default when called without centreOn.
-          if (const auto text = editor::readClipboardText()) {
-            const auto error = editorState.importMeshFromJsonText(*text, "pasted-mesh", 0.0, 0.0);
-            if (error)
-              showStatus("Clipboard does not contain a mesh: " + *error);
-            else
-              rebake();
-          } else {
-            showStatus("Could not read the clipboard");
           }
         }
         ImGui::Separator();
@@ -2623,9 +2382,9 @@ int main(int, char**) {
     ImGui::TextUnformatted("Mode");
     ImGui::SameLine();
     int modeIndex = static_cast<int>(editorState.mode());
-    const char* modeNames[] = {"Edit", "Create", "Rails"};
+    const char* modeNames[] = {"Edit", "Create"};
     ImGui::SetNextItemWidth(100);
-    if (ImGui::Combo("##mode", &modeIndex, modeNames, 3)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
+    if (ImGui::Combo("##mode", &modeIndex, modeNames, 2)) editorState.setMode(static_cast<editor::EditMode>(modeIndex));
     ImGui::SameLine(0.0f, 14.0f);
     ImGui::TextUnformatted("View");
     ImGui::SameLine();
@@ -2755,11 +2514,6 @@ int main(int, char**) {
       if (editor::DrawPropertiesPanel(editorState, currentPathIndex, topDownView, bakedTrack)) rebake();
       ImGui::PopID();
     }
-    if (ImGui::CollapsingHeader("Mesh Region")) {
-      ImGui::PushID("MeshRegion");
-      if (editor::DrawMeshPanel(editorState)) rebake();
-      ImGui::PopID();
-    }
     if (ImGui::CollapsingHeader("Zones")) {
       ImGui::PushID("Zones");
       if (editor::DrawZonesPanel(editorState, currentPathIndex)) rebake();
@@ -2816,15 +2570,6 @@ int main(int, char**) {
       ImGui::BulletText("delete removes point / 4-point floor guard holds: %s / %s", m3Smoke.deleteRemovedPoint ? "OK" : "MISMATCH",
                         m3Smoke.deleteGuardHeld ? "OK" : "MISMATCH");
       ImGui::BulletText("create-mode draft closes into a new path: %s", m3Smoke.createDraftMadeClosedPath ? "OK" : "MISMATCH");
-      ImGui::TextUnformatted("M4 smoke check (mesh placement, exercised directly):");
-      ImGui::BulletText("place / drag / rotate: %s / %s / %s", m4Smoke.placed ? "OK" : "MISMATCH", m4Smoke.dragMoved ? "OK" : "MISMATCH",
-                        m4Smoke.rotateApplied ? "OK" : "MISMATCH");
-      ImGui::BulletText("core's own bake reflects the move / delete: %s / %s", m4Smoke.bakedRegionMoved ? "OK" : "MISMATCH",
-                        m4Smoke.deleted ? "OK" : "MISMATCH");
-      ImGui::TextUnformatted("M5 smoke check (rail-edge toggle, exercised directly):");
-      ImGui::BulletText("toggle flips shared asset edge / sets selection: %s / %s", m5Smoke.toggled ? "OK" : "MISMATCH",
-                        m5Smoke.selectionSet ? "OK" : "MISMATCH");
-      ImGui::BulletText("undo restores / redo reapplies: %s / %s", m5Smoke.undone ? "OK" : "MISMATCH", m5Smoke.redone ? "OK" : "MISMATCH");
       ImGui::TextUnformatted("M6 smoke check (elevation drag, exercised directly):");
       ImGui::BulletText("elevation drag / undo / redo: %s / %s / %s", m6Smoke.elevationChanged ? "OK" : "MISMATCH",
                         m6Smoke.undone ? "OK" : "MISMATCH", m6Smoke.redone ? "OK" : "MISMATCH");
@@ -2844,21 +2589,11 @@ int main(int, char**) {
       ImGui::BulletText("tile resize keeps valid binding / clears invalid one / delete: %s / %s / %s",
                         m7bSmoke.tileResizeOk ? "OK" : "MISMATCH", m7bSmoke.invalidAssignmentCleared ? "OK" : "MISMATCH",
                         m7bSmoke.deleted ? "OK" : "MISMATCH");
-      ImGui::TextUnformatted("M7c smoke check (mesh-section random-track generation, exercised directly):");
-      ImGui::BulletText("found a mesh-section seed / bakes cleanly: %s / %s (%zu path(s), %zu mesh asset(s), %zu placement(s), %zu warning(s))",
-                        m7cSmoke.foundMeshSectionSeed ? "OK" : "FAILED", m7cSmoke.bakeOk ? "OK" : "FAILED", m7cSmoke.pathCount,
-                        m7cSmoke.meshAssetCount, m7cSmoke.meshPlacementCount, m7cSmoke.warningCount);
-      ImGui::TextUnformatted("M9 smoke check (mesh JSON import, exercised directly):");
-      ImGui::BulletText("parse / import / rails boundary by default: %s / %s / %s", m9Smoke.parsedFromJson ? "OK" : "MISMATCH",
-                        m9Smoke.imported ? "OK" : "MISMATCH", m9Smoke.railedBoundary ? "OK" : "MISMATCH");
-      ImGui::BulletText("bakes cleanly / rejects non-mesh JSON: %s / %s", m9Smoke.bakesCleanly ? "OK" : "MISMATCH",
-                        m9Smoke.badJsonRejected ? "OK" : "MISMATCH");
       ImGui::TextUnformatted("Parity-fix smoke check (exercised directly):");
       ImGui::BulletText("no id collision on Create / drawn path bakes as drawn: %s / %s",
                         paritySmoke.noIdCollisionOnCreate ? "OK" : "MISMATCH", paritySmoke.drawnPathBakesAsDrawn ? "OK" : "MISMATCH");
       ImGui::BulletText("start point preserved / clamped in range on delete: %s / %s",
                         paritySmoke.startPointPreservedOnDelete ? "OK" : "MISMATCH", paritySmoke.startClampedInRange ? "OK" : "MISMATCH");
-      ImGui::BulletText("orphaned mesh asset pruned on export: %s", paritySmoke.orphanedMeshAssetPruned ? "OK" : "MISMATCH");
       ImGui::TextUnformatted("Gap1 smoke check (roll/width/crossSection point editing, exercised directly):");
       ImGui::BulletText("add roll/width/crossSection / edit fields / delete: %s/%s/%s / %s / %s", gap1Smoke.rollAdded ? "OK" : "MISMATCH",
                         gap1Smoke.widthAdded ? "OK" : "MISMATCH", gap1Smoke.crossSectionAdded ? "OK" : "MISMATCH",

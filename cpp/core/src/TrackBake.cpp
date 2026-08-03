@@ -3,7 +3,6 @@
 #include "TrackBake.hpp"
 #include "Simulation.hpp"
 #include "TrackCore.hpp"
-#include "TrackMesh.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -753,7 +752,6 @@ RenderBake adaptiveRenderBake(const PathDefinition& definition, const std::vecto
   return out;
 }
 
-void reservationGeometry(Track& track, const PathDefinition& def, const std::vector<Frame>& frames, const Edges& e, int pi);
 struct Builder {
   GeometryBatch b;
   void tri(const Vec3& a, const Vec3& c, const Vec3& d, Vec2d ua = {}, Vec2d uc = {}, Vec2d ud = {}) {
@@ -929,16 +927,16 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
       std::set<double> shellBreaks(br[i].begin(), br[i].end());
       shellBreaks.insert(br[j].begin(), br[j].end());
       std::vector<double> shellV(shellBreaks.begin(), shellBreaks.end());
-      // M6: an Uncapped reservation carves a matching hole in the underside too (a genuine
-      // through-shaft, deliberately non-manifold -- Capped leaves the shell solid here and instead
-      // seals the pit's sides in reservationGeometry, using the shell's own unmodified surface as
-      // the floor). A ring pair can straddle a reservation's own t0/t1 boundary, where only one of
-      // i/j is actually tagged; look at whichever one is.
+      // A reservation carves a matching hole in the underside too (a genuine through-shaft,
+      // deliberately non-manifold) -- every reservation behaves this way now (the alternative,
+      // Capped, sealed underside was removed along with its synthetic MeshRegion floor,
+      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2). A ring pair can straddle a reservation's own
+      // t0/t1 boundary, where only one of i/j is actually tagged; look at whichever one is.
       const int resIdx = frames[i].reservationIndex >= 0 ? frames[i].reservationIndex : frames[j].reservationIndex;
-      const bool uncappedHere = resIdx >= 0 && def.reservations[resIdx].interiorMode == ReservationInteriorMode::Uncapped;
+      const bool insideReservation = resIdx >= 0;
       for (std::size_t k = 0; k + 1 < shellV.size(); ++k) {
         const double lo = shellV[k], hi = shellV[k + 1];
-        if (uncappedHere) {
+        if (insideReservation) {
           const int ringOf[4] = {i, i, j, j};
           const double vOf[4] = {lo, hi, hi, lo};
           const double tOf[4] = {t0, t0, t1, t1};
@@ -1011,261 +1009,13 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     }
     track.geometry.push_back(std::move(r.b));
   }
-  reservationGeometry(track, def, frames, e, pi);
+  // Reservation walls/floor (the synthetic MeshRegion this used to build, plus ReservationWall
+  // render geometry) were removed with MeshRegion, with no interim replacement
+  // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- the void carved above (via reservationHalfGap)
+  // is purely visual/no-collision now. Milestone 5 is expected to restore collidable walls via
+  // drivable mesh object placements.
 }
 
-// Builds a reservation's synthetic MeshRegion plus its ReservationWall render geometry, from the
-// two tapered inner-lane boundary curves. Mirrors PathRail's own triangle winding (a, b, at), (at,
-// b, bt) exactly, at `reservation.wallHeight` (falling back to DEFAULT_RAIL_HEIGHT when unset) --
-// the wall's *visual* height only; see `railClearanceHeight` below for the physics jump-clearance
-// height, decoupled from it since CENTRAL_RESERVATION_PLAN.md M6.
-//
-// Deliberately built from the SAME `frames`/`e` arrays `pathGeometry` just carved the visible
-// surface hole from (the adaptive render bake), not the fine physics centerline: a wall built from
-// a finer or coarser sample set than the hole it's supposed to guard would leave slivers where the
-// two disagree about where the void is -- physics would then see "solid ground" (via the corridor's
-// analytical curvedSurfaceFrame, which knows nothing about the carve) directly behind a wall that
-// doesn't quite reach that spot, and any exported collision mesh's hole (built from this exact
-// surface batch) would likewise not line up with a wall built from a different sample set. Grouped
-// by `frame.reservationIndex` rather than re-deriving each frame's `t` (adaptive frames aren't
-// uniformly spaced, so index-based `t` recovery doesn't work here the way it does for the physics
-// centerline).
-//
-// M6: Uncapped stays exactly as reservations have always behaved -- `polygons`/`triangles` empty,
-// so meshRegionAt/surfaceOwnerAt never treat it as a standing surface (CENTRAL_RESERVATION_PLAN.md's
-// original "true void" decision, now scoped to just this mode). Capped additionally gets a real,
-// landable floor polygon and seals the shell's underside from the sides (see the two blocks below).
-// Every reservation, either mode, gets `oneWayRails`: the boundary only blocks crossing from the
-// track *into* the void, never the reverse, so a car that has landed on a Capped floor can still
-// drive back off it -- bidirectional rails would trap it there permanently. Harmless for Uncapped,
-// since nothing can ever be "inside" one to notice the asymmetry.
-void reservationGeometry(Track& track, const PathDefinition& def, const std::vector<Frame>& frames, const Edges& e, int pi) {
-  const int n = static_cast<int>(frames.size());
-  if (n < 2) return;
-  for (int ri = 0; ri < static_cast<int>(def.reservations.size()); ++ri) {
-    const auto& reservation = def.reservations[ri];
-    struct Bound {
-      Vec3 left, right;
-      Vec3 normal;
-      double crossSectionThickness{0.0};
-      // Retained so the Capped floor below can re-sample the cross-section *across* the void, not
-      // just at its two rims -- the floor is the road's own curved underside, which dips between
-      // them rather than running flat from rim to rim.
-      int frame{-1};
-      double vLeft{0.5}, vRight{0.5};
-    };
-    std::vector<Bound> bounds;
-    for (int i = 0; i < n; i++) {
-      if (frames[i].reservationIndex != ri) continue;
-      const Frame& f = frames[i];
-      const double halfGap = f.reservationHalfGap;
-      const double w = std::max(1.0, f.width);
-      const double vLeft = 0.5 - halfGap / w, vRight = 0.5 + halfGap / w;
-      bounds.push_back({surface(f, e.left[i], e.right[i], vLeft), surface(f, e.left[i], e.right[i], vRight), f.normal,
-                        f.crossSectionThickness, i, vLeft, vRight});
-    }
-    if (bounds.size() < 2) continue;
-
-    MeshRegion region;
-    region.id = "reservation-" + reservation.id + "-path-" + std::to_string(pi);
-    region.elevation = bounds.front().left.y;
-    region.railHeight = reservation.wallHeight > 0.0 ? reservation.wallHeight : TrackCore::DEFAULT_RAIL_HEIGHT;
-    region.railClearanceHeight = reservation.railClearanceHeight > 0.0 ? reservation.railClearanceHeight : TrackCore::DEFAULT_RAIL_HEIGHT;
-    region.oneWayRails = true;
-    region.bounds = MeshBounds{INFINITY, -INFINITY, INFINITY, -INFINITY};
-    auto extend = [&](const Vec3& p) {
-      region.bounds.minX = std::min(region.bounds.minX, p.x);
-      region.bounds.maxX = std::max(region.bounds.maxX, p.x);
-      region.bounds.minZ = std::min(region.bounds.minZ, p.z);
-      region.bounds.maxZ = std::max(region.bounds.maxZ, p.z);
-    };
-    // `outX`/`outZ` point from the void's interior toward the drivable road, i.e. the direction the
-    // rail must face. Orienting the normal against that reference is load-bearing rather than
-    // cosmetic: the one-way rail test (slideAlongRails -- M6) only blocks travel opposing a rail's
-    // own normal, so an inward-facing normal makes that stretch of wall silently non-collidable.
-    // A bare 90-degree rotation of the segment direction cannot get this right on its own -- both
-    // flanks are emitted in the same along-path direction below, so the same rotation lands outward
-    // on one flank and inward on the other (which left every left-flank rail non-collidable, and
-    // likewise one of the two end caps). It was harmless only while rails still blocked both ways.
-    auto addRail = [&](const Vec3& a, const Vec3& b, double outX, double outZ) {
-      const double dx = b.x - a.x, dz = b.z - a.z, length = std::hypot(dx, dz);
-      if (length < 1e-9) return;
-      double nx = dz / length, nz = -dx / length;
-      if (nx * outX + nz * outZ < 0) {
-        nx = -nx;
-        nz = -nz;
-      }
-      region.rails.push_back({static_cast<int>(region.rails.size()), {a.x, a.z}, {b.x, b.z}, nx, nz, length});
-    };
-
-    Builder wall;
-    wall.b.id = region.id + "-wall";
-    wall.b.kind = GeometryKind::ReservationWall;
-    wall.b.materialKey = "Tracks/DefaultRailMaterial";
-    wall.b.hasUv = true;
-    // The wall is parameterized by `across` (normalized [0,1] bottom-to-top, so a barrier texture
-    // maps once over the wall's height whatever `wallHeight` is authored as) and `along` (measured
-    // in units of that same across-extent, so tiles come out square in world metres and never
-    // stretch as the wall lengthens). `uvTile` is therefore the wall's own height: one texture
-    // repeat per railHeight metres of run.
-    //
-    // `wallUv` then turns that pair three-quarters of a turn before it becomes the actual UV, so U
-    // runs *against* the wall's run direction and V spans its height top-to-bottom -- 180 degrees
-    // past the quarter turn this started from, which put U along the wall and V rim-to-top. It is
-    // still a *rotation*, not a transpose: (across, along) -> (1 - along, across) is the quarter
-    // turn's output run back through the same (u,v) -> (1-u, 1-v) half turn, so the determinant
-    // stays positive and an asymmetric texture turns rather than mirroring. To pick a different
-    // quarter turn, this one line is the only thing to change.
-    const double uvTile = std::max(1e-6, region.railHeight);
-    auto wallUv = [](double across, double along) { return Vec2d{1.0 - along, across}; };
-    // Per-flank, because the two flanks of a tapered void are different lengths -- sharing one
-    // accumulator would slide the texture out of step between them.
-    double run[2] = {0.0, 0.0};
-
-    for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
-      const Bound& bi = bounds[k];
-      const Bound& bj = bounds[k + 1];
-      extend(bi.left);
-      extend(bi.right);
-      // Across the void at this ring, left -> right; each flank faces the opposite way out of it.
-      const double acrossX = bi.right.x - bi.left.x, acrossZ = bi.right.z - bi.left.z;
-      addRail(bi.left, bj.left, -acrossX, -acrossZ);
-      addRail(bi.right, bj.right, acrossX, acrossZ);
-      for (const bool right : {false, true}) {
-        const Vec3& a = right ? bi.right : bi.left;
-        const Vec3& b = right ? bj.right : bj.left;
-        Vec3 at = a + bi.normal * region.railHeight;
-        Vec3 bt = b + bj.normal * region.railHeight;
-        double& flankRun = run[right ? 1 : 0];
-        const double u0 = flankRun / uvTile, u1 = (flankRun + glm::distance(a, b)) / uvTile;
-        wall.tri(a, b, at, wallUv(0.0, u0), wallUv(0.0, u1), wallUv(1.0, u0));
-        wall.tri(at, b, bt, wallUv(1.0, u0), wallUv(0.0, u1), wallUv(1.0, u1));
-        flankRun += glm::distance(a, b);
-      }
-    }
-    extend(bounds.back().left);
-    extend(bounds.back().right);
-
-    // Closes the void at any end whose left/right boundary points don't already coincide -- a
-    // Joined end tapers to zero width and self-seals, but a Mitred/Rounded end leaves the void
-    // open at a nonzero width unless capped here (CENTRAL_RESERVATION_PLAN.md end-cap closure).
-    auto capWall = [&](const Bound& b, double outX, double outZ) {
-      const double dx = b.right.x - b.left.x, dz = b.right.z - b.left.z;
-      if (std::hypot(dx, dz) < 1e-9) return;
-      addRail(b.left, b.right, outX, outZ);
-      Vec3 lt = b.left + b.normal * region.railHeight;
-      Vec3 rt = b.right + b.normal * region.railHeight;
-      // Same across/along convention as the flanks, but a cap is its own face rather than a
-      // continuation of either flank's run, so its `along` restarts at 0 and spans the void's width
-      // here. Keeping the same units means the texture reads at the same scale across the join.
-      const double capU = std::hypot(dx, dz) / uvTile;
-      wall.tri(b.left, b.right, lt, wallUv(0.0, 0.0), wallUv(0.0, capU), wallUv(1.0, 0.0));
-      wall.tri(lt, b.right, rt, wallUv(1.0, 0.0), wallUv(0.0, capU), wallUv(1.0, capU));
-    };
-    // A cap faces out along the path, away from the ring that neighbours it inside the span.
-    auto midX = [](const Bound& b) { return (b.left.x + b.right.x) * 0.5; };
-    auto midZ = [](const Bound& b) { return (b.left.z + b.right.z) * 0.5; };
-    const std::size_t lastBound = bounds.size() - 1;
-    capWall(bounds.front(), midX(bounds.front()) - midX(bounds[1]), midZ(bounds.front()) - midZ(bounds[1]));
-    capWall(bounds[lastBound], midX(bounds[lastBound]) - midX(bounds[lastBound - 1]),
-            midZ(bounds[lastBound]) - midZ(bounds[lastBound - 1]));
-
-    // M6: Capped interior -- seals the pit's sides from the void's rim down to the shell's
-    // underside depth (mirroring pathGeometry's own `under()`), using the shell's material rather
-    // than the wall's. The shell's own underside surface is left unmodified by pathGeometry for
-    // Capped reservations (only Uncapped carves it) -- it's already solid and already serves as
-    // the floor once these sides close it off, so no new floor *render* geometry is needed here.
-    if (reservation.interiorMode == ReservationInteriorMode::Capped) {
-      auto under = [](const Bound& b, const Vec3& p) { return p - b.normal * b.crossSectionThickness; };
-
-      Builder seal;
-      seal.b.id = region.id + "-interior-seal";
-      seal.b.kind = GeometryKind::PathShell;
-      // Same fixed material as PathShell (pathGeometry) -- must stay in sync with
-      // Resources.xml's "DefaultShellMaterial" the same way that one does.
-      seal.b.materialKey = "Tracks/DefaultShellMaterial";
-      for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
-        const Bound& bi = bounds[k];
-        const Bound& bj = bounds[k + 1];
-        for (const bool right : {false, true}) {
-          const Vec3& a = right ? bi.right : bi.left;
-          const Vec3& b = right ? bj.right : bj.left;
-          const Vec3 au = under(bi, a), bu = under(bj, b);
-          seal.tri(a, au, b);
-          seal.tri(au, bu, b);
-        }
-      }
-      // Seals whichever end is actually open (Mitred/Rounded, nonzero width) -- a Joined end's
-      // left/right already coincide, matching `capWall` above's own guard.
-      auto sealEnd = [&](const Bound& b) {
-        const double dx = b.right.x - b.left.x, dz = b.right.z - b.left.z;
-        if (std::hypot(dx, dz) < 1e-9) return;
-        const Vec3 lu = under(b, b.left), ru = under(b, b.right);
-        seal.tri(b.left, lu, b.right);
-        seal.tri(lu, ru, b.right);
-      };
-      sealEnd(bounds.front());
-      sealEnd(bounds.back());
-      track.geometry.push_back(std::move(seal.b));
-
-      // Physics floor: the void's own tapered footprint (left boundary forward, right boundary
-      // backward) for ownership, plus a real *curved* floor for height.
-      //
-      // A flat scalar cannot describe this floor. `crossSectionHeight` scales the trough's depth
-      // with the road's local chord width, so wherever a track's authored width varies across a
-      // reservation's span the underside beneath it rises and falls by the same proportion -- on the
-      // track that surfaced this (width ramping 36 -> 138.6 -> 36 across one reservation, curvature
-      // -0.5) the true floor runs -22.0 m at the t0 rim, -38.3 m at mid-span and -22.9 m at t1: a
-      // 16.2 m swing. Any single `elevation` is then tens of metres wrong somewhere in the same
-      // reservation -- which is exactly what the "one end sinks into the track floor" report was:
-      // the physics floor sitting far below the visible one at the shallow (Mitred) end, so a car
-      // driving in dropped straight through the rendered surface.
-      //
-      // So sample the true underside on a grid -- every ring along the span, kFloorSpan+1 stations
-      // across the void at each -- and hand MeshRegion real triangles to interpolate (elevationAt).
-      // Sampling *across* as well as along matters because the floor is the cross-section curve
-      // itself: it dips between the two rims rather than running flat across them. `elevation`
-      // stays set to the shallowest sample, purely as the out-of-footprint fallback elevationAt
-      // returns and as the reference meshRegionAt scores candidate regions by.
-      constexpr int kFloorSpan = 4;
-      auto floorPoint = [&](const Bound& b, double v) {
-        const Frame& f = frames[b.frame];
-        return under(b, surface(f, e.left[b.frame], e.right[b.frame], v));
-      };
-      double elevation = -std::numeric_limits<double>::infinity();
-      for (const Bound& b : bounds) elevation = std::max(elevation, floorPoint(b, b.vLeft).y);
-      region.elevation = elevation;
-      auto addFloorTri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
-        MeshFloorTriangle tri;
-        tri.points = {Vec2d{a.x, a.z}, Vec2d{b.x, b.z}, Vec2d{c.x, c.z}};
-        tri.heights = {a.y, b.y, c.y};
-        tri.bounds = {std::min({a.x, b.x, c.x}), std::max({a.x, b.x, c.x}), std::min({a.z, b.z, c.z}),
-                      std::max({a.z, b.z, c.z})};
-        region.floor.push_back(std::move(tri));
-      };
-      for (std::size_t k = 0; k + 1 < bounds.size(); k++) {
-        const Bound &bi = bounds[k], &bj = bounds[k + 1];
-        for (int s = 0; s < kFloorSpan; ++s) {
-          const double f0 = static_cast<double>(s) / kFloorSpan, f1 = static_cast<double>(s + 1) / kFloorSpan;
-          const Vec3 a = floorPoint(bi, bi.vLeft + (bi.vRight - bi.vLeft) * f0);
-          const Vec3 b = floorPoint(bi, bi.vLeft + (bi.vRight - bi.vLeft) * f1);
-          const Vec3 c = floorPoint(bj, bj.vLeft + (bj.vRight - bj.vLeft) * f0);
-          const Vec3 d = floorPoint(bj, bj.vLeft + (bj.vRight - bj.vLeft) * f1);
-          addFloorTri(a, b, c);
-          addFloorTri(b, d, c);
-        }
-      }
-      MeshPolygon floor;
-      floor.polygonId = 0;
-      for (const auto& b : bounds) floor.outer.push_back({b.left.x, b.left.z});
-      for (auto it = bounds.rbegin(); it != bounds.rend(); ++it) floor.outer.push_back({it->right.x, it->right.z});
-      region.polygons.push_back(std::move(floor));
-    }
-
-    track.meshRegions.push_back(std::move(region));
-    track.geometry.push_back(std::move(wall.b));
-  }
-}
 }  // namespace
 
 // Declared in TrackCore.hpp; lives here because it needs the private spline Evaluator above.
@@ -1366,17 +1116,9 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       bakedEdges[b.path].right[b.index] = flipped ? left : right;
     }
 
-    // Compiled before the per-path loop below (it depends only on definition.meshes/meshAssets, not
-    // on any per-path baked data) so that pathGeometry -> reservationGeometry can append each
-    // reservation's synthetic MeshRegion directly to the already-compiled list, instead of racing
-    // compileTrackMeshes's own track.meshRegions.clear(). Reservation regions are deliberately
-    // excluded from the `low`/trackFloorY computation below (which only sees the regions compiled
-    // here) -- they carry no floor of their own (CENTRAL_RESERVATION_PLAN.md's "true void"
-    // decision), so their `elevation` (the road surface height, not a fall-through depth) must not
-    // raise the respawn floor.
-    compileTrackMeshes(track, warnings);
+    // Placed mesh assets/MeshRegion were removed (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) --
+    // `low`/trackFloorY is derived purely from the baked path centerlines below now.
     double low = INFINITY;
-    for (const auto& region : track.meshRegions) low = std::min(low, region.elevation);
     for (size_t i = 0; i < track.paths.size(); ++i) {
       const auto& definition = track.definition.paths[i];
       Parts parts = split(definition);
@@ -1408,59 +1150,12 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
     for (const auto& [id, count] : endpointCounts)
       if (count >= 2) track.connectedEndpointIds.insert(id);
 
-    std::map<std::string, int> regionIds;
-    for (std::size_t i = 0; i < track.meshRegions.size(); ++i)
-      regionIds.emplace(track.meshRegions[i].id, static_cast<int>(i));
-
     std::map<std::string, int> pathIds;
     for (size_t i = 0; i < track.definition.paths.size(); i++)
       pathIds.emplace(track.definition.paths[i].id, static_cast<int>(i));
+    // Every zone is path-hosted now (mesh-hosted zones were removed along with MeshRegion,
+    // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
     for (auto& z : track.definition.zones) {
-      if (z.host.kind == "mesh") {
-        const auto found = regionIds.find(z.host.meshId);
-        if (found == regionIds.end()) continue;
-        Zone zone;
-        zone.id = z.id;
-        zone.kind = "mesh";
-        zone.effect = z.effect;
-        zone.factor = z.factor;
-        zone.duration = z.duration;
-        zone.hostRegionIndex = found->second;
-        zone.x = z.host.x;
-        zone.z = z.host.z;
-        zone.rotation = z.host.rotation * DEG2RAD;
-        zone.halfLength = std::max(0.25, z.length / 2);
-        zone.halfWidth = std::max(0.25, z.width / 2);
-        track.zones.push_back(zone);
-
-        const double cosine = std::cos(zone.rotation), sine = std::sin(zone.rotation);
-        auto corner = [&](double x, double z) {
-          return Vec3(zone.x + x * cosine - z * sine,
-                      track.meshRegions[zone.hostRegionIndex].elevation + 0.15,
-                      zone.z + x * sine + z * cosine);
-        };
-        const Vec3 a = corner(-zone.halfLength, -zone.halfWidth);
-        const Vec3 b = corner(zone.halfLength, -zone.halfWidth);
-        const Vec3 c = corner(zone.halfLength, zone.halfWidth);
-        const Vec3 d = corner(-zone.halfLength, zone.halfWidth);
-        constexpr double uvScale = 1.0 / 6.0;
-        Builder geometry;
-        geometry.b.id = "zone-" + z.id;
-        geometry.b.kind = GeometryKind::ZoneSurface;
-        // Fixed material for every zone surface, regardless of effect -- must stay in sync with
-        // cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
-        // "DefaultZoneMaterial", and with MaterialCatalog's startup existence check for it.
-        geometry.b.materialKey = "Tracks/DefaultZoneMaterial";
-        geometry.b.hasUv = true;
-        geometry.tri(a, b, c, {-zone.halfLength * uvScale, -zone.halfWidth * uvScale},
-                     {zone.halfLength * uvScale, -zone.halfWidth * uvScale},
-                     {zone.halfLength * uvScale, zone.halfWidth * uvScale});
-        geometry.tri(a, c, d, {-zone.halfLength * uvScale, -zone.halfWidth * uvScale},
-                     {zone.halfLength * uvScale, zone.halfWidth * uvScale},
-                     {-zone.halfLength * uvScale, zone.halfWidth * uvScale});
-        track.geometry.push_back(std::move(geometry.b));
-        continue;
-      }
       if (z.host.kind == "path") {
         int pi = pathIds[z.host.pathId];
         Evaluator e(track.definition.paths[pi]);
@@ -1609,15 +1304,9 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
       trigger.direction = t.direction;
       trigger.halfWidth = std::max(0.25, t.width / 2);
       trigger.height = std::max(0.25, t.height);
-      if (t.host.kind == "mesh") {
-        const auto found = regionIds.find(t.host.meshId);
-        if (found == regionIds.end()) continue;
-        const double angle = t.rotation * DEG2RAD, cosine = std::cos(angle), sine = std::sin(angle);
-        trigger.center = {t.host.x, track.meshRegions[found->second].elevation, t.host.z};
-        trigger.fwd = {sine, 0, cosine};
-        trigger.right = {cosine, 0, -sine};
-        trigger.up = UP;
-      } else if (t.host.kind == "path") {
+      // Every trigger is path-hosted now (mesh-hosted triggers were removed along with MeshRegion,
+      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
+      if (t.host.kind == "path") {
         int pi = pathIds[t.host.pathId];
         Evaluator evaluator(track.definition.paths[pi]);
         double gMax = evaluator.closed ? evaluator.n : evaluator.n - 1;

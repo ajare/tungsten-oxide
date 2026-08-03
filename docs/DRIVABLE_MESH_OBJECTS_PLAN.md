@@ -297,67 +297,123 @@ Removed *before* drivable mesh objects are added, per the "hard break, no
 coexistence" decision — this avoids ever having both entities live in the
 schema/codebase simultaneously.
 
-**2.1 — Remove core compiled types**
-- Files: `cpp/core/include/TrackMesh.hpp`, `cpp/core/src/TrackMesh.cpp`.
-- Remove `MeshRegion`, `MeshFloorTriangle`, `MeshTriangle`/`MeshPolygon`/
-  `MeshRail` and their Willpower.Geometry-driven compile path
-  (`addGeometry`, `elevationAt`, `slideAlongRails`). Remove `Track::meshRegions`.
-- Test: expect widespread compile breakage downstream — do not fix
-  call sites yet if the change is large; proceed to 2.2–2.4 first, then
-  build.
+**2.1 — Remove core compiled types** — done
+- Removed `TrackMesh.hpp`/`TrackMesh.cpp` entirely (`MeshRegion`,
+  `MeshBounds`, `MeshPolygon`, `MeshTriangle`, `MeshFloorTriangle`,
+  `MeshRail`, `MeshMoveResult`, `segmentCrossing`, `slideAlongRails`,
+  `compileTrackMeshes`), `Track::meshRegions`, and every `TrackBake.cpp`/
+  `Ship.cpp`/`Simulation.cpp`/`TrackLoader.cpp` call site. Landed together
+  with 2.3/2.4/2.5's core-side work in one pass rather than as separate
+  plan-ordered commits — the mesh-region removal, reservation
+  wall/interior-mode removal, and host-surface removal were too entangled
+  in `TrackBake.cpp`/`Ship.cpp` to cleanly separate.
+- Central-reservation wall collision was NOT replaced with anything
+  interim (user-confirmed scope decision, `AskUserQuestion`): a
+  reservation still carves the road void, but produces no collision
+  walls at all until Milestone 5 supplies real drivable mesh object
+  placements. A car in analytic mode can currently drive off a void's
+  edge with nothing to stop it; mesh mode is unaffected (never used
+  `MeshRegion`).
+- Discovered mid-implementation that this reaches further than the file
+  list above named: `Ship.cpp`'s mesh-region rail-clip/landing/walking
+  branches, `Simulation.cpp`'s `meshRegionAt`/`surfaceOwnerAt`, and
+  `Track.hpp`'s `Zone`/`Reservation` structs all needed rewriting too.
+- Core-side `ctest` (`parity`, `track_tests`) passed green before moving
+  to the editor side.
 
-**2.2 — Remove authored schema types and editor UI**
-- Files: `cpp/editor/include/EditorTrackDefinition.hpp`,
-  `cpp/editor/src/MeshPanel.cpp` (remove entirely),
-  `cpp/editor/src/TopDownCanvas.cpp` (remove mesh-region hit-testing,
-  drag, and the old `meshRotating_` shift+drag path superseded by 1.3),
-  `cpp/editor/src/EditorState.*` (`importMeshAsset`/`importMeshFromJsonText`/
-  `placeMeshAsset`).
-- Remove `MeshAsset`, `MeshVertex`, `MeshPlacement` and the geometry-js
-  JSON import path (toolbar Import, canvas right-click "Paste Mesh").
-- Test: build editor + core; fix remaining call sites. `ctest`. Commit.
+**2.2 — Remove authored schema types and editor UI** — done
+- Removed `MeshVertex`/`MeshEdge`/`DirectedMeshEdge`/`MeshPolygon`/
+  `MeshAsset`/`MeshPlacement` from `EditorTrackDefinition.hpp`/`.cpp`;
+  deleted `MeshPanel.cpp`/`.hpp` entirely; removed every mesh-region
+  hit-test/drag/rotate/rail-toggle path from `TopDownCanvas.cpp`
+  (`drawMeshRegions`, `drawReservationWalls`, `meshEdgeAtWorld`,
+  `drawMeshRails`, `handleRailsModeInput`, `meshRegionAt`, the Rails-mode
+  `EditMode` case); removed `EditorState`'s mesh
+  placement/drag/rotate/rail-selection state and methods
+  (`importMeshAsset`/`importMeshFromJsonText`/`placeMeshAsset` included).
+  `EditMode` is `Edit | Create` now (was `Edit | Create | Rails`),
+  3-way selection now (was 4-way: point/mesh/zone/trigger →
+  point/zone/trigger). `main.cpp`'s toolbar Import/Paste Mesh UI, the
+  M4/M5/M7c/M9 startup smoke checks, and the mode dropdown were removed
+  to match.
+- `RandomTrack.cpp`'s mesh-section generation branch (splitting the loop
+  into open paths joined by generated jump platforms/ramps) was removed
+  along with `MeshAsset`/`MeshPlacement` — `generateRandomTrack` is
+  single-loop-only now; `RandomTrackRanges`' mesh-section-only fields
+  (`meshChanceMin`/`Max`, `sequenceChance`, `maxMeshSections`,
+  `meshLengthMin`/`Max`, `endDropMin`/`Max`) were removed too, along with
+  their `RandomRangesPanel.cpp` UI.
+- `ZonesPanel.cpp`/`TriggersPanel.cpp` simplified to path-hosted-only
+  (see 2.4).
+- Test: editor + core build clean, full `ctest` green.
 
-**2.3 — Remove Capped-reservation special-case authoring**
-- Files: wherever central-reservation authoring UI/logic lives (surfaced
-  during 2.1/2.2's build fixups — likely `MeshPanel.cpp`/`EditorState`
-  reservation-specific branches).
-- Central reservations are not replaced with an equivalent parametric
-  entity; they become ordinary drivable mesh object placements once
-  Milestone 3/5 exist. No interim replacement needed here.
-- Test: `ctest`. Commit.
+**2.3 — Remove Capped-reservation special-case authoring** — done
+- Removed `interiorMode`/`wallHeight`/`railClearanceHeight` from
+  `TrackDefinition.hpp`/`EditorTrackDefinition.hpp` (and the
+  `ReservationInteriorMode` enum), `TrackLoader.cpp`/
+  `EditorTrackDefinition.cpp` parsing, and `ReservationsPanel.cpp`'s UI.
+  Landed as part of 2.1's core-side pass (see above) plus this
+  editor-side panel fix.
+- No interim replacement, per plan: reservations become ordinary
+  drivable mesh object placements once Milestone 3/5 exist.
 
-**2.4 — Drop Mesh-region host-surface type**
-- Files: wherever `Host surface` is modeled for Zones/Triggers (per
-  `docs/UBIQUITOUS_LANGUAGE.md`, "Zone"/"Trigger"/"Host surface" entries —
-  locate the concrete type, likely near `Track.hpp`/zone-trigger schema
-  types).
-- Remove the Mesh-region host-surface variant. Do not add the
-  drivable-mesh-object host-surface variant yet — that's Milestone 3.5,
-  once the entity exists. Existing Path-hosted zones/triggers are
-  unaffected.
-- Test: `ctest`. Commit.
+**2.4 — Drop Mesh-region host-surface type** — done
+- `Track.hpp`'s `Zone` struct and `TrackDefinition.hpp`/
+  `EditorTrackDefinition.hpp`'s `ZoneHostDefinition`/
+  `TriggerHostDefinition` (and editor mirrors) dropped every mesh-hosted
+  field (`x`/`z`/`rotation`/`meshId`/`hostRegionIndex`); `TrackBake.cpp`'s
+  mesh-hosted zone/trigger compile branches removed; `ZonesPanel.cpp`/
+  `TriggersPanel.cpp` simplified to their single remaining path-hosted
+  branch.
+- `host.kind`/`kind` was deliberately KEPT as a string field (always
+  `"path"` now) rather than dropped outright, so Milestone 3.5's
+  eventual drivable-mesh-object-hosted variant has a discriminator to
+  reuse instead of re-adding one from scratch.
 
-**2.5 — Schema version / hard-break loader error**
-- Files: `cpp/core/src/TrackLoader.cpp`, `cpp/editor` schema-load path.
-- Bump schema version (per repo convention — check how schema 10 → 11 was
-  introduced for precedent). Old tracks whose JSON contains `meshAssets`/
-  `meshes` fields fail to load with a clear, actionable error naming the
-  removed feature — not a silent-drop or generic parse failure.
-- Test: load a fixture with the old fields present, confirm the explicit
-  error. `ctest`. Commit.
+**2.5 — Schema version / hard-break loader error** — done
+- `TRACK_SCHEMA_VERSION` bumped 11 → 12 (`TrackCore.hpp`);
+  `TRACK_SCHEMA_VERSION_MIN_SUPPORTED` unchanged at 10. `TrackLoader.cpp`/
+  `EditorTrackDefinition.cpp` both throw an explicit
+  `std::runtime_error` naming "Mesh regions (meshAssets/meshes)" when
+  either field is present and non-empty, independent of the
+  version-number check (mirrors how schema 10→11 kept the version check
+  a loose range separate from any specific-field validation).
+- Test added per the plan's own instruction: `track_tests.cpp` now loads
+  `cpp/test-data/fixtures/mesh/concave-railed-pad.json` (an old fixture
+  that authors `meshAssets`/`meshes`) and asserts the load fails with an
+  error containing "Mesh regions". This is why `cpp/test-data/fixtures/
+  mesh/` was NOT deleted in 2.6 below — it's still load-bearing as the
+  hard-break check's input.
 
-**2.6 — Update fixtures and docs**
-- Files: `cpp/test-data/fixtures` (remove/replace any fixture exercising
-  Mesh regions — note per repo convention this corpus is normally
-  append-only; removal here is justified by the hard-break decision, but
-  confirm no fixture is *also* covering unrelated behavior before deleting
-  it wholesale), `docs/UBIQUITOUS_LANGUAGE.md` (remove **Mesh region**;
-  update **Region rail**, **Ledge**, **Mesh section**, **Platform
-  sequence**, **Launch ramp**, **Host surface** entries that currently
-  reference it — decide per-term whether the concept transfers to
-  **Drivable mesh object** or is retired with no replacement),
-  `docs/core.md`, `docs/editor.md`.
-- Test: full `ctest`. Commit.
+**2.6 — Update fixtures and docs** — done
+- `cpp/test-data/fixtures/mesh/` and `cpp/test-data/fixtures/
+  random-track-mesh/` were left in place rather than deleted: the former
+  is now the hard-break test's input fixture (2.5), and both corpora
+  feed CTest targets (`raw_parity`/`raw_session_init_parity`/
+  `raw_session_step_parity`/`random_geometry_parity`) that are disabled
+  (`add_test` commented out in `cpp/core/CMakeLists.txt`, with a comment
+  explaining why) rather than deleted — per the user's confirmed
+  decision (`AskUserQuestion`) to disable-and-note rather than
+  re-author replacement fixtures now. This went beyond `raw_parity`
+  alone: `raw_session_init_parity`/`raw_session_step_parity`/
+  `random_geometry_parity` turned out to be equally
+  `meshAssets`/`meshes`-dependent once checked, so all four were
+  disabled under the same rationale. Milestone 7 ("mesh-mode regression
+  coverage") is expected to restore this coverage with new traces.
+- `docs/UBIQUITOUS_LANGUAGE.md`: removed **Mesh region**, **Region
+  rail**, **Ledge**, **Mesh section**, **Platform sequence**, **Launch
+  ramp** entries outright (retired with no replacement, since no
+  Drivable mesh object entity exists yet to transfer the concept to);
+  updated **Host surface**/**Track**/**Track surface**/**Airborne** and
+  the "Rail"/"Mesh" flagged-ambiguity notes to drop mesh-region
+  references.
+- Updated `docs/core.md`, `docs/editor.md`, `cpp/core/CLAUDE.md`,
+  `cpp/editor/CLAUDE.md`, `cpp/README.md`, root `CLAUDE.md`, and the
+  `cpp/test-data/fixtures/random-track-mesh/README.md`/`traces/raw/
+  README.md` fixture READMEs to remove `TrackMesh.hpp`/`MeshRegion`/
+  Rails-mode/mesh-section references and note the schema-12 hard break
+  and disabled test suites.
+- Test: full `ctest` green throughout.
 
 ---
 

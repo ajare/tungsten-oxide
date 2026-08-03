@@ -72,8 +72,8 @@ public:
   const Track& track() const { return track_; }
 
   // When true, Ship::step derives ground contact, wall collision and airborne/landing purely from
-  // the baked collision BVH (Track::collisionSurface) instead of the analytic corridor/MeshRegion
-  // math. On by default -- mesh physics is the shipped default mode; analytic mode remains
+  // the baked collision BVH (Track::collisionSurface) instead of the analytic corridor math. On by
+  // default -- mesh physics is the shipped default mode; analytic mode remains
   // available as a live-toggleable fallback and is what the golden trace regression suite covers
   // (parity/raw_parity pin Simulation/GameSession to analytic mode explicitly rather than relying
   // on this default, so the suite's coverage is unaffected by this default's value). A GameSession
@@ -94,10 +94,9 @@ public:
   // Recovers the ship's evaluator parameter g on the path the sample landed on.
   double shipParamG(const Sample& sample) const;
 
-  // Surface ownership and zone/trigger detection.
-  const MeshRegion* meshRegionAt(double x, double z, double shipY) const;
-  const MeshRegion* surfaceOwnerAt(double x, double z, double shipY, const Sample& corridorSample) const;
-  void detectZoneTriggers(Ship& ship, const Sample& sample, const MeshRegion* meshRegion) const;
+  // Zone/trigger detection. Zones are path-hosted only now (mesh-hosted zones were removed along
+  // with MeshRegion, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
+  void detectZoneTriggers(Ship& ship, const Sample& sample) const;
   void detectTriggers(Ship& ship, const Vec3& p0, const Vec3& p1) const;
   void fireTrigger(Ship& ship, const Trigger& rec, const std::string& dir) const;
 

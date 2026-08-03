@@ -28,10 +28,6 @@ double numberOr(const json& object, const char* key, double fallback) {
   return finite(value) ? value : fallback;
 }
 
-double finiteOrMin(const json& object, const char* key, double fallback, double minimum) {
-  return std::max(minimum, numberOr(object, key, fallback));
-}
-
 double jsNumber(const json& value, double fallback) {
   if (value.is_number()) {
     const double result = value.get<double>();
@@ -212,9 +208,6 @@ PathDefinition normalizePath(const json& raw, std::size_t pathIndex, double topL
       if (t1 - t0 <= 1e-6 || reservation.width <= 1e-6) continue;
       reservation.t0 = t0;
       reservation.t1 = t1;
-      reservation.wallHeight = std::max(0.0, numberOr(source, "wallHeight", 0.0));
-      reservation.interiorMode = stringOr(source, "interiorMode") == "uncapped" ? ReservationInteriorMode::Uncapped : ReservationInteriorMode::Capped;
-      reservation.railClearanceHeight = std::max(0.0, numberOr(source, "railClearanceHeight", 0.0));
       reservation.endCap0 = parseEndCap(source, "endCap0");
       reservation.endCap1 = parseEndCap(source, "endCap1");
       // End-cap width is always metres, so it's only clamped against the reservation's own peak
@@ -237,60 +230,6 @@ int textureTileCount(const TextureAssetDefinition& asset) {
 
 void warn(std::vector<TrackWarning>& warnings, std::string code, std::string message, std::string id = {}) {
   warnings.push_back({std::move(code), std::move(message), std::move(id)});
-}
-
-std::optional<MeshAssetDefinition> normalizeMeshAsset(const std::string& id, const json& entry, std::vector<TrackWarning>& warnings) {
-  if (!entry.is_object()) return std::nullopt;
-  const json& mesh = entry.contains("mesh") && entry.at("mesh").is_object() ? entry.at("mesh") : entry;
-  if (!mesh.contains("vertices") || !mesh.at("vertices").is_array() || !mesh.contains("polygons") || !mesh.at("polygons").is_array()) return std::nullopt;
-
-  MeshAssetDefinition asset;
-  asset.id = id;
-  asset.name = stringOr(entry, "name", id);
-  asset.railHeight = finiteOrMin(entry, "railHeight", TrackCore::DEFAULT_RAIL_HEIGHT, 0.0);
-  try {
-    for (const auto& raw : mesh.at("vertices")) {
-      if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("position") || !raw.at("position").is_object())
-        throw std::runtime_error("invalid vertex record");
-      const json& pos = raw.at("position");
-      const double x = numberOr(pos, "x", 0.0), y = numberOr(pos, "y", 0.0);
-      asset.vertices.push_back({raw.at("id").get<int>(), x, y});
-    }
-    if (mesh.contains("edges") && mesh.at("edges").is_array()) {
-      for (const auto& raw : mesh.at("edges")) {
-        if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("vertices") ||
-            !raw.at("vertices").is_array() || raw.at("vertices").size() != 2 || !raw.at("vertices")[0].is_number_integer() ||
-            !raw.at("vertices")[1].is_number_integer())
-          throw std::runtime_error("invalid edge record");
-        bool rail = false;
-        if (raw.contains("attributes") && raw.at("attributes").is_object() && raw.at("attributes").contains("rail"))
-          rail = jsonTruthy(raw.at("attributes").at("rail"));
-        asset.edges.push_back({raw.at("id").get<int>(), raw.at("vertices")[0].get<int>(), raw.at("vertices")[1].get<int>(), rail});
-      }
-    }
-    for (const auto& raw : mesh.at("polygons")) {
-      if (!raw.is_object() || !raw.contains("id") || !raw.at("id").is_number_integer() || !raw.contains("edges") || !raw.at("edges").is_array())
-        throw std::runtime_error("invalid polygon record");
-      MeshPolygonDefinition polygon;
-      polygon.id = raw.at("id").get<int>();
-      polygon.hole = raw.value("hole", false);
-      for (const auto& directed : raw.at("edges")) {
-        if (!directed.is_object() || !directed.contains("edge") || !directed.contains("v0") || !directed.contains("v1") ||
-            !directed.at("edge").is_number_integer() || !directed.at("v0").is_number_integer() || !directed.at("v1").is_number_integer())
-          throw std::runtime_error("invalid directed polygon edge");
-        polygon.edges.push_back({directed.at("edge").get<int>(), directed.at("v0").get<int>(), directed.at("v1").get<int>()});
-      }
-      if (raw.contains("holes") && raw.at("holes").is_array())
-        for (const auto& hole : raw.at("holes"))
-          if (hole.is_number_integer()) polygon.holes.push_back(hole.get<int>());
-      asset.polygons.push_back(std::move(polygon));
-    }
-    if (asset.vertices.empty() || asset.polygons.empty()) throw std::runtime_error("mesh contains no usable polygons");
-  } catch (const std::exception& error) {
-    warn(warnings, "mesh-asset-invalid", error.what(), id);
-    return std::nullopt;
-  }
-  return asset;
 }
 
 ConnectionDefinition connection(const json& raw) {
@@ -316,6 +255,16 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
                              "-" + std::to_string(TrackCore::TRACK_SCHEMA_VERSION));
   if (!data.contains("paths") || !data.at("paths").is_array() || data.at("paths").empty())
     throw std::runtime_error("a current-schema track needs at least one path");
+  // Hard break, no migration (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2): Mesh regions (placed
+  // mesh assets, authored via `meshAssets`/`meshes`) were removed entirely, not silently dropped --
+  // a track that still references them fails to load with an explicit, actionable error rather
+  // than parsing as if the meshes had simply been deleted.
+  if ((data.contains("meshAssets") && !data.at("meshAssets").empty()) ||
+      (data.contains("meshes") && !data.at("meshes").empty()))
+    throw std::runtime_error(
+        "this track uses Mesh regions (meshAssets/meshes), a feature removed in schema " +
+        std::to_string(TrackCore::TRACK_SCHEMA_VERSION) +
+        "; re-author it without placed mesh assets, or use a track saved before this feature was removed");
 
   TrackDefinition out;
   out.version = TrackCore::TRACK_SCHEMA_VERSION;
@@ -378,36 +327,6 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
     if (asset == out.textureAssets.end() || path.texture->tile >= textureTileCount(asset->second)) path.texture.reset();
   }
 
-  if (data.contains("meshAssets") && data.at("meshAssets").is_object()) {
-    for (auto it = data.at("meshAssets").begin(); it != data.at("meshAssets").end(); ++it) {
-      if (it.key().empty()) continue;
-      auto asset = normalizeMeshAsset(it.key(), it.value(), warnings);
-      if (asset) out.meshAssets.emplace(it.key(), std::move(*asset));
-    }
-  }
-  if (data.contains("meshes") && data.at("meshes").is_array()) {
-    std::size_t i = 0;
-    for (const auto& raw : data.at("meshes")) {
-      ++i;
-      if (!raw.is_object() || !raw.contains("asset") || !raw.at("asset").is_string() || raw.at("asset").get_ref<const std::string&>().empty()) continue;
-      MeshPlacementDefinition placement;
-      placement.id = stringOr(raw, "id", "m" + std::to_string(i));
-      if (placement.id.empty()) placement.id = "m" + std::to_string(i);
-      placement.assetId = raw.at("asset").get<std::string>();
-      placement.x = numberOr(raw, "x", 0.0);
-      placement.z = numberOr(raw, "z", 0.0);
-      placement.rotation = numberOr(raw, "rotation", 0.0);
-      placement.elevation = numberOr(raw, "elevation", 0.0);
-      if (!out.meshAssets.count(placement.assetId)) {
-        warn(warnings, "mesh-placement-missing-asset", "mesh placement references a missing or invalid asset", placement.id);
-        continue;
-      }
-      out.meshes.push_back(std::move(placement));
-    }
-  }
-
-  std::set<std::string> meshIds;
-  for (const auto& mesh : out.meshes) meshIds.insert(mesh.id);
   if (data.contains("zones") && data.at("zones").is_array()) {
     std::size_t i = 0;
     for (const auto& raw : data.at("zones")) {
@@ -421,20 +340,14 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
       zone.effect = effect == "startGrid" ? "startGrid" : effect == "jump" ? "jump" : "velocityChange";
       zone.width = std::max(0.5, numberOr(raw, "width", 24.0));
       zone.length = std::max(0.5, numberOr(raw, "length", 40.0));
-      if (stringOr(host, "kind") == "mesh") {
-        zone.host.kind = "mesh";
-        zone.host.meshId = stringOr(host, "meshId");
-        if (zone.host.meshId.empty() || !meshIds.count(zone.host.meshId)) continue;
-        zone.host.x = numberOr(host, "x", 0.0);
-        zone.host.z = numberOr(host, "z", 0.0);
-        zone.host.rotation = numberOr(host, "rotation", 0.0);
-      } else {
-        zone.host.kind = "path";
-        zone.host.pathId = stringOr(host, "pathId");
-        if (zone.host.pathId.empty() || !usedPathIds.count(zone.host.pathId)) continue;
-        zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-        zone.host.lateral = numberOr(host, "lateral", 0.0);
-      }
+      // Mesh-hosted zones were removed along with MeshRegion (DRIVABLE_MESH_OBJECTS_PLAN.md
+      // Milestone 2); a track using one would already have failed the meshAssets/meshes hard-break
+      // check above, so every zone here is path-hosted.
+      zone.host.kind = "path";
+      zone.host.pathId = stringOr(host, "pathId");
+      if (zone.host.pathId.empty() || !usedPathIds.count(zone.host.pathId)) continue;
+      zone.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+      zone.host.lateral = numberOr(host, "lateral", 0.0);
       if (zone.effect == "velocityChange") {
         zone.factor = clampCoerced(raw, "factor", 0.1, 5.0, 1.5);
         zone.duration = clampCoerced(raw, "duration", 0.1, 30.0, 2.0);
@@ -459,19 +372,12 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
       trigger.height = std::max(0.5, numberOr(raw, "height", 12.0));
       trigger.rotation = numberOr(raw, "rotation", 0.0);
       if (trigger.type == "checkpoint") trigger.role = stringOr(raw, "role") == "finish" ? "finish" : "intermediate";
-      if (stringOr(host, "kind") == "mesh") {
-        trigger.host.kind = "mesh";
-        trigger.host.meshId = stringOr(host, "meshId");
-        if (trigger.host.meshId.empty() || !meshIds.count(trigger.host.meshId)) continue;
-        trigger.host.x = numberOr(host, "x", 0.0);
-        trigger.host.z = numberOr(host, "z", 0.0);
-      } else {
-        trigger.host.kind = "path";
-        trigger.host.pathId = stringOr(host, "pathId");
-        if (trigger.host.pathId.empty() || !usedPathIds.count(trigger.host.pathId)) continue;
-        trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
-        trigger.host.lateral = numberOr(host, "lateral", 0.0);
-      }
+      // Same "always path-hosted now" note as zones above.
+      trigger.host.kind = "path";
+      trigger.host.pathId = stringOr(host, "pathId");
+      if (trigger.host.pathId.empty() || !usedPathIds.count(trigger.host.pathId)) continue;
+      trigger.host.t = clampCoerced(host, "t", 0.0, 1.0, 0.5);
+      trigger.host.lateral = numberOr(host, "lateral", 0.0);
       out.triggers.push_back(std::move(trigger));
     }
   }

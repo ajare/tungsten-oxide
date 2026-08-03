@@ -206,8 +206,7 @@ static std::string surfaceLabel(const Simulation& simulation, const Track& track
   if (ship.physics.airborne) return "airborne";
   const Vec3& p = ship.physics.groundPos;
   const Sample sample = simulation.sampleTrack(p.x, p.y, p.z);
-  const MeshRegion* mesh = simulation.surfaceOwnerAt(p.x, p.z, p.y, sample);
-  return mesh ? "mesh:" + mesh->id : "path:" + std::to_string(sample.pathIndex);
+  return "path:" + std::to_string(sample.pathIndex);
 }
 
 int main(int argc, char** argv) {

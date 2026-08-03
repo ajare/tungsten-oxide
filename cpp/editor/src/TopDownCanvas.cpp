@@ -12,7 +12,6 @@
 
 #include "imgui.h"
 
-#include "Clipboard.hpp"
 #include "TrackCore.hpp"
 
 namespace editor {
@@ -161,14 +160,12 @@ const ImU32 kTriggerDummyColor = IM_COL32(255, 94, 168, 255);        // #ff5ea8
 const ImU32 kTriggerCheckpointColor = IM_COL32(127, 231, 255, 255);  // #7fe7ff
 const ImU32 kTriggerFinishColor = IM_COL32(255, 211, 79, 255);       // #ffd34f
 
-// Authored control points plus every mesh region's baked
-// bounds, so a placed mesh always fits in the auto-fit view even off to one side of the track.
-// Projected into the active ProjectionMode's plane so Front/Side auto-fit to the track's actual
-// (x, y)/(y, z) extent instead of its XZ footprint. Mesh-region bounds are TopDown-only: `region.
-// bounds` is a flat X/Z rectangle with no stored Y (MeshRegion's 2D-polygon representation, removed
-// entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2), so there's no sound way to project it into
-// Front/Side, and it's not worth inventing one for a type about to be deleted.
+// Authored control points' bounds. Projected into the active ProjectionMode's plane so Front/Side
+// auto-fit to the track's actual (x, y)/(y, z) extent instead of its XZ footprint. Used to include
+// every placed mesh region's baked bounds too (MeshRegion, removed in DRIVABLE_MESH_OBJECTS_PLAN.md
+// Milestone 2), so `baked` is unused now but kept as a parameter for callers that still pass it.
 TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* baked, ProjectionMode mode) {
+  (void)baked;
   TrackBounds2D bounds{1e300, -1e300, 1e300, -1e300};
   for (const auto& path : track.paths) {
     for (const auto& point : path.points) {
@@ -178,14 +175,6 @@ TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* 
       bounds.maxX = std::max(bounds.maxX, p.x);
       bounds.minZ = std::min(bounds.minZ, p.z);
       bounds.maxZ = std::max(bounds.maxZ, p.z);
-    }
-  }
-  if (baked != nullptr && mode == ProjectionMode::TopDown) {
-    for (const auto& region : baked->meshRegions) {
-      bounds.minX = std::min(bounds.minX, region.bounds.minX);
-      bounds.maxX = std::max(bounds.maxX, region.bounds.maxX);
-      bounds.minZ = std::min(bounds.minZ, region.bounds.minZ);
-      bounds.maxZ = std::max(bounds.maxZ, region.bounds.maxZ);
     }
   }
   if (bounds.minX > bounds.maxX) return TrackBounds2D{-1.0, 1.0, -1.0, 1.0};
@@ -409,49 +398,10 @@ void drawSegmentHighlight(ImDrawList* drawList, const ImVec2& canvasOrigin, cons
                     kSegmentHighlightThickness);
 }
 
-// Mesh polygons are already baked into world space by core's compileTrackMeshes (Vec2d{x, y}
-// where y is world Z, matching TrackMesh's localToWorld convention) -- the editor draws that
-// directly rather than re-deriving placement transforms itself, the same reuse-core approach as
-// the road.
-void drawMeshRegions(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const std::vector<tox::MeshRegion>& regions,
-                     const std::optional<std::string>& selectedMeshId) {
-  for (const auto& region : regions) {
-    const bool isSelected = selectedMeshId.has_value() && *selectedMeshId == region.id;
-    for (const auto& polygon : region.polygons) {
-      if (polygon.outer.size() < 3) continue;
-      std::vector<ImVec2> screen;
-      screen.reserve(polygon.outer.size());
-      for (const auto& v : polygon.outer) screen.push_back(toAbsolute(canvasOrigin, view.worldToScreen(v.x, v.y)));
-      drawList->AddConcavePolyFilled(screen.data(), static_cast<int>(screen.size()), kMeshFillColor);
-      drawList->AddPolyline(screen.data(), static_cast<int>(screen.size()), isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor,
-                            ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
-    }
-  }
-}
-
-// A central reservation compiles to a synthetic MeshRegion with rails but no polygons/triangles --
-// the trait TrackBake.cpp/Ship.cpp use to tell it apart from a real placed mesh region's (always-
-// populated) one -- so it draws nothing via drawMeshRegions above; this is its own preview instead.
-// `rails` already form the two tapered lane-boundary polylines in world space (baked, no placement
-// transform needed, unlike drawMeshRails' authored mesh edges below): consecutive rails share an
-// endpoint, so drawing each one as its own line segment reconstructs both boundaries. A Joined end
-// tapers to zero width so the two curves already meet at t0/t1 with nothing left to draw there;
-// Mitred/Rounded ends leave a gap at nonzero width, which reservationGeometry closes with its own
-// extra rail across the cap -- already present in `rails` like any other, so no special-casing is
-// needed here either way.
-void drawReservationWalls(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view,
-                          const std::vector<tox::MeshRegion>& regions, const std::optional<std::string>& selectedReservationId) {
-  for (const auto& region : regions) {
-    if (!region.polygons.empty() || region.rails.empty()) continue;
-    // Reservation ids are unique across the whole track (EditorState::newReservationId's single
-    // flat namespace), so a prefix match on TrackBake.cpp's "reservation-<id>-path-<n>" naming
-    // unambiguously identifies which baked region belongs to the selected reservation.
-    const bool isSelected = selectedReservationId.has_value() && region.id.rfind("reservation-" + *selectedReservationId + "-path-", 0) == 0;
-    for (const auto& rail : region.rails)
-      drawList->AddLine(toAbsolute(canvasOrigin, view.worldToScreen(rail.a.x, rail.a.y)),
-                        toAbsolute(canvasOrigin, view.worldToScreen(rail.b.x, rail.b.y)), kReservationWallColor, isSelected ? 3.5f : 2.0f);
-  }
-}
+// drawMeshRegions/drawReservationWalls (placed-mesh polygons and central-reservation preview
+// walls, both sourced from tox::MeshRegion) were removed along with MeshRegion
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2), with no interim replacement -- reservations still
+// carve the road void, but draw no wall preview now.
 
 // ---- Zones --------------------------------------------------
 //
@@ -597,18 +547,6 @@ double dragAuxTAlongTangent(const std::vector<tox::Frame>& centerline, bool clos
   return newT;
 }
 
-// Rotated rectangle for a mesh-hosted zone; zone.rotation is already radians (baked that way in
-// TrackBake.cpp), unlike the degrees the rest of this file works in for placements/edges. A
-// mesh-hosted zone has no stored Y (its schema is a flat X/Z rectangle, `zone.x`/`zone.z` only) --
-// each corner is built as a full Vec3 with y=0 before projecting, so Front/Side draw it as the
-// (mathematically honest) zero-height line a Y-less rectangle actually is, rather than skipping it.
-std::vector<WorldPoint2D> meshZoneOutline(const tox::Zone& zone, ProjectionMode mode) {
-  const double cosine = std::cos(zone.rotation), sine = std::sin(zone.rotation);
-  auto corner = [&](double x, double z) { return planeCoords(mode, tox::Vec3(zone.x + x * cosine - z * sine, 0.0, zone.z + x * sine + z * cosine)); };
-  return {corner(-zone.halfLength, -zone.halfWidth), corner(zone.halfLength, -zone.halfWidth), corner(zone.halfLength, zone.halfWidth),
-          corner(-zone.halfLength, zone.halfWidth)};
-}
-
 // Left rail (gLo..gHi at lateral-halfWidth) followed by the reversed right rail, mirroring
 // zoneOutlineWorld's `strip.left` then reversed `strip.right` assembly exactly. sample.x/z and
 // sample.rightX/rightZ already come out of sampleCenterlineAtG projected into `mode`'s plane, and
@@ -633,7 +571,7 @@ std::vector<WorldPoint2D> pathZoneOutline(const tox::Track& baked, const tox::Zo
 }
 
 std::vector<WorldPoint2D> zoneOutlineWorld(const tox::Track& baked, const tox::Zone& zone, ProjectionMode mode) {
-  return zone.kind == "mesh" ? meshZoneOutline(zone, mode) : pathZoneOutline(baked, zone, mode);
+  return pathZoneOutline(baked, zone, mode);
 }
 
 bool pointInWorldPolygon(const std::vector<WorldPoint2D>& points, double x, double z) {
@@ -897,24 +835,6 @@ void drawTriggers(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDow
   }
 }
 
-// Local-to-world for one mesh vertex, mirroring
-// TrackMesh.cpp's transform() exactly (rotation in degrees, CCW, local y -> world z). Needed only
-// for rail-edge picking/highlighting: core's baked MeshRegion carries just the rail SUBSET already
-// flagged (what physics needs), not every edge, but Rails mode must be able to pick ANY edge to
-// flag it in the first place -- so this one case works from the authored asset instead of reusing
-// a core bake, unlike every other rendering path in this file.
-WorldPoint2D meshVertexWorld(const MeshPlacement& placement, const MeshVertex& vertex) {
-  const double angle = placement.rotation * std::numbers::pi / 180.0;
-  const double cosine = std::cos(angle), sine = std::sin(angle);
-  return {vertex.x * cosine - vertex.y * sine + placement.x, vertex.x * sine + vertex.y * cosine + placement.z};
-}
-
-const MeshVertex* findVertex(const MeshAsset& asset, int id) {
-  for (const auto& v : asset.vertices)
-    if (v.id == id) return &v;
-  return nullptr;
-}
-
 double distanceSqToSegment(double px, double pz, double ax, double az, double bx, double bz) {
   const double dx = bx - ax, dz = bz - az;
   const double lengthSq = dx * dx + dz * dz;
@@ -936,55 +856,8 @@ const tox::Trigger* triggerAtWorld(const tox::Track* baked, double worldX, doubl
   return nullptr;
 }
 
-struct MeshEdgeHit {
-  std::string meshId, assetId;
-  int edgeId;
-};
-
-// Nearest mesh edge (any edge, flagged or not) to a world point, within a screen-space-derived
-// world tolerance -- iterates every placement's asset edges.
-std::optional<MeshEdgeHit> meshEdgeAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld) {
-  std::optional<MeshEdgeHit> best;
-  double bestDistSq = tolWorld * tolWorld;
-  for (const auto& placement : track.meshes) {
-    const auto assetIt = track.meshAssets.find(placement.assetId);
-    if (assetIt == track.meshAssets.end()) continue;
-    for (const auto& edge : assetIt->second.edges) {
-      const MeshVertex* v0 = findVertex(assetIt->second, edge.vertex0);
-      const MeshVertex* v1 = findVertex(assetIt->second, edge.vertex1);
-      if (v0 == nullptr || v1 == nullptr) continue;
-      const WorldPoint2D a = meshVertexWorld(placement, *v0);
-      const WorldPoint2D b = meshVertexWorld(placement, *v1);
-      const double distSq = distanceSqToSegment(worldX, worldZ, a.x, a.z, b.x, b.z);
-      if (distSq <= bestDistSq) {
-        bestDistSq = distSq;
-        best = MeshEdgeHit{placement.id, placement.assetId, edge.id};
-      }
-    }
-  }
-  return best;
-}
-
-// Every rail-flagged edge across every placement, highlighted on top of the mesh fill so Rails
-// mode shows what's already flagged (not just what's being hovered/toggled this click).
-void drawMeshRails(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
-                   const std::optional<SelectedRail>& selectedRail) {
-  for (const auto& placement : track.meshes) {
-    const auto assetIt = track.meshAssets.find(placement.assetId);
-    if (assetIt == track.meshAssets.end()) continue;
-    for (const auto& edge : assetIt->second.edges) {
-      if (!edge.rail) continue;
-      const MeshVertex* v0 = findVertex(assetIt->second, edge.vertex0);
-      const MeshVertex* v1 = findVertex(assetIt->second, edge.vertex1);
-      if (v0 == nullptr || v1 == nullptr) continue;
-      const bool isSelected = selectedRail.has_value() && selectedRail->meshId == placement.id && selectedRail->edgeId == edge.id;
-      const WorldPoint2D a = meshVertexWorld(placement, *v0);
-      const WorldPoint2D b = meshVertexWorld(placement, *v1);
-      drawList->AddLine(toAbsolute(canvasOrigin, view.worldToScreen(a.x, a.z)), toAbsolute(canvasOrigin, view.worldToScreen(b.x, b.z)),
-                        isSelected ? kRailEdgeSelectedColor : kRailEdgeColor, isSelected ? 4.0f : 3.0f);
-    }
-  }
-}
+// meshEdgeAtWorld/drawMeshRails (Rails-mode edge picking/highlighting) were removed along with
+// MeshPlacement/MeshAsset and EditMode::Rails (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
 // ---- Roll/width/cross-section on-canvas handles ------------------------------------------------
 //
@@ -1183,22 +1056,11 @@ void drawCreateDraft(ImDrawList* drawList, const ImVec2& canvasOrigin, const Top
   for (const auto& s : screen) drawList->AddCircleFilled(s, kPointRadius, kCreateDraftColor);
 }
 
-// Mesh regions are hit-tested against the baked (world-space) region polygons, matched back to
-// the authored placement by id -- picked only after every position point, so a large region can
-// never steal a click from a control point drawn on top of it (CLAUDE.md's editor conventions).
-const tox::MeshRegion* meshRegionAt(const tox::Track* baked, double worldX, double worldZ) {
-  if (baked == nullptr) return nullptr;
-  for (const auto& region : baked->meshRegions)
-    if (region.contains(worldX, worldZ)) return &region;
-  return nullptr;
-}
-
 // Nearest path (by baked centerline segment distance) to a world point, tolerant of the ribbon's
 // own half-width (plus a small screen-derived pick margin at the edges) so a click anywhere on the
 // visibly-drawn road counts as clicking that curve, not just its thin centerline. Picked last, after
-// every other clickable thing (points/mesh regions/zones/triggers), since the ribbon is the largest,
-// least-specific target on the canvas -- same "biggest thing loses to anything smaller drawn on top
-// of it" precedent as meshRegionAt going last among those.
+// every other clickable thing (points/zones/triggers), since the ribbon is the largest,
+// least-specific target on the canvas.
 std::optional<int> pathAtWorld(const tox::Track* baked, double worldX, double worldZ, double edgeTolWorld, ProjectionMode mode) {
   if (baked == nullptr) return std::nullopt;
   std::optional<int> best;
@@ -1333,43 +1195,31 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       if (physicsHit.has_value()) {
         view.selectPhysicsSample(physicsHit->pathIndex, physicsHit->frameIndex);
         state.clearSelection();
-        state.clearMeshSelection();
         state.clearZoneSelection();
         state.clearTriggerSelection();
       } else {
         view.clearPhysicsSelection();
-        // Zones checked before mesh regions: a zone is usually the smaller, more specific thing
-        // drawn on top of a region it sits on (a boost pad on a mesh plaza, say), so it should win
-        // a click over the region beneath it.
+        // Zones checked before triggers: a zone is usually the smaller, more specific thing.
         const tox::Zone* zone = zoneAtWorld(baked, world.x, world.z, mode);
         if (zone != nullptr) {
           state.selectZone(zone->id);
         } else {
-          // Triggers: gate lines, picked alongside zones (before the big mesh regions).
+          // Triggers: gate lines, picked alongside zones.
           const tox::Trigger* trigger = triggerAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
           if (trigger != nullptr) {
             state.selectTrigger(trigger->id);
           } else {
-            // Mesh-region hit-testing is TopDown-only: MeshRegion's polygons are a flat X/Z
-            // representation with no Y to project (see computeViewBounds's comment), and the type
-            // is removed entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2.
-            const tox::MeshRegion* region = mode == ProjectionMode::TopDown ? meshRegionAt(baked, world.x, world.z) : nullptr;
-            if (region != nullptr) {
-              state.selectMesh(region->id);
-            } else {
-              state.clearMeshSelection();
-              // Nothing else was hit at this point (aux/position/physics/zone/trigger/mesh all
-              // missed), so clear every object selection before checking the road. Leaving a
-              // stale zone or trigger selected here blocked panDragActive just as a stale point
-              // selection did, making left-drag panning appear broken after selecting one.
-              state.deselectAll();
-              // Clicking the road itself (see pathAtWorld's
-              // comment): picked last since it's the biggest, least-specific target on the
-              // canvas. Selects that curve as "current" for the panels/dropdown.
-              const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
-              if (pathHit.has_value()) {
-                state.setCurrentPathIndex(*pathHit);
-              }
+            // Nothing else was hit at this point (aux/position/physics/zone/trigger all missed),
+            // so clear every object selection before checking the road. Leaving a stale zone or
+            // trigger selected here blocked panDragActive just as a stale point selection did,
+            // making left-drag panning appear broken after selecting one.
+            state.deselectAll();
+            // Clicking the road itself (see pathAtWorld's
+            // comment): picked last since it's the biggest, least-specific target on the
+            // canvas. Selects that curve as "current" for the panels/dropdown.
+            const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
+            if (pathHit.has_value()) {
+              state.setCurrentPathIndex(*pathHit);
             }
           }
         }
@@ -1378,7 +1228,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // A road click still selects the current path, but a path is not an object drag target. Let
     // a subsequent left drag pan from the road as well as from empty background; only actual
     // object selections reserve the gesture for their respective edit operation.
-    panDragActive = !state.selection().valid() && !state.selectedMeshId().has_value() && !state.selectedZoneId().has_value() &&
+    panDragActive = !state.selection().valid() && !state.selectedZoneId().has_value() &&
                     !state.selectedTriggerId().has_value();
   }
 
@@ -1583,35 +1433,6 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // Left-drag-on-empty-space pan -- decided at mousedown (see
     // panDragActive's own comment above), not just "nothing happens to be selected right now".
     view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
-  } else if (draggingGesture && state.selectedMeshId().has_value() && mode == ProjectionMode::TopDown) {
-    // TopDown-only, like every other mesh-region interaction (see meshRegionAt's own comment): a
-    // mesh region can still be selected from a prior TopDown session even after switching planes
-    // (mode switches don't clear object selection, only in-flight gestures), so this guard matters,
-    // not just meshRegionAt's own pick gate.
-    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    const bool rotate = ImGui::GetIO().KeyShift;
-    if (!state.meshDragging() && !state.meshRotating()) {
-      view.freezeBounds(preDragBounds);
-      if (rotate) {
-        const MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
-        if (placement != nullptr) state.beginMeshRotate(angleFromOriginDeg(placement->x, placement->z, world.x, world.z));
-      } else {
-        state.beginMeshDrag(world.x, world.z);
-      }
-    }
-    if (state.meshRotating()) {
-      const MeshPlacement* placement = state.findMeshPlacement(*state.selectedMeshId());
-      if (placement != nullptr) state.dragMeshRotateTo(angleFromOriginDeg(placement->x, placement->z, world.x, world.z));
-    } else if (state.meshDragging()) {
-      const WorldPoint2D snapped =
-          view.snapWorldXZ({world.x + state.meshDragOffsetX(), world.z + state.meshDragOffsetZ()});
-      state.dragMeshTo(snapped.x, snapped.z);
-    }
-    mutated = true;
-  } else if ((state.meshDragging() || state.meshRotating()) && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-    state.endMeshDrag();
-    state.endMeshRotate();
-    view.releaseBoundsFreeze();
   }
   return mutated;
 }
@@ -1642,23 +1463,8 @@ void drawJoinDragLine(ImDrawList* drawList, const ImVec2& canvasOrigin, const To
   drawList->AddLine(from, to, color, kJoinDragLineThickness);
 }
 
-// Rails mode is modal: a left click either toggles the nearest edge within pick tolerance, or (no
-// edge hit) falls back to panning, including that a miss still starts a pan rather than doing
-// nothing.
-bool handleRailsModeInput(EditorState& state, TopDownView& view, const ImVec2& mouseLocal, double edgePickToleranceWorld, bool hovered,
-                          bool itemActive) {
-  bool mutated = false;
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-    const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
-    const auto hit = meshEdgeAtWorld(state.track(), world.x, world.z, edgePickToleranceWorld);
-    if (hit.has_value())
-      mutated = state.toggleRailEdge(hit->meshId, hit->assetId, hit->edgeId);
-    else
-      state.clearRailSelection();
-  }
-  if (itemActive && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
-  return mutated;
-}
+// handleRailsModeInput (EditMode::Rails's modal edge-toggle input) was removed along with Rails
+// mode itself (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
 // Left click: add a draft point, or close/finish the draft. Right click: cancel the draft.
 bool handleCreateModeInput(EditorState& state, const TopDownView& view, const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered) {
@@ -1675,21 +1481,13 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
   return false;
 }
 
-// Bounds of whichever of the four mutually-exclusive selection kinds (EditorState::deselectAll's
+// Bounds of whichever of the three mutually-exclusive selection kinds (EditorState::deselectAll's
 // comment) is currently selected, for the "Object" zoom-to-selection feature. A single point has
 // zero area, so it comes back as a degenerate
 // {x,x,z,z} bounds; TopDownView::focusOn floors that to a fixed minimum span rather than zooming
 // to infinity. Returns nullopt if nothing is selected, or a selected id/index no longer resolves
 // (stale selection, or `baked` not ready yet).
 std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, const tox::Track* baked, ProjectionMode mode) {
-  if (state.selectedMeshId().has_value()) {
-    // TopDown-only: MeshRegion's flat X/Z bounds have no Y to project into Front/Side (see
-    // computeViewBounds's comment) -- deleted entirely in Milestone 2 anyway.
-    if (baked == nullptr || mode != ProjectionMode::TopDown) return std::nullopt;
-    for (const auto& region : baked->meshRegions)
-      if (region.id == *state.selectedMeshId()) return TrackBounds2D{region.bounds.minX, region.bounds.maxX, region.bounds.minZ, region.bounds.maxZ};
-    return std::nullopt;
-  }
   if (state.selectedZoneId().has_value()) {
     if (baked == nullptr) return std::nullopt;
     for (const auto& zone : baked->zones) {
@@ -1877,8 +1675,6 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid())
           mutated = state.deleteSelectedPoint() || mutated;
-        else if (state.selectedMeshId().has_value())
-          mutated = state.deleteSelectedMesh() || mutated;
         else if (state.selectedZoneId().has_value())
           mutated = state.deleteSelectedZone() || mutated;
         else if (state.selectedTriggerId().has_value())
@@ -1949,18 +1745,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         }
         ImGui::EndDisabled();
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Add mesh");
-        if (ImGui::MenuItem("Paste Mesh")) {
-          // Mirrors importMeshFromClipboard(centreOn): centred on the click, unlike the toolbar
-          // Paste Mesh button (world origin) or Import Mesh (current view centre).
-          if (const auto text = readClipboardText()) {
-            mutated = !state.importMeshFromJsonText(*text, "pasted-mesh", contextMenuWorld.x, contextMenuWorld.z).has_value() || mutated;
-          }
-        }
-
-        // Add zone/trigger: mirrors addZoneAt/addTriggerAt's path-anchored branch (mesh-hosted
-        // creation from this menu is out of scope -- gaps 3/4 already don't support it either).
+        // Add zone/trigger: mirrors addZoneAt/addTriggerAt's path-anchored branch.
         ImGui::Separator();
         ImGui::TextDisabled("Add zone");
         ImGui::BeginDisabled(!nearPlacement.has_value());
@@ -1994,11 +1779,6 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       mutated = handleCreateModeInput(state, view, mouseLocal, pickRadiusWorld, hovered);
       if (mutated) state.setMode(EditMode::Edit);  // mirrors setEditMode('edit') after finishCreateDraft
       break;
-    case EditMode::Rails: {
-      const double edgePickToleranceWorld = kMeshEdgePickPx / view.scale();
-      mutated = handleRailsModeInput(state, view, mouseLocal, edgePickToleranceWorld, hovered, ImGui::IsItemActive());
-      break;
-    }
   }
 
   drawList->AddRectFilled(canvasOrigin, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), kBackgroundColor);
@@ -2018,13 +1798,6 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     for (std::size_t i = 0; i < baked->paths.size(); ++i)
       drawBakedPath(drawList, canvasOrigin, view, baked->paths[i], baked->definition.paths[i], view.renderMode(), minElev, maxElev,
                     static_cast<int>(i) == state.currentPathIndex(), mode);
-    // Mesh regions/reservation walls/rails are TopDown-only: MeshRegion's polygon/rail data is a
-    // flat X/Z representation with no stored Y (see computeViewBounds's comment), and the type is
-    // removed entirely in DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2 -- not worth projecting.
-    if (mode == ProjectionMode::TopDown) {
-      drawMeshRegions(drawList, canvasOrigin, view, baked->meshRegions, state.selectedMeshId());
-      drawReservationWalls(drawList, canvasOrigin, view, baked->meshRegions, state.selectedReservationId());
-    }
     drawZones(drawList, canvasOrigin, view, *baked, state.selectedZoneId(), mode);
     // Hover highlight (distinct from click-driven selection, new functionality -- triggers
     // previously only ever showed a selected/unselected state): only meaningful in Edit mode, the
@@ -2049,7 +1822,6 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
     // the path index and clamps `point`'s corresponding g via sampleCenterlineAtG regardless).
     drawStartMarker(drawList, canvasOrigin, view, *baked, state.track().start, mode);
   }
-  if (mode == ProjectionMode::TopDown) drawMeshRails(drawList, canvasOrigin, view, state.track(), state.selectedRail());
   if (view.showPositionPoints()) {
     // Hover highlight (distinct from click-driven selection): only meaningful in Edit mode, the
     // only mode where a plain click on a position point does anything (Create mode's clicks build

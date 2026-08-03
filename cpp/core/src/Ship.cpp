@@ -43,12 +43,12 @@ void integrateSpeed(Physics& p, double dt, double throttle, double brake) {
 
 // Debug/experimental alternate physics mode (Simulation::meshPhysicsEnabled): ground contact, wall
 // collision and airborne/landing all come directly from the baked collision BVH instead of the
-// analytic corridor/MeshRegion math the rest of this file uses. No corridor sampling, no
-// MeshRegion ownership/ elevationAt/slideAlongRails -- see docs/MESH_PHYSICS_PLAN.md. Zone/trigger
-// *hosting* still needs a corridor Sample and an owning MeshRegion (Simulation::detectZoneTriggers'
-// signature), so this still computes those as cheap read-only inputs to that gameplay-trigger
-// system; their results are never used for ship positioning here, only Simulation::detectTriggers
-// (checkpoints/finish) is purely position-based and needs nothing from this mode.
+// analytic corridor math the rest of this file uses. No corridor sampling for ship positioning --
+// see docs/MESH_PHYSICS_PLAN.md. Zone *hosting* still needs a corridor Sample
+// (Simulation::detectZoneTriggers' signature), so this still computes one as a cheap read-only
+// input to that gameplay-trigger system; its result is never used for ship positioning here, only
+// Simulation::detectTriggers (checkpoints/finish) is purely position-based and needs nothing from
+// this mode.
 StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, double throttle,
                            double brake, double steer) {
   Physics& p = ship.physics;
@@ -276,9 +276,7 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 
   tickBoost(ship, dt);
   const Sample zoneSample = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
-  const MeshRegion* zoneRegion =
-      simulation.surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, zoneSample);
-  if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample, zoneRegion);
+  if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample);
 
   simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);
   ship.prevTriggerPos = p.groundPos;
@@ -318,9 +316,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   }
   bool railHit = false;
 
-  const MeshRegion* meshRegion = simulation.surfaceOwnerAt(p.groundPos.x, p.groundPos.z, p.groundPos.y, c);
-
-  const Vec3 steerAxis = (p.airborne || meshRegion) ? UP : surfaceNormal;
+  const Vec3 steerAxis = p.airborne ? UP : surfaceNormal;
 
   const double sgn = p.speed > 0 ? 1.0 : (p.speed < 0 ? -1.0 : 1.0);  // Math.sign(speed || 1)
   const double effectiveTurn = p.turnRate * (1 - 0.35 * speedRatio) * sgn;
@@ -339,146 +335,27 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
     double ax = vx, az = vz;
     double px = p.groundPos.x + ax * dt;
     double pz = p.groundPos.z + az * dt;
-    for (const auto& region : simulation.track().meshRegions) {
-      // Bounds first, then the height test: elevationAt is a triangle scan for a curved-floor region
-      // (a Capped reservation) and a plain read for every other, so this ordering keeps the common
-      // case free while letting the clearance test use the floor height under the ship rather than
-      // one scalar for a floor that can vary tens of metres across a single region.
-      if (!region.withinBounds(p.groundPos.x, p.groundPos.z, px, pz, TrackCore::COLLISION_WALL_MARGIN)) continue;
-      if (p.groundPos.y >= region.elevationAt(p.groundPos.x, p.groundPos.z) + region.railClearanceHeight) continue;
-      Vec2d velocity{ax, az};
-      const double before = std::hypot(ax, az);
-      const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {px, pz},
-                                                   velocity, TrackCore::COLLISION_WALL_MARGIN,
-                                                   weightRestitution(p));
-      if (!moved.hit) continue;
-      railHit = true;
-      px = moved.x;
-      pz = moved.z;
-      ax = velocity.x;
-      az = velocity.y;
-      p.speed = std::hypot(ax, az) * weightSpeedRetain(p);
-      addImpactJolt(p, before - std::hypot(ax, az));
-      if (p.speed > 1e-6) p.moveDir = normalizeSafe(Vec3(ax, 0, az));
-    }
 
     p.verticalVel -= p.gravity * dt;
     p.groundPos = Vec3(px, p.groundPos.y + p.verticalVel * dt, pz);
 
-    const MeshRegion* landing = simulation.meshRegionAt(px, pz, p.groundPos.y);
-    const double landingY = landing ? landing->elevationAt(px, pz) : 0.0;
-    if (landing && p.groundPos.y <= landingY) {
+    // Mesh regions (placed assets, reservation walls) were removed with no interim replacement
+    // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2) -- airborne landing always falls back to the
+    // analytical corridor surface now.
+    c = simulation.sampleTrack(px, p.groundPos.y, pz);
+    const Projection proj = projectToSurface(c, px, p.groundPos.y, pz);
+    const SurfaceFrame surface = curvedSurfaceFrame(c, proj.s);
+    if (corridorContains(c, px, p.groundPos.y, pz, proj) && p.groundPos.y <= surface.pos.y) {
       const double impactSpeed = std::max(0.0, -p.verticalVel);
-      landOnSurface(ship, UP);
+      landOnSurface(ship, surface.normal);
       p.landingBounce += std::min(3.2, impactSpeed * 0.09);
       p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-      p.groundPos = Vec3(px, landingY, pz);
-      surfaceRenderPos = p.groundPos;
-      surfaceNormal = UP;
-    } else if (!landing) {
-      // Only falls back to the analytical corridor surface when no mesh region's footprint claims
-      // this (x,z) at all. The corridor is built from the road's lateral sLeft/sRight alone and has
-      // no notion of a reservation's void (CENTRAL_RESERVATION_PLAN.md M6) -- it reads as solid
-      // ground running straight through the middle of one. A Capped reservation's floor sits lower
-      // than that phantom surface, so if `landing` is non-null here (its footprint claims (x,z),
-      // just not reached its elevation yet this frame), falling through to the corridor would catch
-      // the ship on the wrong, too-high surface before it ever reaches the real floor beneath it.
-      c = simulation.sampleTrack(px, p.groundPos.y, pz);
-      const Projection proj = projectToSurface(c, px, p.groundPos.y, pz);
-      const SurfaceFrame surface = curvedSurfaceFrame(c, proj.s);
-      if (corridorContains(c, px, p.groundPos.y, pz, proj) && p.groundPos.y <= surface.pos.y) {
-        const double impactSpeed = std::max(0.0, -p.verticalVel);
-        landOnSurface(ship, surface.normal);
-        p.landingBounce += std::min(3.2, impactSpeed * 0.09);
-        p.landingBounceVel += std::min(16.0, impactSpeed * 0.35);
-        p.groundPos = surface.pos;
-        surfaceRenderPos = surface.pos;
-        surfaceNormal = surface.normal;
-      }
-    }
-  } else if (meshRegion && hasTranslation) {
-    Vec2d velocity{vx, vz};
-    const MeshMoveResult moved = slideAlongRails(*meshRegion, {p.groundPos.x, p.groundPos.z},
-                                                 {p.groundPos.x + vx * dt, p.groundPos.z + vz * dt},
-                                                 velocity, TrackCore::COLLISION_WALL_MARGIN,
-                                                 weightRestitution(p));
-    if (moved.hit) {
-      railHit = true;
-      const double before = std::hypot(vx, vz), after = std::hypot(velocity.x, velocity.y);
-      // Gear-preserving, as for the reservation and corridor walls: reversing into a platform's
-      // own rail otherwise flips the car into forward gear on contact.
-      const double gear = p.speed < 0.0 ? -1.0 : 1.0;
-      p.speed = gear * after * weightSpeedRetain(p);
-      if (after > 1e-6) p.moveDir = normalizeSafe(Vec3(velocity.x * gear, 0, velocity.y * gear));
-      addImpactJolt(p, before - after);
-    }
-
-    // The height the ship is leaving from, sampled under its *destination* so a curved floor is
-    // followed across the move rather than snapped to one scalar for the whole region.
-    const double leavingY = meshRegion->elevationAt(moved.x, moved.z);
-    const MeshRegion* stillOn = meshRegion->contains(moved.x, moved.z)
-                                    ? meshRegion
-                                    : simulation.meshRegionAt(moved.x, moved.z, leavingY);
-    if (stillOn) {
-      p.groundPos = Vec3(moved.x, stillOn->elevationAt(moved.x, moved.z), moved.z);
-      surfaceRenderPos = p.groundPos;
-      surfaceNormal = UP;
-    } else {
-      c = simulation.sampleTrack(moved.x, leavingY, moved.z);
-      const Projection projection = projectToSurface(c, moved.x, leavingY, moved.z);
-      const bool overCorridor = corridorContains(c, moved.x, leavingY, moved.z, projection);
-      const SurfaceFrame surface = curvedSurfaceFrame(c, projection.s);
-      if (overCorridor && std::fabs(surface.pos.y - leavingY) <= Consts::SURFACE_SNAP_UP) {
-        p.groundPos = surface.pos;
-        tangentize(p.moveDir, surface.normal, p.forward);
-        tangentize(p.forward, surface.normal, p.moveDir);
-        surfaceRenderPos = surface.pos;
-        surfaceNormal = surface.normal;
-      } else {
-        beginAirborne(ship, p.moveDir * p.speed);
-        p.groundPos = Vec3(moved.x, leavingY, moved.z);
-      }
+      p.groundPos = surface.pos;
+      surfaceRenderPos = surface.pos;
+      surfaceNormal = surface.normal;
     }
   } else if (hasTranslation) {
     Vec3 newPos = p.groundPos + vel * dt;
-
-    // Central-reservation walls (CENTRAL_RESERVATION_PLAN.md M2, M6): a car driving the main
-    // corridor isn't "on" any mesh region yet (an Uncapped reservation never is -- no floor at all;
-    // a Capped one only becomes ownable once the car's actually inside its footprint) and isn't
-    // airborne, so neither of this function's other mesh-region checks (the ownership branch above,
-    // the airborne-loop below) ever runs for it here. `oneWayRails` is what identifies a
-    // reservation's synthetic MeshRegion now (M6 gives a Capped one real polygons too, so
-    // `polygons.empty()` alone stopped reliably telling reservations apart from real placed mesh
-    // regions) -- only reservations gatekeep the corridor this way; a real platform's edge still
-    // only collides via ownership/airborne-proximity, unchanged from before this feature.
-    for (const auto& region : simulation.track().meshRegions) {
-      if (!region.oneWayRails) continue;
-      if (!region.withinBounds(p.groundPos.x, p.groundPos.z, newPos.x, newPos.z, TrackCore::COLLISION_WALL_MARGIN))
-        continue;
-      Vec2d velocity{vel.x, vel.z};
-      const double before = std::hypot(vel.x, vel.z);
-      const MeshMoveResult moved = slideAlongRails(region, {p.groundPos.x, p.groundPos.z}, {newPos.x, newPos.z},
-                                                   velocity, TrackCore::COLLISION_WALL_MARGIN, weightRestitution(p));
-      if (!moved.hit) continue;
-      railHit = true;
-      newPos.x = moved.x;
-      newPos.z = moved.z;
-      vel.x = velocity.x;
-      vel.z = velocity.y;
-      // Preserve gear (forward/reverse), unlike a plain `vel.length()`/`vel.normalize()` decomposition
-      // (the outer sLeft/sRight wall's own pattern, further down this function): that always yields a
-      // non-negative speed and reorients moveDir to match, which forces the car into forward gear on
-      // every bounce. Driving in reverse into this wall repeatedly (a median is far more likely to be
-      // backed into than the track's outer edge) then oscillates forever -- brake keeps decelerating
-      // the now-positive speed back through zero into reverse, sending the car back into the same
-      // wall from a slightly different angle each time, denied any use of its resulting outward
-      // impulse to actually escape it (physics-breaks report -- CENTRAL_RESERVATION_PLAN.md M2).
-      const double gear = p.speed < 0.0 ? -1.0 : 1.0;
-      const double mag = std::hypot(vel.x, vel.z);
-      p.speed = gear * mag * weightSpeedRetain(p);
-      addImpactJolt(p, before - mag);
-      if (mag > 1e-6) p.moveDir = normalizeSafe(Vec3(vel.x * gear, 0, vel.z * gear));
-    }
 
     const Sample current = c;
     Projection projection = projectToSurface(current, newPos.x, newPos.y, newPos.z);
@@ -550,11 +427,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
     }
   }
 
-  if (!p.airborne && !hasTranslation && meshRegion) {
-    p.groundPos.y = meshRegion->elevationAt(p.groundPos.x, p.groundPos.z);
-    surfaceRenderPos = p.groundPos;
-    surfaceNormal = UP;
-  } else if (!p.airborne && !hasTranslation) {
+  if (!p.airborne && !hasTranslation) {
     c = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
     const Projection parkedProjection = projectToSurface(c, p.groundPos.x, p.groundPos.y, p.groundPos.z);
     if (!corridorContains(c, p.groundPos.x, p.groundPos.y, p.groundPos.z, parkedProjection)) {
@@ -597,7 +470,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   }
 
   tickBoost(ship, dt);
-  if (!p.airborne) simulation.detectZoneTriggers(ship, c, meshRegion);
+  if (!p.airborne) simulation.detectZoneTriggers(ship, c);
 
   simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);
   ship.prevTriggerPos = p.groundPos;
