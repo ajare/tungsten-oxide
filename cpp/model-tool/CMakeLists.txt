@@ -58,6 +58,8 @@ set(IMGUI_SOURCES
 set(MODEL_TOOL_SOURCES
   src/FileDialog.cpp
   src/AssImpImport.cpp
+  src/NormalSmoothing.cpp
+  src/CollidableFlag.cpp
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
@@ -192,3 +194,16 @@ if (WIN32)
       -P "${CMAKE_CURRENT_BINARY_DIR}/CopyModelToolRuntime.cmake"
     COMMAND_EXPAND_LISTS)
 endif()
+
+# --- Headless tests (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2) ---------------------------
+# NormalSmoothing.cpp/CollidableFlag.cpp deliberately depend on nothing but AssImpImport.hpp's
+# plain data types (no AssImp, no mpp, no SDL/GPU) specifically so they're testable this cheaply --
+# unlike the rest of model_tool, this target needs no runtime-DLL deployment at all.
+enable_testing()
+add_executable(model_tool_tests
+  tests/model_tool_tests.cpp
+  src/NormalSmoothing.cpp
+  src/CollidableFlag.cpp)
+target_include_directories(model_tool_tests PRIVATE include)
+target_compile_features(model_tool_tests PRIVATE cxx_std_20)
+add_test(NAME model_tool_tests COMMAND model_tool_tests)

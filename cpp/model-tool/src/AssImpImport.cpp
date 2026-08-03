@@ -7,6 +7,8 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include "NormalSmoothing.hpp"
+
 namespace modeltool {
 namespace {
 
@@ -110,12 +112,15 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   // Triangulate: every face becomes a triangle (ModelSerializer/mppmodel only ever deals in
   // triangles). JoinIdenticalVertices: real shared-vertex indexing, not a per-face vertex soup
   // (ADR 0001 D5 -- model-tool deliberately keeps real indices, unlike track geometry's soup).
-  // GenSmoothNormals: only fills in normals for meshes that don't already have any. Pre
-  // TransformVertices: bakes node-hierarchy transforms into vertex data, since .mppmodel has no
-  // node concept to preserve them in otherwise (ADR 0001 D3) -- a real gap in ModelConvert's own
-  // AssImpModelLoader precedent, which never applies node transforms at all.
-  constexpr unsigned int flags = static_cast<unsigned int>(aiProcess_Triangulate) | aiProcess_JoinIdenticalVertices |
-                                  aiProcess_GenSmoothNormals | aiProcess_PreTransformVertices;
+  // No GenSmoothNormals: normals are always recomputed from winding order after import instead
+  // (recomputeSmoothNormalsAcrossMeshes below, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.2) --
+  // the source file's own normals (real or AssImp-per-mesh-synthesized) are never trusted, and
+  // per-mesh smoothing wouldn't be continuous across a multi-sub-mesh model's own internal seams
+  // anyway. PreTransformVertices: bakes node-hierarchy transforms into vertex data, since
+  // .mppmodel has no node concept to preserve them in otherwise (ADR 0001 D3) -- a real gap in
+  // ModelConvert's own AssImpModelLoader precedent, which never applies node transforms at all.
+  constexpr unsigned int flags =
+      static_cast<unsigned int>(aiProcess_Triangulate) | aiProcess_JoinIdenticalVertices | aiProcess_PreTransformVertices;
   const aiScene* scene = importer.ReadFile(utf8Path, flags);
   if (scene == nullptr || scene->mRootNode == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0) {
     if (outError) *outError = importer.GetErrorString();
@@ -180,6 +185,8 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   }
   out.materials = std::move(prunedMaterials);
   for (ImportedMesh& mesh : out.meshes) mesh.materialIndex = remappedIndex[static_cast<std::size_t>(mesh.materialIndex)];
+
+  recomputeSmoothNormalsAcrossMeshes(out);
 
   return out;
 }

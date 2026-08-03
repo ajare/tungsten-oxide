@@ -11,6 +11,7 @@
 #include <mpp/mesh/Primitive.h>
 #include <utils/FileSystem.h>
 
+#include "CollidableFlag.hpp"
 #include "TextureLoad.hpp"
 
 namespace modeltool {
@@ -208,7 +209,12 @@ std::optional<MppModelImportResult> importMppModel(const std::string& utf8Path, 
       }
 
       ImportedMesh mesh;
-      mesh.name = ser.getName(i);
+      // Collidable/decorative flag, round-tripped back out of the exported name (see
+      // CollidableFlag.hpp) -- a file this feature never touched decodes as "collidable", the
+      // least-surprising default (matches ImportedMesh::collidable's own default).
+      const DecodedMeshName decodedName = decodeCollidableFromName(ser.getName(i));
+      mesh.name = decodedName.name;
+      mesh.collidable = decodedName.collidable;
       mesh.vertices = unpackVertices(vertexData.get(), vertexCount);
 
       // A mesh written with NO index stream (a real, legitimate shape: cpp/editor's own Track

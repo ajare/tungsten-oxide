@@ -60,6 +60,12 @@ struct ImportedMesh {
   std::vector<ImportedVertex> vertices;
   std::vector<std::uint32_t> indices;  // triangle list, real shared-vertex indices from AssImp
   int materialIndex{0};                 // index into ImportedModel::materials (always valid -- see below)
+  // Whether this sub-mesh should contribute collision geometry when placed as a drivable mesh
+  // object (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1) -- an orthogonal flag, independent of
+  // material/GeometryKind. Defaults true: most sub-meshes of a *drivable* mesh object are meant to
+  // be driven on, so authoring only needs to mark the exceptions (decorative flourishes) false.
+  // See CollidableFlag.hpp for how this survives a save/reimport round trip.
+  bool collidable{true};
 };
 
 struct ImportedModel {

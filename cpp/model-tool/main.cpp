@@ -690,10 +690,12 @@ int main(int argc, char** argv) {
     // D10 -- .mppmodel itself has no node concept, and node transforms are already baked into
     // vertex data at import time).
     ImGui::Begin("Panels");
-    const modeltool::BuiltModel* built = viewport->builtModel();
+    modeltool::BuiltModel* built = viewport->mutableBuiltModel();
     if (built != nullptr) {
       if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (const modeltool::ImportedMesh& mesh : built->source.meshes) {
+        int meshIndex = 0;
+        for (modeltool::ImportedMesh& mesh : built->source.meshes) {
+          ImGui::PushID(meshIndex++);
           const modeltool::ImportedMaterial& material = built->source.materials[static_cast<std::size_t>(mesh.materialIndex)];
           ImGui::BulletText("%s (%zu tris)", mesh.name.c_str(), mesh.indices.size() / 3);
           // DefaultFallback's own `name` is the original, never-resolved bare material name (see
@@ -704,6 +706,13 @@ int main(int argc, char** argv) {
           } else {
             ImGui::TextDisabled("    %s", material.name.c_str());
           }
+          // Collidable/decorative flag (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.3): saved
+          // into the exported .mppmodel name (CollidableFlag.hpp), consumed by the game host when
+          // this model is placed as a drivable mesh object.
+          ImGui::Indent();
+          ImGui::Checkbox("Collidable", &mesh.collidable);
+          ImGui::Unindent();
+          ImGui::PopID();
         }
       }
     } else {

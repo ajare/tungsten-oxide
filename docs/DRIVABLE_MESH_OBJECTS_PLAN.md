@@ -565,32 +565,62 @@ after Milestone 4 lands.
 
 ## Milestone 4 — `model-tool` track-aware export
 
-**4.1 — Track-aware export mode**
-- Files: `cpp/model-tool/src/AssImpImport.cpp`, `ModelResourceExport.cpp`,
-  `MppSave.cpp` (per `docs/model-tool.md`).
-- Add a mode (flag or subcommand) that, alongside today's render-only
-  `.mppmodel` output, tags each named sub-mesh with the orthogonal
-  collidable flag Milestone 3.3 consumes.
-- Test: `model-tool`'s own test coverage if any (check its CMake target);
-  otherwise a manual export + core-loader smoke test. `ctest`. Commit.
+**4.1 — Track-aware export mode** — done, folded into 4.3 (no separate "mode")
+- Files: `cpp/model-tool/include/AssImpImport.hpp`/`src/AssImpImport.cpp`,
+  `include/CollidableFlag.hpp`/`src/CollidableFlag.cpp` (new),
+  `src/MppSave.cpp`, `src/MppModelImport.cpp`.
+- No separate export "mode" was added — `ImportedMesh` always carries a
+  `collidable` bool (default `true`) now, always saved/reimported via the
+  naming convention below; there's no render-only vs. track-aware output
+  distinction to switch between. `model-tool` still has no batch/headless
+  export (only an interactive save), so "mode" would have meant a CLI
+  flag with nothing to gate — 4.3 below covers the actual authoring
+  surface and naming-convention choice.
+- Test: `ctest` (`model_tool_tests`, new headless target — see 4.2/4.3).
+  Commit.
 
-**4.2 — Normal recomputation**
-- Same files as 4.1.
-- Recompute vertex normals from winding order at export, smoothly *across*
-  a model's sub-meshes (shared vertices at sub-mesh boundaries get averaged
-  normals spanning both), rather than trusting Assimp's imported normals or
-  computing per-sub-mesh in isolation.
-- Test: export a multi-sub-mesh asset with a shared edge, confirm normals
-  are continuous across the seam (visual or numeric check). `ctest`. Commit.
+**4.2 — Normal recomputation** — done, at import time (not export)
+- Files: `cpp/model-tool/include/NormalSmoothing.hpp`/
+  `src/NormalSmoothing.cpp` (new, deliberately AssImp/mpp-free).
+- Recomputes vertex normals from triangle winding order, smoothly across
+  a model's sub-meshes (vertices from different `ImportedMesh` entries
+  sharing a quantized position accumulate the same face-normal
+  contributions), rather than trusting AssImp's per-mesh
+  `GenSmoothNormals` (removed from the import post-process flags —
+  redundant once this always runs and overwrites its output anyway).
+- **Deviates from the plan's literal "at export" wording**: runs once at
+  *import* time (end of `importModel()`) instead, so the live viewport
+  preview always matches what gets saved, and because this app's
+  pipeline has no distinct "export" step separate from `importModel()`
+  to hook a save-time recompute into without doing the work twice. See
+  `docs/model-tool.md`'s "Normal recomputation" section for the full
+  rationale.
+- Test: `model_tool_tests` (new `ctest` target, no AssImp/mpp/GPU/window
+  needed) constructs two hand-authored triangles in separate
+  `ImportedMesh` entries sharing an edge, confirms the shared vertices'
+  normals are numerically identical across the sub-mesh boundary after
+  recompute, and that an unshared vertex keeps its own triangle's exact
+  face normal. `ctest`. Commit.
 
-**4.3 — Flag authoring surface**
-- Same files, plus whatever CLI argument parsing `model-tool` already has.
-- Expose a way to mark named sub-meshes collidable vs. decorative at
-  export time (source: either a convention in the input file — e.g. a
-  naming pattern Assimp preserves — or explicit CLI arguments per
-  sub-mesh name). Pick whichever fits `model-tool`'s existing CLI
-  conventions; document the choice in `docs/model-tool.md`.
-- Test: `ctest`. Commit.
+**4.3 — Flag authoring surface** — done
+- Files: `cpp/model-tool/include/CollidableFlag.hpp`/`src/CollidableFlag.cpp`
+  (new), `src/MppSave.cpp`, `src/MppModelImport.cpp`, `main.cpp` (Meshes
+  panel checkbox), `include/Viewport.hpp` (new `mutableBuiltModel()`
+  accessor).
+- Chose the **naming-convention** option, not CLI arguments (documented
+  in `docs/model-tool.md`): `mpp::ModelSerializer`'s `MeshMetadata` has no
+  free-form per-mesh field for a flag, and `model-tool` has no batch/CLI
+  export mode for arguments to attach to (`main()` takes one optional
+  *open* path only). A decorative (non-collidable) sub-mesh's exported
+  name gets a fixed `~decorative` suffix appended (`CollidableFlag.hpp`);
+  a collidable one (the default) is written completely unchanged, so a
+  `.mppmodel` from before this feature existed reads back as "every mesh
+  collidable" with no special-casing needed. Editable per sub-mesh via a
+  checkbox in the existing Meshes list panel.
+- Test: `model_tool_tests` covers the encode/decode round trip
+  numerically (collidable → unchanged name; decorative → suffixed name →
+  decodes back to the original name + `false`; an untouched name decodes
+  as collidable). `ctest`. Commit.
 
 ---
 

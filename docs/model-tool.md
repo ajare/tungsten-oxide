@@ -6,17 +6,31 @@
 
 ## Intended use
 
-A standalone offline utility for getting a third-party 3D model into `.mppmodel` form. It shares nothing at runtime with `cpp/editor` or `cpp/tungsten-monoxide` beyond the `.mppmodel` file format itself — nothing outside `cpp/model-tool/` references it. It is not wired into the editor's mesh-region authoring (mesh regions are unrelated 2D geometry) or the game runtime.
+A standalone offline utility for getting a third-party 3D model into `.mppmodel` form. It shares nothing at runtime with `cpp/editor` or `cpp/tungsten-monoxide` beyond the `.mppmodel` file format itself — nothing outside `cpp/model-tool/` references it (including at build time: this is the only place `NormalSmoothing.cpp`/`CollidableFlag.cpp` are compiled). It is not wired into the editor's own UI or the game runtime; a `.mppmodel` this tool saves is consumed the same way any other `.mppmodel` is, by `cpp/tungsten-monoxide/src/Map.cpp` (see `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 3's architecture note and Milestone 4 below).
 
 ## Import pipeline
 
 Entry point: `modeltool::importModel()` (`include/AssImpImport.hpp`/`src/AssImpImport.cpp`).
 
 - **Formats**: whatever AssImp + the file dialog filter enumerate — OBJ, FBX, USD (`.usd`/`.usda`/`.usdc`/`.usdz`), glTF (`.gltf`/`.glb`), plus round-tripping an existing `.mppmodel`.
-- **Post-process flags**: `aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenSmoothNormals | aiProcess_PreTransformVertices`. The last one bakes every node's transform into its meshes' vertex data, collapsing the scene's node hierarchy into root/world space — there is no node/scene-graph concept anywhere downstream.
+- **Post-process flags**: `aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_PreTransformVertices`. The last one bakes every node's transform into its meshes' vertex data, collapsing the scene's node hierarchy into root/world space — there is no node/scene-graph concept anywhere downstream. No `aiProcess_GenSmoothNormals` — see "Normal recomputation" below.
 - **Fixed vertex layout**: `struct ImportedVertex` — position (float×3), normal (float×3), uv (float×2), color (unorm8×4) = **36 bytes**, matching the stride `cpp/editor`'s own `MppModelExport.cpp` uses for track geometry (independent implementations, same shape by convention). Missing color defaults to opaque white, missing UV to (0,0).
 - **Materials**: `aiTextureType_DIFFUSE` with `aiTextureType_BASE_COLOR` fallback — diffuse/base-color texture path only, no specular/roughness/metalness/emissive/normal maps. Material names are qualified to `"<file-stem>/<material-name>"` and deduplicated; embedded textures (common in `.glb`) are detected and skipped rather than decoded, falling back to default-white with a warning.
 - **Round-trip import**: `include/MppModelImport.hpp`/`src/MppModelImport.cpp` reads an existing `.mppmodel` directly via `mpp::ModelSerializer` (deliberately not `mpp::MppModelStream`), producing the same `ImportedModel` — strict about it: only exactly-36-byte vertex streams and `Triangles` meshes are accepted.
+
+### Normal recomputation (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 4.2)
+
+`include/NormalSmoothing.hpp`/`src/NormalSmoothing.cpp` recomputes every vertex normal from triangle winding order right after import (`importModel()`'s last step), never trusting the source file's own normals (real or AssImp-synthesized) — this is why `aiProcess_GenSmoothNormals` is no longer in the post-process flags above, it would just be redundant work immediately overwritten. Unlike AssImp's own per-mesh smoothing, this is smooth *across* sub-mesh boundaries too: vertices from different `ImportedMesh` entries that share a position (matched by quantized position, not object identity — real sub-meshes never literally share a vertex buffer) accumulate the same face-normal contributions, so a model split into several sub-meshes for organizational reasons (not because of an intended hard edge) reads as one seamless surface once placed. There is no smoothing-angle threshold — every triangle touching a shared position contributes, matching AssImp's own default (no configured crease angle).
+
+**Deviates from the plan's literal wording** ("recompute... at export"): this happens at *import* time instead, so the live viewport preview always matches what gets saved — there's no dedicated "export" step in this app's pipeline distinct from `importModel()` that a save-time recompute could hook into without doing it twice, and doing it once at import avoids ever showing normals in the preview that the saved file won't have.
+
+Deliberately dependency-free (no AssImp, no mpp) — see "Intended use" above — both so `MppModelImport.cpp`'s round-trip path could reuse it too if the round-tripped normals ever needed the same treatment, and so it's cheaply unit-testable headlessly (`tests/model_tool_tests.cpp`, wired into `ctest` as `model_tool_tests` — no GPU, no window, no AssImp DLL needed to run it).
+
+### Collidable/decorative flag (Milestone 4.1/4.3)
+
+Each `ImportedMesh` (a sub-mesh) carries a `collidable` bool, defaulting to `true` — the common case for a *drivable* mesh object is that most of its sub-meshes should be driven on, so authoring only needs to mark the exceptions (decorative flourishes) `false`. Editable per sub-mesh in the Panels window's Meshes list (a checkbox beside each entry).
+
+**Representation choice** (the plan's "Flag authoring surface" step names two options — a naming convention or explicit CLI arguments — and asks that the choice be documented here): a **naming convention**, not CLI arguments. `mpp::ModelSerializer`'s `MeshMetadata` section has no free-form per-mesh field to add a flag to without changing the binary format every other `.mppmodel` writer/reader in this codebase depends on, and this app has no batch/headless export mode for CLI arguments to attach to anyway (`main()` takes one optional model path to *open*, nothing else — see "CLI / UI surface" below). Instead, `include/CollidableFlag.hpp`/`src/CollidableFlag.cpp` appends a fixed `~decorative` marker to a mesh's exported name when it's *not* collidable (a collidable mesh's name is written completely unchanged); `MppSave.cpp` encodes it on save, `MppModelImport.cpp` decodes and strips it back off on reimport. A `.mppmodel` from before this feature existed, or from any other tool, reads back as "every mesh collidable" — the least-surprising default. Also unit-tested headlessly in `model_tool_tests`.
 
 ## Preview
 
@@ -38,7 +52,7 @@ Single `main()` (`cpp/model-tool/main.cpp`). SDL2 window, fixed DockBuilder layo
 
 - **CLI**: one optional positional argument (a model path to open immediately) — no flags, no headless/batch conversion mode.
 - **Menus**: File (Open… / Save As `.mppmodel`… / Import Materials XML… / Exit), Edit (Undo/Redo), View (grid toggle/size).
-- **Left panel**: a flat Meshes list (name, triangle count, material — flagging unresolved materials), a flat unified Materials list (texture path, source, an unload action disabled while in use), and a Scale section (axis, target size, preview-apply, bake).
+- **Left panel**: a flat Meshes list (name, triangle count, material — flagging unresolved materials — plus a Collidable checkbox, see "Collidable/decorative flag" above), a flat unified Materials list (texture path, source, an unload action disabled while in use), and a Scale section (axis, target size, preview-apply, bake).
 - A "Material Name Conflicts" modal (Replace/Ignore per row) handles reimporting a model whose material names collide with already-loaded ones.
 
 ## Limitations

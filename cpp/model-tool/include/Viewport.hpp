@@ -61,6 +61,11 @@ class Viewport {
 
   bool hasModel() const { return built_.has_value(); }
   const BuiltModel* builtModel() const { return built_.has_value() ? &*built_ : nullptr; }
+  // Non-const access for main.cpp's Meshes panel to toggle ImportedMesh::collidable in place
+  // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.3) -- safe unlike a geometry edit: it never touches
+  // vertex/index data, the live GPU resource, or material references, so it needs none of
+  // replaceSourceGeometry()'s rebuild/reframe/undo-history machinery.
+  BuiltModel* mutableBuiltModel() { return built_.has_value() ? &*built_ : nullptr; }
 
   // Renders one frame and returns a GL texture id ready for ImGui::Image() (see this header's top
   // comment on why the *requested* width/height only drive the camera's aspect ratio, not the
