@@ -1,16 +1,17 @@
-// model_tool_tests.cpp — headless tests for NormalSmoothing.cpp/ObjSmoothingGroups.cpp/
-// CollidableFlag.cpp (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2), the pieces of model_tool
-// that need neither AssImp nor a live GPU/window to exercise. ObjSmoothingGroups.cpp in particular
-// is deliberately AssImp-free too (it re-parses the raw .obj text itself -- see its own header
-// comment on why), so even the smoothing-group extraction is testable here without a real AssImp
-// import.
+// model_tool_tests.cpp — headless tests for NormalSmoothing.cpp/ObjSmoothingGroups.cpp
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2), the pieces of model_tool that need neither
+// AssImp nor a live GPU/window to exercise. ObjSmoothingGroups.cpp in particular is deliberately
+// AssImp-free too (it re-parses the raw .obj text itself -- see its own header comment on why), so
+// even the smoothing-group extraction is testable here without a real AssImp import. The old
+// CollidableFlag.cpp round-trip coverage that used to live here was removed along with
+// CollidableFlag.hpp itself (TRACK_MODEL_LIST_PLAN.md Milestone 3.2) -- see model_xml_tests.cpp for
+// the Type/Visible metadata this replaced it with.
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
 
-#include "CollidableFlag.hpp"
 #include "NormalSmoothing.hpp"
 #include "ObjSmoothingGroups.hpp"
 
@@ -40,22 +41,6 @@ modeltool::ImportedVertex vertexAt(float x, float y, float z) {
   v.ny = 0.0f;
   v.nz = 1.0f;
   return v;
-}
-
-void testCollidableFlagRoundTrip() {
-  check(modeltool::encodeCollidableInName("Ramp", true) == "Ramp", "collidable mesh name is written unchanged");
-  check(modeltool::encodeCollidableInName("Ramp", false) == "Ramp~decorative", "decorative mesh name carries the marker");
-
-  const modeltool::DecodedMeshName collidable = modeltool::decodeCollidableFromName("Ramp");
-  check(collidable.name == "Ramp" && collidable.collidable, "a plain name decodes as collidable");
-
-  const modeltool::DecodedMeshName decorative = modeltool::decodeCollidableFromName("Ramp~decorative");
-  check(decorative.name == "Ramp" && !decorative.collidable, "a marked name decodes as decorative with the marker stripped");
-
-  // A file this feature never touched (or a name that never had the marker) must decode as
-  // collidable -- the least-surprising default for pre-existing content.
-  const modeltool::DecodedMeshName untouched = modeltool::decodeCollidableFromName("Statue");
-  check(untouched.name == "Statue" && untouched.collidable, "an untouched name still decodes as collidable");
 }
 
 // Two triangles from two SEPARATE meshes (simulating two sub-meshes AssImp never joins into one
@@ -204,7 +189,6 @@ void testExtractObjSmoothingGroups() {
 }  // namespace
 
 int main() {
-  testCollidableFlagRoundTrip();
   testNormalsHardEdgeAcrossMeshesWithoutGroups();
   testNormalsSmoothAcrossMeshesWithMatchingGroups();
   testNormalsSplitVertexAtGroupBoundary();
@@ -214,6 +198,6 @@ int main() {
     std::cerr << failures << " model_tool test(s) failed\n";
     return 1;
   }
-  std::cout << "PASS: model_tool NormalSmoothing/ObjSmoothingGroups/CollidableFlag\n";
+  std::cout << "PASS: model_tool NormalSmoothing/ObjSmoothingGroups\n";
   return 0;
 }

@@ -39,6 +39,7 @@
 #include "MaterialLibrary.hpp"
 #include "MaterialXmlImport.hpp"
 #include "ModelResourceExport.hpp"
+#include "ModelXml.hpp"
 #include "MppModelImport.hpp"
 #include "MppSave.hpp"
 #include "Viewport.hpp"
@@ -706,11 +707,15 @@ int main(int argc, char** argv) {
           } else {
             ImGui::TextDisabled("    %s", material.name.c_str());
           }
-          // Collidable/decorative flag (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.3): saved
-          // into the exported .mppmodel name (CollidableFlag.hpp), consumed by the game host when
-          // this model is placed as a drivable mesh object.
+          // Per-mesh Type/Visible metadata (TRACK_MODEL_LIST_PLAN.md Milestone 3.4), written to the
+          // associated <Model> XML on Save (OpenTarget.hpp), not into the .mppmodel's own mesh name.
           ImGui::Indent();
-          ImGui::Checkbox("Collidable", &mesh.collidable);
+          int typeIndex = static_cast<int>(mesh.type);
+          if (ImGui::Combo("Type", &typeIndex, "Track\0Physical\0Decorative\0"))
+            mesh.type = static_cast<modelxml::MeshType>(typeIndex);
+          if (mesh.type == modelxml::MeshType::Track)
+            ImGui::TextDisabled("    requires a TrackData file on this Model");
+          ImGui::Checkbox("Visible", &mesh.visible);
           ImGui::Unindent();
           ImGui::PopID();
         }

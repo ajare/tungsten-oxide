@@ -60,7 +60,6 @@ set(MODEL_TOOL_SOURCES
   src/AssImpImport.cpp
   src/NormalSmoothing.cpp
   src/ObjSmoothingGroups.cpp
-  src/CollidableFlag.cpp
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
@@ -124,6 +123,9 @@ target_link_libraries(model_tool PRIVATE
   # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
   # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
   Willpower::Common
+  # <Model> XML fragment schema (docs/adr/0003-model-xml-layer.md), also TinyXML2-via-Willpower::Common
+  # under the hood -- shared with cpp/editor, see cpp/model-xml/CMakeLists.txt.
+  model_xml
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
@@ -204,8 +206,8 @@ enable_testing()
 add_executable(model_tool_tests
   tests/model_tool_tests.cpp
   src/NormalSmoothing.cpp
-  src/ObjSmoothingGroups.cpp
-  src/CollidableFlag.cpp)
+  src/ObjSmoothingGroups.cpp)
 target_include_directories(model_tool_tests PRIVATE include)
 target_compile_features(model_tool_tests PRIVATE cxx_std_20)
+target_link_libraries(model_tool_tests PRIVATE model_xml)
 add_test(NAME model_tool_tests COMMAND model_tool_tests)

@@ -6,8 +6,6 @@
 #include <mpp/ModelSerializer.h>
 #include <mpp/mesh/Primitive.h>
 
-#include "CollidableFlag.hpp"
-
 namespace modeltool {
 namespace {
 
@@ -67,10 +65,10 @@ bool saveModelAsMppModel(const BuiltModel& built, MaterialLibrary& materialLibra
           meshMaterial.origin == MaterialOrigin::DefaultFallback ? materialLibrary.defaultFallbackMaterial()->getName() : meshMaterial.name;
       const std::size_t indexWidth = mesh.vertices.size() > 65535 ? 32 : 16;
 
-      // Collidable/decorative flag (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.3): ModelSerializer
-      // has no free-form per-mesh metadata field, so it rides along in the exported name instead --
-      // see CollidableFlag.hpp.
-      serializer.setName(i, encodeCollidableInName(mesh.name, mesh.collidable));
+      // Per-mesh Type/Visible metadata no longer rides along in the exported name (TRACK_MODEL_LIST_PLAN.md
+      // Milestone 3.2 retired that convention) -- it lives only in the associated <Model> XML, so the
+      // mesh name is always written completely unchanged now.
+      serializer.setName(i, mesh.name);
       serializer.setMaterial(i, materialName);
       serializer.setPrimitiveType(i, mpp::mesh::Primitive::Type::Triangles);
       serializer.setPrimitiveCount(i, mesh.indices.size() / 3);
