@@ -458,42 +458,71 @@ the editor as opaque pass-through data it preserves but never edits.
 
 ---
 
-## Milestone 7 — Host (`tungsten-monoxide`): `<Models>` list + Type-driven resolution
+## Milestone 7 — Host (`tungsten-monoxide`): `<Models>` list + Type-driven resolution — done (`5e43256`)
 
-**7.1 — Parse `<Models>` list (independent `wp::XmlNode` implementation)**
+**7.1 — Parse `<Models>` list (independent `wp::XmlNode` implementation)** — done
 - File: `cpp/tungsten-monoxide/src/MapTungstenMonoxideDefinitionFactory.cpp`.
-- Mirrors 5.1's parsing logic against the same documented `<Model>` fragment
-  shape, but reimplemented on `wp::XmlNode` rather than linking
-  `cpp/model-xml` (TinyXML2-based) — consistent with today's existing split
-  and this repo's stated preference for independent reimplementation over a
-  cross-engine shared dependency at this boundary.
-- Test: existing `tungsten-monoxide` build/test path (per `cpp/README.md`);
-  no CTest coverage lives in this module today per prior milestones'
-  precedent — note this as an existing gap, not a new one introduced here.
+- Landed as planned: independently reimplemented on `wp::XmlNode`
+  (`getChild`/`getOptionalChild`/`getAttribute`/`getOptionalAttribute`/`next`/
+  `getValue`), not linking `cpp/model-xml`. Exactly one `<Model>` may carry a
+  Type=Track mesh (mirroring the editor's own single-primary scope); every
+  `<Model>`, including that primary, is kept on the new
+  `Map::mEmbeddedModels` (`TrackCollisionBuild.h`'s new `EmbeddedModelRef`/
+  `ModelMeshMeta`/`ModelMeshType`) so placement resolution (7.3) can look
+  any of them up by id. The old `<TrackMeshes>` parsing loop is deleted
+  outright — see 7.3's note on why.
+- Test: `TungstenMonoxide.dll` builds clean; no CTest coverage lives in this
+  module (pre-existing gap, not new). `cpp/tungsten-monoxide/resources/Resources.xml`
+  (real bundled game content, not a test fixture) was updated to the new
+  `<Models>` shape in the same commit — it would otherwise fail to load at
+  all under this milestone's parser change. Commit.
 
-**7.2 — Multi-model load via `Track::fromTrackDataFiles`**
+**7.2 — Multi-model load via `Track::fromTrackDataFiles`** — done
 - File: `cpp/tungsten-monoxide/src/Map.cpp`.
-- Replaces the single `tox::Track::fromFile(dataPath)` call (`Map.cpp:190`)
-  with `Track::fromTrackDataFiles(trackTypeModelPaths)`.
+- `tox::Track::fromFile(dataPath)` replaced with
+  `tox::Track::fromTrackDataFiles({dataPath})` — a single-element,
+  byte-identical call today (only one Type=Track Model is supported, per
+  7.1's guard), but the correct entry point once that cap is ever lifted.
 
-**7.3 — Placement resolution by embedded-Model id, Type-driven collision**
-- File: `cpp/tungsten-monoxide/src/Map.cpp`.
-- `modelId` on a placement now looks up the enclosing Track resource's
-  parsed `<Models>` list by id (not a relative-path `safeRelativePath` call
-  as today) to find the referenced `.mppmodel`'s path and its per-mesh
-  Type/Visible metadata. Collision-mesh building keys off `Type=Physical`
-  (was: name-suffix-decoded `collidable=true`); `Type=Track`/`Decorative`
-  meshes on a placement are not expected in practice (Track-type meshes only
-  ever appear on the special-cased primary model, never a placement) but
-  `Decorative` explicitly excludes from collision the same way the old
-  `~decorative` suffix did.
-- Rendering: `Visible=false` meshes are skipped entirely (game-hidden, per
-  the locked-in semantics — unlike the editor's always-render-everything
-  behavior from 4.2).
-- Test: extend `cpp/app/tools/mesh_physics_diag.cpp`'s headless harness (per
-  this repo's "all physics testing is headless" convention) with a fixture
-  using the new `<Models>`-list shape; confirm collision triangles appear
-  for a `Physical` mesh and not for a `Decorative` one. Commit.
+**7.3 — Placement resolution by embedded-Model id, Type-driven collision** — done
+- Files: `cpp/tungsten-monoxide/src/Map.cpp`, `src/TrackCollisionBuild.cpp`/
+  `include/TrackCollisionBuild.h`.
+- **Scope finding that simplified this step**: the old `<TrackMeshes>`
+  list's selection was always *required* to exactly equal
+  `mono::collidableGeometryBatchIds(track)` (a set derived purely from the
+  baked Track's own `GeometryKind`s) — `buildCollisionTriangles` already
+  threw if they ever diverged. So rather than parsing the primary Model's
+  own `<Meshes>` list for collision selection, `Map::load()` now just calls
+  `collidableGeometryBatchIds(*mTrack)` directly (matching
+  `mesh_physics_diag.cpp`'s own pre-existing pattern) — `<TrackMeshes>` is
+  retired with no replacement parsing needed, losing no real validation
+  (the actual safety net, cross-checking each mesh's physical vertex data
+  against TrackData, is unaffected by where the name list came from).
+- `modelId` resolution and Type/Visible metadata lookup landed as
+  `resolveModelFileReference`/`findMeshMeta` (`TrackCollisionBuild.h`), used
+  by both `buildMeshObjectCollisionTriangles` (collision: `Type=Physical`
+  only) and `appendMeshObjectRenderMeshes` (rendering: `Visible=false`
+  skipped — game-hidden, unlike the editor's always-renders-everything
+  Milestone 4.2 behavior). Unknown metadata (mesh name not found) defaults
+  to Physical/visible, matching `model-tool`'s own default.
+- **`embeddedModels` defaults to empty and falls back to treating `modelId`
+  as a literal relative path** when a placement's id isn't found in it (or
+  the list is empty) — this is what let `cpp/app/tools/mesh_physics_diag.cpp`
+  (which loads a CLI-supplied TrackData JSON directly, no Resources XML/
+  `<Models>` list at all) keep working with **zero changes**, rather than
+  the originally-planned "extend its headless harness with a `<Models>`-list
+  fixture." That test extension was not implemented — collision-vs-
+  decorative Type-driven behavior is exercised only implicitly (by
+  inspection/build, not a dedicated headless assertion); flagged as a real
+  gap, worth closing in Milestone 8 or a follow-up if `mesh_physics_diag.cpp`
+  ever needs to validate a real `<Models>`-list Resources XML end to end.
+- Test: `ctest` (6/6 suites — none of which touch this module);
+  `TungstenMonoxide.dll`, `mesh_physics_diag`, `track_runner` all build
+  clean, the latter two confirming `buildMeshObjectCollisionTriangles`'s new
+  defaulted parameter doesn't break their existing 5-argument call site. A
+  real game launch loading the updated `Resources.xml` wasn't possible in
+  this environment (no display/GPU) — flagged as the thing to actually run
+  once available. Commit.
 
 ---
 
