@@ -136,5 +136,19 @@
     "airborneSteps": 248,
     "boostSteps": 272,
     "checkpointSteps": 511
+  },
+  {
+    "file": "raw-mesh-tunnel-ramp.json",
+    "steps": 250,
+    "meshMode": true,
+    "note": "DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 7 -- the only mesh-mode trace in this corpus. Captured via mesh_physics_diag --capture-trace against the Milestone 6.1 tunnel/ramp validation fixture: straight-throttle, zero steer, driving through the tunnel then launching off the ramp and landing on the platform beyond the gap.",
+    "surfaces": [
+      "path:0",
+      "airborne"
+    ],
+    "railHits": 0,
+    "airborneSteps": 17,
+    "boostSteps": 0,
+    "checkpointSteps": 0
   }
 ]

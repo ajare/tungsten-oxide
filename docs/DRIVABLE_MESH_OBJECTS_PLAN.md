@@ -1094,6 +1094,34 @@ after Milestone 4 lands.
 - Test: the new trace must be reproducible — run the capture twice via
   6.0's tool, confirm byte-identical output, before committing it as
   golden.
+- **Done.** Added a `--capture-trace` mode to `mesh_physics_diag` rather
+  than a separate tool: drives a single `Ship` directly through
+  `Simulation::stepPhysics` (not `GameSession::step`, which sub-steps/
+  clamps/collects gameplay events the existing replayer never exercises)
+  and dumps a full raw-track-shaped JSON trace —
+  `cpp/test-data/traces/raw/raw-mesh-tunnel-ramp.json`, captured against
+  Milestone 6.1's tunnel/ramp fixture with straight-throttle/zero-steer
+  input (250 steps @ 1/60s): drives through the tunnel, launches off the
+  ramp, lands on the platform beyond the gap. `meta.name` is
+  `mesh-tunnel-ramp`; `manifest.json` has a matching entry (17 airborne
+  steps, 0 rail hits).
+  - Schema: a `meshMode: true` flag plus an embedded `collisionTriangles`
+    array (the exact BVH triangles, positions+normals+surfaceId) sit
+    alongside the existing raw-track fields (`sourceTrack`, `initialState`,
+    per-step `control`/`after`/`outcome`) — so **replaying this trace needs
+    no `.mppmodel`/mpp/willpower dependency at all**, keeping `parity`
+    exactly as light as it already was. `dumpShip()` (the capture-side
+    mirror of `parity_main.cpp`'s `loadShip()`) also had to add a
+    `renderNormal` field, absent from every prior (analytic-only) trace —
+    see 7.2.
+  - A first capture attempt tried also reusing Milestone 6.2's wall-clip
+    burst before the ramp (to exercise both scenarios in one trace); its
+    residual lateral drift carried the ship past the ramp's side edge
+    instead of its crest. The two don't compose cleanly back-to-back, and
+    the wall bounce already has its own dedicated coverage (6.2's
+    `sweepWall` unit test) — dropped in favor of the clean, Milestone-6.3-
+    verified straight run.
+  - Verified reproducible: two captures, byte-identical output.
 
 **7.2 — Wire mesh-mode into the trace-replay test target**
 - File: `cpp/core/CMakeLists.txt` (`add_test()` entries).
@@ -1102,6 +1130,52 @@ after Milestone 4 lands.
   a mode-specific filter) and fail loudly on divergence, same as analytic
   traces.
 - Test: `ctest --test-dir cpp/build -C Release --output-on-failure`. Commit.
+- **Done — a real bug found and fixed along the way, in addition to the
+  wiring.** `cpp/core/tests/parity_main.cpp` now reads a trace's
+  `meshMode` flag (default `false`, so every existing analytic trace is
+  unaffected): true means `sim.setMeshPhysicsEnabled(true)` instead of the
+  previous unconditional `false`, and the trace's own
+  `collisionTriangles` get loaded straight into a `TrackCollisionSurface`
+  (no `.mppmodel` involved). `${RAW_TRACE_DIR}/raw-mesh-tunnel-ramp.json`
+  was added to the existing `parity` `add_test()`'s argument list — the
+  same binary/test replays both physics modes now, nothing new to invoke.
+  - **Bug found while wiring this up:** the very first capture attempt
+    (before the fix below) reproduced 6.3's original symptom — the ship
+    got stuck dead at the ramp's crest, exactly like the un-fixed
+    `Ship.cpp` had. But the fix *was* already in place; the difference was
+    that `Simulation::stepPhysics()` (what both this capture tool and
+    `parity_main.cpp`'s replay call directly) never maintains
+    `ship.renderNormal` the way `GameSession::step()` does (`if
+    (!r.respawned) ship.renderNormal = r.surfaceNormal;`, per
+    `GameSession.cpp`) — `Ship.hpp` documents `renderNormal` as purely
+    "render-only," but `stepMeshPhysics`'s `probeAxis` actually reads it as
+    a real physics input (what steering/`moveDir` tangentize against).
+    Skipping that maintenance meant `probeAxis` stayed pinned at global
+    `(0,1,0)` forever, which flattened `moveDir.y` back to 0 every frame
+    right before the ramp-launch `vel.y` check added in 6.3 ever saw it —
+    silently defeating that fix for any *direct* `stepPhysics()` caller
+    (GameSession-driven gameplay was never affected; this was purely a
+    capture/replay-path gap, invisible until this exact combination
+    -- mesh mode, a sloped surface, driven outside GameSession -- was
+    exercised for the first time by this milestone).
+  - Fix (both files, matching `GameSession`'s exact contract): the
+    capture tool now sets `ship.renderNormal = result.surfaceNormal`
+    after every `stepPhysics()` call, and records it as a new
+    `renderNormal` field on the dumped ship state. `parity_main.cpp`'s
+    `loadShip()` restores it when present (silently defaulting to Ship's
+    own `(0,1,0)` default otherwise, so every pre-Milestone-7 trace is
+    untouched); its free-run loop got the same
+    `if (!result.respawned) freeShip.renderNormal = result.surfaceNormal;`
+    line `GameSession::step()` already has.
+  - Verified the wiring actually catches regressions, not just green by
+    construction: temporarily swapped in the pre-Milestone-6.3 `Ship.cpp`
+    (via `git show <parent-commit>:cpp/core/src/Ship.cpp`), rebuilt, and
+    confirmed `parity` fails loudly and specifically — `BOOL MISMATCH ...
+    step 152 airborne: got 0 want 1`, `FREE-RUN TOO SHORT`, worst ratio
+    `6.98e+12` — then restored the real fix (confirmed via `git diff`
+    showing zero residual change) and reran clean. `ctest` (4/4, including
+    every existing analytic trace's unchanged worst-ratio numbers) is
+    green.
 
 ---
 

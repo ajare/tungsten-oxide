@@ -8,9 +8,18 @@
 // still need one real (invisible) OpenGL context, though -- see createHeadlessGLContext() below for
 // why that turned out not to be avoidable, unlike the rest of the willpower/mpp resource system.
 //
-// Drives a ship through GameSession with a small fixed, deterministic input script (no real-time
-// clock, no interactive input) and logs position/velocity/normal/airborne-state every frame to
-// stdout, one line per frame, so two runs can be diffed byte-for-byte to confirm reproducibility.
+// Default mode drives a ship through GameSession with a small fixed, deterministic input script (no
+// real-time clock, no interactive input) and logs position/velocity/normal/airborne-state every
+// frame to stdout, one line per frame, so two runs can be diffed byte-for-byte to confirm
+// reproducibility.
+//
+// `--capture-trace` mode (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 7.1) instead drives a single Ship
+// directly through Simulation::stepPhysics -- not GameSession::step, which sub-steps/clamps and
+// collects gameplay events the golden-trace corpus's replayer (cpp/core/tests/parity_main.cpp) never
+// exercises -- and dumps a full raw-track-shaped JSON trace (sourceTrack, initialState, per-step
+// control/after/outcome, all matching parity_main.cpp's loadShip()/checkD() field-for-field) plus
+// the built collision surface itself (`collisionTriangles`, `meshMode: true`), so parity can replay
+// a mesh-mode trace with zero mpp/willpower/GL dependency of its own.
 //
 // Not track_runner: track_runner (cpp/app/main.cpp) deliberately leaves Track::collisionSurface
 // null and only ever drives analytic-mode physics (see cpp/core/CLAUDE.md's "Limitations" section)
@@ -19,6 +28,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -36,12 +46,18 @@
 #include <mpp/RenderSystem.h>
 #include <mpp/ResourceManager.h>
 
+#include "nlohmann/json.hpp"
+
 #include "GameSession.hpp"
+#include "ShipFactory.hpp"
+#include "Simulation.hpp"
+#include "StartGrid.hpp"
 #include "Ship.hpp"
 #include "Track.hpp"
 #include "TrackCollision.hpp"
 #include "TrackCollisionBuild.h"
 
+using nlohmann::json;
 using namespace tox;
 
 namespace {
@@ -96,19 +112,206 @@ ControlIntent scriptedInput(int frame, double dt) {
   return intent;
 }
 
-}  // namespace
+// Trace-capture-only input script (Milestone 7.1): the generic sinusoidal scriptedInput() above
+// drifts too far laterally to actually reach either the DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 6.1
+// tunnel/ramp validation fixture's narrower features by the time it arrives at them, so a captured
+// trace using it would exercise nothing but flat road (verified: zero airborne frames). A brief
+// wall-clip burst (as independently verified by hand during Milestone 6.2's investigation) was tried
+// here too, but its residual lateral drift carried through to the ramp and launched the ship off its
+// *side* instead of its crest -- the two scenarios don't compose cleanly back-to-back in one run.
+// Straight down the center line is what Milestone 6.3's own verification used and is what's kept
+// here: a clean drive through the tunnel, a clean ramp launch/arc/landing on the platform beyond the
+// gap. The in-tunnel wall bounce already has its own dedicated regression coverage
+// (cpp/core/tests/track_tests.cpp's sweepWall test, added in Milestone 6.2) and doesn't need to be
+// reproduced here too.
+ControlIntent captureScriptedInput(int frame, double dt) {
+  ControlIntent intent;
+  intent.throttle = 1.0;
+  (void)frame;
+  (void)dt;
+  intent.steer = 0.0;
+  return intent;
+}
 
-int main(int argc, char** argv) {
-  if (argc < 3) {
-    std::cerr << "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n";
-    return 2;
+// Builds the collision surface exactly as Map::load() would, given an already-constructed
+// mpp::ResourceManager/ModelSerializer. Shared by both this tool's modes.
+bool buildCollisionSurface(const std::filesystem::path& trackPath, mpp::ResourceManager& resourceMgr, mpp::ModelSerializer& serializer,
+                           Track& track, std::string& outError) {
+  try {
+    const std::vector<std::string> selectedNames = mono::collidableGeometryBatchIds(track);
+    std::vector<CollisionTriangle> collisionTriangles = mono::buildCollisionTriangles(serializer, track, selectedNames);
+
+    const std::filesystem::path root = trackPath.parent_path();
+    int nextSurfaceId = static_cast<int>(selectedNames.size());
+    std::map<std::string, std::shared_ptr<mono::MeshObjectModel>> modelCache;
+    auto meshObjectTriangles = mono::buildMeshObjectCollisionTriangles(track, root, &resourceMgr, nextSurfaceId, modelCache);
+    collisionTriangles.insert(collisionTriangles.end(), std::make_move_iterator(meshObjectTriangles.begin()),
+                              std::make_move_iterator(meshObjectTriangles.end()));
+    if (collisionTriangles.empty()) {
+      outError = "track produced no collision triangles -- nothing to drive on";
+      return false;
+    }
+    track.collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(collisionTriangles));
+    return true;
+  } catch (std::exception const& error) {
+    outError = std::string("failed to build collision surface: ") + error.what();
+    return false;
+  }
+}
+
+json dumpVec(const Vec3& v) {
+  return json::array({v.x, v.y, v.z});
+}
+
+// Mirrors cpp/core/tests/parity_main.cpp's loadShip() field-for-field, in reverse -- see that
+// function for the schema this must produce.
+json dumpShip(const Ship& ship) {
+  const Physics& p = ship.physics;
+  json physics = {
+      {"heading", p.heading}, {"speed", p.speed}, {"maxSpeed", p.maxSpeed}, {"maxReverse", p.maxReverse},
+      {"accel", p.accel}, {"brakeDecel", p.brakeDecel}, {"friction", p.friction}, {"turnRate", p.turnRate},
+      {"grip", p.grip}, {"wallRestitution", p.wallRestitution}, {"weight", p.weight}, {"bobTime", p.bobTime},
+      {"visualBank", p.visualBank}, {"visualPitch", p.visualPitch}, {"airborne", p.airborne},
+      {"verticalVel", p.verticalVel}, {"gravity", p.gravity}, {"landingBounce", p.landingBounce},
+      {"landingBounceVel", p.landingBounceVel}, {"boostActive", p.boostActive}, {"boostReleasing", p.boostReleasing},
+      {"boostHold", p.boostHold}, {"boostReleaseT", p.boostReleaseT}, {"boostCap", p.boostCap}, {"boostEffCap", p.boostEffCap},
+      {"up", dumpVec(p.up)}, {"forward", dumpVec(p.forward)}, {"right", dumpVec(p.right)},
+      {"groundPos", dumpVec(p.groundPos)}, {"visualGroundPos", dumpVec(p.visualGroundPos)}, {"visualUp", dumpVec(p.visualUp)},
+      {"moveDir", dumpVec(p.moveDir)}};
+
+  json zoneInside = json::array();
+  for (const auto& [id, inside] : ship.zoneInside) zoneInside.push_back(json::array({id, inside}));
+  json triggerStates = json::array();
+  for (const auto& [id, state] : ship.triggerStates)
+    triggerStates.push_back(json::array({id, json{{"armed", state.armed}, {"flash", state.flash}}}));
+
+  json lastCheckpoint = {{"valid", ship.lastCheckpoint.valid},
+                         {"triggerId", ship.lastCheckpoint.triggerId.empty() ? json(nullptr) : json(ship.lastCheckpoint.triggerId)},
+                         {"pos", dumpVec(ship.lastCheckpoint.pos)},
+                         {"forward", dumpVec(ship.lastCheckpoint.forward)},
+                         {"up", dumpVec(ship.lastCheckpoint.up)}};
+
+  json race = {{"laps", ship.race.laps},
+              {"hit", ship.race.hit},
+              {"intermediateIds", ship.race.intermediateIds},
+              {"finishId", ship.race.finishId.empty() ? json(nullptr) : json(ship.race.finishId)}};
+
+  json startPose = {{"pos", dumpVec(ship.startPose.pos)}, {"up", dumpVec(ship.startPose.up)}, {"forward", dumpVec(ship.startPose.forward)}};
+
+  return json{{"physics", physics},          {"prevTriggerPos", dumpVec(ship.prevTriggerPos)}, {"zoneInside", zoneInside},
+              {"triggerStates", triggerStates}, {"lastCheckpoint", lastCheckpoint},                {"race", race},
+              {"startPose", startPose},
+              // Absent from every pre-Milestone-7 (analytic-only) trace format -- see
+              // cpp/core/tests/parity_main.cpp's loadShip() comment on why a mesh-mode trace needs
+              // this restored explicitly, unlike everything else here which loadShip() already
+              // round-trips.
+              {"renderNormal", dumpVec(ship.renderNormal)}};
+}
+
+// Mirrors parity_main.cpp's surfaceLabel() exactly -- the trace's "outcome.surface" field must
+// match what replay will independently recompute from the same Simulation/Track/Ship.
+std::string surfaceLabel(const Simulation& simulation, const Ship& ship) {
+  if (ship.physics.airborne) return "airborne";
+  const Vec3& pos = ship.physics.groundPos;
+  const Sample sample = simulation.sampleTrack(pos.x, pos.y, pos.z);
+  return "path:" + std::to_string(sample.pathIndex);
+}
+
+int runCapture(const std::filesystem::path& outputPath, const std::string& traceName, const std::filesystem::path& trackPath,
+              const std::filesystem::path& modelPath, int steps, double dt) {
+  TrackLoadResult loaded = Track::fromFile(trackPath);
+  if (!loaded) {
+    std::cerr << "failed to load '" << trackPath.string() << "': " << loaded.error << "\n";
+    return 1;
+  }
+  Track track = std::move(*loaded.track);
+
+#ifdef _WIN32
+  if (!createHeadlessGLContext()) {
+    std::cerr << "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires\n";
+    return 1;
+  }
+#endif
+  mpp::Logger logger;
+  logger.initialise("mesh_physics_diag.log", mpp::Logger::Level::Info);
+  mpp::RenderSystem renderSystem(1, 1, &logger);
+  mpp::ResourceManager resourceMgr(&renderSystem, &logger);
+  mpp::ModelSerializer serializer(&resourceMgr);
+  try {
+    serializer.load(modelPath.string());
+  } catch (std::exception const& error) {
+    std::cerr << "failed to load ModelFile '" << modelPath.string() << "': " << error.what() << "\n";
+    return 1;
   }
 
-  const std::filesystem::path trackPath(argv[1]);
-  const std::filesystem::path modelPath(argv[2]);
-  const int steps = argc > 3 ? std::atoi(argv[3]) : 600;
-  const double dt = argc > 4 ? std::atof(argv[4]) : 1.0 / 60.0;
+  std::string buildError;
+  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, track, buildError)) {
+    std::cerr << buildError << "\n";
+    return 1;
+  }
 
+  Simulation simulation(track);
+  simulation.setMeshPhysicsEnabled(true);
+  const std::vector<Pose> gridPoses = StartGrid::startingGridPoses(simulation, track, 1);
+  if (gridPoses.empty()) {
+    std::cerr << "could not compute a starting-grid pose\n";
+    return 1;
+  }
+  Ship ship = ShipFactory::makeShip(simulation, track, gridPoses.front());
+
+  std::ifstream sourceTrackFile(trackPath, std::ios::binary);
+  json sourceTrackJson;
+  sourceTrackFile >> sourceTrackJson;
+
+  json collisionTrianglesJson = json::array();
+  for (const CollisionTriangle& triangle : track.collisionSurface->triangles()) {
+    collisionTrianglesJson.push_back(json{{"positions", json::array({dumpVec(triangle.positions[0]), dumpVec(triangle.positions[1]),
+                                                                      dumpVec(triangle.positions[2])})},
+                                          {"normals", json::array({dumpVec(triangle.normals[0]), dumpVec(triangle.normals[1]),
+                                                                    dumpVec(triangle.normals[2])})},
+                                          {"surfaceId", triangle.surfaceId}});
+  }
+
+  json trace;
+  trace["meta"] = {{"name", traceName}, {"kind", "raw-track"}, {"steps", steps}};
+  trace["sourceTrack"] = sourceTrackJson;
+  trace["meshMode"] = true;
+  trace["collisionTriangles"] = collisionTrianglesJson;
+  trace["initialState"] = dumpShip(ship);
+
+  json stepsArr = json::array();
+  for (int frame = 0; frame < steps; ++frame) {
+    const ControlIntent intent = captureScriptedInput(frame, dt);
+    const StepResult result = simulation.stepPhysics(ship, dt, intent.throttle, intent.brake, intent.steer);
+    // Simulation::stepPhysics(), unlike GameSession::step(), never maintains ship.renderNormal
+    // itself -- Ship.hpp documents that as GameSession's job (see GameSession.cpp's own `if
+    // (!r.respawned) ship.renderNormal = r.surfaceNormal;`), but stepMeshPhysics's probeAxis reads
+    // it as a real physics input (steering/moveDir tangentize against it), not just a cosmetic
+    // render value. Skipping this left every direct stepPhysics() caller silently probing/steering
+    // against a stale (0,1,0) axis forever on any non-flat mesh surface -- reproduced headlessly: a
+    // ship correctly climbing DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 6.1's ramp asset (per its own
+    // groundPos.y) never launched off its crest the way the exact same drive via GameSession does,
+    // because vel.y kept getting flattened back to 0 by this stale-axis tangentize every frame
+    // before Ship.cpp's ramp-launch check ever saw it. Mirrored here to match GameSession's
+    // contract; cpp/core/tests/parity_main.cpp's replay needs the identical fix to stay consistent
+    // with what this capture records (see its own comment on this).
+    if (!result.respawned) ship.renderNormal = result.surfaceNormal;
+    stepsArr.push_back(json{
+        {"control", {{"throttle", intent.throttle}, {"brake", intent.brake}, {"steer", intent.steer}, {"dt", dt}}},
+        {"after", dumpShip(ship)},
+        {"outcome", {{"surface", surfaceLabel(simulation, ship)}, {"railHit", result.railHit}, {"respawned", result.respawned}}}});
+  }
+  trace["steps"] = stepsArr;
+
+  std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
+  out << trace.dump();
+  out.close();
+  std::cout << "wrote " << steps << " step(s), " << collisionTrianglesJson.size() << " collision triangle(s) to " << outputPath.string()
+            << "\n";
+  return 0;
+}
+
+int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path& modelPath, int steps, double dt) {
   TrackLoadResult loaded = Track::fromFile(trackPath);
   for (const TrackWarning& warning : loaded.warnings) {
     std::cerr << "warning [" << warning.code << "] " << warning.message;
@@ -143,26 +346,11 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::vector<CollisionTriangle> collisionTriangles;
-  try {
-    const std::vector<std::string> selectedNames = mono::collidableGeometryBatchIds(*track);
-    collisionTriangles = mono::buildCollisionTriangles(serializer, *track, selectedNames);
-
-    const std::filesystem::path root = trackPath.parent_path();
-    int nextSurfaceId = static_cast<int>(selectedNames.size());
-    std::map<std::string, std::shared_ptr<mono::MeshObjectModel>> modelCache;
-    auto meshObjectTriangles = mono::buildMeshObjectCollisionTriangles(*track, root, &resourceMgr, nextSurfaceId, modelCache);
-    collisionTriangles.insert(collisionTriangles.end(), std::make_move_iterator(meshObjectTriangles.begin()),
-                              std::make_move_iterator(meshObjectTriangles.end()));
-  } catch (std::exception const& error) {
-    std::cerr << "failed to build collision surface: " << error.what() << "\n";
+  std::string buildError;
+  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, *track, buildError)) {
+    std::cerr << buildError << "\n";
     return 1;
   }
-  if (collisionTriangles.empty()) {
-    std::cerr << "track produced no collision triangles -- nothing to drive on\n";
-    return 1;
-  }
-  track->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(collisionTriangles));
 
   GameSession session(track);
   session.setMeshPhysicsEnabled(true);
@@ -181,6 +369,34 @@ int main(int argc, char** argv) {
     std::printf("%d %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d\n", frame, session.sessionTime(), p.groundPos.x, p.groundPos.y, p.groundPos.z,
                 p.speed, ship0.renderNormal.x, ship0.renderNormal.y, ship0.renderNormal.z, p.airborne ? 1 : 0);
   }
-
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc >= 2 && std::string(argv[1]) == "--capture-trace") {
+    if (argc < 6) {
+      std::cerr << "usage: mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
+      return 2;
+    }
+    const std::filesystem::path outputPath(argv[2]);
+    const std::string traceName = argv[3];
+    const std::filesystem::path trackPath(argv[4]);
+    const std::filesystem::path modelPath(argv[5]);
+    const int steps = argc > 6 ? std::atoi(argv[6]) : 600;
+    const double dt = argc > 7 ? std::atof(argv[7]) : 1.0 / 60.0;
+    return runCapture(outputPath, traceName, trackPath, modelPath, steps, dt);
+  }
+
+  if (argc < 3) {
+    std::cerr << "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n";
+    std::cerr << "       mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
+    return 2;
+  }
+  const std::filesystem::path trackPath(argv[1]);
+  const std::filesystem::path modelPath(argv[2]);
+  const int steps = argc > 3 ? std::atoi(argv[3]) : 600;
+  const double dt = argc > 4 ? std::atof(argv[4]) : 1.0 / 60.0;
+  return runDrive(trackPath, modelPath, steps, dt);
 }
