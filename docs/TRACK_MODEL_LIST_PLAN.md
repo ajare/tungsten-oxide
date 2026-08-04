@@ -406,33 +406,55 @@ the editor as opaque pass-through data it preserves but never edits.
 
 ---
 
-## Milestone 6 — Editor: "Load Model" flow
+## Milestone 6 — Editor: "Load Model" flow — done (`3896a98`)
 
-**6.1 — Replace "Place Drivable Mesh Object..." menu item**
-- File: `cpp/editor/main.cpp`.
-- New "Load Model..." item opens a file picker over `.mppmodel` or
-  standalone Model XML (auto-detected, same classification approach as
-  model-tool's 3.3 — reuse `cpp/model-xml` directly here rather than
-  reimplementing detection). If the resulting `ModelFile` already matches an
-  entry in the current Track's embedded `<Models>` list, reuse that entry's
-  id (dedup, per the locked-in decision); otherwise embed a new `<Model>`
-  entry with a freshly generated id.
-- Then creates a `ModelPlacementDefinition` (Milestone 1.1) referencing that
-  id, placed at the current view center — same UX as today's mesh-object
-  placement, just resolved through an id instead of a raw path.
-- Test: `ctest` — headless check (mirroring the existing M3/M5/etc. built-in
-  main.cpp smoke checks) that loading the same Model XML twice produces one
-  embedded `<Model>` and two placements, and loading two different Model
-  XMLs produces two embedded entries. Commit.
+**6.1 — Replace "Place Drivable Mesh Object..." menu item** — done
+- Files: `cpp/editor/main.cpp`, `include/EditorTrackDefinition.hpp`
+  (`TrackDefinition` gains `models`, outer-XML-only, excluded from
+  fromJson/toJson — see this milestone's own header note above),
+  `include/EditorState.hpp` (`loadModel`/`findModel`/`editEmbeddedModel`/
+  `newModelId`).
+- "Load Model..." opens a file picker over `.mppmodel` or standalone Model
+  XML, classified by extension/parsed root element directly in `main.cpp`
+  (reimplemented independently of `model-tool`'s own `OpenTarget.cpp`
+  classification — the two apps don't share code at that layer, only the
+  `cpp/model-xml` fragment schema both link). `EditorState::loadModel`
+  reuses an existing `track_.models` entry whose `ModelFile` already matches
+  (dedup, per the locked-in decision) rather than duplicating it, or embeds
+  a fresh entry with a freshly generated `"model"`-prefixed id otherwise —
+  one undo step for the whole embed-plus-placement operation, not two.
+- Test: a new `LoadModelSmokeCheckResult`/`runLoadModelSmokeCheck()` in
+  `main.cpp` (mirroring the existing Gap-N/M-N built-in checks) confirms
+  loading the same Model twice dedups to one embedded entry with two
+  placements, loading a different Model embeds a second entry, and editing
+  shared mesh metadata is visible through every placement referencing it.
+  `ctest` (6/6 suites); a `track_editor.exe` smoke launch confirms every
+  built-in self-check reports `OK`, including this new one. Commit.
 
-**6.2 — Properties panel: per-mesh metadata editing**
+**6.2 — Properties panel: per-mesh metadata editing** — done, landed
+  together with 6.1 in one commit
 - File: `cpp/editor/src/PropertiesPanel.cpp`.
 - Alongside a placement's existing transform fields, a Type/Visible editor
-  for its referenced embedded Model's meshes (shared list, so editing it
-  from one placement's panel affects every placement referencing the same
-  embedded Model — consistent with "embedded Model is the shared metadata
-  set, placements only add a transform").
-- Test: `ctest` (UI only). Commit.
+  for its referenced embedded Model's meshes, backed by
+  `EditorState::editEmbeddedModel` — editing it from one placement's panel
+  affects every placement referencing the same embedded Model, consistent
+  with "embedded Model is the shared metadata set, placements only add a
+  transform." A `Type=Track` selection shows an inline "requires a
+  TrackData file on this Model" hint (the hard validation itself is
+  `cpp/model-xml`'s `validateModelDefinition`, enforced at Save time).
+- **Follow-on change to Milestone 5's save logic, made while implementing
+  this**: `TrackResourceSave.cpp`'s `otherModels` (the non-primary `<Model>`
+  entries written back on Save) now come from the in-session
+  `track.models` — the editor is the authoritative live source once it can
+  add to that list — rather than being re-derived from whatever's
+  currently on disk (`matching`), which was only ever a stand-in for not
+  having this milestone's storage yet. `editor_track_resources`' Milestone
+  5 test was updated to exercise the real parse-seeds-`track.models` →
+  save-writes-it-back round trip through `scanTrackResources`, not just an
+  in-memory field poke.
+- Test: `ctest` (no additional headless-testable logic beyond 6.1's own
+  check and the updated `editor_track_resources` coverage — this is UI
+  wiring). Commit.
 
 ---
 
