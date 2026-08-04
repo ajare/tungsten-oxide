@@ -1,5 +1,6 @@
 #include "TrackResourceDocument.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -105,14 +106,42 @@ TrackResourceCandidate parseCandidate(XMLElement* resource, const std::filesyste
     return out;
   }
 
-  out.trackDataReference = text(trackDefinition->FirstChildElement("TrackData"));
+  // <Models> list (TRACK_MODEL_LIST_PLAN.md): a clean break from the old bare <TrackData>/
+  // <ModelFile> pair, no migration -- see this header's own comment. Every <Model> is parsed via
+  // cpp/model-xml (shared with model-tool), then the first Type=Track entry becomes "primary."
+  XMLElement* modelsElem = trackDefinition->FirstChildElement("Models");
+  if (modelsElem == nullptr) {
+    out.error = "Missing <Models> list (old bare <TrackData>/<ModelFile> Track resources are no "
+               "longer supported -- re-save with a current editor).";
+    return out;
+  }
+  for (XMLElement* modelElem = modelsElem->FirstChildElement("Model"); modelElem != nullptr;
+       modelElem = modelElem->NextSiblingElement("Model")) {
+    try {
+      out.models.push_back(modelxml::parseModelFragment(modelElem));
+    } catch (const std::exception& error) {
+      out.error = std::string("Invalid <Model> in <Models>: ") + error.what();
+      return out;
+    }
+  }
+  const auto primaryIt = std::find_if(out.models.begin(), out.models.end(), [](const modelxml::ModelXmlDefinition& model) {
+    return std::any_of(model.meshes.begin(), model.meshes.end(),
+                       [](const modelxml::MeshMetadataXmlDefinition& mesh) { return mesh.type == modelxml::MeshType::Track; });
+  });
+  if (primaryIt == out.models.end() || !primaryIt->trackData.has_value()) {
+    out.error = "No Track-type Model with <TrackData> found in <Models>.";
+    return out;
+  }
+  out.primaryModelIndex = static_cast<std::size_t>(primaryIt - out.models.begin());
+
+  out.trackDataReference = *primaryIt->trackData;
   if (!isSafeResourceRelativePath(out.trackDataReference)) {
     out.error = "TrackData must be a safe relative path within the Resources XML directory.";
     return out;
   }
   out.trackDataPath = resolveResourceRelativePath(xmlPath, out.trackDataReference);
 
-  out.modelFileReference = text(trackDefinition->FirstChildElement("ModelFile"));
+  out.modelFileReference = primaryIt->modelFile;
   if (isSafeResourceRelativePath(out.modelFileReference)) {
     out.modelFilePath = resolveResourceRelativePath(xmlPath, out.modelFileReference);
     if (!std::filesystem::exists(out.modelFilePath)) out.warning = "ModelFile is missing and will be regenerated on Save.";

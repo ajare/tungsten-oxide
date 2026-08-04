@@ -7,6 +7,8 @@
 #include <map>
 #include <set>
 
+#include "willpower/common/tinyxml2.h"
+
 namespace editor {
 namespace {
 
@@ -91,6 +93,50 @@ constexpr std::uint32_t kNoIndexStream = 0xFFFFFFFFu;
 std::string resolveMaterialKey(const std::string& materialKey, const std::map<std::string, std::string>& trackMaterialToMaterial) {
   const auto it = trackMaterialToMaterial.find(materialKey);
   return it == trackMaterialToMaterial.end() ? materialKey : it->second;
+}
+
+// Builds the <Models> list (TRACK_MODEL_LIST_PLAN.md): the primary Track-type Model, regenerated
+// fresh every save from `bakedTrack`'s own collidable geometry -- exactly the same batch-kind filter
+// the old flat <TrackMeshes> list used (Map.cpp's gameplayKind()) -- followed by `otherModels`
+// written back verbatim, byte-identical to how they were parsed (Milestone 6's "Load Model" is the
+// only thing that ever adds to that list; this function never edits it). Printed via TinyXML2 with
+// no attempt at matching the surrounding hand-built string XML's indentation -- upsertTrackResource
+// (TrackResourceDocument.cpp) reparses and reprints the whole document before it's ever saved to
+// disk, so whatever whitespace lands here is discarded and reformatted anyway.
+std::string buildModelsXml(const std::string& primaryModelId, const std::string& mppModelFileName,
+                           const std::string& trackDataFileName, const tox::Track& bakedTrack,
+                           const std::vector<modelxml::ModelXmlDefinition>& otherModels) {
+  tinyxml2::XMLDocument doc;
+  tinyxml2::XMLElement* modelsElem = doc.NewElement("Models");
+  doc.InsertEndChild(modelsElem);
+
+  modelxml::ModelXmlDefinition primary;
+  primary.id = primaryModelId;
+  primary.modelFile = mppModelFileName;
+  primary.trackData = trackDataFileName;
+  // Must stay in lock-step with Map.cpp's gameplayKind() -- same set, same reasoning: everything a
+  // ship can physically contact goes into the collision BVH (drivable surfaces, reservation walls,
+  // Path- and MeshRegion-authored rails). PathShell stays out -- render-only.
+  for (const tox::GeometryBatch& batch : bakedTrack.geometry) {
+    if (batch.kind != tox::GeometryKind::PathSurface && batch.kind != tox::GeometryKind::MeshSurface &&
+        batch.kind != tox::GeometryKind::ReservationWall && batch.kind != tox::GeometryKind::PathRail &&
+        batch.kind != tox::GeometryKind::MeshRail)
+      continue;
+    primary.meshes.push_back({batch.id, modelxml::MeshType::Track, true});
+  }
+  tinyxml2::XMLElement* primaryElem = doc.NewElement("Model");
+  modelsElem->InsertEndChild(primaryElem);
+  modelxml::writeModelFragment(primaryElem, primary);
+
+  for (const modelxml::ModelXmlDefinition& other : otherModels) {
+    tinyxml2::XMLElement* otherElem = doc.NewElement("Model");
+    modelsElem->InsertEndChild(otherElem);
+    modelxml::writeModelFragment(otherElem, other);
+  }
+
+  tinyxml2::XMLPrinter printer;
+  modelsElem->Accept(&printer);
+  return printer.CStr();
 }
 
 }  // namespace
@@ -226,7 +272,9 @@ std::string xmlEscape(const std::string& value) {
 std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox::Track& bakedTrack,
                                          const std::string& resourceName, const std::string& mppModelFileName,
                                          const std::string& trackDataFileName,
-                                         const std::map<std::string, std::string>& trackMaterialToMaterial) {
+                                         const std::map<std::string, std::string>& trackMaterialToMaterial,
+                                         const std::string& primaryModelId,
+                                         const std::vector<modelxml::ModelXmlDefinition>& otherModels) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
   // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
   // curve content. Resolved through trackMaterialToMaterial first (see MppModelExport.hpp's
@@ -271,32 +319,11 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
   // and no (Map, "") definition factory is registered -- only (Map, "Track") is (see
   // cpp/tungsten-monoxide/src/DLL.cpp). Omitting it throws "could not find a definition factory".
   xml += "\t\t\t<Definitions>\n\t\t\t\t<Definition factory=\"Track\">\n";
-  xml += "\t\t\t\t\t<ModelFile>" + xmlEscape(mppModelFileName) + "</ModelFile>\n";
-  xml += "\t\t\t\t\t<TrackData>" + xmlEscape(trackDataFileName) + "</TrackData>\n";
-  xml += "\t\t\t\t\t<TrackMeshes>\n";
-  // Must stay in lock-step with Map.cpp's gameplayKind() (cpp/tungsten-monoxide/src/Map.cpp) --
-  // same set of kinds, same reasoning: everything a ship can physically contact goes into the
-  // collision BVH (drivable surfaces, reservation walls, Path- and MeshRegion-authored rails).
-  // PathShell stays out -- render-only.
-  for (const tox::GeometryBatch& batch : bakedTrack.geometry) {
-    if (batch.kind != tox::GeometryKind::PathSurface && batch.kind != tox::GeometryKind::MeshSurface &&
-        batch.kind != tox::GeometryKind::ReservationWall && batch.kind != tox::GeometryKind::PathRail &&
-        batch.kind != tox::GeometryKind::MeshRail)
-      continue;
-    xml += "\t\t\t\t\t\t<Mesh>" + xmlEscape(batch.id) + "</Mesh>\n";
-  }
-  xml += "\t\t\t\t\t</TrackMeshes>\n";
-  xml += "\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
+  xml += buildModelsXml(primaryModelId, mppModelFileName, trackDataFileName, bakedTrack, otherModels);
+  xml += "\n\t\t\t\t</Definition>\n\t\t\t</Definitions>\n";
 
   xml += "\t\t</Resource>\n\t</Namespace>\n</Resources>\n";
   return xml;
-}
-
-std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
-                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
-                                  const std::map<std::string, std::string>& trackMaterialToMaterial) {
-  return buildTrackResourceXmlForName(track, bakedTrack, track.name, mppModelFileName, trackDataFileName,
-                                      trackMaterialToMaterial);
 }
 
 }  // namespace editor
