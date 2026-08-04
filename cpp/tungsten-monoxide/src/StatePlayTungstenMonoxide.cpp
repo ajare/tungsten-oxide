@@ -571,8 +571,17 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
       if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
       if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
       if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
+      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1: a track with drivable mesh object placements
+      // has no working analytic-mode collision for that geometry, so the toggle is disabled (not
+      // just defaulted) for such a session -- GameSession/Simulation already refuse to honor a
+      // disable request here too, but hiding/graying the control avoids offering a choice that
+      // would silently do nothing.
+      const bool meshPhysicsForced = mGameSession && mGameSession->meshPhysicsForced();
+      if (meshPhysicsForced) mMeshPhysicsDebug = true;
+      ImGui::BeginDisabled(meshPhysicsForced);
       if (ImGui::Checkbox("Mesh Physics", &mMeshPhysicsDebug) && mGameSession)
         mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
+      ImGui::EndDisabled();
       if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
         // Resync on enable so the comparison always starts from "right now", not wherever the
         // ghost last happened to be (e.g. left behind from the last time this was toggled on).

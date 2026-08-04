@@ -1193,6 +1193,31 @@ after Milestone 4 lands.
   step that isn't physics and can reasonably get a quick manual glance in
   the editor/game UI, since it's a visibility check, not input-driven
   simulation. Commit.
+- **Done.** `Simulation` gained `meshPhysicsForced()` (`true` iff
+  `track_.definition.meshObjects` is non-empty) and its constructor now
+  sets `meshPhysicsEnabled_ = true` explicitly whenever that's the case
+  (belt-and-suspenders against the field's default ever changing, not a
+  behavior change today — mesh physics already defaults on for everything).
+  The real enforcement is in `setMeshPhysicsEnabled(bool)` itself: it now
+  silently ignores a request to disable while `meshPhysicsForced()`, so
+  *every* caller — the debug UI, `GameSession`, test code, a future
+  ghost-mode toggle — gets the same guarantee, not just the checkbox.
+  `GameSession::meshPhysicsForced()` forwards it for UI use.
+  - `StatePlayTungstenMonoxide.cpp`'s "Mesh Physics" checkbox now reads
+    `mGameSession->meshPhysicsForced()` each frame: when forced, it snaps
+    `mMeshPhysicsDebug` back to `true` and wraps the checkbox in
+    `ImGui::BeginDisabled`/`EndDisabled` so the control visibly can't be
+    unchecked, rather than silently doing nothing if clicked.
+  - Test: added to `track_tests.cpp`, next to the existing
+    `mesh-object/basic-placement.json` fixture block (already has one
+    `DrivableMeshObjectPlacementDefinition`) — asserts
+    `Simulation::meshPhysicsForced()`/`meshPhysicsEnabled()` are both true
+    immediately after load, that `setMeshPhysicsEnabled(false)` is a no-op
+    on both `Simulation` and `GameSession` for that track, and (negative
+    control, using the unrelated `path/curved-banked.json` fixture with no
+    mesh objects) that an ordinary track is *not* forced and
+    `setMeshPhysicsEnabled(false)` still works normally there. `ctest`
+    (4/4) green; `core`/`track_tests`/`TungstenMonoxide` all rebuilt clean.
 
 **8.2 — Full validation pass (headless)**
 - Author a track (in the editor, as normal) using drivable mesh objects

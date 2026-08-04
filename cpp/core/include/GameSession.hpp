@@ -63,6 +63,9 @@ public:
   // Forwards to Simulation::setMeshPhysicsEnabled -- the debug UI's entry point for the
   // mesh-vs-analytic physics toggle, without exposing broader mutable access to simulation_.
   void setMeshPhysicsEnabled(bool enabled) { simulation_.setMeshPhysicsEnabled(enabled); }
+  // Forwards to Simulation::meshPhysicsForced -- lets the debug UI hide/disable its toggle for a
+  // track with drivable mesh objects (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1).
+  bool meshPhysicsForced() const { return simulation_.meshPhysicsForced(); }
 
   // Debug/visualization only: advances a single externally-owned "what-if" ship by one rendered
   // frame, using the same fixed-substep scheme as step() but forced onto whichever physics mode

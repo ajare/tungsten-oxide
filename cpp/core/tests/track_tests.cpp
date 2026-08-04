@@ -507,6 +507,34 @@ int main(int argc, char** argv) {
             "the fixture's meshObject-hosted zone compiles");
       check(std::any_of(loaded.track->triggers.begin(), loaded.track->triggers.end(), [](const Trigger& t) { return t.id == "platform-checkpoint"; }),
             "the fixture's meshObject-hosted trigger compiles");
+
+      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1: a track with drivable mesh object placements
+      // has no working analytic-mode collision for that geometry, so mesh physics must be forced
+      // on at load, and must stay on even if something tries to disable it.
+      Simulation forcedSim(*loaded.track);
+      check(forcedSim.meshPhysicsForced(), "a track with a drivable mesh object placement reports meshPhysicsForced");
+      check(forcedSim.meshPhysicsEnabled(), "meshPhysicsEnabled reads true immediately after loading such a track");
+      forcedSim.setMeshPhysicsEnabled(false);
+      check(forcedSim.meshPhysicsEnabled(), "setMeshPhysicsEnabled(false) is ignored while meshPhysicsForced");
+
+      auto forcedSession = std::make_shared<Track>(*loaded.track);
+      GameSession forcedGameSession(forcedSession);
+      check(forcedGameSession.meshPhysicsForced(), "GameSession forwards meshPhysicsForced from its Simulation");
+      forcedGameSession.setMeshPhysicsEnabled(false);
+      check(forcedGameSession.simulation().meshPhysicsEnabled(), "GameSession::setMeshPhysicsEnabled(false) is ignored while forced");
+    }
+  }
+  {
+    // A track with no drivable mesh objects at all (the fixtures used throughout the rest of this
+    // file) must NOT be forced -- forcing is specific to tracks that actually need it, not a
+    // blanket change to Simulation's default (which is already true, independently of this).
+    const auto loaded = Track::fromFile(fixtureDir / "path" / "curved-banked.json");
+    check(static_cast<bool>(loaded), "the curved-banked fixture loads: " + loaded.error);
+    if (loaded) {
+      Simulation unforcedSim(*loaded.track);
+      check(!unforcedSim.meshPhysicsForced(), "a track with no drivable mesh objects is not meshPhysicsForced");
+      unforcedSim.setMeshPhysicsEnabled(false);
+      check(!unforcedSim.meshPhysicsEnabled(), "setMeshPhysicsEnabled(false) still works on an unforced track");
     }
   }
 

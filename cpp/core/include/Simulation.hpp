@@ -79,7 +79,23 @@ public:
   // on this default, so the suite's coverage is unaffected by this default's value). A GameSession
   // forwards this from the in-game debug UI (see StatePlayTungstenMonoxide's Debug tab).
   bool meshPhysicsEnabled() const { return meshPhysicsEnabled_; }
-  void setMeshPhysicsEnabled(bool enabled) { meshPhysicsEnabled_ = enabled; }
+  // Ignored (stays true) when meshPhysicsForced() -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1:
+  // a track with drivable mesh object placements has no working analytic-mode collision for that
+  // geometry (no synthetic wall/floor is built for it, unlike the old MeshRegion), so silently
+  // letting the debug toggle fall back to analytic mode on such a track would drive the ship
+  // straight through unmodeled geometry. The constructor already forces meshPhysicsEnabled_ true
+  // for these tracks; this setter keeps that guarantee against every caller (debug UI, ghost
+  // toggle, test code), not just the initial value.
+  void setMeshPhysicsEnabled(bool enabled) {
+    if (meshPhysicsForced() && !enabled) return;
+    meshPhysicsEnabled_ = enabled;
+  }
+
+  // True when `track_` has at least one drivable mesh object placement -- such a track has no
+  // analytic-mode collision for that geometry, so mesh physics is mandatory, not just the default.
+  // The in-game debug UI hides/disables its mesh-physics toggle when this is true (see
+  // StatePlayTungstenMonoxide.cpp).
+  bool meshPhysicsForced() const { return !track_.definition.meshObjects.empty(); }
 
   // Game-only observation hooks (injected trigger-fired callback / session-time source). Both
   // default to no-ops so existing headless callers are unaffected; a GameSession sets these to

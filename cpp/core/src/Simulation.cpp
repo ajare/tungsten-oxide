@@ -135,7 +135,12 @@ void addImpactJolt(Physics& p, double normalImpactSpeed) {
 }
 
 // --- Simulation ------------------------------------------------------------
-Simulation::Simulation(const Track& track) : track_(track) {}
+Simulation::Simulation(const Track& track) : track_(track) {
+  // meshPhysicsEnabled_ already defaults true, but set it explicitly here too so forcing doesn't
+  // silently depend on that default's value ever staying true (DRIVABLE_MESH_OBJECTS_PLAN.md
+  // Milestone 8.1).
+  if (meshPhysicsForced()) meshPhysicsEnabled_ = true;
+}
 
 Sample Simulation::sampleTrack(double x, double y, double z) const {
   const auto& paths = track_.paths;
