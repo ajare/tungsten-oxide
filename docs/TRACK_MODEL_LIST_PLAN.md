@@ -526,27 +526,61 @@ the editor as opaque pass-through data it preserves but never edits.
 
 ---
 
-## Milestone 8 — Fixtures, docs, cleanup
+## Milestone 8 — Fixtures, docs, cleanup — done
 
-**8.1 — Update/replace fixtures**
-- `cpp/test-data/fixtures/mesh-object/basic-placement.json` and any Track
-  resource XML fixtures under `cpp/test-data/` or `cpp/editor/`'s own test
-  assets get rewritten to the new `<Models>`-list shape; add a new fixture
-  mirroring `example_track_def.xml` exactly (two models, Track+Physical).
+**8.1 — Update/replace fixtures** — done, turned out to be a no-op
+- Checked `cpp/test-data/fixtures/mesh-object/basic-placement.json` and
+  every other fixture under `cpp/test-data/`/`cpp/editor/`'s own test
+  assets: none is a Track resource *XML* file (the `<Models>`-list shape
+  this plan changed) — `basic-placement.json` and its siblings are all
+  TrackData JSON, an entirely different, unaffected schema layer (the
+  `<Models>` list is outer-XML-only, per the plan's own architecture
+  notes). `grep -rl "TrackMeshes\|<ModelFile>" --include=*.xml .` across
+  the whole repo found exactly one hit outside `ext/`/`build/`:
+  `cpp/tungsten-monoxide/resources/Resources.xml` — real bundled game
+  content, not a fixture, already migrated to `<Models>` as part of
+  Milestone 7's own commit (`5e43256`). No new fixture mirroring
+  `example_track_def.xml` was added as a committed file — the shape is
+  instead exercised directly in `editor_track_resource_tests`/
+  `model_xml_tests`/`model_tool_tests`' own in-memory XML strings, which
+  cover the same ground without adding a new permanent fixture this plan
+  never otherwise needed.
 
-**8.2 — Docs**
-- `docs/adr/0001-model-tool.md`: add a superseded-by note pointing at
-  `0003-model-xml-layer.md` for D1 specifically (other decisions in 0001
-  stand).
-- `docs/adr/0002-track-resource-save-load.md`: update for the `<Models>`
-  list shape (this ADR documents exactly the schema this plan changes).
-- `cpp/core/CLAUDE.md`, `cpp/editor/CLAUDE.md`, root `CLAUDE.md`,
-  `docs/UBIQUITOUS_LANGUAGE.md` (add **Model**, **Model placement**; retire
-  "drivable mesh object" as the placement's name where it now means
-  something broader), `DRIVABLE_MESH_OBJECTS_PLAN.md` (note the later
-  rename of its own `DrivableMeshObjectPlacementDefinition`).
+**8.2 — Docs** — done (`732e2b9`)
+- `docs/adr/0001-model-tool.md`: superseded-by note added in Milestone 0.1
+  already (`27ca622`), ahead of this milestone.
+- `docs/adr/0002-track-resource-save-load.md`: D2/D4 both got a "Schema
+  note"/"Extended by" callout pointing at this plan, without rewriting
+  their still-accurate underlying principles (JSON-is-authoritative,
+  per-Resource-element replace-and-preserve) — historical-record style,
+  matching `DRIVABLE_MESH_OBJECTS_PLAN.md`'s own precedent elsewhere.
+- `cpp/core/CLAUDE.md` (new `Track::fromTrackDataFiles` bullet),
+  `cpp/editor/CLAUDE.md` (new bullet on the `<Models>` list/`loadModel`/
+  placement rendering), `docs/UBIQUITOUS_LANGUAGE.md` (added **Model**,
+  **Model placement** to the Track-structure glossary table plus a
+  Relationships line), `docs/core.md` and `docs/tungsten-monoxide.md`
+  (both had *load-bearing*, now-stale `<TrackMeshes>`/collision-selection
+  descriptions rewritten — found while doing this pass, not originally
+  scoped by name in this milestone but squarely "docs" work),
+  `docs/model-tool.md` (its whole "Collidable/decorative flag" section
+  rewritten for the Type/Visible XML metadata that replaced it — likewise
+  found live-and-stale during this pass), `docs/DRIVABLE_MESH_OBJECTS_PLAN.md`
+  (light note on `DrivableMeshObjectPlacementDefinition`'s later rename,
+  historical text otherwise left untouched). Root `CLAUDE.md` needed no
+  change — its subproject list already just points at
+  `cpp/CMakeLists.txt`'s own header comment, which Milestone 2 already
+  updated with a `cpp/model-xml` entry.
 
-**8.3 — Full regression pass**
-- `ctest --test-dir cpp/build -C Release --output-on-failure`, full
-  `track_editor.exe`/`model_tool.exe` smoke launches, matching the existing
-  "Milestone 8.2/8.3" precedent from `DRIVABLE_MESH_OBJECTS_PLAN.md`.
+**8.3 — Full regression pass** — done
+- `cmake --build cpp/build --config Release` (the whole workspace, no
+  target filter) — zero errors, only pre-existing benign warnings
+  (`std::float_denorm_style` deprecation, unused-parameter). `ctest
+  --test-dir cpp/build -C Release --output-on-failure` — 6/6 suites green
+  (`parity`, `track_tests`, `model_xml_tests`, `editor_track_resources`,
+  `mpp_model_import_tests`, `model_tool_tests`). A `track_editor.exe`
+  smoke launch reported 22 `OK` self-checks and zero `MISMATCH`/`FAIL`.
+  A real interactive session (Open/Save/Load Model/a live game launch
+  loading the updated `Resources.xml`) was not possible in this
+  environment (no display/GPU) at any point across this whole plan —
+  every milestone's own entry above already flags exactly where that
+  matters most.
