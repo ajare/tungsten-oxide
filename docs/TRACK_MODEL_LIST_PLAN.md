@@ -210,54 +210,61 @@ next step.
 
 ---
 
-## Milestone 3 — `model-tool`: XML layer
+## Milestone 3 — `model-tool`: XML layer — done (`4447a1d`, `19a68a9`)
 
-**3.1 — Link `cpp/model-xml`**
-- File: `cpp/model-tool/CMakeLists.txt`.
-- Test: `ctest` (build-only change). Commit.
+**3.1 — Link `cpp/model-xml`** — done
+- File: `cpp/model-tool/CMakeLists.txt` (`model_tool` and `model_tool_tests`
+  both link `model_xml`). It turned out `model-tool` already linked
+  `Willpower::Common` (for `MaterialXmlImport.hpp`'s XmlReader), so this
+  added no new third-party dependency, just the new fragment-schema lib.
 
-**3.2 — Retire `CollidableFlag.hpp`'s name-suffix encoding**
-- Files: `cpp/model-tool/include/CollidableFlag.hpp`/`src/CollidableFlag.cpp`
-  (deleted), `src/MppSave.cpp`, `src/MppModelImport.cpp`, `main.cpp`,
-  `tests/model_tool_tests.cpp` (round-trip tests removed).
-- Per-mesh state in `model-tool`'s in-memory model moves from a bare
-  `collidable` bool to a `MeshType`+`visible` pair (from `cpp/model-xml`);
-  `.mppmodel` mesh names are written/read completely unchanged now — the
-  metadata that used to ride in the name lives only in the associated XML
-  (standalone or embedded) from here on. A `.mppmodel` with no associated
-  XML at all has no Type/Visible metadata (not "every mesh collidable" as
-  before) — surfaced as "Physical/visible" defaults in the UI until XML
-  metadata is loaded or authored.
-- Test: `ctest` (existing collidable-flag round-trip tests removed, no
-  replacement needed — the concept no longer exists at the `.mppmodel`
-  layer). Commit.
+**3.2 — Retire `CollidableFlag.hpp`'s name-suffix encoding** — done
+- Files: `include/CollidableFlag.hpp`/`src/CollidableFlag.cpp` (deleted),
+  `src/MppSave.cpp`, `src/MppModelImport.cpp`, `include/AssImpImport.hpp`
+  (`ImportedMesh::collidable` → `modelxml::MeshType type` + `bool visible`),
+  `tests/model_tool_tests.cpp` (round-trip tests removed; see
+  `model_xml_tests.cpp`, already landed in Milestone 2, for the coverage
+  that replaced it).
+- Landed exactly as planned: mesh names are now always written/read
+  unchanged; a `.mppmodel` with no associated XML gets in-memory
+  Physical/visible defaults, not "every mesh collidable."
 
-**3.3 — Open-dialog auto-detection**
-- Files: `main.cpp` (open flow), new `src/OpenTarget.cpp`/`.hpp` (peeks at
-  file content/extension to classify: `.mppmodel` magic bytes → raw model;
-  XML with root `<Model>` → standalone; XML with root `<Resources>...
-  factory="Track"` → Track resource, prompting a picker over its `<Models>`
-  list if more than one entry).
-- Whichever path was opened is remembered so Save writes back to the same
-  place: raw `.mppmodel` → `MppSave.cpp`'s existing path; standalone Model
-  XML → `saveStandaloneModelXml` (2.2) plus re-saving the referenced
-  `.mppmodel` via the existing `mpp::ModelSerializer` path; embedded-in-Track
-  → rewrite just that one `<Model>` element in place inside the Track
-  resource XML (parse whole document, locate by id, replace element,
-  re-serialize) plus the `.mppmodel`.
-- Test: `model_tool_tests` — classification of the three input shapes from
-  in-memory XML strings/fixture files; save-back-to-origin round trip for
-  each of the three cases against a temp file. `ctest`. Commit.
+**3.3 — Open-dialog auto-detection** — done
+- Files: new `include/OpenTarget.hpp`/`src/OpenTarget.cpp` (classification
+  by extension for `.mppmodel`, by parsed root element for `.xml` —
+  `<Model>` vs `<Resources>` containing a `Definition[factory=Track]/Models`
+  list, found via an independent re-walk rather than depending on
+  `cpp/editor`'s `TrackResourceDocument.cpp`), `main.cpp` (`doOpen`
+  dispatches via `classifyOpenTarget`; a multi-entry Track resource queues a
+  new "Choose Model" picker modal, mirroring the existing Material Name
+  Conflicts modal's `OpenPopup`/`BeginPopupModal` pattern).
+- Save-back landed as `ModelXmlOrigin` (`None`/`StandaloneXml`/
+  `EmbeddedInTrackResource`) plus a `doSave()`/`doSaveAs()` split: `doSave()`
+  (now what Ctrl+S/the "Save" menu item call) writes back to the remembered
+  origin silently when one is known — re-saving the `.mppmodel` and
+  rewriting the associated `<Model>` fragment's mesh metadata via
+  `rewriteEmbeddedModel`/`saveStandaloneModelXml` — and falls back to the
+  always-prompting `doSaveAs()` (the old "Save As .mppmodel..." behavior,
+  renamed but otherwise unchanged) when there's no origin yet.
+- Test: `model_tool_tests` — classification of all three input shapes;
+  `scanTrackResourceModels`/`readEmbeddedModel`/`rewriteEmbeddedModel`
+  against an in-memory Track resource XML (confirms an unrelated XML
+  comment elsewhere in the document survives a rewrite untouched, and a
+  missing-id lookup throws). `ctest` (5/5 suites). Manual GUI verification
+  (Open dialog, Choose Model modal, Save round trip) wasn't possible in this
+  environment (no display) — flagged as the thing to actually click through
+  once a GUI session is available. Commit.
 
-**3.4 — Per-mesh Type/Visible authoring UI**
+**3.4 — Per-mesh Type/Visible authoring UI** — done, folded into 3.2's commit
 - File: `main.cpp` (Meshes panel).
-- Replaces the old `Collidable` checkbox with a `Type` combo
-  (Track/Physical/Decorative) and a `Visible` checkbox per mesh, backed by
-  `ModelXmlDefinition::meshes`. Selecting `Type=Track` without a `TrackData`
-  set surfaces the 2.2 validation error inline rather than only at save
-  time.
-- Test: `ctest` (UI change, no new headless-testable logic beyond what 3.2/
-  3.3/2.2 already cover). Commit.
+- The old `Collidable` checkbox is replaced by a `Type` combo
+  (Track/Physical/Decorative) and a `Visible` checkbox per mesh. Selecting
+  `Type=Track` shows an inline "requires a TrackData file on this Model"
+  hint; the hard validation itself (2.2's `validateModelDefinition`) fires
+  at Save time via `doSave`/`doSaveAs`'s existing try/catch, surfaced as a
+  status-bar "Save failed" message — no separate inline validation pass was
+  added beyond that hint, since the save-time throw already covers
+  correctness and the hint covers discoverability.
 
 ---
 
