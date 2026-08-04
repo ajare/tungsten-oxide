@@ -326,46 +326,83 @@ next step.
 
 ---
 
-## Milestone 5 — Editor: `<Models>` list parsing/saving
+## Milestone 5 — Editor: `<Models>` list parsing/saving — done (`9ff771a`), scoped down
 
-**5.1 — Link `cpp/model-xml`; parse `<Models>` list**
-- Files: `cpp/editor/CMakeLists.txt`, `cpp/editor/src/TrackResourceDocument.cpp`/
+**Scope revision, decided while starting this milestone:** the editor
+continues to author exactly ONE Track-type Model per session —
+`EditorState` stays single-`TrackDefinition`, as today. True multi-document
+editing of several independently-baked TrackData files (5.2 as originally
+scoped) would mean rearchitecting `EditorState`'s undo/redo and every panel
+around N simultaneously-open documents, out of proportion to what this
+branch's actual user stories (embedding Physical/Decorative props) need.
+`Track::fromTrackDataFiles` (Milestone 1.2) is unused by the editor under
+this revision — it remains for the **host** (Milestone 7) to union multiple
+Track-type Models' TrackData, a scenario the editor itself never needs to
+construct or edit. What Milestone 5 actually delivers: the outer Track
+resource XML shape changes to `<Models>`, and non-primary `<Model>` entries
+(Physical/Decorative props, Milestone 6's "Load Model") round-trip through
+the editor as opaque pass-through data it preserves but never edits.
+
+**5.1 — Link `cpp/model-xml`; parse `<Models>` list** — done
+- Files: `cpp/editor/CMakeLists.txt` (`track_editor` and both test targets
+  link `model_xml`), `cpp/editor/src/TrackResourceDocument.cpp`/
   `include/TrackResourceDocument.hpp`.
-- `TrackResourceCandidate` gains `std::vector<ModelXmlDefinition> models`
-  (via `cpp/model-xml`'s `parseModelFragment` called once per `<Model>` child
-  of `<Models>`), replacing the current single `trackDataPath`/`modelFile`.
-  Old bare `<TrackData>`/`<ModelFile>` (no `<Models>` wrapper) fails to parse
-  with a clear error — no migration, per the locked-in decision.
-- Test: `editor_track_resources` — a fixture Track resource XML mirroring
-  `example_track_def.xml` (two models, one Track-type + TrackData, one
-  Physical) parses into the expected candidate; a legacy-shape fixture fails
-  with a clear "old Track schema no longer supported" error. `ctest`.
-  Commit.
+- `TrackResourceCandidate` gained `std::vector<modelxml::ModelXmlDefinition>
+  models` plus `primaryModelIndex` — the existing `trackDataReference`/
+  `modelFileReference`/`trackDataPath`/`modelFilePath` fields are kept,
+  mirroring `models[primaryModelIndex]` (the first entry with any Type=Track
+  mesh), so every pre-existing call site elsewhere in the editor needed no
+  change. A `<Models>`-less `Definition[factory=Track]` (the old bare
+  `<TrackData>`/`<ModelFile>` shape) fails to parse with an explicit error —
+  no migration, per the locked-in decision.
+- Test: `editor_track_resources` (extended, see 5.3 below — the fixture
+  work and the save-side work landed together in one pass, not as separable
+  commits, since a save→load round trip is what actually exercises the
+  parse side meaningfully). `ctest`. Commit.
 
-**5.2 — Multi-model load via `Track::fromTrackDataFiles`**
-- Files: `cpp/editor/main.cpp` (`loadTrackCandidate` and friends).
-- Collects every Track-type model's `trackData` path from the parsed
-  candidate and calls Milestone 1.2's new entry point instead of a single-
-  file load. `EditorState`/`EditorTrackDefinition` need no change for this
-  part — they still work off one merged `editor::TrackDefinition`, same as
-  today, just sourced from N files instead of one.
-- Test: `ctest` plus a smoke-launch check loading a fixture with two
-  Track-type models, confirming paths/zones from both are present and
-  editable. Commit.
+**5.2 — Multi-model load via `Track::fromTrackDataFiles`** — superseded by
+  the scope revision above; not implemented. The editor's own bake path
+  (`main.cpp`'s existing `editor::TrackDefinition` → `tox::Track::fromJson`
+  flow) is completely unchanged.
 
-**5.3 — Save: write the `<Models>` list back**
+**5.3 — Save: write the `<Models>` list back** — done, landed together with
+  5.1 in one commit
 - Files: `cpp/editor/src/TrackResourceSave.cpp`, `include/MppModelExport.hpp`/
-  `src/MppModelExport.cpp` (`buildTrackResourceXml` reworked to emit
-  `<Models>` via `cpp/model-xml`'s `writeModelFragment` per entry instead of
-  the old single `<TrackData>`/`<ModelFile>` pair).
-- Each Track-type model's own TrackData JSON is written back to its own
-  file (the merged in-memory `TrackDefinition` needs to be split back apart
-  by its namespace prefix — the inverse of 1.2's merge — before writing;
-  add this as a `Track`/`TrackDefinition`-level helper in `cpp/core` rather
-  than duplicating split logic in the editor).
-- Test: `editor_track_resources` — round-trip save→load of a two-Track-type-model
-  fixture reproduces the original per-file TrackData content exactly.
-  `ctest`. Commit.
+  `src/MppModelExport.cpp`.
+- `buildTrackResourceXmlForName` gained `primaryModelId`/`otherModels`
+  parameters: it regenerates the primary Model fresh every save (a
+  `<Meshes><Mesh>Type=Track</Mesh>` entry for every baked collidable batch
+  id, built via a new `buildModelsXml` helper that constructs a small
+  TinyXML2 subtree and calls `modelxml::writeModelFragment` — printed
+  without trying to match the surrounding hand-built string XML's
+  indentation, since `upsertTrackResource` reparses/reprints the whole
+  document before anything reaches disk anyway) — **superseding the old
+  flat `<TrackMeshes>` list entirely** (Milestone 7 migrates the host to
+  read it this way; until then this is a real, expected, and already-planned
+  breaking change to host-side loading, uncaught by any current CTest
+  target). `otherModels` (everything except the primary) are written back
+  via `writeModelFragment` completely unedited. The dead, unused
+  `buildTrackResourceXml` legacy overload (no call sites anywhere) was
+  deleted rather than threading the new parameters through code nothing
+  called. `prepareTrackSave` sources the primary's stable id and the
+  `otherModels` list from `matching` (the freshly rescanned candidate at the
+  target Resource identity, not the passed-in `binding`) — mirrors ADR 0002
+  D4's "Save replaces one complete Track Resource and preserves the rest,"
+  generalized to per-Model granularity within `<Models>`.
+- No `TrackDefinition`-splitting-by-namespace-prefix helper was needed (the
+  scope revision above eliminated the multi-TrackData case this was meant
+  to invert).
+- Test: `editor_track_resources` — a freshly saved resource embeds exactly
+  one Model with a stable non-empty id and Type=Track meshes matching
+  `trackDataReference`; a hand-injected Physical Model (simulating
+  Milestone 6, not yet implemented) survives a bound Save byte-for-byte
+  (id/modelFile unchanged), with the primary's own id stable across saves;
+  hand-editing the file first requires binding fresh off a rescan, not
+  reusing a stale binding — the fingerprint guard correctly flags that as
+  an external change, exactly as designed; the old bare-shape XML fails to
+  load with an error naming `<Models>`. `ctest` (6/6 suites); a
+  `track_editor.exe` smoke launch confirms every built-in self-check still
+  reports `OK`. Commit.
 
 ---
 
