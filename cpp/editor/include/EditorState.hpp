@@ -81,6 +81,7 @@ public:
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
   const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
   const std::optional<std::string>& selectedReservationId() const { return selectedReservationId_; }
+  const std::optional<std::string>& selectedMeshObjectId() const { return selectedMeshObjectId_; }
 
   // ---- Curve management ----
   //
@@ -111,6 +112,12 @@ public:
   const Trigger* findTrigger(const std::string& id) const {
     for (const auto& trigger : track_.triggers)
       if (trigger.id == id) return &trigger;
+    return nullptr;
+  }
+
+  const DrivableMeshObjectPlacement* findMeshObjectPlacement(const std::string& id) const {
+    for (const auto& placement : track_.meshObjects)
+      if (placement.id == id) return &placement;
     return nullptr;
   }
 
@@ -158,9 +165,10 @@ public:
     const auto hit = hitTestPosition(planeU, planeV, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
-    // Points/mesh regions/zones/triggers share one selection (props panel).
+    // Points/mesh objects/zones/triggers share one selection (props panel).
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     return true;
   }
 
@@ -177,6 +185,7 @@ public:
     selection_ = {};
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   // Read-only counterpart to selectPositionAt: the nearest Position point within
@@ -212,6 +221,92 @@ public:
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::CrossSection;
   }
 
+  // ---- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5) ----
+  //
+  // Selection/on-canvas drag+rotate mirrors position points and the old (Milestone 2-removed) mesh
+  // region: click-to-select, plain drag moves (using the shared dragging_/dragMutated_/beginDrag/
+  // endDrag lifecycle, same as dragSelectedTo), shift+drag rotates (using the entity-agnostic
+  // rotateGestureActive_/beginRotateGesture/dragRotateGestureTo/endRotateGesture plumbing Milestone
+  // 1.3 built ahead of time for exactly this). Which plane coordinate a plain drag writes, and
+  // which rotation axis a shift+drag writes, both follow the active ProjectionMode (TopDown moves
+  // X/Z and yaws, Front moves X/Y and pitches, Side moves Y/Z and rolls) -- TopDownCanvas.cpp picks
+  // the field, this class only stores whatever it's told.
+  //
+  // No asset library/thumbnail/bounding-box preview exists here: the editor never loads a
+  // `.mppmodel` (see DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3's "`.mppmodel` loading is host-only"
+  // architecture note), so `modelId` is authored as a plain relative-path string (mirroring
+  // `TextureAsset::path`), picked via a native file-open dialog in main.cpp, not browsed from a
+  // pre-scanned list of known-valid ids.
+
+  void selectMeshObject(const std::string& id) {
+    selectedMeshObjectId_ = id;
+    selection_ = {};
+    selectedZoneId_.reset();
+    selectedTriggerId_.reset();
+  }
+
+  void clearMeshObjectSelection() { selectedMeshObjectId_.reset(); }
+
+  // Places a new instance of `modelId` at world (x, 0, z), facing/scaled at schema defaults.
+  // Selects the new placement and returns its id.
+  std::string addMeshObjectPlacement(const std::string& modelId, double x, double z) {
+    history_.push(track_);
+    DrivableMeshObjectPlacement placement;
+    placement.id = newMeshObjectId();
+    placement.modelId = modelId;
+    placement.position = tox::Vec3(x, 0.0, z);
+    track_.meshObjects.push_back(std::move(placement));
+    const std::string id = track_.meshObjects.back().id;
+    selectMeshObject(id);
+    return id;
+  }
+
+  // Mutates the placement by id via `mutate`, pushing one undo step first. Also re-clamps `scale`
+  // away from zero/negative (a zero or negative scale axis would collapse or mirror the referenced
+  // model in a way nothing downstream expects), mirroring editZone/editReservation's own
+  // re-clamp-after-mutate pattern.
+  template <typename Mutate>
+  bool editMeshObjectPlacement(const std::string& id, Mutate&& mutate) {
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == id; });
+    if (it == track_.meshObjects.end()) return false;
+    history_.push(track_);
+    mutate(*it);
+    it->scale.x = std::max(1e-3, it->scale.x);
+    it->scale.y = std::max(1e-3, it->scale.y);
+    it->scale.z = std::max(1e-3, it->scale.z);
+    return true;
+  }
+
+  bool deleteSelectedMeshObjectPlacement() {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    history_.push(track_);
+    track_.meshObjects.erase(it);
+    selectedMeshObjectId_.reset();
+    pruneStaleReferences();
+    return true;
+  }
+
+  // On-canvas plain-drag counterpart to addMeshObjectPlacement's initial position -- (planeU,
+  // planeV) are already projected into the active ProjectionMode's plane (see planeCoords/
+  // setPlaneCoords), same convention dragSelectedTo uses for position points. No-op (returns
+  // false) if nothing is selected or the id no longer resolves (stale selection).
+  bool dragSelectedMeshObjectTo(double planeU, double planeV) {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    setPlaneCoords(projectionMode_, it->position, planeU, planeV);
+    return true;
+  }
+
   // ---- Zones ----
   //
   // Full add/edit-fields/delete via a dedicated panel (ZonesPanel.hpp/.cpp),
@@ -227,6 +322,7 @@ public:
     selectedZoneId_ = id;
     selection_ = {};
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearZoneSelection() { selectedZoneId_.reset(); }
@@ -297,6 +393,7 @@ public:
     selectedTriggerId_ = id;
     selection_ = {};
     selectedZoneId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearTriggerSelection() { selectedTriggerId_.reset(); }
@@ -410,6 +507,7 @@ public:
     selection_ = {};
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearReservationSelection() { selectedReservationId_.reset(); }
@@ -489,6 +587,7 @@ public:
     selection_ = {};
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     explicitCurrentPathIndex_ = std::clamp(deleteIndex, 0, static_cast<int>(track_.paths.size()) - 1);
     clampStart();
     return true;
@@ -1089,12 +1188,13 @@ public:
   void selectPoint(int pathIndex, int pointIndex) {
     selection_ = {pathIndex, pointIndex};
     // Mirrors selectPositionAt's own clearing of the other three selection kinds -- a point,
-    // mesh region, zone, and trigger share one "the selected object" slot (only one of the four
+    // mesh object, zone, and trigger share one "the selected object" slot (only one of the four
     // is ever selected at a time), so picking one clears the other three. This one had been
     // missing the zone/trigger reset (only mesh was cleared), so clicking a roll/width/cross-
     // section handle while a zone or trigger was selected left both "selected" simultaneously.
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   // Deletes the currently selected point. For a position point, refuses to drop a path below 4,
@@ -1652,6 +1752,7 @@ private:
     createDraft_.clear();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     explicitCurrentPathIndex_ = 0;
   }
 
@@ -1858,6 +1959,13 @@ private:
     return firstUnusedId("res", used);
   }
 
+  // "mo" prefix, for drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5).
+  std::string newMeshObjectId() const {
+    std::set<std::string> used;
+    for (const auto& placement : track_.meshObjects) used.insert(placement.id);
+    return firstUnusedId("mo", used);
+  }
+
   // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix) -- each still
   // scans only its own collection, since the two record kinds never share an id namespace.
   std::string newConnectionId(const std::string& prefix) const {
@@ -1967,13 +2075,22 @@ private:
 
     std::set<std::string> pathIds;
     for (const auto& p : track_.paths) pathIds.insert(p.id);
-    // Every zone/trigger is path-hosted now (mesh-hosted zones/triggers were removed along with
-    // MeshRegion, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
-    track_.zones.erase(
-        std::remove_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return !pathIds.count(z.host.pathId); }),
-        track_.zones.end());
+    std::set<std::string> meshObjectIds;
+    for (const auto& p : track_.meshObjects) meshObjectIds.insert(p.id);
+    // A zone/trigger is path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md
+    // Milestone 3.5/5) -- only the host kind actually in use needs its own reference to still
+    // resolve; the other host's now-empty field (pathId for a meshObject host, meshObjectId for a
+    // path host) is never checked.
+    auto zoneHostValid = [&](const Zone& z) {
+      return z.host.kind == "meshObject" ? meshObjectIds.count(z.host.meshObjectId) > 0 : pathIds.count(z.host.pathId) > 0;
+    };
+    auto triggerHostValid = [&](const Trigger& t) {
+      return t.host.kind == "meshObject" ? meshObjectIds.count(t.host.meshObjectId) > 0 : pathIds.count(t.host.pathId) > 0;
+    };
+    track_.zones.erase(std::remove_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return !zoneHostValid(z); }),
+                       track_.zones.end());
     track_.triggers.erase(
-        std::remove_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return !pathIds.count(t.host.pathId); }),
+        std::remove_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return !triggerHostValid(t); }),
         track_.triggers.end());
     if (!track_.triggers.empty() &&
         std::none_of(track_.triggers.begin(), track_.triggers.end(),
@@ -2107,6 +2224,7 @@ private:
   std::optional<std::string> selectedZoneId_;
   std::optional<std::string> selectedTriggerId_;
   std::optional<std::string> selectedReservationId_;
+  std::optional<std::string> selectedMeshObjectId_;
   int explicitCurrentPathIndex_{0};
 };
 

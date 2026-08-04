@@ -722,11 +722,34 @@ after Milestone 4 lands.
 
 ## Milestone 5 — Editor placement UI
 
-**5.1 — Asset library / picker**
-- Files: new panel replacing `MeshPanel.cpp`'s role, `EditorState.*`.
-- Browse previously imported `.mppmodel` drivable-mesh-object sources by
-  `modelId`; pick one to begin placement.
-- Test: `ctest`; manual browse/pick smoke test. Commit.
+**5.1 — Asset library / picker** — done, scoped down (no library, a plain picker)
+- Files: `cpp/editor/include/EditorState.hpp` (new "Drivable mesh object
+  placements" section: `selectedMeshObjectId_`/`selectMeshObject`/
+  `clearMeshObjectSelection`/`addMeshObjectPlacement`/
+  `editMeshObjectPlacement`/`deleteSelectedMeshObjectPlacement`/
+  `dragSelectedMeshObjectTo`/`findMeshObjectPlacement`/`newMeshObjectId`,
+  folded into the existing 3-way exclusive canvas selection to make it
+  4-way again — every joint reset site updated; `pruneStaleReferences()`
+  fixed to check a zone/trigger's actual host kind instead of assuming
+  path-hosted, which would otherwise have wrongly deleted every
+  meshObject-hosted zone/trigger 3.5 added), `cpp/editor/main.cpp` (a
+  "Place Drivable Mesh Object..." File-menu item).
+- **No asset library** (no `MeshPanel.cpp`-successor panel, no
+  thumbnail/browse-by-`modelId` list): the editor never loads a
+  `.mppmodel` at all (Milestone 3's "`.mppmodel` loading is host-only"
+  architecture note applies to the editor too, not just `core`), so there
+  is nothing to generate a thumbnail or validate a `modelId` against.
+  Instead, `modelId` is authored as a plain relative-path string
+  (mirroring `TextureAsset::path`): the File-menu item opens a native
+  `.mppmodel` file picker and computes the path relative to the current
+  track's own save location when one is bound (`saveBinding`), or falls
+  back to the bare filename otherwise — the Properties panel (5.4) lets
+  it be retyped if that guess is wrong. Placement lands at the current
+  view center, mirroring the removed (Milestone 2) Import Mesh's own
+  placement convention.
+- Test: `ctest` (all 4 suites green); **manual browse/pick smoke test not
+  possible in this environment** (no display) — same caveat as Milestone
+  3.3/3.4's host-side work. Commit.
 
 **5.2 — Placement via canvas projection modes**
 - File: `cpp/editor/src/TopDownCanvas.cpp`.

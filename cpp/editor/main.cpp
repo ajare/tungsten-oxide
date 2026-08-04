@@ -2023,6 +2023,32 @@ int main(int, char**) {
           }
         }
         ImGui::Separator();
+        // Drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.1): the editor
+        // never loads a .mppmodel (see Milestone 3's "`.mppmodel` loading is host-only"
+        // architecture note), so there's no thumbnail/bounding-box preview or pre-scanned asset
+        // library here -- just a native file picker to fill in `modelId` as a plain relative-path
+        // string (mirroring TextureAsset::path), placed at the current view center like Import
+        // Mesh used to be.
+        if (ImGui::MenuItem("Place Drivable Mesh Object...")) {
+          const editor::FileDialogResult picked =
+              editor::showOpenFileDialog(L"Place Drivable Mesh Object", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}});
+          if (picked.ok) {
+            std::string modelId;
+            if (saveBinding.has_value()) {
+              std::error_code relError;
+              const std::filesystem::path relative = std::filesystem::relative(picked.path, saveBinding->xmlPath.parent_path(), relError);
+              modelId = !relError && !relative.empty() ? editor::pathToUtf8(relative) : editor::pathToUtf8(picked.path.filename());
+            } else {
+              // No save location bound yet -- best effort is the bare filename; the author can
+              // retype a real relative path once the track has a home (Properties panel).
+              modelId = editor::pathToUtf8(picked.path.filename());
+            }
+            const editor::WorldPoint2D center = topDownView.center();
+            editorState.addMeshObjectPlacement(modelId, center.x, center.z);
+            rebake();
+          }
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Export USD...")) {
           if (bakedTrack != nullptr) {
             const editor::FileDialogResult picked = editor::showSaveFileDialog(
