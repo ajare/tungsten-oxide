@@ -10,6 +10,8 @@
 | **Start** | The single authored path location and direction from which the runtime starting grid is derived. | Spawn, start point |
 | **Starting grid** | The runtime set of staggered surface-conforming poses assigned to the ship roster around the authored start. | Spawn grid, grid layout |
 | **Track surface** | Any drivable surface supplied by a path. | Ground, road |
+| **Model** | An externally modeled `.mppmodel` embedded in a Track resource's `<Models>` list, with per-mesh Type (Track/Physical/Decorative) and Visible metadata. Exactly one Model per Track is the primary (Track-type, carrying the baked road/rail surface and its own `<TrackData>`); any number of others are Physical/Decorative props. | Mesh, asset, drivable mesh object |
+| **Model placement** | An instance of a non-primary Model, with its own 6-DOF transform, referencing the Model by its embedded id. | Placement, mesh object, prop instance |
 
 ## Ships and movement
 
@@ -70,6 +72,7 @@
 - Each **Ship** owns its own **Lap progress**, **Lap timer**, and most recent **Checkpoint respawn** location.
 - A **Zone** or **Trigger** belongs to exactly one **Host surface**.
 - A **Texture asset** contains one **Texture path** and one or more **Texture tiles**, but no image bytes.
+- A **Track** embeds one or more **Models**, exactly one of which is primary; every **Model placement** references one non-primary **Model**.
 
 ## Example dialogue
 

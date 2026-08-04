@@ -470,7 +470,12 @@ Revised per the architecture note above: `core` only ever carries placements
 as authored data (3.1/3.2/3.5/3.6); all `.mppmodel` loading/transform/merge
 work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
 
-**3.1 — Authored placement type** — done (`99bcaef`)
+**3.1 — Authored placement type** — done (`99bcaef`); renamed to
+  `ModelPlacementDefinition`/`ModelPlacement` by `TRACK_MODEL_LIST_PLAN.md`
+  Milestone 1.1, once placements covered Physical AND Decorative model
+  instances, not just drivable ones — every reference to
+  `DrivableMeshObjectPlacementDefinition` below is that old name, left as
+  written at the time.
 - Files: `cpp/core/include/TrackDefinition.hpp`,
   `cpp/editor/include/EditorTrackDefinition.hpp`.
 - New type, `DrivableMeshObjectPlacementDefinition { id; modelId;
