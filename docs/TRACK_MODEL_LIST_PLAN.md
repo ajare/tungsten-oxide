@@ -120,88 +120,93 @@ next step.
 
 ## Milestone 0 — ADR
 
-**0.1 — Write `docs/adr/0003-model-xml-layer.md`**
+**0.1 — Write `docs/adr/0003-model-xml-layer.md`** — done (`27ca622`)
 - Records the ADR 0001 D1 reversal: why model-tool now needs an XML/Resource
   layer, referencing this plan and the grilling-session decision. Marks ADR
   0001 D1 as superseded (don't edit 0001's own text — add a superseded-by
   note, matching how schema version bumps are handled elsewhere).
+- Also records why the editor gets its own from-scratch, no-mpp-dependency
+  `.mppmodel` reader (Milestone 4) instead of linking `mpp::ModelSerializer`,
+  and that `cpp/model-xml` is a narrow fragment schema, not a full willpower
+  Resource system — D1's "no declarative resource files" reasoning still
+  applies at that larger scope.
 
 ---
 
 ## Milestone 1 — `cpp/core`: placement rename + multi-source union
 
-**1.1 — Rename `DrivableMeshObjectPlacementDefinition` → `ModelPlacementDefinition`**
+**1.1 — Rename `DrivableMeshObjectPlacementDefinition` → `ModelPlacementDefinition`** — done (`46af74e`)
 - Files: `cpp/core/include/TrackDefinition.hpp`, `cpp/editor/include/EditorTrackDefinition.hpp`,
-  every call site (`TrackLoader.cpp`, `EditorTrackDefinition.cpp`,
-  `EditorState.hpp`, `PropertiesPanel.cpp`, `TopDownCanvas.cpp`, `main.cpp`,
-  `TrackBake.cpp`, `Map.cpp`'s comments). Enumerate with
-  `grep -rl DrivableMeshObjectPlacementDefinition cpp/` before starting so no
-  site is missed.
-- Field/comment update only — `modelId`'s type and role stay a plain
-  authored string; update its doc comment to say it now names an embedded
-  `<Model id>` in the enclosing Track resource's `<Models>` list, not a raw
-  `.mppmodel` path. `EditorState`'s method names
-  (`addMeshObjectPlacement`/`editMeshObjectPlacement`/etc.) may keep their
-  current names (they're about *placements* generically already) or be
-  renamed to match — pick during implementation, not a design fork worth
-  re-grilling.
-- Test: `ctest` (rename only, no behavior change). Commit.
+  every call site (`TrackLoader.cpp`, `TrackBake.cpp`, `EditorTrackDefinition.cpp`,
+  `EditorState.hpp`, `PropertiesPanel.cpp`, `TopDownCanvas.cpp`, and
+  `tungsten-monoxide/{src,include}/TrackCollisionBuild.{cpp,h}`, found via
+  `grep -rl DrivableMeshObjectPlacementDefinition cpp/`). `main.cpp`/`Map.cpp`
+  turned out to have no direct references (only through the renamed type).
+- Field/comment update only, as planned — `modelId`'s type/role stayed a
+  plain authored string; both structs' doc comments now say `modelId` will
+  name an embedded `<Model id>`, not a raw path. `EditorState`'s method
+  names (`addMeshObjectPlacement`/etc.) were kept as-is, not renamed — they
+  already read as placement-generic.
+- Test: `ctest` (4/4 suites), plus a full workspace build (`track_editor`,
+  `TungstenMonoxide`, `model_tool`) to confirm no other consumer broke.
+  Commit.
 
-**1.2 — Multi-source TrackData union**
-- Files: `cpp/core/include/Track.hpp`, `cpp/core/src/Track.cpp` (or a new
-  `TrackUnion.cpp`).
-- New entry point, e.g. `TrackLoadResult Track::fromTrackDataFiles(const
-  std::vector<std::filesystem::path>& paths, bool detectSelfIntersections =
-  true)`: loads each path's `TrackDefinition` via the existing JSON parse
-  step (factored out of `fromJson` if it isn't already a separate function),
-  namespaces every id field across all authored lists (`paths`, `zones`,
-  `triggers`, `meshObjects`, `textureAssets`, `selfIntersectionOverrides`,
-  anything else carrying a cross-referencing id) with a `<index>:` prefix,
-  concatenates the arrays into one merged `TrackDefinition`, then calls the
-  existing `normalize()`+bake path exactly once. A single-element vector must
-  produce byte-identical output to today's `fromFile` (regression-tested
-  below) — this is a superset capability, not a parallel code path.
-- Test: `track_tests.cpp` — (a) single-file case matches existing
-  `fromFile` output exactly; (b) two-file case: paths/zones/triggers from
-  both sources are present with distinct namespaced ids, and the bake
-  succeeds with no id collisions even when both sources reused the same
-  raw ids internally. `ctest`. Commit.
+**1.2 — Multi-source TrackData union** — done (`69dfbb4`)
+- Files: `cpp/core/include/Track.hpp`, `cpp/core/src/TrackLoader.cpp` (added
+  directly here, in the same translation unit as the anonymous-namespace
+  `normalize()` it calls, rather than exposing `normalize()` through a new
+  header).
+- `Track::fromTrackDataFiles(const std::vector<std::filesystem::path>&,
+  bool detectSelfIntersections = true)`: loads+normalizes each path
+  independently, namespaces every id a source *owns* (paths/points/
+  reservations/textureAssets/meshObjects/zones/triggers/disjointSeams/
+  junctions/selfIntersectionOverrides) plus same-source references to them
+  with an `"<index>:"` prefix, concatenates the authored lists into one
+  `TrackDefinition`, then bakes exactly once. `ModelPlacementDefinition::modelId`
+  is deliberately never namespaced (see 1.1) — it names an embedded
+  `<Model id>` in the enclosing Track resource's `<Models>` list, an
+  outer-XML concept this source doesn't own. No namespacing at all is
+  applied for a single-path call, guaranteeing byte-identical output to
+  `fromFile`. Singular fields (name/samples/handling/start/version) come
+  from the first source only.
+- Test: `track_tests.cpp` — single-source call matches `fromFile` exactly
+  (path id, centerline size, zone/trigger counts); loading the SAME fixture
+  twice as two sources (a strong collision test, since its own ids are
+  identical across both "files") doubles every list with distinct
+  `"0:"`/`"1:"`-prefixed ids and bakes cleanly. `ctest` (4/4). Commit.
 
 ---
 
-## Milestone 2 — `cpp/model-xml`: shared `<Model>` fragment schema
+## Milestone 2 — `cpp/model-xml`: shared `<Model>` fragment schema — done (`acfc972`)
 
-**2.1 — New CMake target**
-- Files: `cpp/model-xml/CMakeLists.txt` (new static lib, TinyXML2 +
-  `<filesystem>` only, no mpp/AssImp/SDL — mirrors `cpp/core`'s "no
-  heavyweight deps" posture), `cpp/CMakeLists.txt` (add subdirectory).
-- `include/ModelXml.hpp`: `struct MeshMetadataXmlDefinition { std::string
-  name; MeshType type{MeshType::Physical}; bool visible{true}; };` (`enum
-  class MeshType { Track, Physical, Decorative }`), `struct
-  ModelXmlDefinition { std::optional<std::string> id; std::string modelFile;
-  std::optional<std::string> trackData; std::vector<MeshMetadataXmlDefinition>
-  meshes; }`.
-- Test: `ctest` (new empty-ish target, no tests yet — added in 2.2). Commit.
+**2.1 — New CMake target** — done
+- Files: `cpp/model-xml/CMakeLists.txt` (new static lib, TinyXML2 via
+  `Willpower::Common` — no vendored TinyXML2 copy of its own, no mpp/AssImp/
+  SDL, mirroring `cpp/core`'s "no heavyweight deps" posture), `cpp/CMakeLists.txt`
+  (added `add_subdirectory(model-xml)` ahead of `editor`/`model-tool`, plus a
+  header-comment entry).
+- `include/ModelXml.hpp` matches the planned shape (`MeshType`,
+  `MeshMetadataXmlDefinition`, `ModelXmlDefinition`) — `tinyxml2::XMLElement`
+  is only forward-declared in the header, so consumers of just the struct
+  types don't need a TinyXML2 include.
 
-**2.2 — Parse/write functions**
-- Files: `cpp/model-xml/src/ModelXml.cpp`.
-- `ModelXmlDefinition parseModelFragment(tinyxml2::XMLElement* modelElem)` /
-  `void writeModelFragment(tinyxml2::XMLElement* parent, const
-  ModelXmlDefinition&)` — operate on an already-located `<Model>` element (no
-  opinion on whether it's a document root or nested inside `<Models>`), so
-  the same function serves both the standalone-file case (2.3) and the
-  embedded case (Milestone 5). Validates the "`Type=Track` requires
-  `TrackData`" rule here, returning a clear error rather than at every call
-  site.
-- `ModelXmlDefinition loadStandaloneModelXml(const std::filesystem::path&)` /
-  `void saveStandaloneModelXml(const std::filesystem::path&, const
-  ModelXmlDefinition&)` — bare `<Model>` document root, no id written/read
-  (per the locked-in decision).
-- Test: `model_xml_tests` (new CTest target) — round-trip a
-  `ModelXmlDefinition` through standalone save/load byte-for-semantic
-  equality; confirm a `Type=Track` mesh with no `TrackData` fails to parse
-  with a clear error; confirm `id` is silently ignored/absent on standalone
-  round-trips. `ctest`. Commit.
+**2.2 — Parse/write functions** — done, folded into 2.1's commit
+- Files: `cpp/model-xml/src/ModelXml.cpp`, `tests/model_xml_tests.cpp` (new
+  CTest target `model_xml_tests`, plus a post-build `Willpower.Common.dll`
+  copy step — needed here since, unlike `editor_track_resource_tests`, this
+  target has no sibling executable already copying it into the same output
+  directory).
+- `parseModelFragment`/`writeModelFragment` operate on an already-located
+  `<Model>` element exactly as planned; `validateModelDefinition()` (the
+  "`Type=Track` requires `TrackData`" rule, plus a non-empty `ModelFile`
+  check) is called from both, and from `saveStandaloneModelXml` before any
+  file is touched.
+- Test: round-trip through `writeModelFragment`→`parseModelFragment`; the
+  exact `Definition/Models/Model×2` nesting shape from
+  `example_track_def.xml`; standalone save→load drops any `id` the caller
+  set and writes no `id` attribute at all; the Track-mesh-needs-TrackData
+  validation failure/success cases. `ctest` (5/5 suites — this raised the
+  count from 4). Commit.
 
 ---
 
