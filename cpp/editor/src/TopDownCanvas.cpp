@@ -1,6 +1,7 @@
 #include "TopDownCanvas.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -114,7 +115,6 @@ const ImU32 kWidthColor = IM_COL32(182, 255, 60, 255);
 const ImU32 kCrossSectionColor = IM_COL32(213, 140, 255, 255);
 const ImU32 kAuxHandleFillColor = IM_COL32(255, 255, 255, 255);
 const ImU32 kCreateDraftColor = IM_COL32(120, 230, 140, 255);
-const ImU32 kMeshFillColor = IM_COL32(90, 110, 70, 200);
 const ImU32 kMeshOutlineColor = IM_COL32(150, 190, 110, 255);
 const ImU32 kMeshSelectedOutlineColor = IM_COL32(255, 90, 90, 255);
 const ImU32 kRailEdgeColor = IM_COL32(255, 170, 40, 255);
@@ -696,34 +696,136 @@ const ImportedMppModel* loadCachedPlacementGeometry(const std::string& modelFile
   return it->second.has_value() ? &*it->second : nullptr;
 }
 
-void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
-                              const std::optional<std::string>& selectedMeshObjectId, ProjectionMode mode,
-                              const std::filesystem::path& modelBaseDir) {
-  for (const auto& placement : track.meshObjects) {
-    const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == placement.id;
-    const ImU32 outlineColor = isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor;
+// Axis-aligned extent (model local space) across every mesh's every vertex -- the source shape for
+// the placement's rendered bounding box. `valid` is false for an empty/degenerate model (no vertices
+// at all), distinct from a zero-size box.
+struct LocalAabb {
+  tox::Vec3 lo{std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+  tox::Vec3 hi{-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+  bool valid{false};
+};
 
-    // Real geometry (TRACK_MODEL_LIST_PLAN.md Milestone 4.2), drawn under the marker: every
-    // triangle of every mesh, transformed by the placement's 6-DOF transform and projected through
-    // the active plane -- same flat-fill convention every other filled shape on this canvas already
-    // uses (drawBakedPath/drawZones/etc.), not real lit 3D rendering.
+LocalAabb computeLocalAabb(const ImportedMppModel& geometry) {
+  LocalAabb box;
+  for (const ImportedMppMesh& mesh : geometry.meshes) {
+    for (const MppModelVertex& v : mesh.vertices) {
+      box.lo.x = std::min(box.lo.x, v.position.x);
+      box.lo.y = std::min(box.lo.y, v.position.y);
+      box.lo.z = std::min(box.lo.z, v.position.z);
+      box.hi.x = std::max(box.hi.x, v.position.x);
+      box.hi.y = std::max(box.hi.y, v.position.y);
+      box.hi.z = std::max(box.hi.z, v.position.z);
+      box.valid = true;
+    }
+  }
+  return box;
+}
+
+std::array<tox::Vec3, 8> aabbCorners(const LocalAabb& box) {
+  return {tox::Vec3(box.lo.x, box.lo.y, box.lo.z), tox::Vec3(box.hi.x, box.lo.y, box.lo.z), tox::Vec3(box.lo.x, box.hi.y, box.lo.z),
+         tox::Vec3(box.hi.x, box.hi.y, box.lo.z), tox::Vec3(box.lo.x, box.lo.y, box.hi.z), tox::Vec3(box.hi.x, box.lo.y, box.hi.z),
+         tox::Vec3(box.lo.x, box.hi.y, box.hi.z), tox::Vec3(box.hi.x, box.hi.y, box.hi.z)};
+}
+
+double cross2(const ImVec2& o, const ImVec2& a, const ImVec2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
+
+// Andrew's monotone chain: the 2D convex hull of `points`, counter-clockwise, first point not
+// repeated at the end. This is what turns 8 projected box corners into the box's actual on-screen
+// silhouette for whichever way it's rotated/viewed -- a plain projected min/max rectangle would be
+// wrong (too small) for anything but an axis-aligned, unrotated placement.
+std::vector<ImVec2> convexHull2D(std::vector<ImVec2> points) {
+  std::sort(points.begin(), points.end(), [](const ImVec2& a, const ImVec2& b) { return a.x != b.x ? a.x < b.x : a.y < b.y; });
+  points.erase(std::unique(points.begin(), points.end(), [](const ImVec2& a, const ImVec2& b) { return a.x == b.x && a.y == b.y; }),
+              points.end());
+  if (points.size() < 3) return points;
+  std::vector<ImVec2> hull(2 * points.size());
+  int k = 0;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    while (k >= 2 && cross2(hull[static_cast<std::size_t>(k - 2)], hull[static_cast<std::size_t>(k - 1)], points[i]) <= 0) --k;
+    hull[static_cast<std::size_t>(k++)] = points[i];
+  }
+  const int lower = k + 1;
+  for (std::size_t i = points.size() - 1; i-- > 0;) {
+    while (k >= lower && cross2(hull[static_cast<std::size_t>(k - 2)], hull[static_cast<std::size_t>(k - 1)], points[i]) <= 0) --k;
+    hull[static_cast<std::size_t>(k++)] = points[i];
+  }
+  hull.resize(static_cast<std::size_t>(k - 1));
+  return hull;
+}
+
+// Depth along the active ProjectionMode's own view direction (TopDown looks along (0,-1,0), Front
+// along (0,0,-1), Side along (1,0,0) -- this plan's locked-in camera convention), so painter's-
+// algorithm back-to-front sorting means "farthest along the direction the camera is looking, drawn
+// first" regardless of which mode is active, via one shared formula (dot(p, viewDir)) rather than a
+// per-mode special case.
+double viewDepth(ProjectionMode mode, const tox::Vec3& p) {
+  switch (mode) {
+    case ProjectionMode::Front: return -p.z;
+    case ProjectionMode::Side: return p.x;
+    case ProjectionMode::TopDown:
+    default: return -p.y;
+  }
+}
+
+ImU32 toFillColor(const EditorState::DisplayColor& c) {
+  return IM_COL32(static_cast<int>(c.r * 255.0f), static_cast<int>(c.g * 255.0f), static_cast<int>(c.b * 255.0f), 200);
+}
+
+void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, EditorState& state, ProjectionMode mode,
+                              const std::filesystem::path& modelBaseDir) {
+  const TrackDefinition& track = state.track();
+  const std::optional<std::string>& selectedMeshObjectId = state.selectedMeshObjectId();
+
+  // Back-to-front pass: every placement rendered as its bounding box's on-screen silhouette
+  // (TRACK_MODEL_LIST_PLAN.md follow-up -- solid colour, not real triangle geometry; the primary
+  // Track-type model is unaffected, since it's never a placement, only ever the ribbon
+  // drawBakedPath already draws), sorted farthest-from-camera-first so nearer instances correctly
+  // occlude farther ones regardless of authoring/insertion order.
+  struct DrawEntry {
+    const ModelPlacement* placement;
+    double depth;
+    std::vector<ImVec2> hull;  // empty when no geometry could be resolved this frame (falls back to marker-only)
+  };
+  std::vector<DrawEntry> entries;
+  entries.reserve(track.meshObjects.size());
+  for (const auto& placement : track.meshObjects) {
+    DrawEntry entry{&placement, viewDepth(mode, placement.position), {}};
     if (const std::string* modelFileReference = resolveModelFileReference(track, placement.modelId)) {
       if (const ImportedMppModel* geometry = loadCachedPlacementGeometry(*modelFileReference, modelBaseDir)) {
-        for (const ImportedMppMesh& mesh : geometry->meshes) {
-          for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-            const ImVec2 a = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i]].position)));
-            const ImVec2 b = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 1]].position)));
-            const ImVec2 c = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 2]].position)));
-            drawList->AddTriangleFilled(a, b, c, isSelected ? kMeshSelectedOutlineColor : kMeshFillColor);
-          }
+        const LocalAabb box = computeLocalAabb(*geometry);
+        if (box.valid) {
+          std::vector<ImVec2> projected;
+          projected.reserve(8);
+          for (const tox::Vec3& corner : aabbCorners(box))
+            projected.push_back(toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, corner))));
+          entry.hull = convexHull2D(std::move(projected));
         }
       }
     }
+    entries.push_back(std::move(entry));
+  }
+  std::sort(entries.begin(), entries.end(), [](const DrawEntry& a, const DrawEntry& b) { return a.depth > b.depth; });
+
+  for (const auto& entry : entries) {
+    if (entry.hull.size() < 3) continue;
+    const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == entry.placement->id;
+    drawList->AddConvexPolyFilled(entry.hull.data(), static_cast<int>(entry.hull.size()), toFillColor(state.placementColor(entry.placement->id)));
+    if (isSelected)
+      drawList->AddPolyline(entry.hull.data(), static_cast<int>(entry.hull.size()), kMeshSelectedOutlineColor, ImDrawFlags_Closed, 3.0f);
+  }
+
+  // Marker + facing-line pass, always drawn on top of every bounding box (a small fixed-size
+  // selection handle should never be occluded by a nearby instance's box) -- authored order is fine
+  // here, since these never meaningfully overlap the way two large boxes can.
+  for (const auto& placement : track.meshObjects) {
+    const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == placement.id;
+    const ImU32 outlineColor = isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor;
+    const ImU32 fillColor = toFillColor(state.placementColor(placement.id));
 
     const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placement.position));
     const ImVec2 diamond[4] = {ImVec2(center.x, center.y - kMeshObjectMarkerRadiusPx), ImVec2(center.x + kMeshObjectMarkerRadiusPx, center.y),
                                ImVec2(center.x, center.y + kMeshObjectMarkerRadiusPx), ImVec2(center.x - kMeshObjectMarkerRadiusPx, center.y)};
-    drawList->AddConvexPolyFilled(diamond, 4, kMeshFillColor);
+    drawList->AddConvexPolyFilled(diamond, 4, fillColor);
     drawList->AddPolyline(diamond, 4, outlineColor, ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
     const double facingRad = meshObjectRotationDeg(mode, placement) * std::numbers::pi / 180.0;
     const ImVec2 facingEnd(center.x + static_cast<float>(std::cos(facingRad)) * kMeshObjectFacingLengthPx,
@@ -2015,7 +2117,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (hoveredTrigger != nullptr) hoveredTriggerId = hoveredTrigger->id;
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId, mode);
-    drawMeshObjectPlacements(drawList, canvasOrigin, view, state.track(), state.selectedMeshObjectId(), mode, modelBaseDir);
+    drawMeshObjectPlacements(drawList, canvasOrigin, view, state, mode, modelBaseDir);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked, mode);
     // Self-intersection crossing markers, drawn right after the
     // physics-point dots and before the start marker, and

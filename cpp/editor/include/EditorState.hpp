@@ -23,6 +23,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -320,6 +321,25 @@ public:
     selectMeshObject(placementId);
     return placementId;
   }
+
+  // A placement's bounding-box display colour (TopDownCanvas.cpp's drawMeshObjectPlacements) --
+  // purely cosmetic session state, deliberately NOT part of `track_` (not undo-tracked, not
+  // serialized to TrackData JSON, unaffected by the outer <Models>-list-is-editor-only split
+  // either): a placement's colour has no meaning to core or the host, only to this editor's own
+  // canvas. Never explicitly set (`placementColorOverrides_` empty for that id) deterministically
+  // derives one from the placement's own id via randomColorForId -- "randomly-chosen initially"
+  // without needing separate storage for every placement's own generated default, and stable
+  // across reload/undo/redo since it's a pure function of the id string.
+  struct DisplayColor {
+    float r{1.0f}, g{1.0f}, b{1.0f};
+  };
+
+  DisplayColor placementColor(const std::string& id) const {
+    const auto it = placementColorOverrides_.find(id);
+    return it != placementColorOverrides_.end() ? it->second : randomColorForId(id);
+  }
+
+  void setPlacementColor(const std::string& id, DisplayColor color) { placementColorOverrides_[id] = color; }
 
   // Mutates the placement by id via `mutate`, pushing one undo step first. Also re-clamps `scale`
   // away from zero/negative (a zero or negative scale axis would collapse or mirror the referenced
@@ -2301,8 +2321,43 @@ private:
     return true;
   }
 
+  // Deterministic hash-seeded HSV->RGB, used by placementColor() above for any id with no explicit
+  // override -- fixed saturation/value keep every generated colour readable against the canvas'
+  // dark background and distinct from the selection-highlight colour, while the hue (and therefore
+  // the colour overall) varies with the id string.
+  static DisplayColor randomColorForId(const std::string& id) {
+    const std::size_t h = std::hash<std::string>{}(id);
+    const double hue = static_cast<double>(h % 360u);
+    constexpr double kSaturation = 0.55, kValue = 0.85;
+    const double c = kValue * kSaturation;
+    const double x = c * (1.0 - std::fabs(std::fmod(hue / 60.0, 2.0) - 1.0));
+    const double m = kValue - c;
+    double r = 0.0, g = 0.0, b = 0.0;
+    if (hue < 60.0) {
+      r = c;
+      g = x;
+    } else if (hue < 120.0) {
+      r = x;
+      g = c;
+    } else if (hue < 180.0) {
+      g = c;
+      b = x;
+    } else if (hue < 240.0) {
+      g = x;
+      b = c;
+    } else if (hue < 300.0) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    return DisplayColor{static_cast<float>(r + m), static_cast<float>(g + m), static_cast<float>(b + m)};
+  }
+
   TrackDefinition track_;
   History history_;
+  std::map<std::string, DisplayColor> placementColorOverrides_;
   std::vector<std::string> availableMaterials_;  // sorted qualified names; see setAvailableMaterials
   EditMode mode_{EditMode::Edit};
   ProjectionMode projectionMode_{ProjectionMode::TopDown};

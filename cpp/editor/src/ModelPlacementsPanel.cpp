@@ -27,6 +27,13 @@ void drawSelectedPlacementFields(EditorState& state, const std::string& id, bool
   changed |= ImGui::InputText("Model id", modelId, sizeof(modelId), kCommitOnEnter);
   changed |= ImGui::IsItemDeactivatedAfterEdit();
 
+  EditorState::DisplayColor color = state.placementColor(id);
+  float colorRgb[3] = {color.r, color.g, color.b};
+  ImGui::SetNextItemWidth(280);
+  if (ImGui::ColorEdit3("Bounding box color", colorRgb)) {
+    state.setPlacementColor(id, EditorState::DisplayColor{colorRgb[0], colorRgb[1], colorRgb[2]});
+  }
+
   double x = placement->position.x, y = placement->position.y, z = placement->position.z;
   ImGui::TextUnformatted("Position");
   ImGui::SetNextItemWidth(90);
