@@ -629,12 +629,9 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
 // Drawn/hit-tested directly against the AUTHORED `TrackDefinition::meshObjects` list, not `baked`
 // -- unlike paths/zones/triggers, core never compiles a placement into anything (see the plan's
 // "`.mppmodel` loading is host-only" architecture note), so there's no baked record to read, and
-// editing still works even when the track currently fails to bake. Each placement also gets a
-// fixed-size diamond marker plus a short line showing which way it currently faces (see
-// drawMeshObjectPlacements below for the bounding-box fill drawn under it), projected through the
-// active ProjectionMode like every other on-canvas entity.
-constexpr float kMeshObjectMarkerRadiusPx = 9.0f;
-constexpr float kMeshObjectFacingLengthPx = 16.0f;
+// editing still works even when the track currently fails to bake. Each placement renders as its
+// bounding box's solid-filled silhouette (see drawMeshObjectPlacements below) -- there's no separate
+// marker/handle, clicking anywhere inside that silhouette selects it (meshObjectAtWorld below).
 
 // TopDown -> yaw (rotation.x), Front -> pitch (rotation.y), Side -> roll (rotation.z) -- read-only
 // counterpart to EditorState's own dragSelectedMeshObjectRotationTo, which writes via the same
@@ -811,6 +808,10 @@ void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, 
   }
   std::sort(entries.begin(), entries.end(), [](const DrawEntry& a, const DrawEntry& b) { return a.depth > b.depth; });
 
+  // No marker/facing-line pass -- a placement with no resolvable geometry (missing/unloadable
+  // .mppmodel) simply doesn't render at all, same as it can't be hit-tested either (see
+  // meshObjectWorldHull/meshObjectAtWorld below): the bounding box IS the placement's on-canvas
+  // representation now, there's no separate always-visible handle to fall back to.
   for (const auto& entry : entries) {
     if (entry.hull.size() < 3) continue;
     const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == entry.placement->id;
@@ -818,43 +819,62 @@ void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, 
     if (isSelected)
       drawList->AddPolyline(entry.hull.data(), static_cast<int>(entry.hull.size()), kMeshSelectedOutlineColor, ImDrawFlags_Closed, 3.0f);
   }
-
-  // Marker + facing-line pass, always drawn on top of every bounding box (a small fixed-size
-  // selection handle should never be occluded by a nearby instance's box) -- authored order is fine
-  // here, since these never meaningfully overlap the way two large boxes can.
-  for (const auto& placement : track.meshObjects) {
-    const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == placement.id;
-    const ImU32 outlineColor = isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor;
-    const ImU32 fillColor = toFillColor(state.placementColor(placement.id));
-
-    const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placement.position));
-    const ImVec2 diamond[4] = {ImVec2(center.x, center.y - kMeshObjectMarkerRadiusPx), ImVec2(center.x + kMeshObjectMarkerRadiusPx, center.y),
-                               ImVec2(center.x, center.y + kMeshObjectMarkerRadiusPx), ImVec2(center.x - kMeshObjectMarkerRadiusPx, center.y)};
-    drawList->AddConvexPolyFilled(diamond, 4, fillColor);
-    drawList->AddPolyline(diamond, 4, outlineColor, ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
-    const double facingRad = meshObjectRotationDeg(mode, placement) * std::numbers::pi / 180.0;
-    const ImVec2 facingEnd(center.x + static_cast<float>(std::cos(facingRad)) * kMeshObjectFacingLengthPx,
-                           center.y + static_cast<float>(std::sin(facingRad)) * kMeshObjectFacingLengthPx);
-    drawList->AddLine(center, facingEnd, outlineColor, 2.0f);
-  }
 }
 
-// Nearest placement marker to a world point within `tolWorld`, topmost (later-added) wins on a tie
-// -- mirrors zoneAtWorld/triggerAtWorld's own reverse-iteration convention.
-const ModelPlacement* meshObjectAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld,
-                                                     ProjectionMode mode) {
-  const ModelPlacement* best = nullptr;
-  double bestDistSq = tolWorld * tolWorld;
-  for (auto it = track.meshObjects.rbegin(); it != track.meshObjects.rend(); ++it) {
-    const WorldPoint2D p = planeCoords(mode, it->position);
-    const double dx = worldX - p.x, dz = worldZ - p.z;
-    const double distSq = dx * dx + dz * dz;
-    if (distSq <= bestDistSq) {
-      bestDistSq = distSq;
-      best = &*it;
-    }
+double cross2World(const WorldPoint2D& o, const WorldPoint2D& a, const WorldPoint2D& b) {
+  return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+}
+
+// World-plane (not screen-projected) counterpart of the ImVec2 hull drawMeshObjectPlacements builds
+// above -- same corner set, same Andrew's-monotone-chain algorithm, just left in world coordinates
+// so meshObjectAtWorld below can hit-test a click without going through screen space at all.
+std::vector<WorldPoint2D> convexHull2DWorld(std::vector<WorldPoint2D> points) {
+  std::sort(points.begin(), points.end(), [](const WorldPoint2D& a, const WorldPoint2D& b) { return a.x != b.x ? a.x < b.x : a.z < b.z; });
+  points.erase(std::unique(points.begin(), points.end(), [](const WorldPoint2D& a, const WorldPoint2D& b) { return a.x == b.x && a.z == b.z; }),
+              points.end());
+  if (points.size() < 3) return points;
+  std::vector<WorldPoint2D> hull(2 * points.size());
+  int k = 0;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    while (k >= 2 && cross2World(hull[static_cast<std::size_t>(k - 2)], hull[static_cast<std::size_t>(k - 1)], points[i]) <= 0) --k;
+    hull[static_cast<std::size_t>(k++)] = points[i];
   }
-  return best;
+  const int lower = k + 1;
+  for (std::size_t i = points.size() - 1; i-- > 0;) {
+    while (k >= lower && cross2World(hull[static_cast<std::size_t>(k - 2)], hull[static_cast<std::size_t>(k - 1)], points[i]) <= 0) --k;
+    hull[static_cast<std::size_t>(k++)] = points[i];
+  }
+  hull.resize(static_cast<std::size_t>(k - 1));
+  return hull;
+}
+
+// A placement's bounding-box footprint in world-plane coordinates, empty if its geometry can't be
+// resolved this frame (mirrors drawMeshObjectPlacements' own resolve-and-skip logic exactly).
+std::vector<WorldPoint2D> meshObjectWorldHull(const TrackDefinition& track, const ModelPlacement& placement, ProjectionMode mode,
+                                              const std::filesystem::path& modelBaseDir) {
+  const std::string* modelFileReference = resolveModelFileReference(track, placement.modelId);
+  if (modelFileReference == nullptr) return {};
+  const ImportedMppModel* geometry = loadCachedPlacementGeometry(*modelFileReference, modelBaseDir);
+  if (geometry == nullptr) return {};
+  const LocalAabb box = computeLocalAabb(*geometry);
+  if (!box.valid) return {};
+  std::vector<WorldPoint2D> corners;
+  corners.reserve(8);
+  for (const tox::Vec3& corner : aabbCorners(box)) corners.push_back(planeCoords(mode, placementTransformPosition(placement, corner)));
+  return convexHull2DWorld(std::move(corners));
+}
+
+// Topmost placement whose bounding box contains the world point, topmost (later-added) wins on a
+// tie -- mirrors zoneAtWorld/triggerAtWorld's own reverse-iteration convention. Replaces the old
+// fixed-radius-around-the-origin marker pick now that there's no marker to click: "anywhere in the
+// bounding box selects it" instead.
+const ModelPlacement* meshObjectAtWorld(const TrackDefinition& track, double worldX, double worldZ, ProjectionMode mode,
+                                        const std::filesystem::path& modelBaseDir) {
+  for (auto it = track.meshObjects.rbegin(); it != track.meshObjects.rend(); ++it) {
+    const std::vector<WorldPoint2D> hull = meshObjectWorldHull(track, *it, mode, modelBaseDir);
+    if (hull.size() >= 3 && pointInWorldPolygon(hull, worldX, worldZ)) return &*it;
+  }
+  return nullptr;
 }
 
 // ---- Add-point context menu -------------------------------------------------------------------
@@ -1363,7 +1383,8 @@ struct JoinDragPreview {
 // around it.
 bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track* baked, const TrackBounds2D& preDragBounds,
                          const ImVec2& mouseLocal, double pickRadiusWorld, bool hovered, bool itemActive,
-                         std::optional<EditorState::OpenEndpointRef>& outWeldTarget, JoinDragPreview& outJoinDrag) {
+                         std::optional<EditorState::OpenEndpointRef>& outWeldTarget, JoinDragPreview& outJoinDrag,
+                         const std::filesystem::path& modelBaseDir) {
   const ProjectionMode mode = state.projectionMode();
   bool mutated = false;
   outWeldTarget = std::nullopt;
@@ -1453,9 +1474,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
           if (trigger != nullptr) {
             state.selectTrigger(trigger->id);
           } else {
-            // Mesh object placement markers: fixed-size, picked alongside zones/triggers, before
-            // the much-larger road ribbon.
-            const ModelPlacement* meshObject = meshObjectAtWorld(state.track(), world.x, world.z, pickRadiusWorld, mode);
+            // Mesh object placements: click anywhere inside a placement's bounding box, picked
+            // alongside zones/triggers, before the much-larger road ribbon.
+            const ModelPlacement* meshObject = meshObjectAtWorld(state.track(), world.x, world.z, mode, modelBaseDir);
             if (meshObject != nullptr) {
               state.selectMeshObject(meshObject->id);
             } else {
@@ -1962,7 +1983,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
   JoinDragPreview joinDrag;
   switch (state.mode()) {
     case EditMode::Edit: {
-      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered, itemActive, weldTarget, joinDrag);
+      mutated = handleEditModeInput(state, view, baked, bounds, mouseLocal, pickRadiusWorld, hovered, itemActive, weldTarget, joinDrag, modelBaseDir);
       if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) view.pan(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
       if (windowFocused && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
         if (state.selection().valid())
