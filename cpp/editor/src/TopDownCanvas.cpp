@@ -177,6 +177,13 @@ TrackBounds2D computeViewBounds(const TrackDefinition& track, const tox::Track* 
       bounds.maxZ = std::max(bounds.maxZ, p.z);
     }
   }
+  for (const auto& placement : track.meshObjects) {
+    const WorldPoint2D p = planeCoords(mode, placement.position);
+    bounds.minX = std::min(bounds.minX, p.x);
+    bounds.maxX = std::max(bounds.maxX, p.x);
+    bounds.minZ = std::min(bounds.minZ, p.z);
+    bounds.maxZ = std::max(bounds.maxZ, p.z);
+  }
   if (bounds.minX > bounds.maxX) return TrackBounds2D{-1.0, 1.0, -1.0, 1.0};
   return bounds;
 }
@@ -612,6 +619,73 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
     if (outline.size() >= 3 && pointInWorldPolygon(outline, worldX, worldZ)) return &*it;
   }
   return nullptr;
+}
+
+// ---- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.2) ------------
+//
+// Drawn/hit-tested directly against the AUTHORED `TrackDefinition::meshObjects` list, not `baked`
+// -- unlike paths/zones/triggers, core never compiles a placement into anything (see the plan's
+// "`.mppmodel` loading is host-only" architecture note), so there's no baked record to read, and
+// editing still works even when the track currently fails to bake. There's also no bounding-box or
+// real geometry to draw (the editor never loads the referenced `.mppmodel` either) -- just a fixed-
+// size diamond marker plus a short line showing which way it currently faces, projected through the
+// active ProjectionMode like every other on-canvas entity.
+constexpr float kMeshObjectMarkerRadiusPx = 9.0f;
+constexpr float kMeshObjectFacingLengthPx = 16.0f;
+
+// TopDown -> yaw (rotation.x), Front -> pitch (rotation.y), Side -> roll (rotation.z) -- matches
+// EditorState's own dragSelectedMeshObjectTo/setPlaneCoords convention for which axis a shift-drag
+// in each mode edits.
+double meshObjectRotationDeg(ProjectionMode mode, const DrivableMeshObjectPlacement& placement) {
+  switch (mode) {
+    case ProjectionMode::Front: return placement.rotation.y;
+    case ProjectionMode::Side: return placement.rotation.z;
+    case ProjectionMode::TopDown:
+    default: return placement.rotation.x;
+  }
+}
+void setMeshObjectRotationDeg(ProjectionMode mode, DrivableMeshObjectPlacement& placement, double degrees) {
+  switch (mode) {
+    case ProjectionMode::Front: placement.rotation.y = degrees; break;
+    case ProjectionMode::Side: placement.rotation.z = degrees; break;
+    case ProjectionMode::TopDown:
+    default: placement.rotation.x = degrees; break;
+  }
+}
+
+void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
+                              const std::optional<std::string>& selectedMeshObjectId, ProjectionMode mode) {
+  for (const auto& placement : track.meshObjects) {
+    const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == placement.id;
+    const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placement.position));
+    const ImU32 outlineColor = isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor;
+    const ImVec2 diamond[4] = {ImVec2(center.x, center.y - kMeshObjectMarkerRadiusPx), ImVec2(center.x + kMeshObjectMarkerRadiusPx, center.y),
+                               ImVec2(center.x, center.y + kMeshObjectMarkerRadiusPx), ImVec2(center.x - kMeshObjectMarkerRadiusPx, center.y)};
+    drawList->AddConvexPolyFilled(diamond, 4, kMeshFillColor);
+    drawList->AddPolyline(diamond, 4, outlineColor, ImDrawFlags_Closed, isSelected ? 3.0f : 1.5f);
+    const double facingRad = meshObjectRotationDeg(mode, placement) * std::numbers::pi / 180.0;
+    const ImVec2 facingEnd(center.x + static_cast<float>(std::cos(facingRad)) * kMeshObjectFacingLengthPx,
+                           center.y + static_cast<float>(std::sin(facingRad)) * kMeshObjectFacingLengthPx);
+    drawList->AddLine(center, facingEnd, outlineColor, 2.0f);
+  }
+}
+
+// Nearest placement marker to a world point within `tolWorld`, topmost (later-added) wins on a tie
+// -- mirrors zoneAtWorld/triggerAtWorld's own reverse-iteration convention.
+const DrivableMeshObjectPlacement* meshObjectAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld,
+                                                     ProjectionMode mode) {
+  const DrivableMeshObjectPlacement* best = nullptr;
+  double bestDistSq = tolWorld * tolWorld;
+  for (auto it = track.meshObjects.rbegin(); it != track.meshObjects.rend(); ++it) {
+    const WorldPoint2D p = planeCoords(mode, it->position);
+    const double dx = worldX - p.x, dz = worldZ - p.z;
+    const double distSq = dx * dx + dz * dz;
+    if (distSq <= bestDistSq) {
+      bestDistSq = distSq;
+      best = &*it;
+    }
+  }
+  return best;
 }
 
 // ---- Add-point context menu -------------------------------------------------------------------
@@ -1197,6 +1271,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
         state.clearSelection();
         state.clearZoneSelection();
         state.clearTriggerSelection();
+        state.clearMeshObjectSelection();
       } else {
         view.clearPhysicsSelection();
         // Zones checked before triggers: a zone is usually the smaller, more specific thing.
@@ -1209,17 +1284,24 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
           if (trigger != nullptr) {
             state.selectTrigger(trigger->id);
           } else {
-            // Nothing else was hit at this point (aux/position/physics/zone/trigger all missed),
-            // so clear every object selection before checking the road. Leaving a stale zone or
-            // trigger selected here blocked panDragActive just as a stale point selection did,
-            // making left-drag panning appear broken after selecting one.
-            state.deselectAll();
-            // Clicking the road itself (see pathAtWorld's
-            // comment): picked last since it's the biggest, least-specific target on the
-            // canvas. Selects that curve as "current" for the panels/dropdown.
-            const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
-            if (pathHit.has_value()) {
-              state.setCurrentPathIndex(*pathHit);
+            // Mesh object placement markers: fixed-size, picked alongside zones/triggers, before
+            // the much-larger road ribbon.
+            const DrivableMeshObjectPlacement* meshObject = meshObjectAtWorld(state.track(), world.x, world.z, pickRadiusWorld, mode);
+            if (meshObject != nullptr) {
+              state.selectMeshObject(meshObject->id);
+            } else {
+              // Nothing else was hit at this point (aux/position/physics/zone/trigger/mesh object
+              // all missed), so clear every object selection before checking the road. Leaving a
+              // stale selection here blocked panDragActive just as a stale point selection did,
+              // making left-drag panning appear broken after selecting one.
+              state.deselectAll();
+              // Clicking the road itself (see pathAtWorld's
+              // comment): picked last since it's the biggest, least-specific target on the
+              // canvas. Selects that curve as "current" for the panels/dropdown.
+              const auto pathHit = pathAtWorld(baked, world.x, world.z, pickRadiusWorld, mode);
+              if (pathHit.has_value()) {
+                state.setCurrentPathIndex(*pathHit);
+              }
             }
           }
         }
@@ -1229,7 +1311,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // a subsequent left drag pan from the road as well as from empty background; only actual
     // object selections reserve the gesture for their respective edit operation.
     panDragActive = !state.selection().valid() && !state.selectedZoneId().has_value() &&
-                    !state.selectedTriggerId().has_value();
+                    !state.selectedTriggerId().has_value() && !state.selectedMeshObjectId().has_value();
   }
 
   // Gated on itemActive (this canvas's own InvisibleButton captured the mouse-down), not just a
@@ -1416,10 +1498,43 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
       state.dragSelectedTriggerTTo(newT);
       mutated = true;
     }
-  } else if (state.dragging() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+  } else if (draggingGesture && state.selectedMeshObjectId().has_value() && !panDragActive) {
+    // On-canvas mesh object placement drag: plain drag moves it (shared dragging_/beginDrag
+    // lifecycle, same as every other on-canvas drag above); shift+drag rotates it about its own
+    // position instead, using the entity-agnostic rotateGestureActive_/beginRotateGesture/
+    // dragRotateGestureTo plumbing Milestone 1.3 built ahead of time for exactly this. Which
+    // rotation.x/y/z field a shift-drag writes follows the active ProjectionMode (see
+    // meshObjectRotationDeg/setMeshObjectRotationDeg above), same TopDown=yaw/Front=pitch/
+    // Side=roll split dragSelectedMeshObjectTo's plain-drag axes already use.
+    const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
+    if (placement != nullptr) {
+      const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
+      if (ImGui::GetIO().KeyShift) {
+        const WorldPoint2D origin = planeCoords(mode, placement->position);
+        if (!state.rotateGestureActive()) {
+          view.freezeBounds(preDragBounds);
+          state.beginRotateGesture(meshObjectRotationDeg(mode, *placement), angleFromOriginDeg(origin.x, origin.z, world.x, world.z));
+        }
+        const double newDeg = state.dragRotateGestureTo(angleFromOriginDeg(origin.x, origin.z, world.x, world.z));
+        state.editMeshObjectPlacement(*state.selectedMeshObjectId(),
+                                      [&](DrivableMeshObjectPlacement& p) { setMeshObjectRotationDeg(mode, p, newDeg); });
+      } else {
+        if (!state.dragging()) {
+          view.freezeBounds(preDragBounds);
+          state.beginDrag();
+        }
+        const WorldPoint2D snapped = view.snapWorldXZ(world);
+        state.dragSelectedMeshObjectTo(snapped.x, snapped.z);
+      }
+      mutated = true;
+    }
+  } else if ((state.dragging() || state.rotateGestureActive()) && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
     // Weld on release, consuming whatever hitTestOpenEndpoint last found during the drag above --
     // this frame's draggingGesture is typically already false by the time IsMouseReleased fires,
     // so weldTarget (unlike outWeldTarget) has to survive from the last frame that computed it.
+    // A no-op for anything that isn't a position-point drag (weldTarget stays empty), including a
+    // mesh object placement's plain drag or shift-drag rotate -- this one shared release path
+    // covers all of them, including ending whichever of dragging_/rotateGestureActive_ was active.
     if (weldTarget.has_value()) {
       const auto draggedEnd = state.selectedOpenEndpointEnd();
       if (draggedEnd.has_value())
@@ -1428,6 +1543,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     weldTarget.reset();
     weldExcludeTarget.reset();
     state.endDrag();
+    state.endRotateGesture();
     view.releaseBoundsFreeze();
   } else if (draggingGesture && panDragActive) {
     // Left-drag-on-empty-space pan -- decided at mousedown (see
@@ -1488,6 +1604,12 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 // to infinity. Returns nullopt if nothing is selected, or a selected id/index no longer resolves
 // (stale selection, or `baked` not ready yet).
 std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, const tox::Track* baked, ProjectionMode mode) {
+  if (state.selectedMeshObjectId().has_value()) {
+    const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
+    if (placement == nullptr) return std::nullopt;
+    const WorldPoint2D p = planeCoords(mode, placement->position);
+    return TrackBounds2D{p.x, p.x, p.z, p.z};
+  }
   if (state.selectedZoneId().has_value()) {
     if (baked == nullptr) return std::nullopt;
     for (const auto& zone : baked->zones) {
@@ -1679,6 +1801,8 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
           mutated = state.deleteSelectedZone() || mutated;
         else if (state.selectedTriggerId().has_value())
           mutated = state.deleteSelectedTrigger() || mutated;
+        else if (state.selectedMeshObjectId().has_value())
+          mutated = state.deleteSelectedMeshObjectPlacement() || mutated;
       }
       // Right-click context menu: a right-*click* (no drag) opens it instead of panning; a
       // real drag still pans, since ResetMouseDragDelta below only ever fires on release, after
@@ -1810,6 +1934,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (hoveredTrigger != nullptr) hoveredTriggerId = hoveredTrigger->id;
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId, mode);
+    drawMeshObjectPlacements(drawList, canvasOrigin, view, state.track(), state.selectedMeshObjectId(), mode);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked, mode);
     // Self-intersection crossing markers, drawn right after the
     // physics-point dots and before the start marker, and

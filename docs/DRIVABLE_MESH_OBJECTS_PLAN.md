@@ -751,21 +751,56 @@ after Milestone 4 lands.
   possible in this environment** (no display) — same caveat as Milestone
   3.3/3.4's host-side work. Commit.
 
-**5.2 — Placement via canvas projection modes**
+**5.2 — Placement via canvas projection modes** — done
 - File: `cpp/editor/src/TopDownCanvas.cpp`.
-- Wire drivable mesh object placements into Milestone 1's generalized
-  drag-to-move (1.2) and shift+drag-to-rotate (1.3): Top-down drag moves
-  X/Z and rotates yaw, Front drag moves X/Y and rotates pitch, Side drag
-  moves Y/Z and rotates roll.
-- Test: `ctest`; manual placement in all three modes. Commit.
+- Wired into Milestone 1's generalized drag-to-move (1.2, via
+  `dragSelectedMeshObjectTo`/`setPlaneCoords`) and shift+drag-to-rotate
+  (1.3, via `beginRotateGesture`/`dragRotateGestureTo`/`endRotateGesture`,
+  unused until now): Top-down drag moves X/Z and rotates yaw, Front drag
+  moves X/Y and rotates pitch, Side drag moves Y/Z and rotates roll
+  (`meshObjectRotationDeg`/`setMeshObjectRotationDeg` map `ProjectionMode`
+  to which `rotation.x`/`.y`/`.z` component a shift-drag edits).
+- Click-to-select (`meshObjectAtWorld`, hit-tested against a fixed-radius
+  marker, not a bounding box — there's no real geometry to hit-test
+  against, see 5.1) is wired into the same priority chain as zones/
+  triggers (after both, before the road ribbon), `Delete`/`Backspace`
+  deletes the selection, and `selectedObjectBounds`/`computeViewBounds`
+  both include placements now, so "zoom to selection" and canvas auto-fit
+  work for them too.
+- Rendering (since there's no real geometry): a fixed-size diamond marker
+  plus a short facing-direction line, reusing the leftover
+  `kMeshFillColor`/`kMeshOutlineColor`/`kMeshSelectedOutlineColor`
+  constants Milestone 2's Mesh-region removal left unused. Front/Side
+  rendering is the SAME function (already generalized through
+  `worldToScreenPlane`/`planeCoords`) — nothing further was needed for
+  5.3's basic case; 5.3 is only about SELECTED-placement-specific
+  treatment beyond this baseline (see its own entry).
+- The shared drag-release branch (previously gated on `state.dragging()`
+  alone, ending only `dragMutated_`) now also fires on
+  `state.rotateGestureActive()` and ends that gesture too — a plain
+  `state.dragging()`-only release would never have stopped a mesh
+  object's shift-drag rotate, since rotation uses the separate
+  `rotateGestureActive_` flag Milestone 1.3 introduced, not `dragging_`.
+- Test: `ctest` (all 4 suites green); manual placement/drag/rotate check
+  not possible in this environment (no display) — same caveat as 5.1.
+  Commit.
 
-**5.3 — Selected-mesh rendering in Front/Side modes**
-- File: `cpp/editor/src/TopDownCanvas.cpp` (or a Front/Side-specific render
-  path).
-- When a drivable mesh object is selected, render it (or its bounding box,
-  if full-mesh rendering there is too costly) alongside any shown path,
-  scaling with the view's Y axis.
-- Test: `ctest`; manual visual check. Commit.
+**5.3 — Selected-mesh rendering in Front/Side modes** — done, folded into 5.2
+- File: `cpp/editor/src/TopDownCanvas.cpp`.
+- Turned out to need no separate work: `drawMeshObjectPlacements` (5.2)
+  was written from the start on top of `worldToScreenPlane`/`planeCoords`,
+  the same ProjectionMode-generalized primitives every other on-canvas
+  entity already uses, so it draws correctly in Front/Side with no
+  mode-specific branch — the marker's screen position and its facing line
+  both already project through the active plane. There was never a
+  "bounding box, if full-mesh rendering is too costly" fallback to build,
+  since there's no real mesh to render at all (5.1's own scope note: the
+  editor never loads a `.mppmodel`) — the marker rendering IS the
+  lightweight stand-in the plan anticipated, and it's drawn always, not
+  gated on selection, going further than "when selected" asked for.
+- Test: `ctest` (all 4 suites green, no new test needed — same code path
+  5.2 already covers); manual visual check not possible in this
+  environment (no display). Commit.
 
 **5.4 — Properties panel fields**
 - File: `cpp/editor/src/PropertiesPanel.cpp`.
