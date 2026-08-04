@@ -64,6 +64,7 @@ set(EDITOR_SOURCES
   src/TopDownCanvas.cpp
   src/USDExport.cpp
   src/MppModelExport.cpp
+  src/MppModelImport.cpp
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/RandomTrack.cpp
@@ -111,6 +112,17 @@ target_include_directories(editor_track_resource_tests PRIVATE include third_par
 target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
+
+# Headless test for the from-scratch .mppmodel geometry reader (TRACK_MODEL_LIST_PLAN.md Milestone
+# 4) -- deliberately no Willpower/SDL/mpp dependency, matching MppModelImport.cpp/MppModelExport.cpp
+# themselves.
+add_executable(mpp_model_import_tests
+  tests/mpp_model_import_tests.cpp
+  src/MppModelImport.cpp
+  src/MppModelExport.cpp)
+target_include_directories(mpp_model_import_tests PRIVATE include third_party)
+target_link_libraries(mpp_model_import_tests PRIVATE core)
+add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
 
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)
