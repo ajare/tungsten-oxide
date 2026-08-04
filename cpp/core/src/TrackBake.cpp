@@ -22,7 +22,7 @@ constexpr double PI = 3.14159265358979323846, DEG2RAD = PI / 180.0;
 // Mirrors cpp/tungsten-monoxide/src/Map.cpp's placementTransformPosition/Normal exactly (same
 // yaw-about-Y, then pitch-about-X, then roll-about-Z convention), reimplemented independently since
 // core and tungsten-monoxide don't share this kind of file-local helper across binaries.
-Vec3 placementTransformPosition(const DrivableMeshObjectPlacementDefinition& placement, const Vec3& local) {
+Vec3 placementTransformPosition(const ModelPlacementDefinition& placement, const Vec3& local) {
   Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
   Vec3 rotated = applyAxisAngle(scaled, Vec3(0.0, 1.0, 0.0), placement.rotation.x * DEG2RAD);
   rotated = applyAxisAngle(rotated, Vec3(1.0, 0.0, 0.0), placement.rotation.y * DEG2RAD);
@@ -33,7 +33,7 @@ Vec3 placementTransformPosition(const DrivableMeshObjectPlacementDefinition& pla
 // A pure direction (no translation, no inverse-scale -- unlike a surface normal, an orientation
 // axis rotates with scale applied directly, not its inverse-transpose): scale then rotate, same
 // order/convention as placementTransformPosition above.
-Vec3 placementTransformDirection(const DrivableMeshObjectPlacementDefinition& placement, const Vec3& local) {
+Vec3 placementTransformDirection(const ModelPlacementDefinition& placement, const Vec3& local) {
   Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
   Vec3 rotated = applyAxisAngle(scaled, Vec3(0.0, 1.0, 0.0), placement.rotation.x * DEG2RAD);
   rotated = applyAxisAngle(rotated, Vec3(1.0, 0.0, 0.0), placement.rotation.y * DEG2RAD);
@@ -1178,7 +1178,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
     std::map<std::string, int> pathIds;
     for (size_t i = 0; i < track.definition.paths.size(); i++)
       pathIds.emplace(track.definition.paths[i].id, static_cast<int>(i));
-    std::map<std::string, const DrivableMeshObjectPlacementDefinition*> meshObjectsById;
+    std::map<std::string, const ModelPlacementDefinition*> meshObjectsById;
     for (const auto& placement : track.definition.meshObjects) meshObjectsById.emplace(placement.id, &placement);
 
     // A zone or trigger hosted on a drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md

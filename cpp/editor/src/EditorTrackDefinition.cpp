@@ -232,7 +232,7 @@ TrackDefinition normalize(const json& data) {
     for (const auto& raw : data.at("meshObjects")) {
       ++i;
       if (!raw.is_object()) continue;
-      DrivableMeshObjectPlacement placement;
+      ModelPlacement placement;
       placement.id = stringOr(raw, "id", "mo" + std::to_string(i));
       if (placement.id.empty()) placement.id = "mo" + std::to_string(i);
       placement.modelId = stringOr(raw, "modelId");
@@ -390,7 +390,7 @@ json pathToJson(const Path& path) {
   return out;
 }
 
-json meshObjectToJson(const DrivableMeshObjectPlacement& placement) {
+json meshObjectToJson(const ModelPlacement& placement) {
   return json{{"id", placement.id},
               {"modelId", placement.modelId},
               {"x", placement.position.x},

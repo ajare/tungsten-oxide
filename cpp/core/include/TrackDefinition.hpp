@@ -103,13 +103,17 @@ struct TextureAssetDefinition {
   int width{1}, height{1}, tileWidth{1}, tileHeight{1};
 };
 
-// An instance of an externally modeled 3D mesh (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3),
-// replacing the old flat 2D Mesh region. `modelId` references a `.mppmodel` resource by id -- the
-// geometry itself is never embedded in track JSON, and `core` never loads or compiles it (see the
-// plan's "`.mppmodel` loading is host-only" architecture note): this struct is pure authored data,
-// carried through loading/normalization unchanged for the game host to resolve into world-space
-// triangles at runtime. `rotation` is yaw/pitch/roll in degrees, applied in that order.
-struct DrivableMeshObjectPlacementDefinition {
+// An instance of an externally modeled 3D mesh (originally DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
+// 3; renamed and generalized by TRACK_MODEL_LIST_PLAN.md Milestone 1.1 to cover Physical AND
+// Decorative model instances, not just drivable ones), replacing the old flat 2D Mesh region.
+// `modelId` names an embedded `<Model id>` entry in the enclosing Track resource's `<Models>` list
+// (TRACK_MODEL_LIST_PLAN.md) -- not a raw `.mppmodel` path. The geometry itself is never embedded in
+// track JSON, and `core` never loads or compiles it, nor resolves `modelId` against the `<Models>`
+// list (see the plan's "`.mppmodel` loading is host-only"/"Models never enter `cpp/core`" architecture
+// notes): this struct is pure authored data, carried through loading/normalization unchanged for the
+// editor/game host to resolve into world-space triangles at runtime. `rotation` is yaw/pitch/roll in
+// degrees, applied in that order.
+struct ModelPlacementDefinition {
   std::string id, modelId;
   Vec3 position;
   Vec3 rotation;
@@ -182,7 +186,7 @@ struct TrackDefinition {
   int samples{400};
   std::vector<PathDefinition> paths;
   std::map<std::string, TextureAssetDefinition> textureAssets;
-  std::vector<DrivableMeshObjectPlacementDefinition> meshObjects;
+  std::vector<ModelPlacementDefinition> meshObjects;
   std::vector<ZoneDefinition> zones;
   std::vector<TriggerDefinition> triggers;
   std::vector<ConnectionDefinition> disjointSeams, junctions;

@@ -335,7 +335,7 @@ TrackDefinition normalize(const json& data, std::vector<TrackWarning>& warnings)
     for (const auto& raw : data.at("meshObjects")) {
       ++i;
       if (!raw.is_object()) continue;
-      DrivableMeshObjectPlacementDefinition placement;
+      ModelPlacementDefinition placement;
       placement.id = stringOr(raw, "id", "mo" + std::to_string(i));
       if (placement.id.empty()) placement.id = "mo" + std::to_string(i);
       placement.modelId = stringOr(raw, "modelId");

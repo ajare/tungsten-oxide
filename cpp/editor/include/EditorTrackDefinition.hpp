@@ -99,12 +99,16 @@ struct TextureAsset {
   int width{1}, height{1}, tileWidth{1}, tileHeight{1};
 };
 
-// Mirrors core's tox::DrivableMeshObjectPlacementDefinition (DRIVABLE_MESH_OBJECTS_PLAN.md
-// Milestone 3). `modelId` references a `.mppmodel` resource by id; neither the editor nor core ever
-// loads that file (see the plan's "`.mppmodel` loading is host-only" architecture note) -- this is
-// pure authored placement data, resolved into actual geometry only by the game host at runtime.
-// `rotation` is yaw/pitch/roll in degrees, applied in that order.
-struct DrivableMeshObjectPlacement {
+// Mirrors core's tox::ModelPlacementDefinition (originally DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
+// 3; renamed and generalized by TRACK_MODEL_LIST_PLAN.md Milestone 1.1 to cover Physical AND
+// Decorative model instances, not just drivable ones). `modelId` names an embedded `<Model id>`
+// entry in the enclosing Track resource's `<Models>` list (TRACK_MODEL_LIST_PLAN.md) -- not a raw
+// `.mppmodel` path. This struct itself is pure authored placement data; TRACK_MODEL_LIST_PLAN.md
+// Milestone 4 gives the editor its own from-scratch `.mppmodel` geometry reader to resolve/render a
+// placement's referenced model directly (reversing the older "editor never loads a `.mppmodel`"
+// note this comment used to carry) -- until that milestone lands, resolution is still host-only, as
+// it always has been. `rotation` is yaw/pitch/roll in degrees, applied in that order.
+struct ModelPlacement {
   std::string id, modelId;
   tox::Vec3 position;
   tox::Vec3 rotation;
@@ -183,7 +187,7 @@ struct TrackDefinition {
   int samples{400};
   std::vector<Path> paths;
   std::map<std::string, TextureAsset> textureAssets;
-  std::vector<DrivableMeshObjectPlacement> meshObjects;
+  std::vector<ModelPlacement> meshObjects;
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
   std::vector<Connection> disjointSeams, junctions;

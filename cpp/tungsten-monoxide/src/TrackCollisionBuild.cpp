@@ -83,8 +83,8 @@ float readFloat(int8_t const* bytes, size_t offset) {
 }
 
 // Local-to-world position: scale, then rotate (yaw about Y, then pitch about X, then roll about Z
-// -- DrivableMeshObjectPlacementDefinition's own documented convention), then translate.
-tox::Vec3 placementTransformPosition(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& local) {
+// -- ModelPlacementDefinition's own documented convention), then translate.
+tox::Vec3 placementTransformPosition(tox::ModelPlacementDefinition const& placement, tox::Vec3 const& local) {
   tox::Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
   constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
   tox::Vec3 rotated = tox::applyAxisAngle(scaled, tox::Vec3(0.0, 1.0, 0.0), placement.rotation.x * kDegToRad);
@@ -97,7 +97,7 @@ tox::Vec3 placementTransformPosition(tox::DrivableMeshObjectPlacementDefinition 
 // own inverse-transpose); a diagonal scale matrix's inverse-transpose is just 1/scale component-
 // wise -- so this divides by scale BEFORE rotating (the opposite order from position), then
 // renormalizes to undo scale's effect on magnitude.
-tox::Vec3 placementTransformNormal(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& localNormal) {
+tox::Vec3 placementTransformNormal(tox::ModelPlacementDefinition const& placement, tox::Vec3 const& localNormal) {
   tox::Vec3 unscaled(placement.scale.x != 0.0 ? localNormal.x / placement.scale.x : localNormal.x,
                      placement.scale.y != 0.0 ? localNormal.y / placement.scale.y : localNormal.y,
                      placement.scale.z != 0.0 ? localNormal.z / placement.scale.z : localNormal.z);

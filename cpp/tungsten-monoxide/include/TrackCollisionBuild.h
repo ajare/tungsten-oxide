@@ -33,8 +33,8 @@ float readFloat(std::int8_t const* bytes, std::size_t offset);
 // Placement local-to-world transforms (DRIVABLE_MESH_OBJECTS_PLAN.md's documented convention:
 // scale, then yaw about Y / pitch about X / roll about Z, then translate). Shared between collision
 // -triangle building here and Map.cpp's render-mesh-append pass, which must transform identically.
-tox::Vec3 placementTransformPosition(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& local);
-tox::Vec3 placementTransformNormal(tox::DrivableMeshObjectPlacementDefinition const& placement, tox::Vec3 const& localNormal);
+tox::Vec3 placementTransformPosition(tox::ModelPlacementDefinition const& placement, tox::Vec3 const& local);
+tox::Vec3 placementTransformNormal(tox::ModelPlacementDefinition const& placement, tox::Vec3 const& localNormal);
 
 // Every GeometryBatch id in `track.geometry` that must appear in a <TrackMeshes> selection --
 // i.e. exactly the set buildCollisionTriangles below requires as `selectedNames`. Exposed so a

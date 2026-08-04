@@ -115,7 +115,7 @@ public:
     return nullptr;
   }
 
-  const DrivableMeshObjectPlacement* findMeshObjectPlacement(const std::string& id) const {
+  const ModelPlacement* findMeshObjectPlacement(const std::string& id) const {
     for (const auto& placement : track_.meshObjects)
       if (placement.id == id) return &placement;
     return nullptr;
@@ -251,7 +251,7 @@ public:
   // Selects the new placement and returns its id.
   std::string addMeshObjectPlacement(const std::string& modelId, double x, double z) {
     history_.push(track_);
-    DrivableMeshObjectPlacement placement;
+    ModelPlacement placement;
     placement.id = newMeshObjectId();
     placement.modelId = modelId;
     placement.position = tox::Vec3(x, 0.0, z);
@@ -268,7 +268,7 @@ public:
   template <typename Mutate>
   bool editMeshObjectPlacement(const std::string& id, Mutate&& mutate) {
     const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
-                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == id; });
+                                 [&](const ModelPlacement& p) { return p.id == id; });
     if (it == track_.meshObjects.end()) return false;
     history_.push(track_);
     mutate(*it);
@@ -281,7 +281,7 @@ public:
   bool deleteSelectedMeshObjectPlacement() {
     if (!selectedMeshObjectId_.has_value()) return false;
     const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
-                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
     if (it == track_.meshObjects.end()) return false;
     history_.push(track_);
     track_.meshObjects.erase(it);
@@ -297,7 +297,7 @@ public:
   bool dragSelectedMeshObjectTo(double planeU, double planeV) {
     if (!selectedMeshObjectId_.has_value()) return false;
     const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
-                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
     if (it == track_.meshObjects.end()) return false;
     if (!dragMutated_) {
       history_.push(track_);
@@ -319,7 +319,7 @@ public:
   bool dragSelectedMeshObjectRotationTo(double degrees) {
     if (!selectedMeshObjectId_.has_value()) return false;
     const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
-                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
     if (it == track_.meshObjects.end()) return false;
     if (!dragMutated_) {
       history_.push(track_);

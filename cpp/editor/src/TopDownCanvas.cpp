@@ -637,7 +637,7 @@ constexpr float kMeshObjectFacingLengthPx = 16.0f;
 // counterpart to EditorState's own dragSelectedMeshObjectRotationTo, which writes via the same
 // mode-to-axis mapping (duplicated there rather than shared, since that one also owns the
 // push-history-once-per-gesture bookkeeping this free function has no business doing).
-double meshObjectRotationDeg(ProjectionMode mode, const DrivableMeshObjectPlacement& placement) {
+double meshObjectRotationDeg(ProjectionMode mode, const ModelPlacement& placement) {
   switch (mode) {
     case ProjectionMode::Front: return placement.rotation.y;
     case ProjectionMode::Side: return placement.rotation.z;
@@ -665,9 +665,9 @@ void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, 
 
 // Nearest placement marker to a world point within `tolWorld`, topmost (later-added) wins on a tie
 // -- mirrors zoneAtWorld/triggerAtWorld's own reverse-iteration convention.
-const DrivableMeshObjectPlacement* meshObjectAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld,
+const ModelPlacement* meshObjectAtWorld(const TrackDefinition& track, double worldX, double worldZ, double tolWorld,
                                                      ProjectionMode mode) {
-  const DrivableMeshObjectPlacement* best = nullptr;
+  const ModelPlacement* best = nullptr;
   double bestDistSq = tolWorld * tolWorld;
   for (auto it = track.meshObjects.rbegin(); it != track.meshObjects.rend(); ++it) {
     const WorldPoint2D p = planeCoords(mode, it->position);
@@ -1279,7 +1279,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
           } else {
             // Mesh object placement markers: fixed-size, picked alongside zones/triggers, before
             // the much-larger road ribbon.
-            const DrivableMeshObjectPlacement* meshObject = meshObjectAtWorld(state.track(), world.x, world.z, pickRadiusWorld, mode);
+            const ModelPlacement* meshObject = meshObjectAtWorld(state.track(), world.x, world.z, pickRadiusWorld, mode);
             if (meshObject != nullptr) {
               state.selectMeshObject(meshObject->id);
             } else {
@@ -1500,7 +1500,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // meshObjectRotationDeg above, and EditorState::dragSelectedMeshObjectRotationTo which
     // actually performs the write), same TopDown=yaw/Front=pitch/Side=roll split
     // dragSelectedMeshObjectTo's plain-drag axes already use.
-    const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
+    const ModelPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
     if (placement != nullptr) {
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
       if (ImGui::GetIO().KeyShift) {
@@ -1598,7 +1598,7 @@ bool handleCreateModeInput(EditorState& state, const TopDownView& view, const Im
 // (stale selection, or `baked` not ready yet).
 std::optional<TrackBounds2D> selectedObjectBounds(const EditorState& state, const tox::Track* baked, ProjectionMode mode) {
   if (state.selectedMeshObjectId().has_value()) {
-    const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
+    const ModelPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
     if (placement == nullptr) return std::nullopt;
     const WorldPoint2D p = planeCoords(mode, placement->position);
     return TrackBounds2D{p.x, p.x, p.z, p.z};

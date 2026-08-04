@@ -336,7 +336,7 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
 // Milestone 5.1's own scope note) the editor never loads a `.mppmodel` and so has no way to
 // validate a typed id against anything, only round-trip whatever string is entered.
 void drawMeshObjectFields(EditorState& state, const std::string& id, bool& mutated) {
-  const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(id);
+  const ModelPlacement* placement = state.findMeshObjectPlacement(id);
   if (placement == nullptr) return;
   ImGui::Text("Drivable Mesh Object: %s", id.c_str());
 
@@ -390,7 +390,7 @@ void drawMeshObjectFields(EditorState& state, const std::string& id, bool& mutat
   changed |= ImGui::IsItemDeactivatedAfterEdit();
 
   if (changed) {
-    mutated |= state.editMeshObjectPlacement(id, [&](DrivableMeshObjectPlacement& p) {
+    mutated |= state.editMeshObjectPlacement(id, [&](ModelPlacement& p) {
       p.modelId = modelId;
       p.position = tox::Vec3(x, y, z);
       p.rotation = tox::Vec3(yaw, pitch, roll);
