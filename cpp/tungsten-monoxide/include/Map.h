@@ -13,17 +13,25 @@
 
 #include "Ship.hpp"
 #include "Track.hpp"
+#include "TrackCollisionBuild.h"
 
 class Map : public applib::Map {
   friend class MapTungstenMonoxideDefinitionFactory;
 
   wp::Logger* mwLogger;
 
-  // Definition-carried relative filenames and the exact model mesh ids classified as drivable.
-  // Composite resources lose their normal `source`, so these cannot use a location attribute.
+  // Definition-carried relative filenames for the primary (Type=Track) embedded Model. Composite
+  // resources lose their normal `source`, so these cannot use a location attribute. The road's own
+  // collidable-mesh selection is derived straight from the baked Track (mono::collidableGeometryBatchIds)
+  // rather than read from XML -- TRACK_MODEL_LIST_PLAN.md Milestone 7 retired the old flat
+  // <TrackMeshes> list this class used to carry (mTrackMeshNames) in favor of that derivation, which
+  // was always required to equal it anyway (see TrackCollisionBuild.cpp's old cross-check).
   std::string mModelFileName;
   std::string mTrackDataFileName;
-  std::vector<std::string> mTrackMeshNames;
+  // Every <Model> in the Track resource's <Models> list, including the primary -- resolves a
+  // placement's `modelId` (an embedded Model's own id, not a raw path) to its .mppmodel and each
+  // mesh's Type/Visible metadata. See TrackCollisionBuild.h's EmbeddedModelRef.
+  std::vector<mono::EmbeddedModelRef> mEmbeddedModels;
   std::shared_ptr<tox::Track> mTrack;
 
   // Eight poses regenerated from schema-10 metadata and settled onto selected model triangles

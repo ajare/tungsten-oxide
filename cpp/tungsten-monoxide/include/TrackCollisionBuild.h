@@ -22,6 +22,44 @@
 
 namespace mono {
 
+// A Track resource's <Models> list (TRACK_MODEL_LIST_PLAN.md), parsed independently of
+// cpp/model-xml (which this DLL deliberately doesn't link -- see that plan's architecture notes on
+// why the editor/model-tool's TinyXML2-based fragment schema and this host's own wp::XmlNode-based
+// parsing stay two separate implementations of the same documented format). `EmbeddedModelRef` is
+// the minimal slice this module needs: enough to resolve a placement's `modelId` (which now names
+// an embedded <Model id>, not a raw path) to the .mppmodel it references, and each of that model's
+// meshes' own Type/Visible metadata -- superseding cpp/model-tool's old CollidableFlag.hpp
+// name-suffix convention entirely (Milestone 7).
+enum class ModelMeshType { Track,
+                           Physical,
+                           Decorative };
+
+struct ModelMeshMeta {
+  std::string name;
+  ModelMeshType type{ModelMeshType::Physical};
+  bool visible{true};
+};
+
+struct EmbeddedModelRef {
+  std::string id;
+  std::string modelFileReference;  // <ModelFile> text, relative to the Track resource's own directory
+  std::vector<ModelMeshMeta> meshes;
+};
+
+// Resolves a placement's `modelId` to a relative ModelFile reference by looking it up in
+// `embeddedModels` by id. Falls back to treating `modelId` as the reference itself when no match is
+// found (including when `embeddedModels` is empty) -- this is what lets
+// cpp/app/tools/mesh_physics_diag.cpp keep working unchanged: it builds a collision surface straight
+// from a CLI-supplied TrackData JSON with no Resources XML/<Models> list to parse at all, so its
+// placements' `modelId` is still a direct relative path, exactly as it always was.
+std::string resolveModelFileReference(std::string const& modelId, std::vector<EmbeddedModelRef> const& embeddedModels);
+
+// Looks up one mesh's own Type/Visible metadata by (placement modelId, mesh name). Returns nullptr
+// when no embedded Model matches `modelId` at all (same CLI-tool fallback as above) OR when the
+// Model is found but doesn't mention this particular mesh name -- callers default an absent result
+// to Physical/visible, matching model-tool's own "no XML metadata yet" default.
+ModelMeshMeta const* findMeshMeta(std::string const& modelId, std::string const& meshName, std::vector<EmbeddedModelRef> const& embeddedModels);
+
 // Throws std::runtime_error if `value` is empty, absolute, or escapes `root` via "..".
 std::filesystem::path safeRelativePath(std::filesystem::path const& root, std::string const& value, char const* field);
 
@@ -66,12 +104,16 @@ struct MeshObjectModel {
 
 std::shared_ptr<MeshObjectModel> loadMeshObjectModel(mpp::ResourceManager* resourceMgr, std::filesystem::path const& path);
 
-// Every collidable sub-mesh's triangles, transformed into world space by its placement, across
-// every placement in `track.definition.meshObjects`. `nextSurfaceId` is threaded through (not
-// reset) so every triangle in the final BVH carries a unique id; `cache` persists across calls so a
-// model referenced by several placements is only read from disk once.
+// Every Type=Physical sub-mesh's triangles (Type=Decorative is excluded -- render-only, matching
+// the old CollidableFlag.hpp decorative marker it replaces; Type=Track is never expected on a
+// placement, only the primary model), transformed into world space by its placement, across every
+// placement in `track.definition.meshObjects`. `nextSurfaceId` is threaded through (not reset) so
+// every triangle in the final BVH carries a unique id; `cache` persists across calls so a model
+// referenced by several placements is only read from disk once. `embeddedModels` resolves each
+// placement's `modelId` and its meshes' Type -- see resolveModelFileReference/findMeshMeta above for
+// the fallback when it's empty (mesh_physics_diag.cpp).
 std::vector<tox::CollisionTriangle> buildMeshObjectCollisionTriangles(
     tox::Track const& track, std::filesystem::path const& root, mpp::ResourceManager* resourceMgr, int& nextSurfaceId,
-    std::map<std::string, std::shared_ptr<MeshObjectModel>>& cache);
+    std::map<std::string, std::shared_ptr<MeshObjectModel>>& cache, std::vector<EmbeddedModelRef> const& embeddedModels = {});
 
 }  // namespace mono

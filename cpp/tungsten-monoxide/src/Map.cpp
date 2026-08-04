@@ -79,12 +79,13 @@ string resolveMaterialMppName(Map* map, string const& materialKey) {
 // road's own mesh names, never collide in the single shared `modelStream`.
 void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
                                   mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream,
-                                  std::map<string, shared_ptr<mono::MeshObjectModel>>& cache) {
+                                  std::map<string, shared_ptr<mono::MeshObjectModel>>& cache, vector<mono::EmbeddedModelRef> const& embeddedModels) {
   for (auto const& placement : track.definition.meshObjects) {
     auto cached = cache.find(placement.modelId);
     if (cached == cache.end()) {
       try {
-        filesystem::path const modelPath = mono::safeRelativePath(root, placement.modelId, "modelId");
+        filesystem::path const modelPath =
+            mono::safeRelativePath(root, mono::resolveModelFileReference(placement.modelId, embeddedModels), "modelId");
         cached = cache.emplace(placement.modelId, mono::loadMeshObjectModel(resourceMgr, modelPath)).first;
       } catch (exception const& error) {
         throw application::resourcesystem::ResourceException(map, error.what());
@@ -96,6 +97,12 @@ void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const
       if (model.serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles) continue;
 
       string const rawName = model.serializer.getName(meshIndex);
+      // Visible=false is game-hidden (unlike the editor's viewport, which renders it regardless --
+      // TRACK_MODEL_LIST_PLAN.md's locked-in semantics). Unknown metadata defaults to visible,
+      // matching model-tool's own "no XML metadata yet" default.
+      mono::ModelMeshMeta const* meta = mono::findMeshMeta(placement.modelId, rawName, embeddedModels);
+      if (meta != nullptr && !meta->visible) continue;
+
       string materialMppName;
       try {
         materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
@@ -187,7 +194,12 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     throw application::resourcesystem::ResourceException(this, error.what());
   }
 
-  tox::TrackLoadResult loaded = tox::Track::fromFile(dataPath);
+  // Track::fromTrackDataFiles (TRACK_MODEL_LIST_PLAN.md Milestone 1.2) rather than fromFile: only
+  // one Track-type Model is currently supported (see MapTungstenMonoxideDefinitionFactory.cpp's own
+  // "more than one Type=Track Model" guard), so this is a single-element call today -- byte-identical
+  // to fromFile -- but telegraphs that a future multi-Model union is this same entry point's job, not
+  // a new one.
+  tox::TrackLoadResult loaded = tox::Track::fromTrackDataFiles({dataPath});
   if (!loaded)
     throw application::resourcesystem::ResourceException(this, "failed to load TrackData '" + dataPath.string() + "': " + loaded.error);
   for (auto const& warning : loaded.warnings)
@@ -201,25 +213,33 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     throw application::resourcesystem::ResourceException(this, "failed to load ModelFile '" + modelPath.string() + "': " + error.what());
   }
 
+  // Collidable-mesh selection is derived straight from the baked Track (same as
+  // cpp/app/tools/mesh_physics_diag.cpp's own buildCollisionSurface()) rather than read from XML --
+  // the old flat <TrackMeshes> list this replaces was always required to equal this exact set anyway
+  // (see TrackCollisionBuild.cpp's git history), so deriving it loses no real validation: the
+  // dedicated per-mesh-name/vertex-data cross-check against the physical .mppmodel content, just
+  // below, still fires independently of where the name list came from.
+  vector<string> const selectedNames = mono::collidableGeometryBatchIds(*mTrack);
   vector<tox::CollisionTriangle> collisionTriangles;
-  int nextSurfaceId = static_cast<int>(mTrackMeshNames.size());
+  int nextSurfaceId = static_cast<int>(selectedNames.size());
   map<string, shared_ptr<mono::MeshObjectModel>> modelCache;
   try {
-    collisionTriangles = mono::buildCollisionTriangles(serializer, *mTrack, mTrackMeshNames);
-    // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.3): merged into the
-    // same BVH as the road's own collision triangles above, each collidable sub-mesh transformed by
-    // its placement. `modelCache` is scoped to this one load() call -- nothing outside it needs a
-    // loaded placement model, so there's no reason to keep it (or the mpp::ModelSerializer instances
-    // it owns) alive any longer than building this BVH takes.
-    auto meshObjectTriangles = mono::buildMeshObjectCollisionTriangles(*mTrack, root, resourceMgr, nextSurfaceId, modelCache);
+    collisionTriangles = mono::buildCollisionTriangles(serializer, *mTrack, selectedNames);
+    // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.3, now Type=Physical-
+    // driven -- TRACK_MODEL_LIST_PLAN.md Milestone 7): merged into the same BVH as the road's own
+    // collision triangles above, each collidable sub-mesh transformed by its placement. `modelCache`
+    // is scoped to this one load() call -- nothing outside it needs a loaded placement model, so
+    // there's no reason to keep it (or the mpp::ModelSerializer instances it owns) alive any longer
+    // than building this BVH takes.
+    auto meshObjectTriangles = mono::buildMeshObjectCollisionTriangles(*mTrack, root, resourceMgr, nextSurfaceId, modelCache, mEmbeddedModels);
     collisionTriangles.insert(collisionTriangles.end(), make_move_iterator(meshObjectTriangles.begin()), make_move_iterator(meshObjectTriangles.end()));
   } catch (exception const& error) {
     throw application::resourcesystem::ResourceException(this, error.what());
   }
   if (collisionTriangles.empty())
     throw application::resourcesystem::ResourceException(
-        this, "TrackMeshes produced no collision triangles -- this track has no drivable/collidable geometry "
-              "and cannot be loaded; re-export it from the editor after adding a path or mesh region.");
+        this, "this track has no drivable/collidable geometry and cannot be loaded; re-export it from "
+              "the editor after adding a path or mesh region.");
 
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
@@ -246,7 +266,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     try {
       materialMppName = resolveMaterialMppName(this, serializer.getMaterial(i));
     } catch (exception const& error) {
-      if (find(mTrackMeshNames.begin(), mTrackMeshNames.end(), serializer.getName(i)) != mTrackMeshNames.end())
+      if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
         throw application::resourcesystem::ResourceException(
             this, "listed track mesh '" + serializer.getName(i) + "' has unresolved material: " + error.what());
       mwLogger->warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
@@ -265,7 +285,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 
   // Drivable mesh object placements (Milestone 3.4): reuses `modelCache` from the collision-mesh
   // pass above, so a model already loaded there isn't reopened from disk here.
-  appendMeshObjectRenderMeshes(this, mwLogger, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache);
+  appendMeshObjectRenderMeshes(this, mwLogger, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache, mEmbeddedModels);
 
   mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
   mMppResource->acquire(this);

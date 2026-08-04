@@ -215,13 +215,29 @@
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">
-                    <ModelFile>New_Track.mppmodel</ModelFile>
-                    <TrackData>New_Track.json</TrackData>
-                    <TrackMeshes>
-                        <Mesh>path-0-surface</Mesh>
-                        <Mesh>path-0-rail-left</Mesh>
-                        <Mesh>path-0-rail-right</Mesh>
-                    </TrackMeshes>
+                    <Models>
+                        <Model id="track">
+                            <ModelFile>New_Track.mppmodel</ModelFile>
+                            <TrackData>New_Track.json</TrackData>
+                            <Meshes>
+                                <Mesh>
+                                    <Name>path-0-surface</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                                <Mesh>
+                                    <Name>path-0-rail-left</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                                <Mesh>
+                                    <Name>path-0-rail-right</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                            </Meshes>
+                        </Model>
+                    </Models>
                 </Definition>
             </Definitions>
         </Resource>

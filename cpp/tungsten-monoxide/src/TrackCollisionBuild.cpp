@@ -23,15 +23,6 @@ bool matchesExportedFloat(double expected, double actual) {
   return static_cast<double>(static_cast<float>(expected)) == actual;
 }
 
-// Mirrors cpp/model-tool/include/CollidableFlag.hpp's naming convention exactly, but reimplemented
-// independently -- see Map.cpp's own comment on this same constant for why.
-constexpr char kDecorativeMeshNameSuffix[] = "~decorative";
-bool meshNameIsCollidable(string const& name) {
-  size_t const suffixLen = sizeof(kDecorativeMeshNameSuffix) - 1;
-  if (name.size() < suffixLen) return true;
-  return name.compare(name.size() - suffixLen, suffixLen, kDecorativeMeshNameSuffix) != 0;
-}
-
 uint32_t readRawU32(ifstream& fp, string const& utf8Path) {
   uint32_t value = 0;
   fp.read(reinterpret_cast<char*>(&value), sizeof(value));
@@ -106,6 +97,22 @@ tox::Vec3 placementTransformNormal(tox::ModelPlacementDefinition const& placemen
   rotated = tox::applyAxisAngle(rotated, tox::Vec3(1.0, 0.0, 0.0), placement.rotation.y * kDegToRad);
   rotated = tox::applyAxisAngle(rotated, tox::Vec3(0.0, 0.0, 1.0), placement.rotation.z * kDegToRad);
   return tox::normalizeSafe(rotated);
+}
+
+string resolveModelFileReference(string const& modelId, vector<EmbeddedModelRef> const& embeddedModels) {
+  for (auto const& model : embeddedModels)
+    if (model.id == modelId) return model.modelFileReference;
+  return modelId;
+}
+
+ModelMeshMeta const* findMeshMeta(string const& modelId, string const& meshName, vector<EmbeddedModelRef> const& embeddedModels) {
+  for (auto const& model : embeddedModels) {
+    if (model.id != modelId) continue;
+    for (auto const& mesh : model.meshes)
+      if (mesh.name == meshName) return &mesh;
+    return nullptr;
+  }
+  return nullptr;
 }
 
 filesystem::path safeRelativePath(filesystem::path const& root, string const& value, char const* field) {
@@ -217,18 +224,21 @@ shared_ptr<MeshObjectModel> loadMeshObjectModel(mpp::ResourceManager* resourceMg
 
 vector<tox::CollisionTriangle> buildMeshObjectCollisionTriangles(
     tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr, int& nextSurfaceId,
-    std::map<string, shared_ptr<MeshObjectModel>>& cache) {
+    std::map<string, shared_ptr<MeshObjectModel>>& cache, vector<EmbeddedModelRef> const& embeddedModels) {
   vector<tox::CollisionTriangle> triangles;
   for (auto const& placement : track.definition.meshObjects) {
     auto cached = cache.find(placement.modelId);
     if (cached == cache.end()) {
-      filesystem::path const modelPath = safeRelativePath(root, placement.modelId, "modelId");
+      filesystem::path const modelPath = safeRelativePath(root, resolveModelFileReference(placement.modelId, embeddedModels), "modelId");
       cached = cache.emplace(placement.modelId, loadMeshObjectModel(resourceMgr, modelPath)).first;
     }
     MeshObjectModel& model = *cached->second;
 
     for (size_t meshIndex = 0; meshIndex < model.serializer.getMeshCount(); ++meshIndex) {
-      if (!meshNameIsCollidable(model.serializer.getName(meshIndex))) continue;
+      ModelMeshMeta const* meta = findMeshMeta(placement.modelId, model.serializer.getName(meshIndex), embeddedModels);
+      // Default Physical (collidable) when no metadata is known -- matches CollidableFlag.hpp's old
+      // "every mesh collidable" default this replaces.
+      if (meta != nullptr && meta->type != ModelMeshType::Physical) continue;
       if (model.serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles) continue;
 
       size_t vertexCount, stride;
