@@ -633,23 +633,16 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
 constexpr float kMeshObjectMarkerRadiusPx = 9.0f;
 constexpr float kMeshObjectFacingLengthPx = 16.0f;
 
-// TopDown -> yaw (rotation.x), Front -> pitch (rotation.y), Side -> roll (rotation.z) -- matches
-// EditorState's own dragSelectedMeshObjectTo/setPlaneCoords convention for which axis a shift-drag
-// in each mode edits.
+// TopDown -> yaw (rotation.x), Front -> pitch (rotation.y), Side -> roll (rotation.z) -- read-only
+// counterpart to EditorState's own dragSelectedMeshObjectRotationTo, which writes via the same
+// mode-to-axis mapping (duplicated there rather than shared, since that one also owns the
+// push-history-once-per-gesture bookkeeping this free function has no business doing).
 double meshObjectRotationDeg(ProjectionMode mode, const DrivableMeshObjectPlacement& placement) {
   switch (mode) {
     case ProjectionMode::Front: return placement.rotation.y;
     case ProjectionMode::Side: return placement.rotation.z;
     case ProjectionMode::TopDown:
     default: return placement.rotation.x;
-  }
-}
-void setMeshObjectRotationDeg(ProjectionMode mode, DrivableMeshObjectPlacement& placement, double degrees) {
-  switch (mode) {
-    case ProjectionMode::Front: placement.rotation.y = degrees; break;
-    case ProjectionMode::Side: placement.rotation.z = degrees; break;
-    case ProjectionMode::TopDown:
-    default: placement.rotation.x = degrees; break;
   }
 }
 
@@ -1504,8 +1497,9 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
     // position instead, using the entity-agnostic rotateGestureActive_/beginRotateGesture/
     // dragRotateGestureTo plumbing Milestone 1.3 built ahead of time for exactly this. Which
     // rotation.x/y/z field a shift-drag writes follows the active ProjectionMode (see
-    // meshObjectRotationDeg/setMeshObjectRotationDeg above), same TopDown=yaw/Front=pitch/
-    // Side=roll split dragSelectedMeshObjectTo's plain-drag axes already use.
+    // meshObjectRotationDeg above, and EditorState::dragSelectedMeshObjectRotationTo which
+    // actually performs the write), same TopDown=yaw/Front=pitch/Side=roll split
+    // dragSelectedMeshObjectTo's plain-drag axes already use.
     const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(*state.selectedMeshObjectId());
     if (placement != nullptr) {
       const WorldPoint2D world = view.screenToWorld(mouseLocal.x, mouseLocal.y);
@@ -1516,8 +1510,7 @@ bool handleEditModeInput(EditorState& state, TopDownView& view, const tox::Track
           state.beginRotateGesture(meshObjectRotationDeg(mode, *placement), angleFromOriginDeg(origin.x, origin.z, world.x, world.z));
         }
         const double newDeg = state.dragRotateGestureTo(angleFromOriginDeg(origin.x, origin.z, world.x, world.z));
-        state.editMeshObjectPlacement(*state.selectedMeshObjectId(),
-                                      [&](DrivableMeshObjectPlacement& p) { setMeshObjectRotationDeg(mode, p, newDeg); });
+        state.dragSelectedMeshObjectRotationTo(newDeg);
       } else {
         if (!state.dragging()) {
           view.freezeBounds(preDragBounds);

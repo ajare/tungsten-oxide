@@ -331,6 +331,78 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
   drawCrossSectionPreview(curvature, tightness, thickness, width);
 }
 
+// Drivable mesh object placement fields (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.4): position/
+// rotation/scale plus a `modelId` reference display -- editable as a plain text field, since (per
+// Milestone 5.1's own scope note) the editor never loads a `.mppmodel` and so has no way to
+// validate a typed id against anything, only round-trip whatever string is entered.
+void drawMeshObjectFields(EditorState& state, const std::string& id, bool& mutated) {
+  const DrivableMeshObjectPlacement* placement = state.findMeshObjectPlacement(id);
+  if (placement == nullptr) return;
+  ImGui::Text("Drivable Mesh Object: %s", id.c_str());
+
+  char modelId[256];
+  std::snprintf(modelId, sizeof(modelId), "%s", placement->modelId.c_str());
+  bool changed = false;
+  ImGui::SetNextItemWidth(280);
+  changed |= ImGui::InputText("Model (relative path)", modelId, sizeof(modelId), kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+  double x = placement->position.x, y = placement->position.y, z = placement->position.z;
+  ImGui::TextUnformatted("Position");
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("X##moX", &x, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Y##moY", &y, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Z##moZ", &z, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+  double yaw = placement->rotation.x, pitch = placement->rotation.y, roll = placement->rotation.z;
+  ImGui::TextUnformatted("Rotation (deg)");
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Yaw##moYaw", &yaw, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Pitch##moPitch", &pitch, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Roll##moRoll", &roll, 0.0, 0.0, "%.1f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+  double scaleX = placement->scale.x, scaleY = placement->scale.y, scaleZ = placement->scale.z;
+  ImGui::TextUnformatted("Scale");
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("X##moScaleX", &scaleX, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Y##moScaleY", &scaleY, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90);
+  changed |= ImGui::InputDouble("Z##moScaleZ", &scaleZ, 0.0, 0.0, "%.2f", kCommitOnEnter);
+  changed |= ImGui::IsItemDeactivatedAfterEdit();
+
+  if (changed) {
+    mutated |= state.editMeshObjectPlacement(id, [&](DrivableMeshObjectPlacement& p) {
+      p.modelId = modelId;
+      p.position = tox::Vec3(x, y, z);
+      p.rotation = tox::Vec3(yaw, pitch, roll);
+      p.scale = tox::Vec3(scaleX, scaleY, scaleZ);
+    });
+  }
+
+  if (ImGui::Button("Delete Mesh Object")) {
+    if (state.deleteSelectedMeshObjectPlacement()) mutated = true;
+  }
+}
+
 // Read-only physics-sample info: these are baked frames, not authored state, so there's
 // nothing here to edit -- just the exact values physics consumes. Returns true if a selection was
 // shown (caller should skip the normal point-fields body).
@@ -414,6 +486,8 @@ bool DrawPropertiesPanel(EditorState& state, int currentPathIndex, const TopDown
         if (state.splitSelectedPoint()) mutated = true;
       }
     }
+  } else if (state.selectedMeshObjectId().has_value()) {
+    drawMeshObjectFields(state, *state.selectedMeshObjectId(), mutated);
   } else {
     ImGui::TextUnformatted("No point selected.");
   }

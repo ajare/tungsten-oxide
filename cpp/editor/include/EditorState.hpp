@@ -307,6 +307,33 @@ public:
     return true;
   }
 
+  // Shift-drag rotate counterpart to dragSelectedMeshObjectTo above -- writes into whichever of
+  // rotation.x/y/z (yaw/pitch/roll) the active ProjectionMode implies (TopDown=yaw, Front=pitch,
+  // Side=roll), pushing history once per gesture via the SAME dragMutated_ flag
+  // dragSelectedMeshObjectTo uses. Safe to share: a plain drag and a shift-drag rotate are
+  // mutually exclusive per frame (the caller picks one based on whether shift is held, never
+  // both), so there's never a chance of one gesture's flag state leaking into the other's.
+  // Deliberately NOT built on editMeshObjectPlacement -- that pushes history unconditionally on
+  // every call, which called once per dragged frame would push a new undo step every single frame
+  // of the rotate instead of one per gesture.
+  bool dragSelectedMeshObjectRotationTo(double degrees) {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const DrivableMeshObjectPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    switch (projectionMode_) {
+      case ProjectionMode::Front: it->rotation.y = degrees; break;
+      case ProjectionMode::Side: it->rotation.z = degrees; break;
+      case ProjectionMode::TopDown:
+      default: it->rotation.x = degrees; break;
+    }
+    return true;
+  }
+
   // ---- Zones ----
   //
   // Full add/edit-fields/delete via a dedicated panel (ZonesPanel.hpp/.cpp),

@@ -802,17 +802,36 @@ after Milestone 4 lands.
   5.2 already covers); manual visual check not possible in this
   environment (no display). Commit.
 
-**5.4 — Properties panel fields**
+**5.4 — Properties panel fields** — done
 - File: `cpp/editor/src/PropertiesPanel.cpp`.
-- Numeric fields for position/rotation/scale, `modelId` reference display,
-  name/id.
-- Test: `ctest`. Commit.
+- `drawMeshObjectFields`, shown (in `DrawPropertiesPanel`'s existing
+  selection branch, alongside the point-fields/"no point selected" cases)
+  whenever `state.selectedMeshObjectId()` has a value: id (read-only),
+  `modelId` as an editable relative-path text field (no validation --
+  same "the editor can't check this against anything" note as 5.1's
+  picker), position X/Y/Z, rotation yaw/pitch/roll, scale X/Y/Z, and a
+  Delete button.
+- Test: `ctest` (all 4 suites green). Commit.
 
-**5.5 — Undo/redo integration**
-- File: wherever 5.2's drag/rotate gestures live.
-- `pushUndo()` once per gesture start, per `cpp/editor/CLAUDE.md`'s existing
-  convention (continuous drag = one undo step).
-- Test: `ctest`; manual undo/redo check across a drag and a rotate. Commit.
+**5.5 — Undo/redo integration** — done; caught and fixed a real bug along the way
+- File: `cpp/editor/include/EditorState.hpp` (new
+  `dragSelectedMeshObjectRotationTo`), `cpp/editor/src/TopDownCanvas.cpp`
+  (5.2's rotate branch switched to call it).
+- **Bug found while implementing this step**: 5.2's shift-drag rotate
+  branch called the generic `editMeshObjectPlacement` once per dragged
+  frame to write the new rotation value -- but that method pushes
+  `history_` *unconditionally* on every call (correct for its actual use,
+  a single discrete panel edit), so a rotate gesture was pushing a new
+  undo step every single frame instead of one per gesture, unlike every
+  other drag on this canvas. Fixed by adding
+  `dragSelectedMeshObjectRotationTo`, mirroring
+  `dragSelectedMeshObjectTo`'s own push-once-via-`dragMutated_` pattern
+  instead of going through `editMeshObjectPlacement` at all. The plain
+  drag (`dragSelectedMeshObjectTo`, written directly in 5.2) already had
+  this right from the start.
+- Test: `ctest` (all 4 suites green); manual undo/redo check across a
+  drag and a rotate not possible in this environment (no display) -- same
+  caveat as every other GUI-only check in this milestone. Commit.
 
 ---
 
