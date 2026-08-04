@@ -2725,7 +2725,10 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("View");
     std::optional<editor::WorldPoint2D> hoveredWorld;
-    if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack, &hoveredWorld)) rebake();
+    // Placement geometry (TRACK_MODEL_LIST_PLAN.md Milestone 4.2) resolves modelId the same way
+    // "Place Drivable Mesh Object" already does: relative to the current save location's directory.
+    const std::filesystem::path modelBaseDir = saveBinding.has_value() ? saveBinding->xmlPath.parent_path() : std::filesystem::path{};
+    if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack, &hoveredWorld, modelBaseDir)) rebake();
     ImGui::End();
 
     // Status bar strip itself: docked to the bottom edge, same fixed/non-dockable/non-movable

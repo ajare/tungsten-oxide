@@ -3,15 +3,18 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <numbers>
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "imgui.h"
 
+#include "MppModelImport.hpp"
 #include "TrackCore.hpp"
 
 namespace editor {
@@ -646,12 +649,68 @@ double meshObjectRotationDeg(ProjectionMode mode, const ModelPlacement& placemen
   }
 }
 
+// Scale-then-rotate(yaw about Y, then pitch about X, then roll about Z)-then-translate, mirroring
+// cpp/core/src/TrackBake.cpp's and cpp/tungsten-monoxide/src/Map.cpp's own placementTransformPosition
+// exactly (same convention, reimplemented independently here too -- editor/core/host don't share
+// this kind of file-local helper, per this codebase's established convention).
+tox::Vec3 placementTransformPosition(const ModelPlacement& placement, const tox::Vec3& local) {
+  constexpr double kDegToRad = std::numbers::pi / 180.0;
+  tox::Vec3 scaled(local.x * placement.scale.x, local.y * placement.scale.y, local.z * placement.scale.z);
+  tox::Vec3 rotated = tox::applyAxisAngle(scaled, tox::Vec3(0.0, 1.0, 0.0), placement.rotation.x * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(1.0, 0.0, 0.0), placement.rotation.y * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(0.0, 0.0, 1.0), placement.rotation.z * kDegToRad);
+  return rotated + placement.position;
+}
+
+// Loads (and caches for the process's lifetime -- no on-disk-change invalidation, an accepted
+// limitation matching this codebase's "no triangle budget set now, measure against real content
+// once it exists" posture for placement rendering elsewhere) a placement's referenced .mppmodel
+// geometry, resolved as a plain relative path against `baseDir` -- today's only resolution
+// convention (mirrors main.cpp's "Place Drivable Mesh Object" path handling exactly); once
+// TRACK_MODEL_LIST_PLAN.md Milestone 6 gives placements a real embedded-Model-id lookup instead,
+// only the caller producing `baseDir`/the path to resolve changes, not this cache/loader itself.
+// Returns nullptr on any failure (missing file, bad format, no baseDir yet) -- best-effort, a
+// placement always still renders its marker either way (see drawMeshObjectPlacements below).
+const ImportedMppModel* loadCachedPlacementGeometry(const std::string& modelId, const std::filesystem::path& baseDir) {
+  static std::unordered_map<std::string, std::optional<ImportedMppModel>> cache;
+  if (baseDir.empty() || modelId.empty()) return nullptr;
+  const std::string key = (baseDir / modelId).lexically_normal().string();
+  const auto found = cache.find(key);
+  if (found != cache.end()) return found->second.has_value() ? &*found->second : nullptr;
+  std::optional<ImportedMppModel> loaded;
+  try {
+    loaded = readMppModelGeometry(key);
+  } catch (const std::exception&) {
+    loaded.reset();
+  }
+  auto [it, inserted] = cache.emplace(key, std::move(loaded));
+  (void)inserted;
+  return it->second.has_value() ? &*it->second : nullptr;
+}
+
 void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, const TopDownView& view, const TrackDefinition& track,
-                              const std::optional<std::string>& selectedMeshObjectId, ProjectionMode mode) {
+                              const std::optional<std::string>& selectedMeshObjectId, ProjectionMode mode,
+                              const std::filesystem::path& modelBaseDir) {
   for (const auto& placement : track.meshObjects) {
     const bool isSelected = selectedMeshObjectId.has_value() && *selectedMeshObjectId == placement.id;
-    const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placement.position));
     const ImU32 outlineColor = isSelected ? kMeshSelectedOutlineColor : kMeshOutlineColor;
+
+    // Real geometry (TRACK_MODEL_LIST_PLAN.md Milestone 4.2), drawn under the marker: every
+    // triangle of every mesh, transformed by the placement's 6-DOF transform and projected through
+    // the active plane -- same flat-fill convention every other filled shape on this canvas already
+    // uses (drawBakedPath/drawZones/etc.), not real lit 3D rendering.
+    if (const ImportedMppModel* geometry = loadCachedPlacementGeometry(placement.modelId, modelBaseDir)) {
+      for (const ImportedMppMesh& mesh : geometry->meshes) {
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+          const ImVec2 a = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i]].position)));
+          const ImVec2 b = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 1]].position)));
+          const ImVec2 c = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 2]].position)));
+          drawList->AddTriangleFilled(a, b, c, isSelected ? kMeshSelectedOutlineColor : kMeshFillColor);
+        }
+      }
+    }
+
+    const ImVec2 center = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placement.position));
     const ImVec2 diamond[4] = {ImVec2(center.x, center.y - kMeshObjectMarkerRadiusPx), ImVec2(center.x + kMeshObjectMarkerRadiusPx, center.y),
                                ImVec2(center.x, center.y + kMeshObjectMarkerRadiusPx), ImVec2(center.x - kMeshObjectMarkerRadiusPx, center.y)};
     drawList->AddConvexPolyFilled(diamond, 4, kMeshFillColor);
@@ -1664,7 +1723,8 @@ bool FocusOnSelection(TopDownView& view, const EditorState& state, const tox::Tr
   return true;
 }
 
-bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked, std::optional<WorldPoint2D>* hoveredWorldOut) {
+bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked, std::optional<WorldPoint2D>* hoveredWorldOut,
+                       const std::filesystem::path& modelBaseDir) {
   const ProjectionMode mode = state.projectionMode();
   const TrackBounds2D bounds = computeViewBounds(state.track(), baked, mode);
 
@@ -1927,7 +1987,7 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
       if (hoveredTrigger != nullptr) hoveredTriggerId = hoveredTrigger->id;
     }
     drawTriggers(drawList, canvasOrigin, view, *baked, state.selectedTriggerId(), hoveredTriggerId, mode);
-    drawMeshObjectPlacements(drawList, canvasOrigin, view, state.track(), state.selectedMeshObjectId(), mode);
+    drawMeshObjectPlacements(drawList, canvasOrigin, view, state.track(), state.selectedMeshObjectId(), mode, modelBaseDir);
     if (view.showPhysicsPoints()) drawPhysicsPoints(drawList, canvasOrigin, view, *baked, mode);
     // Self-intersection crossing markers, drawn right after the
     // physics-point dots and before the start marker, and
