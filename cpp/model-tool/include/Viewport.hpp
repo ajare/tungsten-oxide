@@ -114,6 +114,14 @@ class Viewport {
   void undo();
   void redo();
 
+  // Public counterpart to the private replaceSourceGeometry() below, for main.cpp's per-mesh
+  // material reassignment (Meshes panel's material combobox) -- rebuilds the GPU model resource
+  // from `newSource` without touching material references or undo history, since reassigning which
+  // already-resolved material a mesh uses isn't a geometry edit the way Bake Scale's vertex
+  // mutation is. The caller is responsible for its own MaterialReference acquire/release (and for
+  // `newSource.materials`/`built->materialRefs` staying parallel) before calling this.
+  void refreshGeometry(ImportedModel newSource) { replaceSourceGeometry(std::move(newSource)); }
+
  private:
   void rebuildGrid();
   void destroyGrid();

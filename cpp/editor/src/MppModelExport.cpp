@@ -252,6 +252,21 @@ constexpr char kDefaultShellMaterial[] = "Tracks/DefaultShellMaterial";
 constexpr char kDefaultZoneMaterial[] = "Tracks/DefaultZoneMaterial";
 constexpr char kDefaultTriggerMaterial[] = "Tracks/DefaultTriggerMaterial";
 
+// model-tool's own untextured-white placeholder (MaterialLibrary.cpp's defaultFallbackMaterial()):
+// a raw, unnamespaced key model-tool bakes into a mesh's material metadata when the mesh was never
+// assigned a real one there. Unlike the fixed materials above, its id (what Map.cpp's
+// resolveMaterialMppName() looks it up by, matched verbatim against the .mppmodel's own baked
+// string) is NOT the same as its qualified resource name -- it's declared under the Tracks
+// namespace in Resources.xml (alongside DefaultMeshMaterial et al.) but referenced bare, since
+// that's the literal string model-tool writes, with no namespace prefix of its own. Included
+// unconditionally on every export, regardless of whether this track's own placements are known to
+// need it: core never loads a placement's .mppmodel (this editor can't introspect what material
+// key it actually embeds), so the only way to guarantee this one well-known fallback name always
+// resolves for ANY drivable mesh object placement is to always declare it, the same as the fixed
+// rail/mesh/shell/zone/trigger materials above.
+constexpr char kModelToolDefaultFallbackMaterialId[] = "ModelTool.DefaultFallbackMaterial3D";
+constexpr char kModelToolDefaultFallbackMaterialRef[] = "Tracks/ModelTool.DefaultFallbackMaterial3D";
+
 std::string xmlEscape(const std::string& value) {
   std::string out;
   out.reserve(value.size());
@@ -301,7 +316,7 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
   // MapTungstenMonoxideDefinitionFactory::create() reads into Map::mModelFileName.
   xml += "\t\t<Resource type=\"Track\" name=\"" + xmlEscape(resourceName) + "\">\n";
 
-  if (!materials.empty()) {
+  {
     xml += "\t\t\t<DependentResources>\n";
     // id == ref (the qualified name) -- Map::load() (cpp/tungsten-monoxide/src/Map.cpp) resolves
     // each mesh's material by calling getDependentResource() with the exact "Tracks/..." string
@@ -310,6 +325,9 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
     for (const std::string& qualifiedName : materials) {
       xml += "\t\t\t\t<DependentResource id=\"" + xmlEscape(qualifiedName) + "\" ref=\"" + xmlEscape(qualifiedName) + "\" />\n";
     }
+    // id != ref here -- see kModelToolDefaultFallbackMaterialId's own comment above.
+    xml += "\t\t\t\t<DependentResource id=\"" + xmlEscape(kModelToolDefaultFallbackMaterialId) + "\" ref=\"" +
+           xmlEscape(kModelToolDefaultFallbackMaterialRef) + "\" />\n";
     xml += "\t\t\t</DependentResources>\n";
   }
 

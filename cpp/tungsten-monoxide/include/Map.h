@@ -38,6 +38,13 @@ class Map : public applib::Map {
   // during load; no duplicate StartGrid payload exists in resource XML.
   std::vector<tox::Pose> mStartGridPoses;
 
+  // Every non-fatal issue logged during the most recent load() -- skipped meshes, unresolved
+  // materials, TrackData warnings -- collected (in addition to being logged, via warn() below) so
+  // the host can surface them to the player directly (StatePlayTungstenMonoxide's "Map Load
+  // Warnings" dialog) instead of them being visible only in the log file. Cleared at the start of
+  // every load() call.
+  std::vector<std::string> mLoadWarnings;
+
 private:
   // Loads mModelFileName's geometry via mpp::ModelSerializer directly (NOT mpp::MppModelStream --
   // that class resolves each mesh's material only against the .mppmodel file's own embedded
@@ -68,6 +75,19 @@ public:
 
   std::vector<tox::Pose> const& getStartGridPoses() const { return mStartGridPoses; }
   std::shared_ptr<tox::Track> const& getTrack() const { return mTrack; }
+
+  // Every non-fatal issue logged during the most recent load() -- skipped meshes, unresolved
+  // materials, TrackData warnings -- so the host can surface them to the player directly
+  // (StatePlayTungstenMonoxide's "Map Load Warnings" dialog) instead of them being visible only in
+  // the log file. Empty for a load with nothing to report.
+  std::vector<std::string> const& loadWarnings() const { return mLoadWarnings; }
+
+  // Logs `message` through mwLogger (unchanged behaviour) and also records it in mLoadWarnings --
+  // the one place every load()-time warning (this class's own, and
+  // mono::appendMeshObjectRenderMeshes' via the `Map*` it's given) should go through, so the host
+  // never has to guess which log lines belonged to this particular load. Public so the free
+  // function in Map.cpp's anonymous namespace can call it too.
+  void warn(std::string const& message);
 };
 
 class MapResourceFactory : public wp::application::resourcesystem::ResourceFactory {

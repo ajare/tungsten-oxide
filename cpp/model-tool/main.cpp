@@ -656,6 +656,69 @@ int main(int argc, char** argv) {
     refreshCurrentModelMaterials();
   };
 
+  // Reassigns mesh `meshIndex`'s material to `materialName` (an already-loaded MaterialLibrary
+  // entry, from the Meshes panel's material combobox below). Reuses an existing
+  // built->source.materials[] entry of that name if this model already has one (another mesh
+  // already using it); otherwise acquires a fresh MaterialLibrary reference and appends a new
+  // entry. Afterward, any materials[] entry no mesh references anymore (this was the reassigned
+  // mesh's *last* use of its previous material) is pruned and its reference released -- otherwise
+  // MaterialLibrary's "(in use)" indicator and Unload button would stay wrong forever for a
+  // material this model no longer actually uses.
+  auto assignMeshMaterial = [&](std::size_t meshIndex, const std::string& materialName) {
+    modeltool::BuiltModel* current = viewport->mutableBuiltModel();
+    if (current == nullptr || meshIndex >= current->source.meshes.size()) return;
+
+    modeltool::ImportedModel updated = current->source;
+    std::vector<std::optional<modeltool::MaterialReference>> materialRefs = current->materialRefs;
+
+    const auto existingIt = std::find_if(updated.materials.begin(), updated.materials.end(), [&](const modeltool::ImportedMaterial& m) {
+      return m.origin != modeltool::MaterialOrigin::DefaultFallback && m.name == materialName;
+    });
+    std::size_t newIndex;
+    if (existingIt != updated.materials.end()) {
+      newIndex = static_cast<std::size_t>(existingIt - updated.materials.begin());
+    } else {
+      const std::optional<modeltool::MaterialReference> ref = materialLibrary->acquireExistingReference(materialName);
+      if (!ref.has_value()) {
+        showStatus("Failed to assign material '" + materialName + "' -- not currently loaded.");
+        return;
+      }
+      modeltool::ImportedMaterial fresh;
+      fresh.name = materialName;
+      fresh.diffuseTexturePath = materialLibrary->materials().at(materialName).texturePath;
+      fresh.origin = modeltool::MaterialOrigin::ExternalReference;
+      updated.materials.push_back(fresh);
+      materialRefs.push_back(ref);
+      newIndex = updated.materials.size() - 1;
+    }
+    updated.meshes[meshIndex].materialIndex = static_cast<int>(newIndex);
+
+    // Prune materials[] entries no mesh references anymore, releasing their MaterialLibrary
+    // reference, and remap every mesh's materialIndex to the compacted list.
+    std::vector<bool> stillUsed(updated.materials.size(), false);
+    for (const modeltool::ImportedMesh& mesh : updated.meshes) stillUsed[static_cast<std::size_t>(mesh.materialIndex)] = true;
+    std::vector<int> remap(updated.materials.size(), -1);
+    std::vector<modeltool::ImportedMaterial> compactedMaterials;
+    std::vector<std::optional<modeltool::MaterialReference>> compactedRefs;
+    for (std::size_t i = 0; i < updated.materials.size(); ++i) {
+      if (stillUsed[i]) {
+        remap[i] = static_cast<int>(compactedMaterials.size());
+        compactedMaterials.push_back(updated.materials[i]);
+        compactedRefs.push_back(materialRefs[i]);
+      } else if (materialRefs[i].has_value()) {
+        materialLibrary->releaseModelReference(*materialRefs[i]);
+      }
+    }
+    for (modeltool::ImportedMesh& mesh : updated.meshes) mesh.materialIndex = remap[static_cast<std::size_t>(mesh.materialIndex)];
+    updated.materials = std::move(compactedMaterials);
+
+    const std::string meshName = updated.meshes[meshIndex].name;
+    current->materialRefs = std::move(compactedRefs);
+    viewport->refreshGeometry(std::move(updated));
+    mppModelDirty = true;
+    showStatus("Mesh '" + meshName + "' material set to '" + materialName + "'");
+  };
+
   // Optional CLI arg: model_tool.exe <path> auto-imports at startup, mainly useful for headless/
   // scripted debugging without driving the Open... dialog by hand.
   if (argc > 1) openPath(argv[1]);
@@ -941,22 +1004,35 @@ int main(int argc, char** argv) {
     modeltool::BuiltModel* built = viewport->mutableBuiltModel();
     if (built != nullptr) {
       if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen)) {
-        int meshIndex = 0;
-        for (modeltool::ImportedMesh& mesh : built->source.meshes) {
-          ImGui::PushID(meshIndex++);
+        // Applying a material reassignment rebuilds built->source.meshes wholesale (see
+        // assignMeshMaterial()/Viewport::refreshGeometry()) -- deferred until after this loop so
+        // that rebuild doesn't invalidate the very range this loop is iterating.
+        std::optional<std::pair<std::size_t, std::string>> pendingMeshMaterialChange;
+        for (std::size_t meshIndex = 0; meshIndex < built->source.meshes.size(); ++meshIndex) {
+          modeltool::ImportedMesh& mesh = built->source.meshes[meshIndex];
+          ImGui::PushID(static_cast<int>(meshIndex));
           const modeltool::ImportedMaterial& material = built->source.materials[static_cast<std::size_t>(mesh.materialIndex)];
           ImGui::BulletText("%s (%zu tris)", mesh.name.c_str(), mesh.indices.size() / 3);
+          ImGui::Indent();
           // DefaultFallback's own `name` is the original, never-resolved bare material name (see
           // MppModelImport.cpp/AssImpImport.cpp) -- flagged the same way the Materials section
-          // below flags it, rather than implying the mesh actually has that material bound.
-          if (material.origin == modeltool::MaterialOrigin::DefaultFallback) {
-            ImGui::TextDisabled("    %s: NOT FOUND -- using default white", material.name.c_str());
-          } else {
-            ImGui::TextDisabled("    %s", material.name.c_str());
+          // below flags it, rather than implying the mesh actually has that material bound. The
+          // combobox lists every currently-loaded MaterialLibrary entry regardless of the mesh's
+          // current material origin, so a DefaultFallback (or any other) assignment can always be
+          // corrected here instead of only by re-exporting from the original source file.
+          const char* comboLabel = material.origin == modeltool::MaterialOrigin::DefaultFallback
+                                       ? "NOT FOUND -- using default white"
+                                       : material.name.c_str();
+          if (ImGui::BeginCombo("Material", comboLabel)) {
+            for (const auto& [name, loadedMaterial] : materialLibrary->materials()) {
+              const bool selected = material.origin != modeltool::MaterialOrigin::DefaultFallback && name == material.name;
+              if (ImGui::Selectable(name.c_str(), selected)) pendingMeshMaterialChange = {meshIndex, name};
+            }
+            if (materialLibrary->materials().empty()) ImGui::TextDisabled("(none loaded -- Import Materials XML..., or open a model)");
+            ImGui::EndCombo();
           }
           // Per-mesh Type/Visible metadata (TRACK_MODEL_LIST_PLAN.md Milestone 3.4), written to the
           // associated <Model> XML on Save (OpenTarget.hpp), not into the .mppmodel's own mesh name.
-          ImGui::Indent();
           int typeIndex = static_cast<int>(mesh.type);
           if (ImGui::Combo("Type", &typeIndex, "Track\0Physical\0Decorative\0"))
             mesh.type = static_cast<modelxml::MeshType>(typeIndex);
@@ -966,6 +1042,7 @@ int main(int argc, char** argv) {
           ImGui::Unindent();
           ImGui::PopID();
         }
+        if (pendingMeshMaterialChange.has_value()) assignMeshMaterial(pendingMeshMaterialChange->first, pendingMeshMaterialChange->second);
       }
     } else {
       ImGui::TextDisabled("No model loaded -- File > Open...");

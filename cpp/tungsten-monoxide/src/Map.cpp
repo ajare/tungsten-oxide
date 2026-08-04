@@ -77,7 +77,7 @@ string resolveMaterialMppName(Map* map, string const& materialKey) {
 // Mesh names are namespaced by placement id ("meshobject-<placement id>-<sub-mesh name>") so
 // multiple placements sharing one model, or a sub-mesh name that happens to collide with one of the
 // road's own mesh names, never collide in the single shared `modelStream`.
-void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
+void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
                                   mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream,
                                   std::map<string, shared_ptr<mono::MeshObjectModel>>& cache, vector<mono::EmbeddedModelRef> const& embeddedModels) {
   for (auto const& placement : track.definition.meshObjects) {
@@ -107,8 +107,8 @@ void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const
       try {
         materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
       } catch (exception const& error) {
-        logger->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
-                     "'): " + error.what());
+        map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                  "'): " + error.what());
         continue;
       }
 
@@ -116,8 +116,8 @@ void appendMeshObjectRenderMeshes(Map* map, wp::Logger* logger, tox::Track const
       shared_ptr<const int8_t> data;
       model.serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
       if (stride != 36) {
-        logger->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
-                     "'): unsupported vertex stride.");
+        map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                  "'): unsupported vertex stride.");
         continue;
       }
 
@@ -179,8 +179,14 @@ Map::Map(string const& name, string const& namesp, string const& source,
 
 Map::~Map() = default;
 
+void Map::warn(string const& message) {
+  mwLogger->warn(message);
+  mLoadWarnings.push_back(message);
+}
+
 bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
   WP_UNUSED(renderSystem);
+  mLoadWarnings.clear();
   auto directoryLocation = dynamic_cast<application::resourcesystem::DirectoryResourceLocation*>(mwLocation);
   if (directoryLocation == nullptr)
     throw application::resourcesystem::ResourceException(this, "Track resources require a directory-based resource location.");
@@ -203,7 +209,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
   if (!loaded)
     throw application::resourcesystem::ResourceException(this, "failed to load TrackData '" + dataPath.string() + "': " + loaded.error);
   for (auto const& warning : loaded.warnings)
-    mwLogger->warn("Track '" + getQualifiedName() + "' [" + warning.code + "] " + warning.objectId + ": " + warning.message);
+    warn("Track '" + getQualifiedName() + "' [" + warning.code + "] " + warning.objectId + ": " + warning.message);
   mTrack = make_shared<tox::Track>(std::move(*loaded.track));
 
   mpp::ModelSerializer serializer(resourceMgr);
@@ -269,7 +275,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
       if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
         throw application::resourcesystem::ResourceException(
             this, "listed track mesh '" + serializer.getName(i) + "' has unresolved material: " + error.what());
-      mwLogger->warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
+      warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
       continue;
     }
 
@@ -285,7 +291,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
 
   // Drivable mesh object placements (Milestone 3.4): reuses `modelCache` from the collision-mesh
   // pass above, so a model already loaded there isn't reopened from disk here.
-  appendMeshObjectRenderMeshes(this, mwLogger, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache, mEmbeddedModels);
+  appendMeshObjectRenderMeshes(this, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache, mEmbeddedModels);
 
   mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
   mMppResource->acquire(this);

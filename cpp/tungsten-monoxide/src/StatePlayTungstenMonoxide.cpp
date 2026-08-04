@@ -213,6 +213,11 @@ void StatePlayTungstenMonoxide::createGameObjects(
 
   if (!getMap()->getTrack())
     throw application::resourcesystem::ResourceException(trackResource.get(), "Track resource has no compiled TrackData.");
+  // Surface anything Map::load() had to skip/work around (e.g. a drivable mesh object sub-mesh
+  // with an unresolved material) directly to the player, not just the log file -- see
+  // mMapLoadWarnings' own comment.
+  mMapLoadWarnings = getMap()->loadWarnings();
+  mMapLoadWarningsDialogOpen = !mMapLoadWarnings.empty();
   applyTriggersDebugVisibility();          // mShowTriggersDebug defaults to false: trigger quads start hidden.
   applyRailsDebugVisibility();             // mShowRailsDebug defaults to false: rails start hidden too.
   applyReservationWallsDebugVisibility();  // mShowReservationWallsDebug defaults to true: real gameplay geometry, starts visible.
@@ -307,7 +312,8 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
   // (a widget hovered or focused), letting driving input bubble through whenever the panel is
   // open but unfocused. Guarded by mShowDebugUi since GetIO() needs a bound context, which is
   // only set up (in _renderImGui) on frames the panel actually renders.
-  bool guiCapturingInput = mShowDebugUi && (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse);
+  bool guiCapturingInput =
+      (mShowDebugUi || mMapLoadWarningsDialogOpen) && (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse);
   const bool debugLaunchActive =
       find(activeStates.begin(), activeStates.end(), "DebugLaunch") != activeStates.end();
   tox::ControlIntent player;
@@ -553,7 +559,7 @@ void StatePlayTungstenMonoxide::renderShipPhysicsTab() const {
   renderPhysicsSlider("Weight", physics.weight, mInitialShipPhysics.weight);
 }
 
-bool StatePlayTungstenMonoxide::_imGuiActive() const { return mShowDebugUi; }
+bool StatePlayTungstenMonoxide::_imGuiActive() const { return mShowDebugUi || mMapLoadWarningsDialogOpen; }
 
 void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, void* imPlotCtx, void* allocFunc,
                                              void* freeFunc, void* userData) {
@@ -564,41 +570,61 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
   ImGui::SetCurrentContext(static_cast<ImGuiContext*>(imGuiCtx));
   ImGui::SetAllocatorFunctions(reinterpret_cast<ImGuiMemAllocFunc>(allocFunc), reinterpret_cast<ImGuiMemFreeFunc>(freeFunc), userData);
 
-  ImGui::Begin("Debug");
-  if (ImGui::BeginTabBar("DebugTabs")) {
-    if (ImGui::BeginTabItem("Debug")) {
-      if (ImGui::Checkbox("Show Triggers", &mShowTriggersDebug)) applyTriggersDebugVisibility();
-      if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
-      if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
-      if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
-      // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1: a track with drivable mesh object placements
-      // has no working analytic-mode collision for that geometry, so the toggle is disabled (not
-      // just defaulted) for such a session -- GameSession/Simulation already refuse to honor a
-      // disable request here too, but hiding/graying the control avoids offering a choice that
-      // would silently do nothing.
-      const bool meshPhysicsForced = mGameSession && mGameSession->meshPhysicsForced();
-      if (meshPhysicsForced) mMeshPhysicsDebug = true;
-      ImGui::BeginDisabled(meshPhysicsForced);
-      if (ImGui::Checkbox("Mesh Physics", &mMeshPhysicsDebug) && mGameSession)
-        mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
-      ImGui::EndDisabled();
-      if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
-        // Resync on enable so the comparison always starts from "right now", not wherever the
-        // ghost last happened to be (e.g. left behind from the last time this was toggled on).
-        if (mShowPhysicsGhost && mGameSession && !mGameSession->ships().empty())
-          mGhostShip = mGameSession->ships()[0];
-        applyGhostVisibility();
-      }
-      ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
-      ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
-      ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");
-      ImGui::EndTabItem();
+  // Map load warnings: shown regardless of mShowDebugUi (see _imGuiActive()/mMapLoadWarningsDialogOpen's
+  // own comment) -- a player who never opens the debug panel should still learn part of the map
+  // failed to load, not just find it in the log file. OpenPopup only fires the frame the flag flips
+  // true; BeginPopupModal owns the popup's own open/closed state (including its own X-to-close,
+  // wired to the same bool) after that.
+  if (mMapLoadWarningsDialogOpen) ImGui::OpenPopup("Map Load Warnings");
+  if (ImGui::BeginPopupModal("Map Load Warnings", &mMapLoadWarningsDialogOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("This map loaded with warnings -- some geometry may be missing:");
+    ImGui::Separator();
+    for (std::string const& warning : mMapLoadWarnings) ImGui::BulletText("%s", warning.c_str());
+    ImGui::Separator();
+    if (ImGui::Button("OK")) {
+      mMapLoadWarningsDialogOpen = false;
+      ImGui::CloseCurrentPopup();
     }
-    if (ImGui::BeginTabItem("Physics")) {
-      renderShipPhysicsTab();
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
+    ImGui::EndPopup();
   }
-  ImGui::End();
+
+  if (mShowDebugUi) {
+    ImGui::Begin("Debug");
+    if (ImGui::BeginTabBar("DebugTabs")) {
+      if (ImGui::BeginTabItem("Debug")) {
+        if (ImGui::Checkbox("Show Triggers", &mShowTriggersDebug)) applyTriggersDebugVisibility();
+        if (ImGui::Checkbox("Show Rails", &mShowRailsDebug)) applyRailsDebugVisibility();
+        if (ImGui::Checkbox("Show Reservation Walls", &mShowReservationWallsDebug)) applyReservationWallsDebugVisibility();
+        if (ImGui::Checkbox("Wireframe", &mShowWireframeDebug)) applyWireframeDebug();
+        // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1: a track with drivable mesh object placements
+        // has no working analytic-mode collision for that geometry, so the toggle is disabled (not
+        // just defaulted) for such a session -- GameSession/Simulation already refuse to honor a
+        // disable request here too, but hiding/graying the control avoids offering a choice that
+        // would silently do nothing.
+        const bool meshPhysicsForced = mGameSession && mGameSession->meshPhysicsForced();
+        if (meshPhysicsForced) mMeshPhysicsDebug = true;
+        ImGui::BeginDisabled(meshPhysicsForced);
+        if (ImGui::Checkbox("Mesh Physics", &mMeshPhysicsDebug) && mGameSession)
+          mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
+        ImGui::EndDisabled();
+        if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
+          // Resync on enable so the comparison always starts from "right now", not wherever the
+          // ghost last happened to be (e.g. left behind from the last time this was toggled on).
+          if (mShowPhysicsGhost && mGameSession && !mGameSession->ships().empty())
+            mGhostShip = mGameSession->ships()[0];
+          applyGhostVisibility();
+        }
+        ImGui::SliderScalar("Camera Zoom", ImGuiDataType_Double, &mCameraZoom, &CAM_ZOOM_MIN, &CAM_ZOOM_MAX, "%.2f");
+        ImGui::SliderScalar("Camera Height", ImGuiDataType_Double, &mCameraHeight, &CAM_UP_MIN, &CAM_UP_MAX, "%.2f");
+        ImGui::SliderScalar("Camera Aim Height", ImGuiDataType_Double, &mLookAtHeight, &LOOK_AT_UP_MIN, &LOOK_AT_UP_MAX, "%.2f");
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Physics")) {
+        renderShipPhysicsTab();
+        ImGui::EndTabItem();
+      }
+      ImGui::EndTabBar();
+    }
+    ImGui::End();
+  }
 }

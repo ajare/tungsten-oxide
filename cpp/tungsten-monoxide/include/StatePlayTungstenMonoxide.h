@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 #include <deque>
 #include <mutex>
@@ -70,6 +71,13 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   double mLapFlashUntil{0.0};
 
   bool mShowDebugUi{false};
+  // Every warning collected during this session's Map::load() (Map::loadWarnings()), copied out in
+  // createGameObjects() once loading finishes -- e.g. a drivable mesh object sub-mesh skipped for
+  // an unresolved material (the "ModelTool.DefaultFallbackMaterial3D" case). Surfaced to the player
+  // via a dismissible ImGui modal in _renderImGui, independent of mShowDebugUi (a player who never
+  // opens the debug panel should still see that part of the map failed to load), not just logged.
+  std::vector<std::string> mMapLoadWarnings;
+  bool mMapLoadWarningsDialogOpen{false};
   bool mDebugLaunchWasActive{false};
   bool mShowTriggersDebug{false};
   bool mShowRailsDebug{false};
