@@ -70,6 +70,7 @@ set(EDITOR_SOURCES
   src/RandomTrack.cpp
   src/TextureCache.cpp
   src/MaterialsPanel.cpp
+  src/ModelsPanel.cpp
   src/FileDialog.cpp
   src/Clipboard.cpp
   src/TrackPropertiesPanel.cpp

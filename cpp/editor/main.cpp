@@ -72,6 +72,7 @@
 #include "fontawesome/IconsFontAwesome5.h"
 #include "MaterialCatalog.hpp"
 #include "MaterialsPanel.hpp"
+#include "ModelsPanel.hpp"
 #include "ModelXml.hpp"
 #include "RandomTrack.hpp"
 #include "StartGrid.hpp"
@@ -2628,6 +2629,11 @@ int main(int, char**) {
     if (ImGui::CollapsingHeader("Curves")) {
       ImGui::PushID("Curves");
       if (editor::DrawCurvesPanel(editorState)) rebake();
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Models")) {
+      ImGui::PushID("Models");
+      editor::DrawModelsPanel(editorState);
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Materials")) {
