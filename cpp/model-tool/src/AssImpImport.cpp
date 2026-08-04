@@ -174,8 +174,7 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   // AssImp commonly synthesizes an implicit placeholder material (e.g. a "DefaultMaterial" with
   // no texture) for meshes that don't explicitly reference one, in addition to whatever real
   // materials the scene actually declares -- if nothing ends up using it, don't create/display/
-  // declare it at all (matches ModelResourceExport.cpp's own "only export materials actually
-  // referenced" rule, just applied here at import time instead of at export time).
+  // declare it at all.
   std::vector<bool> referenced(out.materials.size(), false);
   for (const ImportedMesh& mesh : out.meshes) referenced[static_cast<std::size_t>(mesh.materialIndex)] = true;
 

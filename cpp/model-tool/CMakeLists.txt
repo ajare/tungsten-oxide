@@ -64,7 +64,6 @@ set(MODEL_TOOL_SOURCES
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
-  src/ModelResourceExport.cpp
   src/MaterialXmlImport.cpp
   src/MaterialLibrary.cpp
   src/MppModelImport.cpp
