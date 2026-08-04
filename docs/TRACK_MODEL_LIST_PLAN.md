@@ -268,39 +268,61 @@ next step.
 
 ---
 
-## Milestone 4 — Editor: `.mppmodel` geometry reader
+## Milestone 4 — Editor: `.mppmodel` geometry reader — done (`7c11718`, `7ba6f49`)
 
-**4.1 — From-scratch read-only parser**
+**4.1 — From-scratch read-only parser** — done
 - Files: `cpp/editor/include/MppModelImport.hpp`/`src/MppModelImport.cpp`
-  (new — distinct from `cpp/model-tool`'s own `MppModelImport.cpp`, which is
-  a *reimport-for-editing* path built on the real `mpp::ModelSerializer`;
-  this one is a minimal geometry-only reader with zero mpp dependency,
-  mirroring `MppModelExport.cpp`'s existing from-scratch *writer*).
-- Reads vertex positions/normals/indices and per-mesh names/counts only — no
-  materials, no shaders, no `mpp::ModelSerializer` involvement. Must
-  correctly parse output written by both `MppModelExport.cpp` (baked track
-  geometry) and `model-tool`'s real `mpp::ModelSerializer` save path (props)
-  — round-trip-test against real files produced by each.
-- Test: `editor_track_resources`/new test target — parse a `.mppmodel`
-  written by `model-tool` in this session (a small fixture, e.g. a cube) and
-  one written by `MppModelExport.cpp`, confirm vertex/triangle counts and a
-  handful of spot-checked positions match what the writer put in. `ctest`.
-  Commit.
+  (new — distinct from `cpp/model-tool`'s own `MppModelImport.cpp`, a
+  *reimport-for-editing* path built on the real `mpp::ModelSerializer`; this
+  one is a minimal geometry-only reader with zero mpp dependency, mirroring
+  `MppModelExport.cpp`'s existing from-scratch *writer*), new
+  `tests/mpp_model_import_tests.cpp` target.
+- The on-disk format was verified field-for-field against the real
+  `ext/massivepolypusher/mpp/src/ModelSerializer.cpp` write*()/read*()
+  functions directly (`MPPMODEL_EXPORT_SPEC.md` isn't present in-repo, so
+  that vendored source is the actual ground truth) rather than inferred from
+  `MppModelExport.cpp`'s writer alone. Reads vertex positions/normals/UVs
+  and per-mesh names/materials/indices only; Materials/MaterialNames
+  sections are directory-skipped, never parsed.
+- Test: round-trips `MppModelExport.cpp`'s own non-indexed output; since a
+  live `model-tool` session wasn't available to generate a real file in this
+  environment (no display), a minimal real-format INDEXED `.mppmodel` was
+  instead hand-built byte-for-byte per `ModelSerializer.cpp`'s actual write
+  functions (16-bit index stream) and confirmed to unpack to the expected
+  triangle list — exercising the one code path `MppModelExport.cpp`'s own
+  output never does. `ctest` (6/6 suites). Commit.
 
-**4.2 — Viewport rendering of embedded models**
-- Files: `cpp/editor/src/TopDownCanvas.cpp` or a new `ModelRenderer.cpp`.
-- Feeds 4.1's parsed geometry into the editor's existing OpenGL pipeline as
-  ordinary triangle data, transformed by each placement's 6-DOF transform
-  (reusing `placementTransformPosition`/`placementTransformNormal`-style math
-  already established in `cpp/tungsten-monoxide/src/Map.cpp` for the same
-  purpose — reimplemented independently per the existing "core/editor/host
-  don't share code" convention, not extracted into a shared helper).
-  `Visible=false` meshes ARE drawn here (editor-visible, per the locked-in
-  semantics) — the game-hidden behavior is host-side only (Milestone 8).
-- Test: `ctest` (no new headless-testable logic — this is draw-call wiring).
-  Manual visual verification flagged as needed once a GUI session is
-  available, matching this repo's established "no display in this
-  environment" caveat pattern. Commit.
+**4.2 — Viewport rendering of embedded models** — done, scoped down (no
+  OpenGL/mpp work needed at all)
+- File: `cpp/editor/src/TopDownCanvas.cpp` (plus `TopDownCanvas.hpp`/
+  `main.cpp` for a new `modelBaseDir` parameter).
+- Turned out the editor's canvas has no real 3D OpenGL rendering pipeline in
+  the first place — every shape on it (`drawBakedPath`, `drawZones`, the
+  placement marker itself, etc.) is a flat 2D shape filled via ImGui's
+  `ImDrawList` (`AddTriangleFilled`/`AddConvexPolyFilled`), projected through
+  the active `ProjectionMode` plane via the existing `worldToScreenPlane`.
+  `drawMeshObjectPlacements` now does the same for every triangle of a
+  placement's real geometry (loaded via 4.1's reader, cached per resolved
+  path for the process's lifetime — no on-disk-change invalidation, an
+  accepted limitation), transformed by a new `placementTransformPosition`
+  mirroring `TrackBake.cpp`/`Map.cpp`'s own scale-then-yaw/pitch/roll-then-
+  translate convention (reimplemented independently, as planned). The
+  existing diamond marker + facing line still draws on top as a selection
+  handle. `Visible=false` meshes are NOT special-cased yet (Milestone 6/7's
+  concern once per-mesh metadata is actually wired up) — every mesh in the
+  file renders unconditionally for now.
+- `modelId` is resolved exactly as "Place Drivable Mesh Object" already
+  does today (relative to the current save location's directory, via a new
+  `modelBaseDir` parameter threaded through `DrawTopDownCanvas`) — not
+  wasted work even once Milestone 6 gives placements a real embedded-Model-
+  id lookup instead of a raw path, since only the caller producing the
+  resolved path changes, not this renderer/cache.
+- Test: `ctest` (6/6 suites, no new headless-testable logic — this is
+  draw-call wiring); a `track_editor.exe` smoke launch confirmed every
+  built-in self-check still reports `OK` with zero `MISMATCH`. Manual visual
+  verification of the rendered geometry itself wasn't possible in this
+  environment (no display) — flagged as the thing to actually look at once
+  a GUI session is available. Commit.
 
 ---
 
