@@ -857,6 +857,59 @@ after Milestone 4 lands.
   mesh mode, confirm output is stable/reproducible run-to-run. `ctest`
   (build only — this tool has no ctest target of its own unless folded into
   7.2). Commit.
+- **Done.** Went with the "separate `cpp/app/tools` binary" option: `Map.cpp`'s
+  BVH-building free functions (`buildCollisionTriangles`,
+  `buildMeshObjectCollisionTriangles`, `loadMeshObjectModel`,
+  `safeRelativePath`, the placement transforms, the raw `.mppmodel`
+  index-stream reader) were extracted into
+  `cpp/tungsten-monoxide/include/TrackCollisionBuild.h` +
+  `src/TrackCollisionBuild.cpp` — a `Map*`/`ResourceException`-free module
+  (plain `std::runtime_error`) so it has no willpower-resource-system
+  dependency at all. `Map.cpp` now calls into it and wraps its exceptions
+  back into `ResourceException(this, ...)`, unchanged behavior. The new
+  `cpp/app/tools/mesh_physics_diag.cpp` compiles that same
+  `TrackCollisionBuild.cpp` directly as an extra source file (not by linking
+  the `TungstenMonoxide` DLL, which is a Windows application DLL wired to
+  AppLib/the willpower resource system and not meant to be a library
+  dependency of anything else) alongside `core`, plus the raw
+  `MassivePolyPusher`/`MppMesh`/`MppHelper`/`MppProgram`/`Utils` import libs
+  mpp needs — no SDL2, no AppLib, no Willpower.Application.
+  `mono::collidableGeometryBatchIds(track)` (new, also exposed from the same
+  header) derives the `<TrackMeshes>` selection automatically from
+  `track.geometry`'s own collidable kinds, since this tool has no
+  Resources.xml to read the real selection from.
+  - **Deviation from "no window" (real finding, not a design choice):**
+    `mpp::RenderSystem`'s constructor unconditionally calls `glewInit()` and
+    issues a few GL calls (`setDefaultState`/`createLightsData`/
+    `glGenBuffers`) — there is no lazy/deferred-GL-init path to avoid by
+    just skipping `createCoreResources()`, contrary to what a first read of
+    the header suggested. `glewInit()` crashes (`STATUS_STACK_BUFFER_OVERRUN`
+    observed) without a real, current OpenGL context bound to the calling
+    thread. So this tool creates one throwaway 1x1 **hidden** Win32 window +
+    legacy WGL context (`createHeadlessGLContext()`, raw
+    `Windows.h`/`opengl32`/`gdi32`/`user32`, no SDL2) purely so `glewInit()`
+    has something to bind to, then leaks both deliberately for the rest of
+    the process's short life. Nothing renders, there is no message loop, no
+    visible UI — "headless" in the sense of no interaction/rendering, not
+    literally no GL context.
+  - Runtime DLL set beyond `TARGET_RUNTIME_DLLS` (which only sees CMake
+    targets, not raw linked import libs): `MassivePolyPusher(d).dll`,
+    `MppMesh(d).dll`, `MppHelper(d).dll`, `MppProgram(d).dll` (a transitive
+    dependency of `MassivePolyPusher.dll`, not directly linked),
+    `Utils(d).dll`, and two of `Utils.dll`'s own transitive dependencies,
+    `glew32.dll` and `FreeImage.dll` — all copied post-build from
+    `ext/massivepolypusher/*/build/vs2026/bin/<arch>/<config>` (note: `bin/`
+    for the `.dll`, not `lib/` where the `.lib` import libs live).
+  - Verified: built and ran clean in both Release and Debug configs. Ran
+    against a freshly generated (schema-current, not a possibly-stale
+    checked-in fixture) track+model pair — obtained by temporarily
+    disabling `editor_track_resource_tests`' end-of-test `remove_all` long
+    enough to copy its `%TEMP%` output, then reverting that test file
+    change before committing (confirmed via `git diff` showing no residual
+    change) — via `mono::` on `cpp/test-data/fixtures/path/curved-banked.json`.
+    600 scripted frames, two independent runs, byte-identical stdout
+    (`Compare-Object` empty diff); no NaN/Inf in either run. `ctest` stayed
+    green (4/4) throughout.
 
 **6.1 — Build a genuinely 3D validation asset**
 - Author (or source) a test mesh with real 3D topology a flat Mesh region
