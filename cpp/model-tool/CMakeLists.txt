@@ -60,6 +60,7 @@ set(MODEL_TOOL_SOURCES
   src/AssImpImport.cpp
   src/NormalSmoothing.cpp
   src/ObjSmoothingGroups.cpp
+  src/OpenTarget.cpp
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
@@ -206,8 +207,16 @@ enable_testing()
 add_executable(model_tool_tests
   tests/model_tool_tests.cpp
   src/NormalSmoothing.cpp
-  src/ObjSmoothingGroups.cpp)
+  src/ObjSmoothingGroups.cpp
+  src/OpenTarget.cpp)
 target_include_directories(model_tool_tests PRIVATE include)
 target_compile_features(model_tool_tests PRIVATE cxx_std_20)
 target_link_libraries(model_tool_tests PRIVATE model_xml)
 add_test(NAME model_tool_tests COMMAND model_tool_tests)
+
+# Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
+# `ctest` can actually launch it (OpenTarget.cpp/model_xml both use TinyXML2 now).
+add_custom_command(TARGET model_tool_tests POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_RUNTIME_DLLS:model_tool_tests> $<TARGET_FILE_DIR:model_tool_tests>
+  COMMAND_EXPAND_LISTS)

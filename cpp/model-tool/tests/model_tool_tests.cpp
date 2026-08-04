@@ -8,12 +8,14 @@
 // the Type/Visible metadata this replaced it with.
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 
 #include "NormalSmoothing.hpp"
 #include "ObjSmoothingGroups.hpp"
+#include "OpenTarget.hpp"
 
 namespace {
 
@@ -186,6 +188,114 @@ void testExtractObjSmoothingGroups() {
   check(!notObj.has_value(), "a non-.obj path returns nullopt (no smoothing-group data recoverable)");
 }
 
+// OpenTarget.cpp tests (TRACK_MODEL_LIST_PLAN.md Milestone 3.3): classification across the three
+// Open-dialog input shapes, Track-resource Models-list scanning, and rewriting one embedded <Model>
+// in place without disturbing the rest of the document.
+void writeFile(const std::filesystem::path& path, const std::string& contents) {
+  std::ofstream out(path, std::ios::binary);
+  out << contents;
+}
+
+void testClassifyOpenTarget() {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path();
+
+  check(modeltool::classifyOpenTarget(dir / "cube.mppmodel") == modeltool::OpenTargetKind::MppModel,
+        ".mppmodel classifies by extension alone, no content read");
+
+  const std::filesystem::path standalonePath = dir / "open_target_standalone.xml";
+  writeFile(standalonePath, "<Model><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
+                            "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+                            "</Meshes></Model>");
+  check(modeltool::classifyOpenTarget(standalonePath) == modeltool::OpenTargetKind::StandaloneModelXml,
+        "a bare <Model> root classifies as StandaloneModelXml");
+
+  const std::filesystem::path trackResourcePath = dir / "open_target_track_resource.xml";
+  writeFile(trackResourcePath,
+            "<Resources><Namespace name=\"Tracks\"><Resource type=\"Track\" name=\"T\"><Definitions>"
+            "<Definition factory=\"Track\"><Models>"
+            "<Model id=\"m1\"><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
+            "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+            "</Meshes></Model>"
+            "</Models></Definition></Definitions></Resource></Namespace></Resources>");
+  check(modeltool::classifyOpenTarget(trackResourcePath) == modeltool::OpenTargetKind::TrackResourceXml,
+        "a Track resource with a Definition[factory=Track]/Models list classifies as TrackResourceXml");
+
+  const std::filesystem::path emptyResourcesPath = dir / "open_target_empty_resources.xml";
+  writeFile(emptyResourcesPath, "<Resources></Resources>");
+  check(modeltool::classifyOpenTarget(emptyResourcesPath) == modeltool::OpenTargetKind::Unsupported,
+        "a Resources document with no Track Models list is Unsupported, not TrackResourceXml");
+
+  check(modeltool::classifyOpenTarget(dir / "cube.obj") == modeltool::OpenTargetKind::Unsupported,
+        "a non-.xml, non-.mppmodel extension is Unsupported (falls through to AssImp)");
+
+  std::remove(standalonePath.string().c_str());
+  std::remove(trackResourcePath.string().c_str());
+  std::remove(emptyResourcesPath.string().c_str());
+}
+
+void testScanAndRewriteTrackResourceModels() {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / "open_target_scan_rewrite.xml";
+  writeFile(path,
+            "<Resources><Namespace name=\"Tracks\"><Resource type=\"Track\" name=\"T\"><Definitions>"
+            "<Definition factory=\"Track\"><Models>"
+            "<Model id=\"track-model\"><ModelFile>New_Track.mppmodel</ModelFile>"
+            "<TrackData>New_Track.json</TrackData><Meshes>"
+            "<Mesh><Name>road</Name><Type>Track</Type><Visible>true</Visible></Mesh>"
+            "</Meshes></Model>"
+            "<Model id=\"cube-model\"><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
+            "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+            "</Meshes></Model>"
+            "</Models></Definition></Definitions></Resource>"
+            "<!-- an unrelated marker comment, expected to survive rewriteEmbeddedModel untouched -->"
+            "</Namespace></Resources>");
+
+  const std::vector<modeltool::TrackResourceModelEntry> entries = modeltool::scanTrackResourceModels(path);
+  check(entries.size() == 2, "both embedded Model entries are found by the scan");
+  check(entries.size() >= 1 && entries[0].id == "track-model" && entries[0].modelFileReference == "New_Track.mppmodel",
+        "the first entry's id/modelFileReference match the source XML");
+  check(entries.size() >= 2 && entries[1].id == "cube-model", "the second entry's id matches the source XML");
+
+  const modelxml::ModelXmlDefinition trackModel = modeltool::readEmbeddedModel(path, "track-model");
+  check(trackModel.trackData.has_value() && *trackModel.trackData == "New_Track.json", "readEmbeddedModel returns full mesh/TrackData metadata");
+  check(trackModel.meshes.size() == 1 && trackModel.meshes[0].type == modelxml::MeshType::Track, "readEmbeddedModel's mesh Type round-trips");
+
+  bool readThrewOnMissingId = false;
+  try {
+    modeltool::readEmbeddedModel(path, "does-not-exist");
+  } catch (const std::exception&) {
+    readThrewOnMissingId = true;
+  }
+  check(readThrewOnMissingId, "readEmbeddedModel throws when the target id isn't found");
+
+  modelxml::ModelXmlDefinition rewritten;
+  rewritten.id = "cube-model";
+  rewritten.modelFile = "Cube.mppmodel";
+  rewritten.meshes.push_back({"main", modelxml::MeshType::Decorative, false});
+  modeltool::rewriteEmbeddedModel(path, "cube-model", rewritten);
+
+  const std::vector<modeltool::TrackResourceModelEntry> afterRewrite = modeltool::scanTrackResourceModels(path);
+  check(afterRewrite.size() == 2, "rewriteEmbeddedModel changes neither entry's presence");
+  check(afterRewrite.size() >= 1 && afterRewrite[0].id == "track-model" &&
+            afterRewrite[0].modelFileReference == "New_Track.mppmodel",
+        "the untouched Model entry survives rewriteEmbeddedModel exactly as it was");
+
+  std::ifstream reread(path);
+  const std::string contents((std::istreambuf_iterator<char>(reread)), std::istreambuf_iterator<char>());
+  check(contents.find("unrelated marker comment") != std::string::npos,
+        "an unrelated XML comment elsewhere in the document survives rewriteEmbeddedModel");
+  check(contents.find("Decorative") != std::string::npos, "the rewritten Model's new Type is actually on disk");
+
+  bool threwOnMissingId = false;
+  try {
+    modeltool::rewriteEmbeddedModel(path, "does-not-exist", rewritten);
+  } catch (const std::exception&) {
+    threwOnMissingId = true;
+  }
+  check(threwOnMissingId, "rewriteEmbeddedModel throws when the target id isn't found");
+
+  std::remove(path.string().c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -193,6 +303,8 @@ int main() {
   testNormalsSmoothAcrossMeshesWithMatchingGroups();
   testNormalsSplitVertexAtGroupBoundary();
   testExtractObjSmoothingGroups();
+  testClassifyOpenTarget();
+  testScanAndRewriteTrackResourceModels();
 
   if (failures) {
     std::cerr << failures << " model_tool test(s) failed\n";

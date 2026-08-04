@@ -11,6 +11,7 @@
 #include <glm/vec3.hpp>
 #pragma warning(pop)
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -42,6 +43,7 @@
 #include "ModelXml.hpp"
 #include "MppModelImport.hpp"
 #include "MppSave.hpp"
+#include "OpenTarget.hpp"
 #include "Viewport.hpp"
 #include "fontawesome/IconsFontAwesome5.h"
 
@@ -184,6 +186,32 @@ int main(int argc, char** argv) {
     statusExpiresAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   };
 
+  // Where the currently-loaded model's per-mesh Type/Visible metadata came from
+  // (TRACK_MODEL_LIST_PLAN.md Milestone 3.3): None for a raw .mppmodel or AssImp import opened
+  // directly (Save always prompts, exactly as before this milestone -- doSave() falls back to
+  // doSaveAs()). StandaloneXml/EmbeddedInTrackResource let Save write back silently to wherever the
+  // model was actually opened from, mirroring ordinary "Save" vs "Save As" semantics.
+  struct ModelXmlOrigin {
+    enum class Kind { None,
+                      StandaloneXml,
+                      EmbeddedInTrackResource } kind{Kind::None};
+    std::filesystem::path xmlPath;
+    std::string modelFileReference;  // <ModelFile> text as read, preserved verbatim on save-back
+    std::optional<std::string> trackDataReference;
+    std::optional<std::string> embeddedModelId;  // set only for EmbeddedInTrackResource
+  };
+  ModelXmlOrigin modelXmlOrigin;
+
+  // Set when a picked Track resource XML embeds more than one <Model> -- resolved via the "Choose
+  // Model" modal further down the frame loop, mirroring the Material Name Conflicts modal's own
+  // OpenPopup-then-BeginPopupModal pattern.
+  struct PendingTrackResourceOpen {
+    std::filesystem::path xmlPath;
+    std::vector<modeltool::TrackResourceModelEntry> entries;
+  };
+  std::optional<PendingTrackResourceOpen> pendingTrackResourceOpen;
+  bool openTrackResourceModelPickerDialog = false;
+
   // One row per name collision, surfaced either by doImportMaterialsXml() (a plain UserImported
   // conflict) or by beginModelImport() below (an Embedded-material conflict for a model still
   // being loaded -- modelMaterialIndex/embeddedStream are set in that case). Resolved via the
@@ -209,6 +237,11 @@ int main(int argc, char** argv) {
     std::string sourceFileForDisplay;
     std::vector<std::optional<modeltool::MaterialReference>> materialRefs;  // parallel to imported.materials
     std::vector<std::string> unresolvedMaterialNames;                      // for the finish-up status message
+    // Set only when this import came from a <Model> XML (standalone or embedded) -- applied onto
+    // the built model's meshes by name once finalizeModelBuild() actually has them, and committed
+    // to the outer modelXmlOrigin so Save knows where to write back to.
+    std::optional<std::vector<modelxml::MeshMetadataXmlDefinition>> xmlMeshMetadata;
+    ModelXmlOrigin xmlOrigin;
   };
   std::optional<PendingModelImport> pendingModelImport;
 
@@ -221,11 +254,27 @@ int main(int argc, char** argv) {
   auto finalizeModelBuild = [&](PendingModelImport pending) {
     const std::string sourceFileForDisplay = pending.sourceFileForDisplay;
     const std::size_t unresolvedCount = pending.unresolvedMaterialNames.size();
+    const std::optional<std::vector<modelxml::MeshMetadataXmlDefinition>> xmlMeshMetadata = pending.xmlMeshMetadata;
+    const ModelXmlOrigin xmlOrigin = pending.xmlOrigin;
     try {
       const std::string defaultFallbackName = materialLibrary->defaultFallbackMaterial()->getName();
       modeltool::BuiltModel built =
           modeltool::buildModel(*resourceMgr, wrangler, std::move(pending.imported), std::move(pending.materialRefs), defaultFallbackName);
+      // Per-mesh Type/Visible metadata from the associated <Model> XML, matched onto the just-built
+      // meshes by name -- a mesh the XML doesn't mention (e.g. the .mppmodel was re-exported with
+      // extra meshes since the XML was last saved) just keeps ImportedMesh's in-memory defaults.
+      if (xmlMeshMetadata.has_value()) {
+        for (modeltool::ImportedMesh& mesh : built.source.meshes) {
+          const auto found = std::find_if(xmlMeshMetadata->begin(), xmlMeshMetadata->end(),
+                                          [&](const modelxml::MeshMetadataXmlDefinition& m) { return m.name == mesh.name; });
+          if (found != xmlMeshMetadata->end()) {
+            mesh.type = found->type;
+            mesh.visible = found->visible;
+          }
+        }
+      }
       viewport->setModel(std::move(built));
+      modelXmlOrigin = xmlOrigin;
     } catch (const std::exception& error) {
       showStatus("Failed to finish loading " + sourceFileForDisplay + ": " + error.what());
       return;
@@ -288,11 +337,15 @@ int main(int argc, char** argv) {
   // only populated (non-null entries) for .mppmodel-sourced Embedded materials -- empty for AssImp,
   // whose Embedded materials are always built fresh from a texture file path instead.
   auto beginModelImport = [&](modeltool::ImportedModel imported, const std::string& sourceFileForDisplay,
-                               std::vector<mpp::ResourceStreamPtr> embeddedStreams, std::vector<std::string> unresolvedMaterialNames) {
+                               std::vector<mpp::ResourceStreamPtr> embeddedStreams, std::vector<std::string> unresolvedMaterialNames,
+                               std::optional<std::vector<modelxml::MeshMetadataXmlDefinition>> xmlMeshMetadata = std::nullopt,
+                               ModelXmlOrigin xmlOrigin = {}) {
     PendingModelImport pending;
     pending.sourceFileForDisplay = sourceFileForDisplay;
     pending.unresolvedMaterialNames = std::move(unresolvedMaterialNames);
     pending.materialRefs.resize(imported.materials.size());
+    pending.xmlMeshMetadata = std::move(xmlMeshMetadata);
+    pending.xmlOrigin = std::move(xmlOrigin);
 
     // Wrapped in try/catch: declareModelOwned()/declareModelOwnedFromStream() call Resource::load()
     // on a (for .mppmodel) deserialized material -- vendored mpp/ResourceStreamSerializer code this
@@ -375,27 +428,94 @@ int main(int argc, char** argv) {
     }
   };
 
-  // Shared by the File menu's "Open..."/"Save As .mppmodel..." items and their Ctrl+O/Ctrl+S
-  // keyboard shortcuts below, so both paths run identical logic.
+  // Opens the .mppmodel a <Model> XML fragment (standalone or embedded) references, resolved
+  // relative to the XML file's own directory -- mirrors openPath()'s .mppmodel branch, but routes
+  // the fragment's mesh metadata + origin through beginModelImport so finalizeModelBuild can apply
+  // them once the meshes actually exist.
+  auto openModelXml = [&](const std::filesystem::path& xmlPath, const modelxml::ModelXmlDefinition& def, ModelXmlOrigin origin) {
+    const std::filesystem::path mppPath = (xmlPath.parent_path() / modeltool::utf8ToWide(def.modelFile)).lexically_normal();
+    std::string error;
+    std::optional<modeltool::MppModelImportResult> result =
+        modeltool::importMppModel(modeltool::pathToUtf8(mppPath), *resourceMgr, *materialLibrary, &error);
+    if (!result.has_value()) {
+      showStatus("Open failed: " + error);
+      return;
+    }
+    beginModelImport(std::move(result->model), modeltool::pathToUtf8(mppPath), std::move(result->embeddedMaterialStreams),
+                      std::move(result->unresolvedMaterialNames), def.meshes, std::move(origin));
+  };
+
+  // Shared by the File menu's "Open..." item and its Ctrl+O keyboard shortcut below, so both paths
+  // run identical logic. Classifies the picked file (TRACK_MODEL_LIST_PLAN.md Milestone 3.3):
+  // .mppmodel/AssImp formats go through the unchanged openPath() dispatch; a standalone <Model> XML
+  // opens the .mppmodel it references with that fragment's metadata attached; a Track resource XML
+  // opens its one embedded <Model>, or queues the "Choose Model" picker modal if it has more than
+  // one.
   auto doOpen = [&]() {
-    // *.mppmodel is folded into "All Supported Models" alongside the AssImp formats (doOpen()/
-    // openPath() dispatch by extension regardless of which filter entry the user picked, same as
-    // the AssImp formats already do among themselves), plus its own separate filter entry for
-    // picking it specifically.
+    // *.mppmodel and *.xml are folded into "All Supported Models" alongside the AssImp formats
+    // (classifyOpenTarget()/openPath() dispatch by content/extension regardless of which filter
+    // entry the user picked, same as the AssImp formats already do among themselves), plus their
+    // own separate filter entries for picking them specifically.
     const modeltool::FileDialogResult picked = modeltool::showOpenFileDialog(
         L"Open Model",
-        {{L"All Supported Models (*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz;*.gltf;*.glb;*.mppmodel)",
-          L"*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz;*.gltf;*.glb;*.mppmodel"},
+        {{L"All Supported Models (*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz;*.gltf;*.glb;*.mppmodel;*.xml)",
+          L"*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz;*.gltf;*.glb;*.mppmodel;*.xml"},
          {L"OBJ (*.obj)", L"*.obj"},
          {L"FBX (*.fbx)", L"*.fbx"},
          {L"USD (*.usd;*.usda;*.usdc;*.usdz)", L"*.usd;*.usda;*.usdc;*.usdz"},
          {L"glTF (*.gltf;*.glb)", L"*.gltf;*.glb"},
-         {L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}});
+         {L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"},
+         {L"Model XML (*.xml)", L"*.xml"}});
     if (!picked.ok) return;
-    openPath(modeltool::pathToUtf8(picked.path));
+
+    const std::filesystem::path path = picked.path;
+    const modeltool::OpenTargetKind kind = modeltool::classifyOpenTarget(path);
+    try {
+      switch (kind) {
+        case modeltool::OpenTargetKind::StandaloneModelXml: {
+          const modelxml::ModelXmlDefinition def = modelxml::loadStandaloneModelXml(path);
+          ModelXmlOrigin origin;
+          origin.kind = ModelXmlOrigin::Kind::StandaloneXml;
+          origin.xmlPath = path;
+          origin.modelFileReference = def.modelFile;
+          origin.trackDataReference = def.trackData;
+          openModelXml(path, def, std::move(origin));
+          break;
+        }
+        case modeltool::OpenTargetKind::TrackResourceXml: {
+          std::vector<modeltool::TrackResourceModelEntry> entries = modeltool::scanTrackResourceModels(path);
+          if (entries.empty()) {
+            showStatus("Open failed: '" + modeltool::pathToUtf8(path) + "' has no <Model> entries in its Models list.");
+          } else if (entries.size() == 1) {
+            const modelxml::ModelXmlDefinition def = modeltool::readEmbeddedModel(path, entries.front().id);
+            ModelXmlOrigin origin;
+            origin.kind = ModelXmlOrigin::Kind::EmbeddedInTrackResource;
+            origin.xmlPath = path;
+            origin.modelFileReference = def.modelFile;
+            origin.trackDataReference = def.trackData;
+            origin.embeddedModelId = entries.front().id;
+            openModelXml(path, def, std::move(origin));
+          } else {
+            pendingTrackResourceOpen = PendingTrackResourceOpen{path, std::move(entries)};
+            openTrackResourceModelPickerDialog = true;
+          }
+          break;
+        }
+        case modeltool::OpenTargetKind::MppModel:
+        case modeltool::OpenTargetKind::Unsupported:
+          openPath(modeltool::pathToUtf8(path));
+          break;
+      }
+    } catch (const std::exception& error) {
+      showStatus(std::string("Open failed: ") + error.what());
+    }
   };
 
-  auto doSave = [&]() {
+  // Always prompts for a destination and writes a raw .mppmodel + companion materials XML --
+  // unchanged from before TRACK_MODEL_LIST_PLAN.md Milestone 3.3, used for a fresh AssImp import (no
+  // XML origin yet) or an explicit "save a copy elsewhere". doSave() below is the smart one: it
+  // writes back to modelXmlOrigin silently when one is known, falling back to this otherwise.
+  auto doSaveAs = [&]() {
     if (!viewport->hasModel()) return;
     const modeltool::FileDialogResult picked =
         modeltool::showSaveFileDialog(L"Save mppmodel", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}}, L"model.mppmodel", L"mppmodel");
@@ -421,6 +541,43 @@ int main(int argc, char** argv) {
       } else {
         showStatus("Save failed: " + error);
       }
+    } catch (const std::exception& saveError) {
+      showStatus(std::string("Save failed: ") + saveError.what());
+    }
+  };
+
+  // Writes back to wherever the model was opened from (TRACK_MODEL_LIST_PLAN.md Milestone 3.3): a
+  // raw .mppmodel with no known <Model> XML falls back to doSaveAs() (prompts), exactly as before
+  // this milestone. A StandaloneXml/EmbeddedInTrackResource origin instead re-saves the .mppmodel to
+  // its resolved path and rewrites the associated <Model> fragment's mesh metadata, with no dialog.
+  auto doSave = [&]() {
+    if (!viewport->hasModel()) return;
+    if (modelXmlOrigin.kind == ModelXmlOrigin::Kind::None) {
+      doSaveAs();
+      return;
+    }
+
+    const std::filesystem::path mppPath =
+        (modelXmlOrigin.xmlPath.parent_path() / modeltool::utf8ToWide(modelXmlOrigin.modelFileReference)).lexically_normal();
+    std::string error;
+    try {
+      if (!modeltool::saveModelAsMppModel(*viewport->builtModel(), *materialLibrary, modeltool::pathToUtf8(mppPath), &error)) {
+        showStatus("Save failed: " + error);
+        return;
+      }
+
+      modelxml::ModelXmlDefinition def;
+      def.modelFile = modelXmlOrigin.modelFileReference;
+      def.trackData = modelXmlOrigin.trackDataReference;
+      for (const modeltool::ImportedMesh& mesh : viewport->builtModel()->source.meshes) def.meshes.push_back({mesh.name, mesh.type, mesh.visible});
+
+      if (modelXmlOrigin.kind == ModelXmlOrigin::Kind::StandaloneXml) {
+        modelxml::saveStandaloneModelXml(modelXmlOrigin.xmlPath, def);
+      } else {
+        def.id = modelXmlOrigin.embeddedModelId;
+        modeltool::rewriteEmbeddedModel(modelXmlOrigin.xmlPath, *modelXmlOrigin.embeddedModelId, def);
+      }
+      showStatus("Saved " + modeltool::pathToUtf8(mppPath) + " and " + modeltool::pathToUtf8(modelXmlOrigin.xmlPath));
     } catch (const std::exception& saveError) {
       showStatus(std::string("Save failed: ") + saveError.what());
     }
@@ -518,10 +675,13 @@ int main(int argc, char** argv) {
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("File")) {
         // One "Open..." item, combined filter across all four AssImp formats (ADR 0001 D11) plus
-        // a separate *.mppmodel filter entry -- doOpen()/openPath() dispatch by extension.
+        // .mppmodel/Model-XML entries -- doOpen() classifies and dispatches (OpenTarget.hpp).
         if (ImGui::MenuItem("Open...", "Ctrl+O")) doOpen();
         ImGui::Separator();
-        if (ImGui::MenuItem("Save As .mppmodel...", "Ctrl+S", false, viewport->hasModel())) doSave();
+        // "Save" (Ctrl+S) writes back to wherever the model was opened from when that's known
+        // (TRACK_MODEL_LIST_PLAN.md Milestone 3.3); "Save As" always prompts.
+        if (ImGui::MenuItem("Save", "Ctrl+S", false, viewport->hasModel())) doSave();
+        if (ImGui::MenuItem("Save As .mppmodel...", nullptr, false, viewport->hasModel())) doSaveAs();
         ImGui::Separator();
         if (ImGui::MenuItem("Import Materials XML...")) doImportMaterialsXml();
         ImGui::Separator();
@@ -645,6 +805,54 @@ int main(int argc, char** argv) {
         ImGui::CloseCurrentPopup();
       }
       ImGui::EndPopup();
+    }
+
+    // "Choose Model" modal (TRACK_MODEL_LIST_PLAN.md Milestone 3.3): a picked Track resource XML
+    // embedded more than one <Model> -- one row per entry, opened via openModelXml() on click.
+    if (openTrackResourceModelPickerDialog) {
+      ImGui::OpenPopup("Choose Model");
+      openTrackResourceModelPickerDialog = false;
+    }
+    if (ImGui::BeginPopupModal("Choose Model", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextUnformatted("This Track resource embeds more than one Model -- choose which to open:");
+      ImGui::Separator();
+      std::optional<std::string> selectedModelId;
+      if (pendingTrackResourceOpen.has_value()) {
+        for (const modeltool::TrackResourceModelEntry& entry : pendingTrackResourceOpen->entries) {
+          const std::string label = entry.id + "  (" + entry.modelFileReference + ")";
+          if (ImGui::Selectable(label.c_str())) selectedModelId = entry.id;
+        }
+      }
+      ImGui::Separator();
+      if (ImGui::Button("Cancel")) {
+        pendingTrackResourceOpen.reset();
+        ImGui::CloseCurrentPopup();
+      }
+      if (selectedModelId.has_value()) ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+
+      // Deferred until after EndPopup() (mirroring the "Material Name Conflicts" modal's own
+      // act-then-close pattern) -- xmlPath/modelId are copied out before pendingTrackResourceOpen
+      // resets, since openModelXml() below can itself repopulate it (e.g. a Cancel-then-reopen
+      // wouldn't, but nothing here should assume pendingTrackResourceOpen still holds this frame's
+      // selection afterward).
+      if (selectedModelId.has_value() && pendingTrackResourceOpen.has_value()) {
+        const std::filesystem::path xmlPath = pendingTrackResourceOpen->xmlPath;
+        const std::string modelId = *selectedModelId;
+        pendingTrackResourceOpen.reset();
+        try {
+          const modelxml::ModelXmlDefinition def = modeltool::readEmbeddedModel(xmlPath, modelId);
+          ModelXmlOrigin origin;
+          origin.kind = ModelXmlOrigin::Kind::EmbeddedInTrackResource;
+          origin.xmlPath = xmlPath;
+          origin.modelFileReference = def.modelFile;
+          origin.trackDataReference = def.trackData;
+          origin.embeddedModelId = modelId;
+          openModelXml(xmlPath, def, std::move(origin));
+        } catch (const std::exception& error) {
+          showStatus(std::string("Open failed: ") + error.what());
+        }
+      }
     }
 
     ImGuiViewport* mainViewport = ImGui::GetMainViewport();
