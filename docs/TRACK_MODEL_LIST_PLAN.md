@@ -584,3 +584,28 @@ the editor as opaque pass-through data it preserves but never edits.
   environment (no display/GPU) at any point across this whole plan —
   every milestone's own entry above already flags exactly where that
   matters most.
+
+---
+
+## Post-plan follow-up — model-tool: export `<Model>` XML instead of a materials fragment — done (`08252b4`)
+
+A second grilling session, after all 8 milestones above landed, revised
+`model-tool`'s Open/Save flow further:
+
+- **Open** (`Ctrl+O`) is now `<Model>` XML only (standalone or embedded in a
+  Track resource); the AssImp-formats-plus-raw-`.mppmodel` case Open used to
+  also handle moved to a new **Import Model...** item, always starting a
+  document with no XML origin.
+- **Save As** now prompts for the `<Model>` XML destination (not an
+  `.mppmodel` destination as before), deriving the `.mppmodel` filename from
+  it and adopting the new location as the origin.
+- **Save** gained `mppModelDirty` tracking (set by Bake Scale and its
+  undo/redo, and by a fresh Import) so a metadata-only edit updates just the
+  XML, leaving the `.mppmodel` untouched.
+- The old companion materials-declaration XML export
+  (`ModelResourceExport.hpp`/`.cpp`, `buildModelMaterialsXml`) is deleted
+  outright — the `<Model>` XML fragment fully replaces it, per this
+  session's own locked-in decision, rather than the two coexisting.
+
+See the commit above for the full breakdown; `docs/model-tool.md`'s "Open /
+Import / Save" section documents the resulting UX.
