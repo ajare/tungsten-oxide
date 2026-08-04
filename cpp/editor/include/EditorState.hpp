@@ -286,31 +286,35 @@ public:
     return id;
   }
 
-  // "Load Model" (TRACK_MODEL_LIST_PLAN.md Milestone 6): embeds `parsed` into `track_.models` --
-  // reusing an existing entry whose ModelFile already matches `modelFileReference` (dedup, per the
-  // locked-in decision) rather than duplicating it, or appending a fresh entry with a freshly
-  // generated id otherwise -- then adds a placement referencing that id at world (x, 0, z), exactly
-  // like addMeshObjectPlacement. Pushes exactly one undo step for the whole operation (embed, if
-  // any, plus placement) -- inlined rather than calling addMeshObjectPlacement, which pushes its
-  // own unconditionally and would double up when a new Model entry is also embedded this call.
-  // Returns the new placement's id.
-  std::string loadModel(modelxml::ModelXmlDefinition parsed, const std::string& modelFileReference, double x, double z) {
-    history_.push(track_);
+  // "Load Model" (TRACK_MODEL_LIST_PLAN.md Milestone 6, revised so loading no longer implies
+  // placing): embeds `parsed` into `track_.models` -- reusing an existing entry whose ModelFile
+  // already matches `modelFileReference` (dedup, per the locked-in decision) rather than duplicating
+  // it, or appending a fresh entry with a freshly generated id otherwise. Creates no placement --
+  // that's placeModelInstance's job, invoked separately (the canvas's right-click "Place Model"
+  // submenu). Returns the embedded (or reused) Model's own id.
+  std::string embedModel(modelxml::ModelXmlDefinition parsed, const std::string& modelFileReference) {
     const auto existing = std::find_if(track_.models.begin(), track_.models.end(),
                                        [&](const modelxml::ModelXmlDefinition& m) { return m.modelFile == modelFileReference; });
-    std::string modelId;
-    if (existing != track_.models.end()) {
-      modelId = existing->id.value_or(std::string());
-    } else {
-      modelId = newModelId();
-      parsed.id = modelId;
-      parsed.modelFile = modelFileReference;
-      track_.models.push_back(std::move(parsed));
-    }
+    if (existing != track_.models.end()) return existing->id.value_or(std::string());
+    history_.push(track_);
+    const std::string modelId = newModelId();
+    parsed.id = modelId;
+    parsed.modelFile = modelFileReference;
+    track_.models.push_back(std::move(parsed));
+    return modelId;
+  }
+
+  // Places a new instance of an already-embedded `modelId` (see embedModel above) at whichever
+  // world position the active ProjectionMode's plane maps (planeU, planeV) to -- same
+  // planeCoords/setPlaneCoords convention as every other canvas-placed entity (e.g. the "Add control
+  // point" context-menu items), rather than always writing world X/Z regardless of mode. Selects the
+  // new placement and returns its id.
+  std::string placeModelInstance(const std::string& modelId, double planeU, double planeV) {
+    history_.push(track_);
     ModelPlacement placement;
     placement.id = newMeshObjectId();
     placement.modelId = modelId;
-    placement.position = tox::Vec3(x, 0.0, z);
+    setPlaneCoords(projectionMode_, placement.position, planeU, planeV);
     track_.meshObjects.push_back(std::move(placement));
     const std::string placementId = track_.meshObjects.back().id;
     selectMeshObject(placementId);

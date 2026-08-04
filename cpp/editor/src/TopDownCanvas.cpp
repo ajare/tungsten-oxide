@@ -662,19 +662,27 @@ tox::Vec3 placementTransformPosition(const ModelPlacement& placement, const tox:
   return rotated + placement.position;
 }
 
+// A placement's modelId names an embedded <Model id> in track.models (TRACK_MODEL_LIST_PLAN.md
+// Milestone 6), not a raw path -- resolve it to that Model's own <ModelFile> reference. Returns
+// nullptr if the id doesn't match any embedded Model (a stale/hand-edited reference).
+const std::string* resolveModelFileReference(const TrackDefinition& track, const std::string& modelId) {
+  for (const auto& model : track.models)
+    if (model.id == modelId) return &model.modelFile;
+  return nullptr;
+}
+
 // Loads (and caches for the process's lifetime -- no on-disk-change invalidation, an accepted
 // limitation matching this codebase's "no triangle budget set now, measure against real content
-// once it exists" posture for placement rendering elsewhere) a placement's referenced .mppmodel
-// geometry, resolved as a plain relative path against `baseDir` -- today's only resolution
-// convention (mirrors main.cpp's "Place Drivable Mesh Object" path handling exactly); once
-// TRACK_MODEL_LIST_PLAN.md Milestone 6 gives placements a real embedded-Model-id lookup instead,
-// only the caller producing `baseDir`/the path to resolve changes, not this cache/loader itself.
-// Returns nullptr on any failure (missing file, bad format, no baseDir yet) -- best-effort, a
-// placement always still renders its marker either way (see drawMeshObjectPlacements below).
-const ImportedMppModel* loadCachedPlacementGeometry(const std::string& modelId, const std::filesystem::path& baseDir) {
+// once it exists" posture for placement rendering elsewhere) a .mppmodel's geometry, resolved as a
+// plain relative path against `baseDir` (mirrors main.cpp's own save-location-relative resolution
+// convention). `modelFileReference` is the embedded Model's own <ModelFile> text (see
+// resolveModelFileReference above), not the placement's modelId. Returns nullptr on any failure
+// (missing file, bad format, no baseDir yet) -- best-effort, a placement always still renders its
+// marker either way (see drawMeshObjectPlacements below).
+const ImportedMppModel* loadCachedPlacementGeometry(const std::string& modelFileReference, const std::filesystem::path& baseDir) {
   static std::unordered_map<std::string, std::optional<ImportedMppModel>> cache;
-  if (baseDir.empty() || modelId.empty()) return nullptr;
-  const std::string key = (baseDir / modelId).lexically_normal().string();
+  if (baseDir.empty() || modelFileReference.empty()) return nullptr;
+  const std::string key = (baseDir / modelFileReference).lexically_normal().string();
   const auto found = cache.find(key);
   if (found != cache.end()) return found->second.has_value() ? &*found->second : nullptr;
   std::optional<ImportedMppModel> loaded;
@@ -699,13 +707,15 @@ void drawMeshObjectPlacements(ImDrawList* drawList, const ImVec2& canvasOrigin, 
     // triangle of every mesh, transformed by the placement's 6-DOF transform and projected through
     // the active plane -- same flat-fill convention every other filled shape on this canvas already
     // uses (drawBakedPath/drawZones/etc.), not real lit 3D rendering.
-    if (const ImportedMppModel* geometry = loadCachedPlacementGeometry(placement.modelId, modelBaseDir)) {
-      for (const ImportedMppMesh& mesh : geometry->meshes) {
-        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-          const ImVec2 a = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i]].position)));
-          const ImVec2 b = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 1]].position)));
-          const ImVec2 c = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 2]].position)));
-          drawList->AddTriangleFilled(a, b, c, isSelected ? kMeshSelectedOutlineColor : kMeshFillColor);
+    if (const std::string* modelFileReference = resolveModelFileReference(track, placement.modelId)) {
+      if (const ImportedMppModel* geometry = loadCachedPlacementGeometry(*modelFileReference, modelBaseDir)) {
+        for (const ImportedMppMesh& mesh : geometry->meshes) {
+          for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const ImVec2 a = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i]].position)));
+            const ImVec2 b = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 1]].position)));
+            const ImVec2 c = toAbsolute(canvasOrigin, worldToScreenPlane(view, mode, placementTransformPosition(placement, mesh.vertices[mesh.indices[i + 2]].position)));
+            drawList->AddTriangleFilled(a, b, c, isSelected ? kMeshSelectedOutlineColor : kMeshFillColor);
+          }
         }
       }
     }
@@ -1945,6 +1955,24 @@ bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* 
         }
         if (ImGui::MenuItem("Checkpoint")) {
           mutated = state.addPathTrigger(nearPlacement->pathIndex, "checkpoint", nearPlacement->t).has_value() || mutated;
+        }
+        ImGui::EndDisabled();
+
+        // Place an instance of an already-embedded Model (TRACK_MODEL_LIST_PLAN.md: "File > Load
+        // Model..." only embeds now, it doesn't place -- this submenu is the one place placements
+        // are actually created). Disabled with nothing to place when the Track has no embedded
+        // Models yet.
+        ImGui::Separator();
+        ImGui::BeginDisabled(state.track().models.empty());
+        if (ImGui::BeginMenu("Place Model")) {
+          for (const auto& model : state.track().models) {
+            const std::string label = model.id.value_or(model.modelFile) + "  (" + model.modelFile + ")";
+            if (ImGui::MenuItem(label.c_str()) && model.id.has_value()) {
+              state.placeModelInstance(*model.id, contextMenuWorld.x, contextMenuWorld.z);
+              mutated = true;
+            }
+          }
+          ImGui::EndMenu();
         }
         ImGui::EndDisabled();
 

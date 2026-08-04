@@ -1237,8 +1237,9 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
 // metadata is visible through every placement that references it, since the metadata belongs to
 // the shared Model entry, not any one placement.
 struct LoadModelSmokeCheckResult {
-  bool firstEmbedsOneModelOnePlacement = false;
-  bool secondReusesEmbeddedModel = false;
+  bool embedCreatesNoPlacement = false;
+  bool firstPlacementCreatesInstance = false;
+  bool secondPlacementReusesEmbeddedModel = false;
   bool differentModelEmbedsSecondEntry = false;
   bool editEmbeddedModelAffectsSharedMetadata = false;
 };
@@ -1249,19 +1250,25 @@ LoadModelSmokeCheckResult runLoadModelSmokeCheck() {
 
   modelxml::ModelXmlDefinition cubeModel;
   cubeModel.meshes.push_back({"main", modelxml::MeshType::Physical, true});
-  state.loadModel(cubeModel, "Cube.mppmodel", 10.0, 20.0);
-  result.firstEmbedsOneModelOnePlacement = state.track().models.size() == 1 && state.track().meshObjects.size() == 1;
+  const std::string cubeModelId = state.embedModel(cubeModel, "Cube.mppmodel");
+  result.embedCreatesNoPlacement = state.track().models.size() == 1 && state.track().meshObjects.empty();
 
-  state.loadModel(cubeModel, "Cube.mppmodel", 30.0, 40.0);
-  result.secondReusesEmbeddedModel = state.track().models.size() == 1 && state.track().meshObjects.size() == 2 &&
-                                     state.track().meshObjects[0].modelId == state.track().meshObjects[1].modelId;
+  state.placeModelInstance(cubeModelId, 10.0, 20.0);
+  result.firstPlacementCreatesInstance = state.track().models.size() == 1 && state.track().meshObjects.size() == 1 &&
+                                         state.track().meshObjects[0].modelId == cubeModelId;
+
+  const std::string reusedModelId = state.embedModel(cubeModel, "Cube.mppmodel");
+  state.placeModelInstance(reusedModelId, 30.0, 40.0);
+  result.secondPlacementReusesEmbeddedModel = reusedModelId == cubeModelId && state.track().models.size() == 1 &&
+                                              state.track().meshObjects.size() == 2 &&
+                                              state.track().meshObjects[0].modelId == state.track().meshObjects[1].modelId;
 
   modelxml::ModelXmlDefinition rampModel;
   rampModel.meshes.push_back({"ramp", modelxml::MeshType::Physical, true});
-  state.loadModel(rampModel, "Ramp.mppmodel", 50.0, 60.0);
+  const std::string rampModelId = state.embedModel(rampModel, "Ramp.mppmodel");
+  state.placeModelInstance(rampModelId, 50.0, 60.0);
   result.differentModelEmbedsSecondEntry = state.track().models.size() == 2 && state.track().meshObjects.size() == 3;
 
-  const std::string cubeModelId = state.track().meshObjects[0].modelId;
   result.editEmbeddedModelAffectsSharedMetadata =
       state.editEmbeddedModel(cubeModelId, [](modelxml::ModelXmlDefinition& m) { m.meshes[0].visible = false; }) &&
       state.findModel(cubeModelId) != nullptr && !state.findModel(cubeModelId)->meshes[0].visible;
@@ -1601,9 +1608,9 @@ int main(int, char**) {
   std::fflush(stdout);
 
   const LoadModelSmokeCheckResult loadModelSmoke = runLoadModelSmokeCheck();
-  std::fprintf(stdout, "LoadModel smoke check: firstEmbed=%s dedupReuse=%s secondModelEmbeds=%s sharedMetadataEdit=%s\n",
-               loadModelSmoke.firstEmbedsOneModelOnePlacement ? "OK" : "MISMATCH",
-               loadModelSmoke.secondReusesEmbeddedModel ? "OK" : "MISMATCH",
+  std::fprintf(stdout, "LoadModel smoke check: embedNoPlacement=%s firstPlacement=%s dedupReuse=%s secondModelEmbeds=%s sharedMetadataEdit=%s\n",
+               loadModelSmoke.embedCreatesNoPlacement ? "OK" : "MISMATCH", loadModelSmoke.firstPlacementCreatesInstance ? "OK" : "MISMATCH",
+               loadModelSmoke.secondPlacementReusesEmbeddedModel ? "OK" : "MISMATCH",
                loadModelSmoke.differentModelEmbedsSecondEntry ? "OK" : "MISMATCH",
                loadModelSmoke.editEmbeddedModelAffectsSharedMetadata ? "OK" : "MISMATCH");
   std::fflush(stdout);
@@ -2071,15 +2078,14 @@ int main(int, char**) {
           }
         }
         ImGui::Separator();
-        // "Load Model..." (TRACK_MODEL_LIST_PLAN.md Milestone 6.1, replacing "Place Drivable Mesh
-        // Object..."): picks either a raw .mppmodel or a standalone <Model> XML fragment (the
+        // "Load Model..." picks either a raw .mppmodel or a standalone <Model> XML fragment (the
         // latter parsed via cpp/model-xml, same as model-tool's own OpenTarget.cpp classification --
         // reimplemented independently here, not shared, since the editor has no dependency on
-        // model-tool's code). Either way, the resulting relative path (mirroring how a raw
-        // .mppmodel pick already resolved `modelId` before this milestone: relative to the current
-        // save location, falling back to the bare filename with no save location bound yet) is
-        // handed to EditorState::loadModel, which embeds (or reuses, per the dedup-by-ModelFile
-        // decision) a <Model> entry and creates a placement referencing it.
+        // model-tool's code) and embeds it into the current Track's `models` list (or reuses an
+        // existing entry, per the dedup-by-ModelFile decision) -- it does NOT place an instance.
+        // Placing instances is the canvas's right-click "Place Model" submenu's job instead (see
+        // TopDownCanvas.cpp), so the same embedded Model can be placed any number of times without
+        // reopening its source file each time.
         if (ImGui::MenuItem("Load Model...")) {
           const editor::FileDialogResult picked = editor::showOpenFileDialog(
               L"Load Model", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}, {L"Model XML (*.xml)", L"*.xml"}});
@@ -2107,13 +2113,12 @@ int main(int, char**) {
                 modelFileReference = resolveModelFileReference(absoluteMppModel);
               } else {
                 // A raw .mppmodel with no associated XML has no Type/Visible metadata to attach --
-                // EditorState::loadModel embeds a bare entry (matching model-tool's own "no XML
+                // EditorState::embedModel embeds a bare entry (matching model-tool's own "no XML
                 // metadata yet" Physical/visible defaults).
                 modelFileReference = resolveModelFileReference(picked.path);
               }
-              const editor::WorldPoint2D center = topDownView.center();
-              editorState.loadModel(std::move(parsed), modelFileReference, center.x, center.z);
-              rebake();
+              editorState.embedModel(std::move(parsed), modelFileReference);
+              showStatus("Loaded " + modelFileReference + " -- right-click the canvas to place an instance");
             } catch (const std::exception& error) {
               showStatus(std::string("Load Model failed: ") + error.what());
             }
@@ -2801,8 +2806,8 @@ int main(int, char**) {
     ImGui::SetNextWindowSize(ImVec2(900, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("View");
     std::optional<editor::WorldPoint2D> hoveredWorld;
-    // Placement geometry (TRACK_MODEL_LIST_PLAN.md Milestone 4.2) resolves modelId the same way
-    // "Place Drivable Mesh Object" already does: relative to the current save location's directory.
+    // Placement geometry (TRACK_MODEL_LIST_PLAN.md Milestone 4.2): an embedded Model's own
+    // <ModelFile> reference is resolved relative to the current save location's directory.
     const std::filesystem::path modelBaseDir = saveBinding.has_value() ? saveBinding->xmlPath.parent_path() : std::filesystem::path{};
     if (editor::DrawTopDownCanvas(topDownView, editorState, bakedTrack, &hoveredWorld, modelBaseDir)) rebake();
     ImGui::End();
