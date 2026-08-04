@@ -916,6 +916,52 @@ after Milestone 4 lands.
   never exercised — a tunnel, a loop, or an overhang — and place it in a
   scratch track via the now-working Milestones 1–5 pipeline.
 - No code change; this step produces the asset/track used by 6.2–6.3.
+- **Done.** Went with a tunnel: floor/ceiling/two-walls U-channel-with-roof,
+  8m wide (local X -4..4) x 6m clearance (local Y 0..6) x 24m long (local Z
+  0..24) — floor+ceiling stacked vertically is specifically the case a flat
+  Mesh region never produces (a single vertical probe now has two along-axis
+  hits, floor and ceiling, not one), which is exactly what 6.2's `Ship.cpp`
+  investigation needs to exercise.
+  - Files: `cpp/test-data/fixtures/mesh-object/tunnel-validation/tunnel.mppmodel`
+    (the asset, 4 meshes/8 triangles, all collidable — no `~decorative`
+    suffix needed) + `track.json` (a straight, flat, 240m/24m-wide path,
+    structurally copied from the existing
+    `cpp/test-data/fixtures/mesh-object/basic-placement.json` fixture, with
+    one `meshObjects` entry placing the tunnel at world `(0, 0, 48)`,
+    identity rotation — local +Z already runs along the path's own +Z, so no
+    rotation was needed for a first pass) + `track.mppmodel` (the road's own
+    baked ModelFile, i.e. what a real editor Save/Export would produce for
+    `track.json`).
+  - No editor GUI available to author this (no display in this
+    environment), so both `.mppmodel` files were produced by reusing
+    already-existing, already-tested non-interactive code paths rather than
+    hand-writing a third binary-format writer:
+    - `tunnel.mppmodel`: a temporary scratch executable (built, run once,
+      then fully deleted — same precedent as the AssImp smoothing-groups
+      probe earlier in this project's history) that constructed a synthetic
+      `tox::Track` with four hand-authored flat-quad `GeometryBatch`es (one
+      per tunnel face, explicit per-vertex normals, no smoothing-recompute
+      needed since each is already planar) and passed it straight to
+      `cpp/editor/src/MppModelExport.cpp`'s `exportTrackToMppModel` — that
+      function only ever reads `Track::geometry`, so no baked path/spline
+      data was needed to get a valid, spec-verified `.mppmodel` out.
+    - `track.mppmodel`: obtained by temporarily disabling
+      `editor_track_resource_tests`' end-of-run `remove_all` (same
+      technique as 6.0's own verification) and feeding it `track.json` as
+      its fixture argument, exercising the real bake→export path a live
+      editor Save would use; copied the resulting `.mppmodel` out, then
+      reverted the test file (confirmed clean via `git diff`).
+  - Verified: `mesh_physics_diag` loads the pair without error and drives
+    through cleanly. With the default sinusoidal scripted steer the ship's
+    lateral drift (built for exercising a full 24m-wide road) carries it
+    outside the tunnel's narrower 8m footprint by the time it reaches z=48 —
+    expected, not a bug; 6.2 will design a steer pattern specific to this
+    track. A one-off zero-steer local rebuild (not committed) confirmed the
+    placement itself is correct: driving straight down the path's center
+    line at x=-2.5 passes cleanly under/through the tunnel's full z=48..72
+    span with `airborne=0` and a steady `normal=(0,1,0)` throughout, no
+    NaN/discontinuity. `ctest` stayed green (4/4) throughout; no `Ship.cpp`
+    changes made in this step (per scope).
 
 **6.2 — Fix ground/wall/airborne issues found**
 - File: `cpp/core/src/Ship.cpp` (`stepMeshPhysics`).

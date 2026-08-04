@@ -1,0 +1,45 @@
+{
+  "version": 12,
+  "name": "Fixture - tunnel validation (Milestone 6.1)",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": { "maxSpeed": 140, "accel": 71, "turnSpeed": 137.5, "weight": 1000 },
+  "meshObjects": [
+    {
+      "id": "tunnel-1",
+      "modelId": "tunnel.mppmodel",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 48.0,
+      "yaw": 0.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
+    }
+  ],
+  "zones": [],
+  "triggers": [],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "textureAssets": {},
+  "paths": [
+    {
+      "id": "path-main",
+      "closed": false,
+      "points": [
+        { "type": "position", "id": "p0", "pos": [0, 0, -120], "weight": 1 },
+        { "type": "position", "id": "p1", "pos": [0, 0, -40], "weight": 1 },
+        { "type": "position", "id": "p2", "pos": [0, 0, 40], "weight": 1 },
+        { "type": "position", "id": "p3", "pos": [0, 0, 120], "weight": 1 },
+        { "type": "width", "t": 0, "width": 24 },
+        { "type": "width", "t": 1, "width": 24 },
+        { "type": "roll", "t": 0, "roll": 0 },
+        { "type": "roll", "t": 1, "roll": 0 },
+        { "type": "crossSection", "t": 0, "curvature": 0, "tightness": 1, "thickness": 4 },
+        { "type": "crossSection", "t": 1, "curvature": 0, "tightness": 1, "thickness": 4 }
+      ]
+    }
+  ]
+}
