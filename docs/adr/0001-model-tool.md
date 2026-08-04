@@ -41,6 +41,14 @@ import unnecessary machinery or unnecessary limitations.
 
 ### D1 — Bare mpp, no willpower.application Resource system
 
+**Superseded in part by `0003-model-xml-layer.md`**: `model-tool` gained a
+`<Model>` XML fragment read/write layer once the Track resource schema grew a
+`<Models>` list with per-mesh metadata that's `model-tool`'s job to author.
+This D1 entry (and its "no declarative resource files to author" premise) is
+kept here for historical context; see 0003 for what changed and why the
+narrower Resource-scope reasoning below still applies to the willpower
+Resource/`ResourceManager` system specifically.
+
 `model-tool` talks to `mpp::RenderSystem`/`mpp::ResourceManager` directly and
 builds `mpp::Model`/`mpp::Material`/`mpp::Texture` objects programmatically at
 runtime (mirroring `ext/massivepolypusher/demo-suite`'s `ModelScene` and
