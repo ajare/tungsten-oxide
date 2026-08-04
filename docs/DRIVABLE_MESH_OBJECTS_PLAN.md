@@ -647,28 +647,56 @@ after Milestone 4 lands.
 - Test: `ctest` (`model_tool_tests`, new headless target — see 4.2/4.3).
   Commit.
 
-**4.2 — Normal recomputation** — done, at import time (not export)
-- Files: `cpp/model-tool/include/NormalSmoothing.hpp`/
-  `src/NormalSmoothing.cpp` (new, deliberately AssImp/mpp-free).
-- Recomputes vertex normals from triangle winding order, smoothly across
-  a model's sub-meshes (vertices from different `ImportedMesh` entries
-  sharing a quantized position accumulate the same face-normal
-  contributions), rather than trusting AssImp's per-mesh
-  `GenSmoothNormals` (removed from the import post-process flags —
-  redundant once this always runs and overwrites its output anyway).
-- **Deviates from the plan's literal "at export" wording**: runs once at
-  *import* time (end of `importModel()`) instead, so the live viewport
-  preview always matches what gets saved, and because this app's
-  pipeline has no distinct "export" step separate from `importModel()`
-  to hook a save-time recompute into without doing the work twice. See
-  `docs/model-tool.md`'s "Normal recomputation" section for the full
-  rationale.
-- Test: `model_tool_tests` (new `ctest` target, no AssImp/mpp/GPU/window
-  needed) constructs two hand-authored triangles in separate
-  `ImportedMesh` entries sharing an edge, confirms the shared vertices'
-  normals are numerically identical across the sub-mesh boundary after
-  recompute, and that an unshared vertex keeps its own triangle's exact
-  face normal. `ctest`. Commit.
+**4.2 — Normal recomputation** — done, at import time (not export), later revised to be smoothing-group-aware
+- Files: `cpp/model-tool/include/NormalSmoothing.hpp`/`src/NormalSmoothing.cpp`,
+  `include/PositionKey.hpp` (new, shared quantization helper),
+  `include/ObjSmoothingGroups.hpp`/`src/ObjSmoothingGroups.cpp` (new) —
+  all deliberately AssImp/mpp-free.
+- **Revision (post-completion follow-up):** originally smoothed across
+  every sub-mesh in a model unconditionally, treating "sub-mesh boundary"
+  as never an intended hard edge. Follow-up feedback asked this to
+  respect authored smoothing groups where the source format has them,
+  falling back to per-mesh (not cross-mesh) smoothing otherwise —
+  `.mppmodel` explicitly does not carry smoothing groups. Investigation
+  (reading the vendored AssImp headers, then empirically loading a
+  hand-crafted `.obj` with two triangles in different `s` groups sharing
+  an edge) confirmed `aiMesh` exposes **no** smoothing-group data for any
+  format, and `aiProcess_GenSmoothNormals` is a fixed crease-angle
+  heuristic that smooths straight across an authored group boundary
+  regardless — group data is genuinely unrecoverable through AssImp's
+  public API. User-confirmed scope: real group fidelity only for `.obj`
+  (parsed directly, bypassing AssImp for this one piece of data — a
+  documented plaintext format, unlike FBX/glTF/USD); every other format,
+  and `.mppmodel` reimport, now smooths per-mesh only (narrowed from the
+  original cross-every-mesh behavior).
+- `recomputeNormals()` now takes an optional `std::vector<MeshTriangleGroups>*`
+  (one group id per triangle, one entry per mesh). When supplied
+  (`.obj` only), matching (position, group) pairs merge into one smoothed
+  normal, global across meshes; a boundary between different groups at a
+  shared position gets a real hard edge via vertex splitting (a vertex
+  used by more than one group's triangles is duplicated, one copy per
+  group, since a single vertex can only carry one normal). When absent,
+  every mesh gets one synthetic group covering all its own triangles
+  (smooth within a mesh, hard between meshes).
+- `ObjSmoothingGroups.cpp` re-parses the raw `.obj` text directly
+  (tracking `s`/`f` lines), then matches AssImp's post-processed
+  triangles back to the original faces by vertex position (declaration
+  order isn't stable across `Triangulate`/`JoinIdenticalVertices`) — a
+  triangulated face's sub-triangles only ever use vertices the original
+  face had, so the correct source face is whichever one's position set
+  contains all three of a triangle's corners. `s off`/`s 0` gets a
+  unique synthetic group per face (never merges, matching OBJ's own "no
+  smoothing" semantics for that face).
+- Test: `model_tool_tests` covers (a) two meshes sharing an edge with no
+  group data get a hard edge (replacing the original "always smooths"
+  test), (b) two meshes sharing an edge WITH matching explicit groups
+  smooth seamlessly across the mesh boundary, (c) one mesh, two
+  triangles in different groups sharing an edge: the shared vertices
+  split into separate copies with distinct normals, (d) `.obj` raw-text
+  parsing recovers the correct group id per triangle, matched against a
+  hand-built `ImportedModel` mirroring AssImp's expected output shape,
+  and returns `nullopt` for a non-`.obj` path. `ctest` green (all 4
+  suites). Commit.
 
 **4.3 — Flag authoring surface** — done
 - Files: `cpp/model-tool/include/CollidableFlag.hpp`/`src/CollidableFlag.cpp`

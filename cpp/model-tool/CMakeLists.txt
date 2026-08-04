@@ -59,6 +59,7 @@ set(MODEL_TOOL_SOURCES
   src/FileDialog.cpp
   src/AssImpImport.cpp
   src/NormalSmoothing.cpp
+  src/ObjSmoothingGroups.cpp
   src/CollidableFlag.cpp
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
@@ -203,6 +204,7 @@ enable_testing()
 add_executable(model_tool_tests
   tests/model_tool_tests.cpp
   src/NormalSmoothing.cpp
+  src/ObjSmoothingGroups.cpp
   src/CollidableFlag.cpp)
 target_include_directories(model_tool_tests PRIVATE include)
 target_compile_features(model_tool_tests PRIVATE cxx_std_20)
