@@ -6,6 +6,7 @@
 #include <numbers>
 #include <vector>
 
+#include "ModelXml.hpp"
 #include "TrackCore.hpp"
 #include "imgui.h"
 
@@ -331,10 +332,11 @@ void drawCrossSectionFields(EditorState& state, const SelectedPoint& sel, const 
   drawCrossSectionPreview(curvature, tightness, thickness, width);
 }
 
-// Drivable mesh object placement fields (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.4): position/
-// rotation/scale plus a `modelId` reference display -- editable as a plain text field, since (per
-// Milestone 5.1's own scope note) the editor never loads a `.mppmodel` and so has no way to
-// validate a typed id against anything, only round-trip whatever string is entered.
+// Model placement fields (originally DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.4; `modelId` now
+// names an embedded <Model id> rather than a raw path, and gained a per-mesh Type/Visible editor --
+// TRACK_MODEL_LIST_PLAN.md Milestone 6.2): position/rotation/scale, a `modelId` text field (still
+// unvalidated against anything -- retyping it to a different embedded Model's id is a valid,
+// if manual, way to repoint a placement), and the referenced Model's own mesh metadata.
 void drawMeshObjectFields(EditorState& state, const std::string& id, bool& mutated) {
   const ModelPlacement* placement = state.findMeshObjectPlacement(id);
   if (placement == nullptr) return;
@@ -396,6 +398,39 @@ void drawMeshObjectFields(EditorState& state, const std::string& id, bool& mutat
       p.rotation = tox::Vec3(yaw, pitch, roll);
       p.scale = tox::Vec3(scaleX, scaleY, scaleZ);
     });
+  }
+
+  // Per-mesh Type/Visible metadata (TRACK_MODEL_LIST_PLAN.md Milestone 6.2): editing here affects
+  // every placement referencing the same embedded Model, since the metadata belongs to the shared
+  // Model entry, not this one placement -- consistent with "embedded Model is the shared metadata
+  // set, placements only add a transform."
+  const modelxml::ModelXmlDefinition* model = state.findModel(placement->modelId);
+  if (model != nullptr && !model->meshes.empty()) {
+    ImGui::Separator();
+    ImGui::Text("Model meshes (shared across every placement of %s)", placement->modelId.c_str());
+    for (std::size_t i = 0; i < model->meshes.size(); ++i) {
+      ImGui::PushID(static_cast<int>(i));
+      const modelxml::MeshMetadataXmlDefinition& mesh = model->meshes[i];
+      ImGui::BulletText("%s", mesh.name.c_str());
+      int typeIndex = static_cast<int>(mesh.type);
+      bool meshChanged = false;
+      ImGui::SetNextItemWidth(150);
+      meshChanged |= ImGui::Combo("Type##meshType", &typeIndex, "Track\0Physical\0Decorative\0");
+      bool visible = mesh.visible;
+      ImGui::SameLine();
+      meshChanged |= ImGui::Checkbox("Visible##meshVisible", &visible);
+      if (typeIndex == static_cast<int>(modelxml::MeshType::Track))
+        ImGui::TextDisabled("  requires a TrackData file on this Model");
+      if (meshChanged) {
+        mutated |= state.editEmbeddedModel(placement->modelId, [&](modelxml::ModelXmlDefinition& m) {
+          m.meshes[i].type = static_cast<modelxml::MeshType>(typeIndex);
+          m.meshes[i].visible = visible;
+        });
+      }
+      ImGui::PopID();
+    }
+  } else if (!placement->modelId.empty()) {
+    ImGui::TextDisabled("No mesh metadata embedded for this Model yet.");
   }
 
   if (ImGui::Button("Delete Mesh Object")) {

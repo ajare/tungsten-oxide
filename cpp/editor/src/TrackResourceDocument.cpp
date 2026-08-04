@@ -154,6 +154,13 @@ TrackResourceCandidate parseCandidate(XMLElement* resource, const std::filesyste
   try {
     out.jsonFingerprint = readFile(out.trackDataPath);
     out.track = fromJson(out.jsonFingerprint);
+    // Seed the editable document's own `models` (TRACK_MODEL_LIST_PLAN.md Milestone 6) with every
+    // non-primary entry -- the primary is regenerated fresh from the bake every save (see
+    // TrackResourceSave.cpp) and never lives here, only in the `models`/`primaryModelIndex` pair
+    // above.
+    if (out.track.has_value())
+      for (std::size_t i = 0; i < out.models.size(); ++i)
+        if (i != out.primaryModelIndex) out.track->models.push_back(out.models[i]);
   } catch (const std::exception& error) {
     out.error = error.what();
   }

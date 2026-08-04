@@ -121,6 +121,31 @@ public:
     return nullptr;
   }
 
+  // Non-const: PropertiesPanel.cpp edits an embedded Model's per-mesh Type/Visible metadata
+  // in place (TRACK_MODEL_LIST_PLAN.md Milestone 6.2) -- callers push undo themselves via
+  // editEmbeddedModel below rather than mutating this pointer directly.
+  modelxml::ModelXmlDefinition* findModel(const std::string& id) {
+    for (auto& model : track_.models)
+      if (model.id == id) return &model;
+    return nullptr;
+  }
+  const modelxml::ModelXmlDefinition* findModel(const std::string& id) const {
+    for (const auto& model : track_.models)
+      if (model.id == id) return &model;
+    return nullptr;
+  }
+
+  // Mutates the embedded Model by id via `mutate`, pushing one undo step first -- mirrors
+  // editMeshObjectPlacement's own pattern, for Milestone 6.2's per-mesh Type/Visible editor.
+  template <typename Mutate>
+  bool editEmbeddedModel(const std::string& id, Mutate&& mutate) {
+    modelxml::ModelXmlDefinition* model = findModel(id);
+    if (model == nullptr) return false;
+    history_.push(track_);
+    mutate(*model);
+    return true;
+  }
+
   // Unlike findZone/findTrigger, reservations are stored per-path, so this scans every path.
   const Reservation* findReservation(const std::string& id) const {
     for (const auto& path : track_.paths)
@@ -259,6 +284,37 @@ public:
     const std::string id = track_.meshObjects.back().id;
     selectMeshObject(id);
     return id;
+  }
+
+  // "Load Model" (TRACK_MODEL_LIST_PLAN.md Milestone 6): embeds `parsed` into `track_.models` --
+  // reusing an existing entry whose ModelFile already matches `modelFileReference` (dedup, per the
+  // locked-in decision) rather than duplicating it, or appending a fresh entry with a freshly
+  // generated id otherwise -- then adds a placement referencing that id at world (x, 0, z), exactly
+  // like addMeshObjectPlacement. Pushes exactly one undo step for the whole operation (embed, if
+  // any, plus placement) -- inlined rather than calling addMeshObjectPlacement, which pushes its
+  // own unconditionally and would double up when a new Model entry is also embedded this call.
+  // Returns the new placement's id.
+  std::string loadModel(modelxml::ModelXmlDefinition parsed, const std::string& modelFileReference, double x, double z) {
+    history_.push(track_);
+    const auto existing = std::find_if(track_.models.begin(), track_.models.end(),
+                                       [&](const modelxml::ModelXmlDefinition& m) { return m.modelFile == modelFileReference; });
+    std::string modelId;
+    if (existing != track_.models.end()) {
+      modelId = existing->id.value_or(std::string());
+    } else {
+      modelId = newModelId();
+      parsed.id = modelId;
+      parsed.modelFile = modelFileReference;
+      track_.models.push_back(std::move(parsed));
+    }
+    ModelPlacement placement;
+    placement.id = newMeshObjectId();
+    placement.modelId = modelId;
+    placement.position = tox::Vec3(x, 0.0, z);
+    track_.meshObjects.push_back(std::move(placement));
+    const std::string placementId = track_.meshObjects.back().id;
+    selectMeshObject(placementId);
+    return placementId;
   }
 
   // Mutates the placement by id via `mutate`, pushing one undo step first. Also re-clamps `scale`
@@ -1991,6 +2047,14 @@ private:
     std::set<std::string> used;
     for (const auto& placement : track_.meshObjects) used.insert(placement.id);
     return firstUnusedId("mo", used);
+  }
+
+  // "model" prefix, for embedded <Model> entries (TRACK_MODEL_LIST_PLAN.md Milestone 6).
+  std::string newModelId() const {
+    std::set<std::string> used;
+    for (const auto& model : track_.models)
+      if (model.id.has_value()) used.insert(*model.id);
+    return firstUnusedId("model", used);
   }
 
   // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix) -- each still

@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "ModelXml.hpp"
 #include "Vec3.hpp"
 
 namespace editor {
@@ -194,6 +195,17 @@ struct TrackDefinition {
   std::vector<SelfIntersectionOverride> selfIntersectionOverrides;
   Handling handling;
   Start start;
+
+  // Every non-primary embedded <Model> entry (Physical/Decorative props, TRACK_MODEL_LIST_PLAN.md
+  // Milestone 6's "Load Model") -- an outer-Track-resource-XML-only concept, deliberately NOT part
+  // of the schema-10/12 TrackData JSON this struct's own fromJson/toJson (EditorTrackDefinition.cpp)
+  // read/write, so it's excluded from both directions there. Carried here anyway (rather than only
+  // in TrackResourceCandidate, which is transient/scan-only) purely so it participates naturally in
+  // EditorState's existing whole-struct undo/redo snapshots and in-session mutation, exactly like
+  // every other authored list on this struct -- TrackResourceDocument.cpp seeds it from the parsed
+  // candidate at load, TrackResourceSave.cpp writes it back out at save (both minus whichever entry
+  // is primary, which is regenerated fresh from the bake every save and never lives here).
+  std::vector<modelxml::ModelXmlDefinition> models;
 };
 
 // Backfills missing position-point ids in place. Called after every track construction/

@@ -180,20 +180,17 @@ TrackSavePlan prepareTrackSave(const TrackDefinition& track, const tox::Track& b
   if (saveAs && std::filesystem::exists(plan.modelPath) && !modelOwned)
     plan.overwriteWarnings.push_back("Overwrite unrelated file " + pathToUtf8(plan.modelPath));
 
-  // The primary Track-type Model's own id, and every other <Model> entry (Physical/Decorative props
-  // -- Milestone 6's "Load Model", never touched here), both preserved verbatim from whatever's
-  // currently on disk at this Resource identity (`matching`, freshly rescanned above) -- mirrors
-  // ADR 0002 D4's "Save replaces one complete Track Resource and preserves the rest," generalized to
-  // per-Model granularity within the <Models> list. A brand-new track (no `matching`) gets a fresh
-  // id and no other models to preserve.
+  // Every non-primary <Model> entry (Physical/Decorative props) comes straight from the in-session
+  // `track.models` -- the editor itself is the authoritative live source once Milestone 6's "Load
+  // Model" can add to it, not whatever happens to be on disk. The primary Track-type Model's own id
+  // is still preserved from `matching` (whatever's currently on disk at this Resource identity, if
+  // any) purely for id stability across saves -- a brand-new track (no `matching`) gets a fresh one.
   std::string primaryModelId = stem;
-  std::vector<modelxml::ModelXmlDefinition> otherModels;
   if (matching != nullptr && matching->primaryModelIndex < matching->models.size()) {
     const modelxml::ModelXmlDefinition& existingPrimary = matching->models[matching->primaryModelIndex];
     if (existingPrimary.id.has_value() && !existingPrimary.id->empty()) primaryModelId = *existingPrimary.id;
-    for (std::size_t i = 0; i < matching->models.size(); ++i)
-      if (i != matching->primaryModelIndex) otherModels.push_back(matching->models[i]);
   }
+  const std::vector<modelxml::ModelXmlDefinition>& otherModels = track.models;
 
   plan.json = toJson(track) + "\n";
   const MppModelExportResult exported = exportTrackToMppModel(bakedTrack, trackMaterialToMaterial);

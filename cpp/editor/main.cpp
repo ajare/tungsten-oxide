@@ -72,6 +72,7 @@
 #include "fontawesome/IconsFontAwesome5.h"
 #include "MaterialCatalog.hpp"
 #include "MaterialsPanel.hpp"
+#include "ModelXml.hpp"
 #include "RandomTrack.hpp"
 #include "StartGrid.hpp"
 #include "TextureCache.hpp"
@@ -1229,6 +1230,44 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   return result;
 }
 
+// LoadModel smoke check (TRACK_MODEL_LIST_PLAN.md Milestone 6): loading the same Model twice
+// reuses the embedded entry (dedup by ModelFile, per the locked-in decision) and only adds a new
+// placement; loading a different Model embeds a second entry; editing an embedded Model's mesh
+// metadata is visible through every placement that references it, since the metadata belongs to
+// the shared Model entry, not any one placement.
+struct LoadModelSmokeCheckResult {
+  bool firstEmbedsOneModelOnePlacement = false;
+  bool secondReusesEmbeddedModel = false;
+  bool differentModelEmbedsSecondEntry = false;
+  bool editEmbeddedModelAffectsSharedMetadata = false;
+};
+
+LoadModelSmokeCheckResult runLoadModelSmokeCheck() {
+  LoadModelSmokeCheckResult result;
+  editor::EditorState state(buildStarterTrack());
+
+  modelxml::ModelXmlDefinition cubeModel;
+  cubeModel.meshes.push_back({"main", modelxml::MeshType::Physical, true});
+  state.loadModel(cubeModel, "Cube.mppmodel", 10.0, 20.0);
+  result.firstEmbedsOneModelOnePlacement = state.track().models.size() == 1 && state.track().meshObjects.size() == 1;
+
+  state.loadModel(cubeModel, "Cube.mppmodel", 30.0, 40.0);
+  result.secondReusesEmbeddedModel = state.track().models.size() == 1 && state.track().meshObjects.size() == 2 &&
+                                     state.track().meshObjects[0].modelId == state.track().meshObjects[1].modelId;
+
+  modelxml::ModelXmlDefinition rampModel;
+  rampModel.meshes.push_back({"ramp", modelxml::MeshType::Physical, true});
+  state.loadModel(rampModel, "Ramp.mppmodel", 50.0, 60.0);
+  result.differentModelEmbedsSecondEntry = state.track().models.size() == 2 && state.track().meshObjects.size() == 3;
+
+  const std::string cubeModelId = state.track().meshObjects[0].modelId;
+  result.editEmbeddedModelAffectsSharedMetadata =
+      state.editEmbeddedModel(cubeModelId, [](modelxml::ModelXmlDefinition& m) { m.meshes[0].visible = false; }) &&
+      state.findModel(cubeModelId) != nullptr && !state.findModel(cubeModelId)->meshes[0].visible;
+
+  return result;
+}
+
 editor::TrackDefinition buildOpenTestTrack(int pointCount) {
   editor::TrackDefinition track;
   track.name = "Gap11 Open Test";
@@ -1558,6 +1597,14 @@ int main(int, char**) {
                mppModelSmoke.headerOk ? "OK" : "MISMATCH", mppModelSmoke.meshCountMatches ? "OK" : "MISMATCH",
                mppModelSmoke.fieldsMatch ? "OK" : "MISMATCH", mppModelSmoke.byteSizesMatch ? "OK" : "MISMATCH",
                mppModelSmoke.nonIndexedTriangleSoup ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
+  const LoadModelSmokeCheckResult loadModelSmoke = runLoadModelSmokeCheck();
+  std::fprintf(stdout, "LoadModel smoke check: firstEmbed=%s dedupReuse=%s secondModelEmbeds=%s sharedMetadataEdit=%s\n",
+               loadModelSmoke.firstEmbedsOneModelOnePlacement ? "OK" : "MISMATCH",
+               loadModelSmoke.secondReusesEmbeddedModel ? "OK" : "MISMATCH",
+               loadModelSmoke.differentModelEmbedsSecondEntry ? "OK" : "MISMATCH",
+               loadModelSmoke.editEmbeddedModelAffectsSharedMetadata ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
   const M7bSmokeCheckResult m7bSmoke = runM7bSmokeCheck();
@@ -2023,29 +2070,52 @@ int main(int, char**) {
           }
         }
         ImGui::Separator();
-        // Drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5.1): the editor
-        // never loads a .mppmodel (see Milestone 3's "`.mppmodel` loading is host-only"
-        // architecture note), so there's no thumbnail/bounding-box preview or pre-scanned asset
-        // library here -- just a native file picker to fill in `modelId` as a plain relative-path
-        // string (mirroring TextureAsset::path), placed at the current view center like Import
-        // Mesh used to be.
-        if (ImGui::MenuItem("Place Drivable Mesh Object...")) {
-          const editor::FileDialogResult picked =
-              editor::showOpenFileDialog(L"Place Drivable Mesh Object", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}});
+        // "Load Model..." (TRACK_MODEL_LIST_PLAN.md Milestone 6.1, replacing "Place Drivable Mesh
+        // Object..."): picks either a raw .mppmodel or a standalone <Model> XML fragment (the
+        // latter parsed via cpp/model-xml, same as model-tool's own OpenTarget.cpp classification --
+        // reimplemented independently here, not shared, since the editor has no dependency on
+        // model-tool's code). Either way, the resulting relative path (mirroring how a raw
+        // .mppmodel pick already resolved `modelId` before this milestone: relative to the current
+        // save location, falling back to the bare filename with no save location bound yet) is
+        // handed to EditorState::loadModel, which embeds (or reuses, per the dedup-by-ModelFile
+        // decision) a <Model> entry and creates a placement referencing it.
+        if (ImGui::MenuItem("Load Model...")) {
+          const editor::FileDialogResult picked = editor::showOpenFileDialog(
+              L"Load Model", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}, {L"Model XML (*.xml)", L"*.xml"}});
           if (picked.ok) {
-            std::string modelId;
-            if (saveBinding.has_value()) {
-              std::error_code relError;
-              const std::filesystem::path relative = std::filesystem::relative(picked.path, saveBinding->xmlPath.parent_path(), relError);
-              modelId = !relError && !relative.empty() ? editor::pathToUtf8(relative) : editor::pathToUtf8(picked.path.filename());
-            } else {
+            auto resolveModelFileReference = [&](const std::filesystem::path& absoluteMppModelPath) {
+              if (saveBinding.has_value()) {
+                std::error_code relError;
+                const std::filesystem::path relative =
+                    std::filesystem::relative(absoluteMppModelPath, saveBinding->xmlPath.parent_path(), relError);
+                if (!relError && !relative.empty()) return editor::pathToUtf8(relative);
+              }
               // No save location bound yet -- best effort is the bare filename; the author can
               // retype a real relative path once the track has a home (Properties panel).
-              modelId = editor::pathToUtf8(picked.path.filename());
+              return editor::pathToUtf8(absoluteMppModelPath.filename());
+            };
+
+            const bool isModelXml = picked.path.extension() == L".xml" || picked.path.extension() == L".XML";
+            try {
+              modelxml::ModelXmlDefinition parsed;
+              std::string modelFileReference;
+              if (isModelXml) {
+                parsed = modelxml::loadStandaloneModelXml(picked.path);
+                const std::filesystem::path absoluteMppModel =
+                    (picked.path.parent_path() / editor::utf8ToWide(parsed.modelFile)).lexically_normal();
+                modelFileReference = resolveModelFileReference(absoluteMppModel);
+              } else {
+                // A raw .mppmodel with no associated XML has no Type/Visible metadata to attach --
+                // EditorState::loadModel embeds a bare entry (matching model-tool's own "no XML
+                // metadata yet" Physical/visible defaults).
+                modelFileReference = resolveModelFileReference(picked.path);
+              }
+              const editor::WorldPoint2D center = topDownView.center();
+              editorState.loadModel(std::move(parsed), modelFileReference, center.x, center.z);
+              rebake();
+            } catch (const std::exception& error) {
+              showStatus(std::string("Load Model failed: ") + error.what());
             }
-            const editor::WorldPoint2D center = topDownView.center();
-            editorState.addMeshObjectPlacement(modelId, center.x, center.z);
-            rebake();
           }
         }
         ImGui::Separator();

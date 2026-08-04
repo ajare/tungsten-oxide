@@ -175,11 +175,13 @@ int main(int argc, char** argv) {
   check(!emptyPlan.ok(), "a baked Track with no drivable/collidable geometry is refused at export time");
   check(!std::filesystem::exists(emptyXml), "refused export leaves no partial Resources XML behind");
 
-  // A hand-injected Physical <Model> entry (simulating Milestone 6's "Load Model," not yet
-  // implemented) must survive an ordinary bound Save byte-for-byte -- Save only ever regenerates
-  // the primary entry, never touches others (Milestone 5.3). `resources` is untouched on disk since
-  // `first`'s own commit (every check above this point only builds plans or writes elsewhere), so
-  // `first.resultingBinding` is still a valid binding against it here.
+  // A hand-injected Physical <Model> entry (simulating Milestone 6's "Load Model") must survive an
+  // ordinary bound Save byte-for-byte -- Save regenerates the primary entry fresh, but writes back
+  // whatever the in-session TrackDefinition's own `models` list holds for everything else
+  // (TrackResourceSave.cpp sources `otherModels` from `track.models`, not from disk -- the editor is
+  // the authoritative live source once Milestone 6 exists). parseCandidate() seeds `track->models`
+  // with every non-primary entry at load time (Milestone 6), so round-tripping through a real
+  // load (scanTrackResources) is what's exercised here, not just an in-memory field poke.
   {
     std::string xmlWithProp = readFile(resources);
     const std::string propModel =
@@ -195,6 +197,9 @@ int main(int argc, char** argv) {
       const editor::TrackResourceScanResult withPropScan = editor::scanTrackResources(resources);
       check(withPropScan.validDocument() && withPropScan.tracks.size() == 1 && withPropScan.tracks[0].models.size() == 2,
             "the injected Physical Model is discovered alongside the primary");
+      check(withPropScan.tracks.size() == 1 && withPropScan.tracks[0].track.has_value() &&
+                withPropScan.tracks[0].track->models.size() == 1 && withPropScan.tracks[0].track->models[0].id == "cube-model",
+            "loading seeds the editable TrackDefinition's own models list with the non-primary entry");
 
       // Hand-editing `resources` above is exactly the kind of external change the bound-Save
       // fingerprint guard exists to catch (it just did, correctly, before this fix) -- so this
@@ -204,14 +209,16 @@ int main(int argc, char** argv) {
       const editor::TrackResourceCandidate& withProp = withPropScan.tracks[0];
       const editor::TrackSaveBinding freshBinding{resources,          withProp.resourceName,       withProp.trackDataReference,
                                                   withProp.modelFileReference, withProp.resourceFingerprint, withProp.jsonFingerprint};
-      editor::TrackSavePlan resaved = editor::prepareTrackSave(authored, *changedBake.track, {}, resources, freshBinding, false);
+      const tox::TrackLoadResult withPropBake = tox::Track::fromJson(editor::toJson(*withProp.track));
+      check(static_cast<bool>(withPropBake), "the freshly loaded-with-prop track still bakes: " + withPropBake.error);
+      editor::TrackSavePlan resaved = editor::prepareTrackSave(*withProp.track, *withPropBake.track, {}, resources, freshBinding, false);
       check(resaved.ok(), "bound Save succeeds with a Physical Model present: " + resaved.error);
       std::string commitError2;
       check(editor::commitTrackSave(resaved, commitError2), "resave transaction commits: " + commitError2);
 
       const editor::TrackResourceScanResult afterResave = editor::scanTrackResources(resources);
       check(afterResave.validDocument() && afterResave.tracks.size() == 1 && afterResave.tracks[0].models.size() == 2,
-            "the Physical Model survives a bound Save that only regenerates the primary");
+            "the Physical Model survives a bound Save sourced from the in-session models list");
       if (afterResave.tracks.size() == 1) {
         const auto& modelsAfter = afterResave.tracks[0].models;
         const bool cubeStillPresent = std::any_of(modelsAfter.begin(), modelsAfter.end(), [](const modelxml::ModelXmlDefinition& m) {
