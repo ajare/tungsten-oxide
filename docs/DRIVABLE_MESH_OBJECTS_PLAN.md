@@ -1024,6 +1024,59 @@ after Milestone 4 lands.
   launches the ship at the gap) rather than assuming.
 - Test: headless check via 6.0's tool; `ctest`. Commit if any fix was
   needed.
+- **Done — a real fix was needed.** "No new state expected" turned out to
+  be wrong; the investigation found a genuine bug, not a non-issue like
+  6.2's.
+  - Extended the 6.1 tunnel-validation fixture with a second placement,
+    `ramp.mppmodel` (a shallow ~3.8-degree ramp, a real gap, then a long
+    flat elevated platform — same hand-authored-`GeometryBatch`-via-
+    `exportTrackToMppModel` technique as 6.1's tunnel, same temporary-
+    scratch-executable-then-delete pattern), positioned so the platform
+    is reachable only by driving up the ramp and launching over the gap.
+  - First attempt placed the ramp overlapping the *existing* (still
+    length-120) road, and found nothing: the ship simply never climbed the
+    ramp at all, silently preferring the flat road underneath it for the
+    ramp's entire length (`nearestAlongAxis` picks whichever candidate is
+    nearest the ship's *current* y, and a ship starting flat on the road at
+    y=0 always has zero distance to more road but positive distance to any
+    rising ramp beside it — a self-reinforcing tie the ramp can never win).
+    Fixed the test setup (not a code bug) by shortening `path-main` so the
+    road ends exactly at the ramp's base — no more overlap/competing
+    surface, committed as part of this step's `track.json`/`track.mppmodel`
+    update.
+  - With that corrected, a *real* `Ship.cpp` bug surfaced: the ship still
+    never became airborne off the ramp — its speed collapsed to a dead
+    stop right at the ramp's crest on every run, instead of launching over
+    the gap. Root cause: `stepMeshPhysics`'s "walked off the drivable
+    surface" recovery (the `!ground` branch, originally written and only
+    ever verified against a flat road's *lateral* boundary) unconditionally
+    zeros the outward velocity component and pins the ship at the edge —
+    correct for scraping along a flat road's side, but it left a ship no
+    way to ever leave the ground via ramp momentum at all, contradicting
+    this milestone's entire premise.
+  - Fix: `cpp/core/src/Ship.cpp` now checks `vel.y` before running that
+    recovery — a flat surface keeps a ship's `moveDir` (and so `vel.y`)
+    exactly 0 every frame (`tangentize()` against a flat `(0,1,0)` normal
+    forces it), while a genuinely sloped surface like a ramp produces a
+    real, nonzero `vel.y` proportional to its grade. A meaningfully
+    positive `vel.y` (new constant `MESH_RAMP_LAUNCH_VERTICAL_SPEED`, well
+    below any real ramp's launch speed, comfortably above float noise) at
+    the moment ground is lost now skips the edge-scrape recovery entirely
+    and falls through to this block's existing `else` (`beginAirborne`)
+    instead, unchanged. Scoped narrowly: an ordinary hill crest never
+    reaches this branch at all as long as the ground stays continuous
+    (`groundAt(intended)` still succeeds, just at a different height) —
+    this only changes behavior at a genuine "no ground within reach" edge,
+    exactly the case this milestone is about.
+  - Verified: with the fix, `mesh_physics_diag` (a temporary local
+    steer=0 scripted-input variant, reverted after — confirmed via `git
+    diff` showing no residual change) shows a clean launch (`airborne`
+    flips to `1` right at the ramp's crest), a smooth parabolic arc
+    peaking roughly midway across the gap, and a clean landing back on the
+    platform (`airborne` back to `0`, normal `(0,1,0)`) — no NaN, no
+    discontinuous teleport, no stuck-airborne loop. `ctest` stayed green
+    (4/4) with the committed default scripted input, confirmed
+    reproducible (two runs, byte-identical stdout, no NaN/Inf).
 
 ---
 

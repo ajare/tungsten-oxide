@@ -25,6 +25,13 @@ constexpr double MESH_WALL_PROBE_HEIGHT = 0.5;
 // (verified headlessly: road ends at x~1312.3 with the rail at x~1312.36). A full margin puts the
 // ship back on actual road, and keeps mesh mode's wall standoff consistent with analytic mode's.
 constexpr double MESH_WALL_CLEARANCE = TrackCore::COLLISION_WALL_MARGIN;
+// A flat road keeps a ship's moveDir tangent to (0,1,0) exactly, so vel.y is exactly 0 there every
+// frame; a genuinely sloped surface (a ramp) produces a real, nonzero vel.y proportional to its
+// grade. This threshold only needs to clear ordinary floating-point noise on an ostensibly-flat
+// surface, not any real ramp grade -- it is far below the vertical launch speed even a shallow
+// (~4 degree) ramp imparts at typical driving speed. See its one call site's comment for why this
+// distinguishes a ramp-crest launch from an ordinary flat-road-edge scrape.
+constexpr double MESH_RAMP_LAUNCH_VERTICAL_SPEED = 0.05;
 
 void integrateSpeed(Physics& p, double dt, double throttle, double brake) {
   if (throttle) {
@@ -191,7 +198,18 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
       return bvh.nearestAlongAxis(Vec3(at.x, p.groundPos.y, at.z), probeAxis, 4.0);
     };
     auto ground = groundAt(intended);
-    if (!ground) {
+    // vel.y is nonzero only when the ship was climbing/descending a genuinely sloped surface --
+    // moveDir only ever picks up a y component via tangentize() against a non-flat surfaceNormal; a
+    // flat road keeps vel.y exactly 0 every frame. If the step also leaves the drivable surface
+    // entirely while that's true, this is a ramp crest, not a flat road's edge, and the ship should
+    // launch into real airborne flight -- skip the edge-scrape recovery below entirely (it
+    // unconditionally zeros the outward velocity component to keep the ship pinned at the edge,
+    // which is exactly wrong here) and fall through to this block's existing final `else`, which
+    // already does exactly the right thing (beginAirborne(ship, vel)) once `ground` stays unset.
+    // Verified headlessly with DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 6.1's ramp/platform
+    // validation asset: without this check, the ship's speed collapsed to a dead stop right at the
+    // ramp's crest on every run instead of launching over the gap beyond it.
+    if (!ground && vel.y <= MESH_RAMP_LAUNCH_VERTICAL_SPEED) {
       // The step would leave the drivable surface. A rail is *supposed* to have stopped this, but
       // rails stand exactly at the road's outer boundary, so the last road triangle and the first
       // rail triangle meet in a razor-thin seam that a fast ship can slip through without the wall

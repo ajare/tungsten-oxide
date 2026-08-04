@@ -16,6 +16,19 @@
       "scaleX": 1.0,
       "scaleY": 1.0,
       "scaleZ": 1.0
+    },
+    {
+      "id": "ramp-1",
+      "modelId": "ramp.mppmodel",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 85.0,
+      "yaw": 0.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
     }
   ],
   "zones": [],
@@ -31,8 +44,8 @@
       "points": [
         { "type": "position", "id": "p0", "pos": [0, 0, -120], "weight": 1 },
         { "type": "position", "id": "p1", "pos": [0, 0, -40], "weight": 1 },
-        { "type": "position", "id": "p2", "pos": [0, 0, 40], "weight": 1 },
-        { "type": "position", "id": "p3", "pos": [0, 0, 120], "weight": 1 },
+        { "type": "position", "id": "p2", "pos": [0, 0, 20], "weight": 1 },
+        { "type": "position", "id": "p3", "pos": [0, 0, 85], "weight": 1 },
         { "type": "width", "t": 0, "width": 24 },
         { "type": "width", "t": 1, "width": 24 },
         { "type": "roll", "t": 0, "roll": 0 },
