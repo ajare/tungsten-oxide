@@ -71,6 +71,7 @@ set(EDITOR_SOURCES
   src/TextureCache.cpp
   src/MaterialsPanel.cpp
   src/ModelsPanel.cpp
+  src/ModelPlacementsPanel.cpp
   src/FileDialog.cpp
   src/Clipboard.cpp
   src/TrackPropertiesPanel.cpp

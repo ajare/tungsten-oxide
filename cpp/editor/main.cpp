@@ -73,6 +73,7 @@
 #include "MaterialCatalog.hpp"
 #include "MaterialsPanel.hpp"
 #include "ModelsPanel.hpp"
+#include "ModelPlacementsPanel.hpp"
 #include "ModelXml.hpp"
 #include "RandomTrack.hpp"
 #include "StartGrid.hpp"
@@ -2639,6 +2640,11 @@ int main(int, char**) {
     if (ImGui::CollapsingHeader("Models")) {
       ImGui::PushID("Models");
       editor::DrawModelsPanel(editorState);
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Model Placements")) {
+      ImGui::PushID("ModelPlacements");
+      if (editor::DrawModelPlacementsPanel(editorState)) rebake();
       ImGui::PopID();
     }
     if (ImGui::CollapsingHeader("Materials")) {

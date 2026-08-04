@@ -31,7 +31,7 @@ void DrawModelsPanel(EditorState& state) {
     return;
   }
 
-  ImGui::TextUnformatted("Selecting a row selects one of its placements (Point Properties panel).");
+  ImGui::TextUnformatted("Selecting a row selects one of its placements (Model Placements panel).");
   constexpr ImGuiTableFlags kModelsTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
   if (ImGui::BeginTable("modelsTable", 4, kModelsTableFlags)) {
     ImGui::TableSetupColumn("ID");
