@@ -133,6 +133,34 @@ ControlIntent captureScriptedInput(int frame, double dt) {
   return intent;
 }
 
+// Milestone 8.2 end-to-end validation script: full throttle throughout. A small symmetric steer "S"
+// (t in [0.4s, 0.55s] then the opposite sign in [0.55s, 0.7s], zero elsewhere) is a lane change, not
+// a turn -- steer is an angular *rate* control (Ship.cpp), so a one-sided burst leaves a permanent
+// heading offset that a return to steer=0 never corrects; the matched opposite pulse cancels the
+// rotation it introduced, leaving the ship laterally offset but pointed straight down +Z again well
+// before the tunnel (z=48) and ramp (z=85) -- confirmed clean: continuous ground contact throughout,
+// the tunnel-boost zone and ramp-checkpoint trigger both fire, a clean ramp launch/arc/landing
+// follows, same shape as Milestone 7.1's own straight-line capture. This script stays this gentle
+// deliberately: a stronger burst aimed at actually contacting the central-reservation-replacement
+// barrier (z=-85) was tried and does produce a real, clearly visible wall bounce (a discontinuous
+// position/speed change consistent with weightRestitution) -- see the plan doc's Milestone 8.2 entry
+// -- but the resulting heading disturbance is too large to also recover in time for a clean tunnel
+// pass and ramp launch in the same take, the same composition problem 7.1 hit combining a wall clip
+// with the ramp. The wall-bounce evidence lives in the plan doc as a separate one-off run instead,
+// matching 7.1's precedent of not forcing every scenario into a single script.
+ControlIntent validationScriptedInput(int frame, double dt) {
+  ControlIntent intent;
+  intent.throttle = 1.0;
+  const double t = frame * dt;
+  if (t >= 0.4 && t < 0.55)
+    intent.steer = -0.35;
+  else if (t >= 0.55 && t < 0.7)
+    intent.steer = 0.35;
+  else
+    intent.steer = 0.0;
+  return intent;
+}
+
 // Builds the collision surface exactly as Map::load() would, given an already-constructed
 // mpp::ResourceManager/ModelSerializer. Shared by both this tool's modes.
 bool buildCollisionSurface(const std::filesystem::path& trackPath, mpp::ResourceManager& resourceMgr, mpp::ModelSerializer& serializer,
@@ -311,7 +339,26 @@ int runCapture(const std::filesystem::path& outputPath, const std::string& trace
   return 0;
 }
 
-int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path& modelPath, int steps, double dt) {
+// Mirrors GameEventType (GameSession.hpp) as a short label for logging -- kept local since this
+// tool only ever prints events, never branches on the enum value itself.
+const char* eventLabel(GameEventType type) {
+  switch (type) {
+    case GameEventType::TriggerFired:
+      return "TriggerFired";
+    case GameEventType::CheckpointAccepted:
+      return "CheckpointAccepted";
+    case GameEventType::LapCompleted:
+      return "LapCompleted";
+    case GameEventType::Respawned:
+      return "Respawned";
+    case GameEventType::RailHit:
+      return "RailHit";
+  }
+  return "Unknown";
+}
+
+int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path& modelPath, int steps, double dt,
+             ControlIntent (*script)(int, double) = scriptedInput) {
   TrackLoadResult loaded = Track::fromFile(trackPath);
   for (const TrackWarning& warning : loaded.warnings) {
     std::cerr << "warning [" << warning.code << "] " << warning.message;
@@ -359,15 +406,26 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
   std::cout << "# frame t pos.x pos.y pos.z speed normal.x normal.y normal.z airborne\n";
 
   const std::vector<ControlIntent> idleIntents(session.ships().size());
+  bool wasBoostActive = false;
   for (int frame = 0; frame < steps; ++frame) {
     std::vector<ControlIntent> intents = idleIntents;
-    intents[0] = scriptedInput(frame, dt);
+    intents[0] = script(frame, dt);
     session.step(intents, dt);
 
     const Ship& ship0 = session.ships()[0];
     const Physics& p = ship0.physics;
     std::printf("%d %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d\n", frame, session.sessionTime(), p.groundPos.x, p.groundPos.y, p.groundPos.z,
                 p.speed, ship0.renderNormal.x, ship0.renderNormal.y, ship0.renderNormal.z, p.airborne ? 1 : 0);
+    for (const GameEvent& event : session.events()) {
+      if (event.shipIndex != 0) continue;
+      std::printf("# EVENT frame=%d %s trigger=%s dir=%s auto=%d\n", frame, eventLabel(event.type), event.triggerId.c_str(),
+                  event.direction.c_str(), event.automatic ? 1 : 0);
+    }
+    // Zones (unlike triggers) never raise a GameEvent -- triggerBoost (Simulation.cpp) mutates
+    // Physics::boostActive directly -- so a boost zone's firing is only observable by watching that
+    // flag's edge here.
+    if (p.boostActive && !wasBoostActive) std::printf("# EVENT frame=%d ZoneBoostActivated\n", frame);
+    wasBoostActive = p.boostActive;
   }
   return 0;
 }
@@ -389,9 +447,24 @@ int main(int argc, char** argv) {
     return runCapture(outputPath, traceName, trackPath, modelPath, steps, dt);
   }
 
+  // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.2's end-to-end validation script -- see
+  // validationScriptedInput's comment.
+  if (argc >= 2 && std::string(argv[1]) == "--validate") {
+    if (argc < 4) {
+      std::cerr << "usage: mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]\n";
+      return 2;
+    }
+    const std::filesystem::path trackPath(argv[2]);
+    const std::filesystem::path modelPath(argv[3]);
+    const int steps = argc > 4 ? std::atoi(argv[4]) : 600;
+    const double dt = argc > 5 ? std::atof(argv[5]) : 1.0 / 60.0;
+    return runDrive(trackPath, modelPath, steps, dt, validationScriptedInput);
+  }
+
   if (argc < 3) {
     std::cerr << "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n";
     std::cerr << "       mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
+    std::cerr << "       mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]\n";
     return 2;
   }
   const std::filesystem::path trackPath(argv[1]);

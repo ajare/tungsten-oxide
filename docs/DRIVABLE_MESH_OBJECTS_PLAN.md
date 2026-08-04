@@ -1228,12 +1228,100 @@ after Milestone 4 lands.
   expected, correct wall/rail bounce, at least one airborne moment that
   lands cleanly, and the hosted zone/trigger firing at the expected frame.
 - Fix anything broken; re-run headless; `ctest`; commit.
+- **Done — no `Ship.cpp`/`Simulation.cpp` fix needed; one real bug found and
+  fixed in the headless tool itself.** No editor GUI available (no display
+  in this environment, same constraint as Milestone 6.1), so the track was
+  extended non-interactively again: `cpp/test-data/fixtures/mesh-object/
+  tunnel-validation/track.json` (Milestone 6.1's tunnel+ramp fixture) grew
+  a third drivable mesh object (`barrier-1`, a simple two-sided wall
+  standing in for a central-reservation-replacement, generated the same
+  scratch-executable-then-delete way as 6.1's tunnel/ramp), a matching
+  `reservations` entry on `path-main` (the void the barrier physically
+  plugs), a `velocityChange` zone hosted on `tunnel-1`, and a `checkpoint`
+  trigger hosted on `ramp-1`. `track.mppmodel` was regenerated for the new
+  bake via the same disable-cleanup-then-revert `editor_track_resource_tests`
+  trick 6.1 used (confirmed reverted via `git diff --stat` showing zero
+  residual change to that test file). This fixture is standalone (no code
+  references its path directly) and doesn't touch Milestone 7's own
+  golden trace, which embeds its own frozen `sourceTrack`/`collisionTriangles`
+  snapshot from capture time and never re-reads this file.
+  - `mesh_physics_diag` gained a `--validate` mode (`runDrive` now takes an
+    optional scripted-input function pointer, default unchanged) plus
+    per-frame event logging: `GameSession::events()` printed directly for
+    triggers, and an edge-detected `Physics::boostActive` print for zones
+    (zones, unlike triggers, never raise a `GameEvent` -- `triggerBoost`
+    mutates `boostActive` directly -- so that flag's rising edge is the
+    only way to observe one firing from this tool).
+  - `validationScriptedInput`: full throttle, a small steer "S" (`-0.35` for
+    150ms then `+0.35` for 150ms, zero elsewhere) starting at t=0.4s.
+    Steer is an angular *rate* control (`Ship.cpp`), not a heading target,
+    so a one-sided burst leaves a permanent heading offset that returning
+    to `steer=0` never corrects -- the first attempt (a one-sided burst)
+    left the ship's heading permanently rotated, and it drifted into a
+    wall near the ramp and sat there with climbing wheel-spin speed and
+    frozen position for the rest of the run. The matched opposite pulse
+    cancels the rotation it introduced instead, leaving the ship laterally
+    offset but pointed straight down +Z again with ~120m of runway before
+    the tunnel (z=48) to fully settle.
+  - Verified via a 250-step `--validate` run (dt=1/60) against the
+    extended fixture: zero airborne frames before frame 150, then exactly
+    22 consecutive airborne frames (a clean ramp launch/arc/landing, no
+    stuck-airborne loop, no NaN), landing back on the ground and coming to
+    rest at the platform's far end (z≈165) -- the same terminal behavior
+    Milestone 7's own trace description records for this ramp asset, so
+    this isn't a new/different failure mode. Events fired in order:
+    `tunnel-boost`'s `ZoneBoostActivated` at frame 134, `ramp-checkpoint`'s
+    `TriggerFired`+`CheckpointAccepted` at frame 144 (both while still
+    grounded, before the airborne window starts) -- confirms the
+    meshObject-hosted zone/trigger pair actually fires during real gameplay
+    driving, not just at load time (Milestone 3.6's `track_tests.cpp`
+    coverage) or in a synthetic unit fixture (`basic-placement.json`).
+    Also confirmed no unexpected z-discontinuity anywhere in the run
+    (grepped the full per-frame log for any backward or >3m single-frame z
+    jump outside the airborne window -- none found), i.e. "continuous
+    ground contact where expected" holds for the whole course, not just
+    the segments explicitly called out above.
+  - **Wall/rail bounce**: mesh mode has no rail concept at all (`Ship.cpp`:
+    "mesh mode has no rail concept -- walls are ordinary BVH geometry"),
+    so `StepResult::railHit` is unconditionally `false` in mesh mode and a
+    barrier hit never raises a `RailHit` `GameEvent` -- the same
+    conclusion Milestone 7.1 already reached for its own wall-clip
+    attempt. Confirmed the underlying *physics* response is still correct
+    (a real, visible bounce) via a separate one-off, not-committed run of
+    the same tool with a stronger steer burst (`+0.9`/`-0.9`) aimed to
+    actually cross the barrier's footprint: frame 49 (t=0.833s,
+    pos=(-0.246, 0, -95.24), speed=59.17) to frame 50 (t=0.850s,
+    pos=(-0.126, 0, -97.16), speed=44.66) shows the ship's z position
+    moving *backward* (net-forward motion reversing for a step) with a
+    25% instantaneous speed loss, right as it crosses into the barrier's
+    world footprint (placed at z=-85, local Z extent ±10 i.e. world
+    z -95..-75) -- exactly the deflection+speed-loss signature
+    `weightRestitution`-based wall response produces. That stronger burst
+    does NOT compose cleanly with the rest of the course in one take (the
+    heading disturbance is too large to recover from before the tunnel,
+    same composition problem 7.1 hit combining a wall clip with the ramp
+    launch), so it was not kept as `validationScriptedInput` -- matching
+    7.1's own precedent of keeping the wall-bounce evidence as separate,
+    dedicated coverage (6.2's `sweepWall` unit test there; this one-off
+    run's logged numbers here) rather than forcing every scenario into a
+    single script.
+  - `ctest` (4/4) green after these changes; `mesh_physics_diag` rebuilt
+    clean.
 
 **8.3 — Full regression pass**
 - Full `ctest` run: analytic-mode golden traces for tracks with no drivable
   mesh objects unaffected; new mesh-mode traces (Milestone 7) green.
 - Commit (likely doc/plan cleanup only, unless 8.2 surfaced fixes not yet
   committed).
+- **Done.** `ctest --test-dir cpp/build -C Release --output-on-failure`:
+  4/4 green (`parity` -- every analytic-mode golden trace plus Milestone
+  7's mesh-mode `raw-mesh-tunnel-ramp.json`, `track_tests`, including
+  Milestone 8.1's new `meshPhysicsForced()` coverage,
+  `editor_track_resources`, `model_tool_tests`). 8.2 surfaced no
+  `Ship.cpp`/`Simulation.cpp` regressions needing a fix (see its own entry
+  above), so this pass is exactly what it says: a confirmation, not new
+  code. This closes out `DRIVABLE_MESH_OBJECTS_PLAN.md` -- every milestone
+  through 8 is now Done.
 
 ---
 
