@@ -680,6 +680,42 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Track::fromTrackDataFiles (TRACK_MODEL_LIST_PLAN.md Milestone 1.2): a single-source call must
+  // match fromFile's output exactly (no namespacing applied), and unioning the SAME fixture as two
+  // sources must double every authored list with distinct namespaced ids and still bake cleanly --
+  // reusing curved-banked.json itself as both sources is a strong collision test, since its own ids
+  // ("path1"/"p1"/etc.) are identical across the two "files".
+  {
+    const TrackLoadResult singleSource = Track::fromTrackDataFiles({pathFixture});
+    check(static_cast<bool>(singleSource), "single-source fromTrackDataFiles loads: " + singleSource.error);
+    if (singleSource && pathLoaded) {
+      check(singleSource.track->definition.paths.size() == pathLoaded.track->definition.paths.size() &&
+                singleSource.track->definition.paths[0].id == pathLoaded.track->definition.paths[0].id,
+            "single-source fromTrackDataFiles matches fromFile's path id (no namespacing applied)");
+      check(singleSource.track->paths[0].centerline.size() == pathLoaded.track->paths[0].centerline.size(),
+            "single-source fromTrackDataFiles bakes identically to fromFile");
+      check(singleSource.track->zones.size() == pathLoaded.track->zones.size() &&
+                singleSource.track->triggers.size() == pathLoaded.track->triggers.size(),
+            "single-source fromTrackDataFiles compiles the same zone/trigger counts as fromFile");
+    }
+
+    const TrackLoadResult twoSource = Track::fromTrackDataFiles({pathFixture, pathFixture});
+    check(static_cast<bool>(twoSource), "loading the same TrackData file as two sources unions successfully: " + twoSource.error);
+    if (twoSource && pathLoaded) {
+      const TrackDefinition& def = twoSource.track->definition;
+      check(def.paths.size() == 2 * pathLoaded.track->definition.paths.size(), "two-source union doubles the path count");
+      check(def.paths[0].id == "0:" + pathLoaded.track->definition.paths[0].id &&
+                def.paths[1].id == "1:" + pathLoaded.track->definition.paths[0].id,
+            "namespaced path ids carry the expected <index>: prefix");
+      check(twoSource.track->zones.size() == 2 * pathLoaded.track->zones.size() &&
+                twoSource.track->triggers.size() == 2 * pathLoaded.track->triggers.size(),
+            "two-source union doubles the compiled zone/trigger counts");
+      check(twoSource.track->zones[0].id != twoSource.track->zones[1].id &&
+                twoSource.track->triggers[0].id != twoSource.track->triggers[1].id,
+            "namespacing keeps compiled zone/trigger ids distinct across sources");
+    }
+  }
+
   // Hard-break check (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2.5): a track still carrying
   // meshAssets/meshes (removed in schema 12) must fail to load with an explicit, actionable
   // error rather than silently parsing as if the meshes had been deleted. Reuses one of the

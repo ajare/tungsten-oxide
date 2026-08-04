@@ -491,4 +491,119 @@ TrackLoadResult Track::fromFile(const std::filesystem::path& path, bool detectSe
   return fromJson(buffer.str(), detectSelfIntersections);
 }
 
+namespace {
+
+// Prefixes every id an authored TrackDefinition owns, plus every same-source reference to one of
+// those ids, with "<index>:" -- so two sources that each independently reused e.g. "path1"/"p1"
+// merge without collision (TRACK_MODEL_LIST_PLAN.md Milestone 1.2). `ModelPlacementDefinition::modelId`
+// is deliberately NOT touched: it names an embedded `<Model id>` in the enclosing Track resource's
+// `<Models>` list (an outer-XML-only concept `core` never resolves), not an id this TrackDefinition
+// owns -- unlike `meshObjects[].id` itself (the placement's OWN id, referenced by
+// zones/triggers[].host.meshObjectId), which is this source's to own and therefore is namespaced.
+void namespaceIds(TrackDefinition& def, const std::string& prefix) {
+  if (prefix.empty()) return;
+
+  for (auto& path : def.paths) {
+    path.id = prefix + path.id;
+    for (auto& point : path.points)
+      if (!point.id.empty()) point.id = prefix + point.id;
+    for (auto& reservation : path.reservations) reservation.id = prefix + reservation.id;
+  }
+
+  std::map<std::string, TextureAssetDefinition> renamedAssets;
+  for (auto& [id, asset] : def.textureAssets) {
+    asset.id = prefix + asset.id;
+    renamedAssets.emplace(asset.id, std::move(asset));
+  }
+  def.textureAssets = std::move(renamedAssets);
+  for (auto& path : def.paths)
+    if (path.texture) path.texture->assetId = prefix + path.texture->assetId;
+
+  for (auto& placement : def.meshObjects) placement.id = prefix + placement.id;
+
+  for (auto& zone : def.zones) {
+    zone.id = prefix + zone.id;
+    if (zone.host.kind == "meshObject")
+      zone.host.meshObjectId = prefix + zone.host.meshObjectId;
+    else
+      zone.host.pathId = prefix + zone.host.pathId;
+  }
+
+  for (auto& trigger : def.triggers) {
+    trigger.id = prefix + trigger.id;
+    if (trigger.host.kind == "meshObject")
+      trigger.host.meshObjectId = prefix + trigger.host.meshObjectId;
+    else
+      trigger.host.pathId = prefix + trigger.host.pathId;
+  }
+
+  auto namespaceConnection = [&](ConnectionDefinition& c) {
+    c.id = prefix + c.id;
+    if (!c.pointId.empty()) c.pointId = prefix + c.pointId;
+    if (!c.sourcePathId.empty()) c.sourcePathId = prefix + c.sourcePathId;
+    if (!c.targetPathId.empty()) c.targetPathId = prefix + c.targetPathId;
+  };
+  for (auto& c : def.disjointSeams) namespaceConnection(c);
+  for (auto& c : def.junctions) namespaceConnection(c);
+
+  for (auto& o : def.selfIntersectionOverrides) {
+    if (!o.a.empty()) o.a = prefix + o.a;
+    if (!o.b.empty()) o.b = prefix + o.b;
+  }
+}
+
+// Concatenates N already-normalized TrackDefinitions' list fields into one, after namespaceIds()
+// above has made every source's ids collision-free. Singular/global fields (name/samples/handling/
+// start/version) come from the first source only -- there is exactly one of each in a merged Track,
+// not one per source, and "first source wins" mirrors the "primary Track-type model" the Track
+// resource's own `<Models>` list designates (TRACK_MODEL_LIST_PLAN.md).
+TrackDefinition mergeTrackDefinitions(std::vector<TrackDefinition> defs) {
+  for (std::size_t i = 0; i < defs.size(); ++i)
+    if (defs.size() > 1) namespaceIds(defs[i], std::to_string(i) + ":");
+
+  TrackDefinition merged = std::move(defs.front());
+  for (std::size_t i = 1; i < defs.size(); ++i) {
+    TrackDefinition& src = defs[i];
+    merged.paths.insert(merged.paths.end(), std::make_move_iterator(src.paths.begin()), std::make_move_iterator(src.paths.end()));
+    merged.textureAssets.insert(std::make_move_iterator(src.textureAssets.begin()), std::make_move_iterator(src.textureAssets.end()));
+    merged.meshObjects.insert(merged.meshObjects.end(), std::make_move_iterator(src.meshObjects.begin()), std::make_move_iterator(src.meshObjects.end()));
+    merged.zones.insert(merged.zones.end(), std::make_move_iterator(src.zones.begin()), std::make_move_iterator(src.zones.end()));
+    merged.triggers.insert(merged.triggers.end(), std::make_move_iterator(src.triggers.begin()), std::make_move_iterator(src.triggers.end()));
+    merged.disjointSeams.insert(merged.disjointSeams.end(), std::make_move_iterator(src.disjointSeams.begin()), std::make_move_iterator(src.disjointSeams.end()));
+    merged.junctions.insert(merged.junctions.end(), std::make_move_iterator(src.junctions.begin()), std::make_move_iterator(src.junctions.end()));
+    merged.selfIntersectionOverrides.insert(merged.selfIntersectionOverrides.end(), std::make_move_iterator(src.selfIntersectionOverrides.begin()),
+                                             std::make_move_iterator(src.selfIntersectionOverrides.end()));
+  }
+  return merged;
+}
+
+}  // namespace
+
+TrackLoadResult Track::fromTrackDataFiles(const std::vector<std::filesystem::path>& paths, bool detectSelfIntersections) {
+  if (paths.empty()) return {std::nullopt, {}, "fromTrackDataFiles requires at least one TrackData path"};
+
+  std::vector<TrackDefinition> defs;
+  std::vector<TrackWarning> warnings;
+  for (const auto& path : paths) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {std::nullopt, {}, "cannot open track file: " + path.string()};
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    try {
+      const json data = json::parse(buffer.str());
+      defs.push_back(normalize(data, warnings));
+    } catch (const std::exception& error) {
+      return {std::nullopt, {}, "failed to load '" + path.string() + "': " + error.what()};
+    }
+  }
+
+  TrackLoadResult result;
+  result.warnings = std::move(warnings);
+  Track track;
+  track.definition = mergeTrackDefinitions(std::move(defs));
+  if (!bakeTrack(track, result.warnings, result.error, detectSelfIntersections)) return result;
+  result.track = std::move(track);
+  return result;
+}
+
 }  // namespace tox

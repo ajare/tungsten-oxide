@@ -124,6 +124,15 @@ struct Track {
   // last good detection result instead).
   static TrackLoadResult fromJson(std::string_view text, bool detectSelfIntersections = true);
   static TrackLoadResult fromFile(const std::filesystem::path& path, bool detectSelfIntersections = true);
+
+  // Loads and normalizes N TrackData JSON files independently, namespaces every id each source owns
+  // (but never `ModelPlacementDefinition::modelId` -- see `namespaceIds()`'s own comment in
+  // TrackLoader.cpp) so they can't collide, concatenates their authored lists into one
+  // TrackDefinition, then bakes exactly once -- TRACK_MODEL_LIST_PLAN.md Milestone 1.2, for a Track
+  // resource whose `<Models>` list embeds more than one Track-type model. A single-path call produces
+  // byte-identical output to `fromFile` (no namespacing is applied when there's only one source).
+  // Singular fields (name/samples/handling/start/version) come from the first source only.
+  static TrackLoadResult fromTrackDataFiles(const std::vector<std::filesystem::path>& paths, bool detectSelfIntersections = true);
 };
 
 struct TrackWarning {
