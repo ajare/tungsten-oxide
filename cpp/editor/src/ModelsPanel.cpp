@@ -8,6 +8,8 @@
 namespace editor {
 namespace {
 
+constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsTrue;
+
 int placementCountFor(const EditorState& state, const std::string& modelId) {
   return static_cast<int>(std::count_if(state.track().meshObjects.begin(), state.track().meshObjects.end(),
                                         [&](const ModelPlacement& p) { return p.modelId == modelId; }));
@@ -32,6 +34,7 @@ void DrawModelsPanel(EditorState& state) {
   }
 
   ImGui::TextUnformatted("Selecting a row selects one of its placements (Model Placements panel).");
+  ImGui::TextUnformatted("ModelFile must be a path relative to this Track's own save location (no drive letter, no '..') -- Save will refuse an unsafe one.");
   constexpr ImGuiTableFlags kModelsTableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
   if (ImGui::BeginTable("modelsTable", 4, kModelsTableFlags)) {
     ImGui::TableSetupColumn("ID");
@@ -54,7 +57,20 @@ void DrawModelsPanel(EditorState& state) {
       ImGui::SameLine();
       ImGui::TextUnformatted(id.c_str());
       ImGui::TableNextColumn();
-      ImGui::TextUnformatted(model.modelFile.c_str());
+      // Editable (TRACK_MODEL_LIST_PLAN.md follow-up): "Load Model..." on a not-yet-saved Track has
+      // no save directory to resolve a relative reference against, so it falls back to storing the
+      // picked file's absolute path (main.cpp) -- this is the promised way to retype it into a real
+      // relative one afterwards, since there's otherwise no in-editor path back from that fallback.
+      char modelFile[512];
+      std::snprintf(modelFile, sizeof(modelFile), "%s", model.modelFile.c_str());
+      ImGui::SetNextItemWidth(-1);
+      std::string fieldId = "##modelFile-" + id;
+      bool changed = ImGui::InputText(fieldId.c_str(), modelFile, sizeof(modelFile), kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      if (changed) {
+        const std::string newValue = modelFile;
+        state.editEmbeddedModel(id, [&](modelxml::ModelXmlDefinition& m) { m.modelFile = newValue; });
+      }
       ImGui::TableNextColumn();
       ImGui::Text("%zu", model.meshes.size());
       ImGui::TableNextColumn();

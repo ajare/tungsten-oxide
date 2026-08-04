@@ -192,6 +192,27 @@ TrackSavePlan prepareTrackSave(const TrackDefinition& track, const tox::Track& b
   }
   const std::vector<modelxml::ModelXmlDefinition>& otherModels = track.models;
 
+  // "Load Model..." on a not-yet-saved Track has no save directory yet to resolve a relative
+  // ModelFile against, so it falls back to embedding the picked file's absolute path (main.cpp) --
+  // fine for this session's own canvas rendering (TopDownCanvas.cpp resolves an absolute reference
+  // directly), but the game runtime's own resource loader (TrackCollisionBuild.cpp/Map.cpp,
+  // mono::safeRelativePath) rejects anything but a safe path relative to the Resources XML
+  // directory, by design -- a Track resource can't reference arbitrary filesystem paths outside its
+  // own resource tree. Catch that here at save time (same check the primary Model's own
+  // ModelFile/TrackData already get above) rather than let a broken reference reach disk silently;
+  // ModelsPanel.cpp's ModelFile field is the promised way to retype it into a real relative path.
+  for (const auto& other : otherModels) {
+    const std::string label = other.id.value_or(other.modelFile);
+    if (!isSafeResourceRelativePath(other.modelFile)) {
+      plan.error = "Model '" + label + "' has an unsafe ModelFile (must be relative, no drive letter, no '..') -- fix it in the Models panel before saving.";
+      return plan;
+    }
+    if (other.trackData.has_value() && !isSafeResourceRelativePath(*other.trackData)) {
+      plan.error = "Model '" + label + "' has an unsafe TrackData reference (must be relative, no drive letter, no '..').";
+      return plan;
+    }
+  }
+
   plan.json = toJson(track) + "\n";
   const MppModelExportResult exported = exportTrackToMppModel(bakedTrack, trackMaterialToMaterial);
   plan.model = exported.bytes;
