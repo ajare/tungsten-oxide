@@ -560,6 +560,50 @@ int main(int argc, char** argv) {
   }
 
   {
+    // sweepWall() had no dedicated coverage at all before DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
+    // 6.2 -- every existing BVH test above exercises nearestAlongAxis/nearestAcrossAxis/sweep, not
+    // the TwoSidedWall filter stepMeshPhysics's lateral wall-bounce logic actually depends on. A
+    // tunnel cross-section (floor + ceiling, both excluded by the |dot(normal,UP)|>0.5 floor/
+    // ceiling filter, plus two opposing walls) is exactly the genuinely-3D, multiple-BVH-leaf
+    // shape Milestone 6.1's own validation asset uses, so this mirrors that asset in miniature.
+    auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
+      CollisionTriangle first, second;
+      first.positions[0] = a;
+      first.positions[1] = b;
+      first.positions[2] = c;
+      second.positions[0] = a;
+      second.positions[1] = c;
+      second.positions[2] = d;
+      for (int corner = 0; corner < 3; ++corner) first.normals[corner] = second.normals[corner] = normal;
+      first.surfaceId = second.surfaceId = surfaceId;
+      return std::vector<CollisionTriangle>{first, second};
+    };
+    std::vector<CollisionTriangle> tunnel;
+    auto append = [&](std::vector<CollisionTriangle> quadTris) {
+      tunnel.insert(tunnel.end(), quadTris.begin(), quadTris.end());
+    };
+    append(quad({-5, 0, 5}, {5, 0, 5}, {5, 0, 15}, {-5, 0, 15}, {0, 1, 0}, 1));     // floor
+    append(quad({-5, 6, 5}, {5, 6, 5}, {5, 6, 15}, {-5, 6, 15}, {0, -1, 0}, 2));    // ceiling
+    append(quad({-4, 0, 5}, {-4, 6, 5}, {-4, 6, 15}, {-4, 0, 15}, {1, 0, 0}, 3));   // left wall
+    append(quad({4, 0, 5}, {4, 6, 5}, {4, 6, 15}, {4, 0, 15}, {-1, 0, 0}, 4));      // right wall
+    TrackCollisionSurface tunnelSurface(tunnel);
+
+    auto leftHit = tunnelSurface.sweepWall({0, 1, 10}, {-10, 1, 10});
+    check(leftHit && leftHit->surfaceId == 3 && std::fabs(leftHit->position.x + 4) < 1e-9,
+          "sweepWall finds the left wall of a tunnel cross-section");
+    check(leftHit && glm::dot(leftHit->normal, Vec3(1, 0, 10) - leftHit->position) > 0,
+          "sweepWall orients the contact normal back toward the side the sweep started from");
+
+    check(!tunnelSurface.sweepWall({0, 1, 10}, {0, 10, 10}).has_value(),
+          "sweepWall never reports the floor/ceiling of a tunnel as a wall, even when a segment "
+          "would otherwise cross it");
+
+    auto crossingHit = tunnelSurface.sweepWall({-10, 1, 10}, {10, 1, 10});
+    check(crossingHit && crossingHit->surfaceId == 3 && std::fabs(crossingHit->position.x + 4) < 1e-9,
+          "sweepWall picks the nearer of two walls a segment crosses (left, not right)");
+  }
+
+  {
     auto loaded = Track::fromJson(base.dump());
     check(static_cast<bool>(loaded), "external-contact ship fixture loads");
     if (loaded) {

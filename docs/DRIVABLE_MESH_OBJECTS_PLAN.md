@@ -977,6 +977,44 @@ after Milestone 4 lands.
   behavior); re-run 6.0's tool against the 6.1 asset and confirm
   ground/wall/airborne state stays sane frame-to-frame (no NaN, no
   discontinuous teleport, no stuck-airborne loop). Commit.
+- **Done — no `Ship.cpp` change needed.** Investigated both named suspects
+  and found neither actually broken for this asset:
+  - `nearestAlongAxis`'s "single-hit" worry turned out to already be a
+    non-issue on inspection: `queryNearestSegment` does a full BVH
+    traversal picking the geometrically nearest candidate by distance to
+    `origin` (not a first-hit/early-exit), and separately, an existing test
+    (`cpp/core/tests/track_tests.cpp`, "BVH contact prefers/preserves the
+    nearest stacked lower/upper surface") already covers two same-facing
+    stacked surfaces. The floor/ceiling case specifically can never be
+    ambiguous regardless of distance: `upFilter`'s
+    `dot(hit->normal, *upFilter) <= EPSILON` check rejects a
+    downward-facing ceiling outright, so a ceiling can never be mistaken
+    for ground no matter how close it is.
+  - `sweepWall`'s floor-vs-wall threshold is also fine for an axis-aligned
+    tunnel: floor/ceiling normals are exactly `±(0,1,0)` (`|dot|==1`, well
+    past the `0.5` cutoff) and the two wall normals are exactly horizontal
+    (`|dot|==0`), so there's no near-threshold ambiguity to trip over here.
+  - What *was* missing: `sweepWall` itself (the `TwoSidedWall` filter path
+    `stepMeshPhysics`'s lateral wall-bounce logic actually depends on) had
+    **no dedicated unit coverage at all** before this step — every existing
+    BVH test exercised `nearestAlongAxis`/`nearestAcrossAxis`/`sweep`
+    instead. Added one, mirroring 6.1's tunnel in miniature (floor +
+    ceiling + two opposing walls): confirms `sweepWall` finds the correct
+    wall with a correctly start-oriented normal, never reports the floor/
+    ceiling as a wall even when a segment would otherwise cross it, and
+    picks the nearer of two walls a segment crosses rather than an
+    arbitrary one. `cpp/core/tests/track_tests.cpp`, runs under the
+    existing `track_tests` `ctest` target — no new target needed.
+  - Empirical drive-through, `mesh_physics_diag` against the 6.1 asset: a
+    temporary scripted-input variant (steer=0 to converge, then a hard
+    steer-left burst timed to land inside the tunnel span, then release —
+    reverted after, confirmed via `git diff` showing no residual change)
+    produced a clean wall bounce right inside the tunnel (speed loss from
+    the bounce, smooth recovery, no NaN/teleport/stuck-airborne) at
+    z≈66.6, well inside the tunnel's z=48..72 span. The committed default
+    sinusoidal scripted input was also re-verified: two 300-frame runs,
+    byte-identical stdout, no NaN/Inf.
+  - `ctest` stayed green (4/4) throughout, including the new test.
 
 **6.3 — Non-contiguous entry validation**
 - Confirm a ship can transition onto a drivable mesh object not contiguous
