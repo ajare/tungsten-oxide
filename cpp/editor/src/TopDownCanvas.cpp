@@ -629,9 +629,9 @@ const tox::Zone* zoneAtWorld(const tox::Track* baked, double worldX, double worl
 // Drawn/hit-tested directly against the AUTHORED `TrackDefinition::meshObjects` list, not `baked`
 // -- unlike paths/zones/triggers, core never compiles a placement into anything (see the plan's
 // "`.mppmodel` loading is host-only" architecture note), so there's no baked record to read, and
-// editing still works even when the track currently fails to bake. There's also no bounding-box or
-// real geometry to draw (the editor never loads the referenced `.mppmodel` either) -- just a fixed-
-// size diamond marker plus a short line showing which way it currently faces, projected through the
+// editing still works even when the track currently fails to bake. Each placement also gets a
+// fixed-size diamond marker plus a short line showing which way it currently faces (see
+// drawMeshObjectPlacements below for the bounding-box fill drawn under it), projected through the
 // active ProjectionMode like every other on-canvas entity.
 constexpr float kMeshObjectMarkerRadiusPx = 9.0f;
 constexpr float kMeshObjectFacingLengthPx = 16.0f;
@@ -681,7 +681,12 @@ const std::string* resolveModelFileReference(const TrackDefinition& track, const
 // marker either way (see drawMeshObjectPlacements below).
 const ImportedMppModel* loadCachedPlacementGeometry(const std::string& modelFileReference, const std::filesystem::path& baseDir) {
   static std::unordered_map<std::string, std::optional<ImportedMppModel>> cache;
-  if (baseDir.empty() || modelFileReference.empty()) return nullptr;
+  // An empty baseDir (track never saved yet) only dooms resolution for a *relative* reference --
+  // an absolute one (main.cpp's own fallback when embedding into an unsaved track) resolves fine
+  // on its own, since path::operator/ returns its right-hand side unchanged when that side is
+  // already absolute.
+  if (modelFileReference.empty()) return nullptr;
+  if (baseDir.empty() && !std::filesystem::path(modelFileReference).is_absolute()) return nullptr;
   const std::string key = (baseDir / modelFileReference).lexically_normal().string();
   const auto found = cache.find(key);
   if (found != cache.end()) return found->second.has_value() ? &*found->second : nullptr;

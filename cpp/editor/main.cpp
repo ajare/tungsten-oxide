@@ -2098,9 +2098,15 @@ int main(int, char**) {
                     std::filesystem::relative(absoluteMppModelPath, saveBinding->xmlPath.parent_path(), relError);
                 if (!relError && !relative.empty()) return editor::pathToUtf8(relative);
               }
-              // No save location bound yet -- best effort is the bare filename; the author can
-              // retype a real relative path once the track has a home (Properties panel).
-              return editor::pathToUtf8(absoluteMppModelPath.filename());
+              // No save location bound yet -- store the absolute path so placement rendering can
+              // still resolve it this session (TopDownCanvas.cpp's loadCachedPlacementGeometry
+              // joins ModelFile against the track's save directory, but std::filesystem::path's
+              // `/` operator returns the right-hand side unchanged when it's already absolute, so
+              // this round-trips correctly even before modelBaseDir exists). The author can still
+              // retype a real relative path once the track has a home (Properties panel) -- a bare
+              // filename here would have silently discarded the only path that worked, whereas an
+              // absolute path is only inconvenient, never wrong.
+              return editor::pathToUtf8(absoluteMppModelPath);
             };
 
             const bool isModelXml = picked.path.extension() == L".xml" || picked.path.extension() == L".XML";
