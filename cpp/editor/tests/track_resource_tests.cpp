@@ -231,6 +231,83 @@ int main(int argc, char** argv) {
     }
   }
 
+  // A placement (ModelPlacement) referencing an embedded Model, with a non-default transform, must
+  // survive a real save->reload round trip: the model itself through the <Models> XML list (already
+  // covered above), the placement itself -- id, modelId, and its full 6-DOF transform -- through the
+  // TrackData JSON's "meshObjects" field (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.1's schema
+  // addition, parsed back in by the same editor::fromJson that TrackResourceDocument.cpp's
+  // parseCandidate() calls for every load, not a separate/parallel code path).
+  {
+    std::string xmlWithProp = readFile(resources);
+    const std::string propModel =
+        "<Model id=\"prop-model\"><ModelFile>Prop.mppmodel</ModelFile><Meshes>"
+        "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+        "</Meshes></Model>";
+    const std::size_t pos = xmlWithProp.find("</Models>");
+    check(pos != std::string::npos, "generated XML contains a </Models> closing tag to inject before");
+    if (pos != std::string::npos) {
+      xmlWithProp.insert(pos, propModel);
+      writeFile(resources, xmlWithProp);
+
+      editor::TrackResourceScanResult withPlacementScan = editor::scanTrackResources(resources);
+      check(withPlacementScan.validDocument() && withPlacementScan.tracks.size() == 1 &&
+                withPlacementScan.tracks[0].track.has_value(),
+            "the prop Model loads alongside the primary");
+      if (withPlacementScan.tracks.size() == 1 && withPlacementScan.tracks[0].track.has_value()) {
+        editor::TrackResourceCandidate& withPlacement = withPlacementScan.tracks[0];
+
+        editor::ModelPlacement placement;
+        placement.id = "prop-placement-1";
+        placement.modelId = "prop-model";
+        placement.position = tox::Vec3(11.0, 22.0, 33.0);
+        placement.rotation = tox::Vec3(45.0, 15.0, 90.0);
+        placement.scale = tox::Vec3(2.0, 3.0, 4.0);
+        withPlacement.track->meshObjects.push_back(placement);
+
+        check(editor::toJson(*withPlacement.track).find("\"meshObjects\"") != std::string::npos,
+              "a track with a placement serializes a non-empty meshObjects array");
+
+        const tox::TrackLoadResult withPlacementBake = tox::Track::fromJson(editor::toJson(*withPlacement.track));
+        check(static_cast<bool>(withPlacementBake), "a track with a placement still bakes: " + withPlacementBake.error);
+        if (withPlacementBake) {
+          const editor::TrackSaveBinding placementBinding{
+              resources, withPlacement.resourceName, withPlacement.trackDataReference,
+              withPlacement.modelFileReference, withPlacement.resourceFingerprint, withPlacement.jsonFingerprint};
+          editor::TrackSavePlan placementPlan =
+              editor::prepareTrackSave(*withPlacement.track, *withPlacementBake.track, {}, resources, placementBinding, false);
+          check(placementPlan.ok(), "bound Save succeeds with a placement present: " + placementPlan.error);
+          std::string commitError3;
+          check(editor::commitTrackSave(placementPlan, commitError3), "placement resave transaction commits: " + commitError3);
+
+          const editor::TrackResourceScanResult afterPlacementResave = editor::scanTrackResources(resources);
+          check(afterPlacementResave.validDocument() && afterPlacementResave.tracks.size() == 1 &&
+                    afterPlacementResave.tracks[0].track.has_value(),
+                "the track reloads after a Save with a placement present");
+          if (afterPlacementResave.tracks.size() == 1 && afterPlacementResave.tracks[0].track.has_value()) {
+            const auto& reloadedTrack = *afterPlacementResave.tracks[0].track;
+            const bool modelSurvived = std::any_of(reloadedTrack.models.begin(), reloadedTrack.models.end(),
+                                                   [](const modelxml::ModelXmlDefinition& m) {
+                                                     return m.id.has_value() && *m.id == "prop-model" && m.modelFile == "Prop.mppmodel";
+                                                   });
+            check(modelSurvived, "the placement's referenced Model survives the round trip");
+
+            check(reloadedTrack.meshObjects.size() == 1, "exactly one placement survives the round trip");
+            if (reloadedTrack.meshObjects.size() == 1) {
+              const editor::ModelPlacement& reloaded = reloadedTrack.meshObjects[0];
+              check(reloaded.modelId == "prop-model", "the reloaded placement still references its Model by id");
+              check(reloaded.position.x == 11.0 && reloaded.position.y == 22.0 && reloaded.position.z == 33.0,
+                    "the reloaded placement's position survives exactly");
+              check(reloaded.rotation.x == 45.0 && reloaded.rotation.y == 15.0 && reloaded.rotation.z == 90.0,
+                    "the reloaded placement's rotation survives exactly");
+              check(reloaded.scale.x == 2.0 && reloaded.scale.y == 3.0 && reloaded.scale.z == 4.0,
+                    "the reloaded placement's scale survives exactly");
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Hard break, no migration (TRACK_MODEL_LIST_PLAN.md): a Track resource using the old bare
   // <TrackData>/<ModelFile> shape (no <Models> wrapper) must fail to load with a clear error.
   {
