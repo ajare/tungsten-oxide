@@ -17,6 +17,9 @@
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
 #   model-tool/ model_tool, the AssImp import/preview/save tool for MassivePolyPusher's model
 #               format — see model-tool/CMakeLists.txt and ../docs/adr/0001-model-tool.md.
+#   model-xml/  the shared <Model> XML fragment schema (id/ModelFile/TrackData/per-mesh Type+
+#               Visible), linked by both editor/ and model-tool/ — see model-xml/CMakeLists.txt,
+#               ../docs/adr/0003-model-xml-layer.md, and ../docs/TRACK_MODEL_LIST_PLAN.md.
 #
 # core links Willpower.Geometry for current-schema mesh topology validation and
 # triangulation. The target link establishes build order; explicit dependencies
@@ -42,6 +45,7 @@ add_subdirectory(app)
 add_subdirectory(applib)
 add_subdirectory(launcher)
 add_subdirectory(tungsten-monoxide)
+add_subdirectory(model-xml)
 add_subdirectory(editor)
 add_subdirectory(model-tool)
 

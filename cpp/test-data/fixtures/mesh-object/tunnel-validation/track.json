@@ -1,0 +1,110 @@
+{
+  "version": 12,
+  "name": "Fixture - tunnel/ramp/barrier validation (Milestones 6.1, 8.2)",
+  "start": { "path": 0, "point": 0, "reverse": false },
+  "handling": { "maxSpeed": 140, "accel": 71, "turnSpeed": 137.5, "weight": 1000 },
+  "meshObjects": [
+    {
+      "id": "barrier-1",
+      "modelId": "barrier.mppmodel",
+      "x": 0.0,
+      "y": 0.0,
+      "z": -85.0,
+      "yaw": 0.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
+    },
+    {
+      "id": "tunnel-1",
+      "modelId": "tunnel.mppmodel",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 48.0,
+      "yaw": 0.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
+    },
+    {
+      "id": "ramp-1",
+      "modelId": "ramp.mppmodel",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 85.0,
+      "yaw": 0.0,
+      "pitch": 0.0,
+      "roll": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "scaleZ": 1.0
+    }
+  ],
+  "zones": [
+    {
+      "id": "tunnel-boost",
+      "effect": "velocityChange",
+      "width": 6,
+      "length": 10,
+      "factor": 1.2,
+      "duration": 1.0,
+      "host": {
+        "kind": "meshObject",
+        "meshObjectId": "tunnel-1",
+        "localPosition": { "x": 0.0, "y": 0.0, "z": 12.0 },
+        "localYaw": 0.0
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "id": "ramp-checkpoint",
+      "type": "checkpoint",
+      "role": "intermediate",
+      "width": 10,
+      "height": 8,
+      "rotation": 0,
+      "direction": "both",
+      "host": {
+        "kind": "meshObject",
+        "meshObjectId": "ramp-1",
+        "localPosition": { "x": 0.0, "y": 0.0, "z": 0.0 }
+      }
+    }
+  ],
+  "disjointSeams": [],
+  "junctions": [],
+  "selfIntersectionOverrides": [],
+  "textureAssets": {},
+  "paths": [
+    {
+      "id": "path-main",
+      "closed": false,
+      "points": [
+        { "type": "position", "id": "p0", "pos": [0, 0, -120], "weight": 1 },
+        { "type": "position", "id": "p1", "pos": [0, 0, -40], "weight": 1 },
+        { "type": "position", "id": "p2", "pos": [0, 0, 20], "weight": 1 },
+        { "type": "position", "id": "p3", "pos": [0, 0, 85], "weight": 1 },
+        { "type": "width", "t": 0, "width": 24 },
+        { "type": "width", "t": 1, "width": 24 },
+        { "type": "roll", "t": 0, "roll": 0 },
+        { "type": "roll", "t": 1, "roll": 0 },
+        { "type": "crossSection", "t": 0, "curvature": 0, "tightness": 1, "thickness": 4 },
+        { "type": "crossSection", "t": 1, "curvature": 0, "tightness": 1, "thickness": 4 }
+      ],
+      "reservations": [
+        {
+          "id": "res-1",
+          "t0": 0.12,
+          "t1": 0.22,
+          "width": 4,
+          "widthMode": "fixed"
+        }
+      ]
+    }
+  ]
+}

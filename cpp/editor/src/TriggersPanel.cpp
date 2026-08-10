@@ -88,22 +88,34 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
     const bool dirChanged = ImGui::Combo("Direction", &dirIndex, dirNames, 3);
     changed |= dirChanged;
 
-    double t = trigger->host.t * 100.0, lateral = trigger->host.lateral, hostX = trigger->host.x, hostZ = trigger->host.z;
-    if (isPath) {
+    // Path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5) --
+    // no placement picker exists yet (Milestone 5), so editable but not creatable from this panel;
+    // "Add Trigger" below stays path-only.
+    const bool isMeshObject = trigger->host.kind == "meshObject";
+    double t = trigger->host.t * 100.0, lateral = trigger->host.lateral;
+    char meshObjectId[128];
+    std::snprintf(meshObjectId, sizeof(meshObjectId), "%s", trigger->host.meshObjectId.c_str());
+    double localX = trigger->host.localPosition.x, localY = trigger->host.localPosition.y, localZ = trigger->host.localPosition.z;
+    if (isMeshObject) {
+      ImGui::SetNextItemWidth(160);
+      changed |= ImGui::InputText("Placement id", meshObjectId, sizeof(meshObjectId), kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local X", &localX, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local Y", &localY, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local Z", &localZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+    } else {
       ImGui::Text("Host path: %s", trigger->host.pathId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Position (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
       changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    } else {
-      ImGui::Text("Host mesh: %s", trigger->host.meshId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
       changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
@@ -115,12 +127,12 @@ bool DrawTriggersPanel(EditorState& state, int currentPathIndex, const tox::Trac
         target.autoWidth = autoWidth;
         target.direction = dirNames[dirIndex];
         if (isCheckpoint) target.role = role;
-        if (target.host.kind == "path") {
+        if (target.host.kind == "meshObject") {
+          target.host.meshObjectId = meshObjectId;
+          target.host.localPosition = tox::Vec3(localX, localY, localZ);
+        } else {
           target.host.t = t / 100.0;
           target.host.lateral = lateral;
-        } else {
-          target.host.x = hostX;
-          target.host.z = hostZ;
         }
       });
     }

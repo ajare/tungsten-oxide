@@ -20,6 +20,7 @@
 #include "nlohmann/json.hpp"
 #include "Vec3.hpp"
 #include "Track.hpp"
+#include "TrackCollision.hpp"
 #include "Ship.hpp"
 #include "Simulation.hpp"
 
@@ -132,6 +133,12 @@ static Ship loadShip(const json& s) {
   p.visualUp = jvec(ph.at("visualUp"));
   p.moveDir = jvec(ph.at("moveDir"));
   ship.prevTriggerPos = jvec(s.at("prevTriggerPos"));
+  // Absent on every pre-Milestone-7 analytic trace (Ship's own default -- (0,1,0) -- is exactly
+  // right there, since analytic-mode physics never reads renderNormal at all). A mesh-mode trace
+  // needs it restored explicitly: stepMeshPhysics's probeAxis reads it as a real physics input (see
+  // this file's own comment where it's re-threaded after stepPhysics below), not just the cosmetic
+  // "render-only" value Ship.hpp's own doc comment describes it as for analytic mode.
+  if (s.contains("renderNormal")) ship.renderNormal = jvec(s.at("renderNormal"));
 
   for (const auto& e : s.value("zoneInside", json::array()))
     ship.zoneInside[e[0].get<std::string>()] = e[1].get<bool>();
@@ -206,8 +213,7 @@ static std::string surfaceLabel(const Simulation& simulation, const Track& track
   if (ship.physics.airborne) return "airborne";
   const Vec3& p = ship.physics.groundPos;
   const Sample sample = simulation.sampleTrack(p.x, p.y, p.z);
-  const MeshRegion* mesh = simulation.surfaceOwnerAt(p.x, p.z, p.y, sample);
-  return mesh ? "mesh:" + mesh->id : "path:" + std::to_string(sample.pathIndex);
+  return "path:" + std::to_string(sample.pathIndex);
 }
 
 int main(int argc, char** argv) {
@@ -268,6 +274,11 @@ int main(int argc, char** argv) {
     in >> trace;
     const std::string name = trace.value("meta", json::object()).value("name", file);
     const bool rawTrack = trace.contains("sourceTrack");
+    // DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 7.2: a raw-track trace captured under mesh-mode
+    // physics carries its own `collisionTriangles` (the exact BVH mesh_physics_diag's
+    // --capture-trace mode built) so replay needs no mpp/willpower/.mppmodel dependency of its own
+    // -- Track::collisionSurface is just a plain in-memory TrackCollisionSurface either way.
+    const bool meshMode = trace.value("meshMode", false);
     Track track;
     if (rawTrack) {
       TrackLoadResult loaded = Track::fromJson(trace.at("sourceTrack").dump());
@@ -279,10 +290,24 @@ int main(int argc, char** argv) {
     } else {
       track = loadTrack(trace.at("world"));
     }
+    if (meshMode) {
+      std::vector<CollisionTriangle> triangles;
+      for (const auto& tj : trace.at("collisionTriangles")) {
+        CollisionTriangle triangle;
+        for (int corner = 0; corner < 3; ++corner) {
+          triangle.positions[corner] = jvec(tj.at("positions")[corner]);
+          triangle.normals[corner] = jvec(tj.at("normals")[corner]);
+        }
+        triangle.surfaceId = tj.at("surfaceId").get<int>();
+        triangles.push_back(triangle);
+      }
+      track.collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
+    }
     Simulation sim(track);
     // Golden traces were captured under analytic-mode physics; pin explicitly rather than relying
-    // on Simulation's default, which now defaults to mesh physics (see Simulation.hpp).
-    sim.setMeshPhysicsEnabled(false);
+    // on Simulation's default, which now defaults to mesh physics (see Simulation.hpp). A trace
+    // that says otherwise (meshMode above) gets what it actually asked for instead.
+    sim.setMeshPhysicsEnabled(meshMode);
     const double traceAtol = rawTrack ? rawAtol : atol;
     const double traceRtol = rawTrack ? rawRtol : rtol;
     Worst& categoryWorst = rawTrack ? rawWorst : bakedWorst;
@@ -422,6 +447,11 @@ int main(int argc, char** argv) {
       const auto& ctrl = steps[i].at("control");
       const StepResult result = sim.stepPhysics(freeShip, ctrl.at("dt").get<double>(), ctrl.at("throttle").get<double>(),
                                                 ctrl.at("brake").get<double>(), ctrl.at("steer").get<double>());
+      // Mirrors GameSession's own contract (see loadShip()'s comment on renderNormal above) --
+      // required for a mesh-mode trace's free-run to track the same trajectory the per-step check
+      // above and the original capture both do; a no-op for analytic-mode traces, which never read
+      // renderNormal at all.
+      if (!result.respawned) freeShip.renderNormal = result.surfaceNormal;
       const json& expectedStep = steps[i];
       const json& expectedPhysics = expectedStep.at("after").at("physics");
       const json& expectedAfter = expectedStep.at("after");

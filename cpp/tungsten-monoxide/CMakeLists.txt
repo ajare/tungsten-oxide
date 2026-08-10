@@ -27,6 +27,7 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/StateMapTransitionTungstenMonoxide.h
   include/StateMapUnloadTungstenMonoxide.h
   include/StatePlayTungstenMonoxide.h
+  include/TrackCollisionBuild.h
   include/imgui/imconfig.h
   include/imgui/imgui.h
   include/imgui/imgui_internal.h
@@ -58,7 +59,8 @@ set(TUNGSTEN_MONOXIDE_SOURCES
   src/StateMapLoadTungstenMonoxide.cpp
   src/StateMapTransitionTungstenMonoxide.cpp
   src/StateMapUnloadTungstenMonoxide.cpp
-  src/StatePlayTungstenMonoxide.cpp)
+  src/StatePlayTungstenMonoxide.cpp
+  src/TrackCollisionBuild.cpp)
 
 set(TUNGSTEN_MONOXIDE_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
   "Root of the MassivePolyPusher dependency")

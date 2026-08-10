@@ -7,6 +7,9 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include "NormalSmoothing.hpp"
+#include "ObjSmoothingGroups.hpp"
+
 namespace modeltool {
 namespace {
 
@@ -110,12 +113,17 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   // Triangulate: every face becomes a triangle (ModelSerializer/mppmodel only ever deals in
   // triangles). JoinIdenticalVertices: real shared-vertex indexing, not a per-face vertex soup
   // (ADR 0001 D5 -- model-tool deliberately keeps real indices, unlike track geometry's soup).
-  // GenSmoothNormals: only fills in normals for meshes that don't already have any. Pre
-  // TransformVertices: bakes node-hierarchy transforms into vertex data, since .mppmodel has no
-  // node concept to preserve them in otherwise (ADR 0001 D3) -- a real gap in ModelConvert's own
-  // AssImpModelLoader precedent, which never applies node transforms at all.
-  constexpr unsigned int flags = static_cast<unsigned int>(aiProcess_Triangulate) | aiProcess_JoinIdenticalVertices |
-                                  aiProcess_GenSmoothNormals | aiProcess_PreTransformVertices;
+  // No GenSmoothNormals: normals are always recomputed from winding order after import instead
+  // (recomputeNormals below, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.2) -- the source file's own
+  // normals (real or AssImp-per-mesh-synthesized) are never trusted, and GenSmoothNormals is a
+  // fixed crease-angle heuristic that ignores authored smoothing groups entirely (verified against
+  // this vendored AssImp build -- see docs/model-tool.md), which recomputeNormals restores respect
+  // for when they're recoverable (OBJ only -- see ObjSmoothingGroups.hpp). PreTransformVertices:
+  // bakes node-hierarchy transforms into vertex data, since
+  // .mppmodel has no node concept to preserve them in otherwise (ADR 0001 D3) -- a real gap in
+  // ModelConvert's own AssImpModelLoader precedent, which never applies node transforms at all.
+  constexpr unsigned int flags =
+      static_cast<unsigned int>(aiProcess_Triangulate) | aiProcess_JoinIdenticalVertices | aiProcess_PreTransformVertices;
   const aiScene* scene = importer.ReadFile(utf8Path, flags);
   if (scene == nullptr || scene->mRootNode == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0) {
     if (outError) *outError = importer.GetErrorString();
@@ -166,8 +174,7 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   // AssImp commonly synthesizes an implicit placeholder material (e.g. a "DefaultMaterial" with
   // no texture) for meshes that don't explicitly reference one, in addition to whatever real
   // materials the scene actually declares -- if nothing ends up using it, don't create/display/
-  // declare it at all (matches ModelResourceExport.cpp's own "only export materials actually
-  // referenced" rule, just applied here at import time instead of at export time).
+  // declare it at all.
   std::vector<bool> referenced(out.materials.size(), false);
   for (const ImportedMesh& mesh : out.meshes) referenced[static_cast<std::size_t>(mesh.materialIndex)] = true;
 
@@ -180,6 +187,12 @@ std::optional<ImportedModel> importModel(const std::string& utf8Path, std::strin
   }
   out.materials = std::move(prunedMaterials);
   for (ImportedMesh& mesh : out.meshes) mesh.materialIndex = remappedIndex[static_cast<std::size_t>(mesh.materialIndex)];
+
+  // Smoothing-group-aware where recoverable (OBJ only -- AssImp's public API exposes no such data
+  // for any format, so every other source, and a `.mppmodel` reimport elsewhere, always falls back
+  // to recomputeNormals' per-mesh mode). See ObjSmoothingGroups.hpp.
+  const auto smoothingGroups = extractObjSmoothingGroups(utf8Path, out);
+  recomputeNormals(out, smoothingGroups.has_value() ? &*smoothingGroups : nullptr);
 
   return out;
 }

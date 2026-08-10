@@ -116,10 +116,9 @@ std::optional<ImportedMaterialXmlFile> importMaterialXml(const std::string& utf8
 
         const auto textureDep = std::find_if(res.dependents.begin(), res.dependents.end(),
                                               [](const auto& dep) { return dep.first == "Texture"; });
-        // "__mpp_tex_none__" (ADR 0001 D7's sentinel, and what buildModelMaterialsXml itself
-        // writes for an untextured material) has no Image resource declared for it anywhere --
-        // that's expected, not a broken reference, so it's treated the same as "no Texture
-        // dependent at all" rather than logged as missing.
+        // "__mpp_tex_none__" (ADR 0001 D7's sentinel for an untextured material) has no Image
+        // resource declared for it anywhere -- that's expected, not a broken reference, so it's
+        // treated the same as "no Texture dependent at all" rather than logged as missing.
         if (textureDep != res.dependents.end() && textureDep->second != "__mpp_tex_none__") {
           const auto [imageNamesp, imageName] = splitRef(textureDep->second, namesp);
           const RawResource* image = findResource(namespaces, imageNamesp, imageName);

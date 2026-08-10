@@ -1,6 +1,6 @@
 # cpp/editor — the native ImGui/SDL2/OpenGL track editor. Sits alongside cpp/core and
-# cpp/willpower and links both: `core` for schema-10 loading/baking/preview (reused unmodified as a
-# black box) and `Willpower::Geometry` transitively through `core` for mesh topology.
+# cpp/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
+# as a black box) and `Willpower::Common` directly for material catalog parsing.
 #
 # Dear ImGui (docking branch) and its SDL2/OpenGL3 backends, plus the gl3w GL loader, are copied
 # into include/ and src/ rather than pulled in as a submodule/FetchContent — see the
@@ -62,14 +62,16 @@ set(GL3W_SOURCES src/gl3w/gl3w.c)
 set(EDITOR_SOURCES
   src/EditorTrackDefinition.cpp
   src/TopDownCanvas.cpp
-  src/ElevationView.cpp
   src/USDExport.cpp
   src/MppModelExport.cpp
+  src/MppModelImport.cpp
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/RandomTrack.cpp
   src/TextureCache.cpp
   src/MaterialsPanel.cpp
+  src/ModelsPanel.cpp
+  src/ModelPlacementsPanel.cpp
   src/FileDialog.cpp
   src/Clipboard.cpp
   src/TrackPropertiesPanel.cpp
@@ -77,7 +79,6 @@ set(EDITOR_SOURCES
   src/ZonesPanel.cpp
   src/TriggersPanel.cpp
   src/ReservationsPanel.cpp
-  src/MeshPanel.cpp
   src/CurvesPanel.cpp
   src/HandlingPanel.cpp
   src/RandomRangesPanel.cpp
@@ -99,6 +100,7 @@ target_include_directories(track_editor PRIVATE
 target_link_libraries(track_editor PRIVATE
   core
   Willpower::Common
+  model_xml
   SDL2::SDL2
   SDL2::SDL2main)
 
@@ -110,9 +112,20 @@ add_executable(editor_track_resource_tests
   src/TrackResourceSave.cpp
   src/FileDialog.cpp)
 target_include_directories(editor_track_resource_tests PRIVATE include third_party)
-target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common)
+target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common model_xml)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
+
+# Headless test for the from-scratch .mppmodel geometry reader (TRACK_MODEL_LIST_PLAN.md Milestone
+# 4) -- deliberately no Willpower/SDL/mpp dependency, matching MppModelImport.cpp/MppModelExport.cpp
+# themselves.
+add_executable(mpp_model_import_tests
+  tests/mpp_model_import_tests.cpp
+  src/MppModelImport.cpp
+  src/MppModelExport.cpp)
+target_include_directories(mpp_model_import_tests PRIVATE include third_party)
+target_link_libraries(mpp_model_import_tests PRIVATE core Willpower::Common model_xml)
+add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
 
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)

@@ -4,6 +4,8 @@
 // milestone only renders and navigates.
 #pragma once
 
+#include <filesystem>
+
 #include "EditorState.hpp"
 #include "TopDownView.hpp"
 #include "Track.hpp"
@@ -19,8 +21,16 @@ namespace editor {
 // `hoveredWorldOut`, if non-null, is set to the mouse's world X/Z position when the mouse is over
 // the canvas this frame, or reset to nullopt otherwise -- lets main.cpp's status bar show a live
 // world-coordinate readout without duplicating this function's own hover/screen-to-world logic.
+//
+// `modelBaseDir`, if non-empty, is the directory the embedded Model's own <ModelFile> reference
+// (resolved from a placement's `modelId` via `track.models`, TRACK_MODEL_LIST_PLAN.md Milestone 6)
+// is resolved against -- today: the current save location's directory. This is what lets real mesh
+// geometry render for each placement instead of just a marker. Left empty (no save location bound
+// yet), placements still render their marker, just not real geometry -- best-effort, never blocks
+// editing.
 bool DrawTopDownCanvas(TopDownView& view, EditorState& state, const tox::Track* baked,
-                      std::optional<WorldPoint2D>* hoveredWorldOut = nullptr);
+                      std::optional<WorldPoint2D>* hoveredWorldOut = nullptr,
+                      const std::filesystem::path& modelBaseDir = {});
 
 // Pans+zooms `view` to frame whichever of the four mutually-exclusive selection kinds (point/
 // mesh-region/zone/trigger) is currently selected -- shared by the top-down canvas's own "Object"

@@ -4,17 +4,14 @@
 
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
-| **Track** | The complete authored racing world, including paths, mesh regions, starts, zones, triggers, and texture references. | Course, level, map |
+| **Track** | The complete authored racing world, including paths, starts, zones, triggers, and texture references. | Course, level, map |
 | **Path** | An ordered open or closed spline ribbon that forms a drivable road surface. | Curve, road, spline |
 | **Control point** | An authored point that contributes one typed property to a path, such as position, roll, width, or cross-section. | Node, handle, point |
-| **Mesh region** | A flat, rigidly placed drivable area used for shapes that a swept path cannot represent. | Mesh, pad, arena, plaza |
 | **Start** | The single authored path location and direction from which the runtime starting grid is derived. | Spawn, start point |
 | **Starting grid** | The runtime set of staggered surface-conforming poses assigned to the ship roster around the authored start. | Spawn grid, grid layout |
-| **Track surface** | Any drivable surface supplied by a path or mesh region. | Ground, road |
-| **Ledge** | An unrailed boundary from which a ship can become airborne. | Open edge, drop-off |
-| **Mesh section** | A generated route section in which one or more mesh platforms connect an outgoing open path end to a lower receiving path end. | Gap, mesh gap, split section |
-| **Platform sequence** | A mesh section containing two to four separated drivable platforms. | Platform chain, mesh sequence |
-| **Launch ramp** | A short inclined open path that gives a ship upward velocity before a level or rising platform transition. | Ramp mesh, jump ramp |
+| **Track surface** | Any drivable surface supplied by a path. | Ground, road |
+| **Model** | An externally modeled `.mppmodel` embedded in a Track resource's `<Models>` list, with per-mesh Type (Track/Physical/Decorative) and Visible metadata. Exactly one Model per Track is the primary (Track-type, carrying the baked road/rail surface and its own `<TrackData>`); any number of others are Physical/Decorative props. | Mesh, asset, drivable mesh object |
+| **Model placement** | An instance of a non-primary Model, with its own 6-DOF transform, referencing the Model by its embedded id. | Placement, mesh object, prop instance |
 
 ## Ships and movement
 
@@ -27,11 +24,10 @@
 | **Controller** | The source of steering and throttle intent for one ship. | Driver, input handler |
 | **Idle controller** | An AI controller that supplies no steering or throttle intent. | Stationary AI, dummy driver |
 | **Grounded** | The motion state in which a ship is constrained to its current track surface. | On track, attached |
-| **Airborne** | The ballistic motion state entered after a ship leaves a ledge or an open path end. | Falling, flying |
+| **Airborne** | The ballistic motion state entered after a ship leaves an open path end. | Falling, flying |
 | **Impact** | A ship's collision with a solid rail boundary. | Hit, crash |
 | **Bounce** | The reflected motion produced by restitution after an impact. | Rebound, knockback |
 | **Path guard rail** | A solid lateral boundary along a path that reflects a ship's into-wall velocity. | Wall, spline rail, guardrail |
-| **Region rail** | A solid finite-height boundary edge authored on a mesh-region asset. | Mesh rail, wall, guard rail |
 
 ## Race progression
 
@@ -54,7 +50,7 @@
 | **Zone** | A flat surface area that applies an effect when a grounded ship enters it on the zone's host surface. | Pad, area trigger |
 | **Boost zone** | A zone that temporarily raises a ship's speed and speed cap. | Speed pad, accelerator |
 | **Start-grid zone** | A checkered visual zone with no race mechanic. | Start grid, finish line |
-| **Host surface** | The specific path or mesh region to which a zone or trigger is anchored. | Parent, owner, attachment |
+| **Host surface** | The specific path to which a zone or trigger is anchored. | Parent, owner, attachment |
 
 ## Texture authoring
 
@@ -67,17 +63,16 @@
 
 ## Relationships
 
-- A **Track** contains zero or more **Paths** and **Mesh regions**, but exactly one authored **Start**.
+- A **Track** contains zero or more **Paths**, but exactly one authored **Start**.
 - A **Starting grid** is derived from the **Start** and assigns one pose to each **Ship** in the **Ship roster**.
 - A **Ship roster** contains exactly one **Player ship** and zero or more **AI ships**.
 - Every **Ship** has exactly one **Controller**, independent race state, trigger state, zone state, and motion state.
 - A **Path** contains ordered typed **Control points** and may have lateral **Path guard rails**.
-- A **Mesh region** may have zero or more **Region rails**; an unrailed boundary is a **Ledge**.
-- A **Mesh section** contains either one **Mesh region** or one **Platform sequence** and may contain **Launch ramps**.
 - A valid checkpoint set contains exactly one **Finish checkpoint** and zero or more ordered **Intermediate checkpoints**.
 - Each **Ship** owns its own **Lap progress**, **Lap timer**, and most recent **Checkpoint respawn** location.
 - A **Zone** or **Trigger** belongs to exactly one **Host surface**.
 - A **Texture asset** contains one **Texture path** and one or more **Texture tiles**, but no image bytes.
+- A **Track** embeds one or more **Models**, exactly one of which is primary; every **Model placement** references one non-primary **Model**.
 
 ## Example dialogue
 
@@ -95,10 +90,9 @@
 
 ## Flagged ambiguities
 
-- "Rail" and "guard rail" have been used interchangeably. Use **Path guard rail** for a path's lateral collision boundary and **Region rail** for a flagged mesh-region edge; use **rail** alone only when the distinction is irrelevant.
+- "Rail" and "guard rail" have been used interchangeably. Use **Path guard rail** for a path's lateral collision boundary; use **rail** alone only when the distinction is irrelevant.
 - "Trigger" has referred both to generic debug gates and race checkpoints. Use **Trigger** for the general vertical-gate concept and **Checkpoint** only for a trigger participating in lap progression.
 - "Start grid" can mean the runtime ship arrangement or the checkered visual zone. Use **Starting grid** for ship poses and **Start-grid zone** for the visual marker.
 - "Respawn" and "reset" have been used as synonyms. Use **Checkpoint respawn** for restoring a ship to race progress and **Manual respawn** for the player's request; reserve "reset" for clearing runtime state.
 - "Path", "curve", "road", and "spline" have referred to the same authored ribbon. Use **Path** as the domain entity and "spline" only when discussing its interpolation geometry.
-- "Mesh" can mean either raw geometry, a placed region, or rendered triangles. Use **Mesh region** for the drivable domain entity and qualify asset geometry or rendered geometry explicitly.
 - A browser file dialog does not reveal the selected file's absolute filepath. **Texture path** therefore means the stored filename or available relative path, not an OS path; authors must ensure that reference is loadable beside the served track application.

@@ -13,7 +13,6 @@
 #include "TrackDefinition.hpp"
 #include "TrackCollision.hpp"
 #include "TrackGeometry.hpp"
-#include "TrackMesh.hpp"
 
 namespace tox {
 
@@ -48,17 +47,27 @@ struct Path {
   std::vector<Frame> centerline;
 };
 
-// A compiled path- or mesh-hosted effect zone.
+// A compiled zone, path-hosted (`kind == "path"`, `gLo`/`gHi`/`gMax`/`closed`/`lateral` valid) or
+// drivable-mesh-object-hosted (`kind == "meshObject"`, `x`/`z`/`rotation`/`halfLength`/`halfWidth`
+// valid instead -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5, restoring the flat-rectangle host
+// capability the old Mesh-region host provided, generalized off a placement's transform instead of
+// a MeshRegion's own x/z/rotation). `rotation` is the placement's yaw, in radians, plus the host's
+// own `localYaw` offset -- see TrackBake.cpp. A meshObject-hosted zone gets no render geometry
+// (unlike the path-hosted case, which emits a `ZoneSurface` batch) -- deliberately deferred, since
+// core has no geometry for the referenced model to place a visual quad against without loading it,
+// which it never does (see the plan's "`.mppmodel` loading is host-only" architecture note); the
+// zone is still fully functional for physics, just visually absent until a future milestone adds
+// host-side (or editor-side) rendering for it.
 struct Zone {
   std::string id;
   std::string kind;
   std::string effect;  // "velocityChange" | "jump" | "startGrid"
   double factor{0.0}, duration{0.0};
-  int hostPathIndex{0}, hostRegionIndex{-1};
-  double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};
+  int hostPathIndex{0};
   double gLo{0.0}, gHi{0.0}, gMax{1.0};
   bool closed{true};
   double lateral{0.0}, halfWidth{0.0};
+  double x{0.0}, z{0.0}, rotation{0.0}, halfLength{0.0};
 };
 
 // A compiled trigger gate: baked world-space frame (center + right/up/fwd) and
@@ -93,7 +102,6 @@ struct Track {
   double trackFloorY{-1e9};
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
-  std::vector<MeshRegion> meshRegions;
   std::vector<GeometryBatch> geometry;
   // Optional external road triangles supplied by a native Track resource.
   // JSON-only consumers leave this null and retain analytical collision.
@@ -116,6 +124,15 @@ struct Track {
   // last good detection result instead).
   static TrackLoadResult fromJson(std::string_view text, bool detectSelfIntersections = true);
   static TrackLoadResult fromFile(const std::filesystem::path& path, bool detectSelfIntersections = true);
+
+  // Loads and normalizes N TrackData JSON files independently, namespaces every id each source owns
+  // (but never `ModelPlacementDefinition::modelId` -- see `namespaceIds()`'s own comment in
+  // TrackLoader.cpp) so they can't collide, concatenates their authored lists into one
+  // TrackDefinition, then bakes exactly once -- TRACK_MODEL_LIST_PLAN.md Milestone 1.2, for a Track
+  // resource whose `<Models>` list embeds more than one Track-type model. A single-path call produces
+  // byte-identical output to `fromFile` (no namespacing is applied when there's only one source).
+  // Singular fields (name/samples/handling/start/version) come from the first source only.
+  static TrackLoadResult fromTrackDataFiles(const std::vector<std::filesystem::path>& paths, bool detectSelfIntersections = true);
 };
 
 struct TrackWarning {

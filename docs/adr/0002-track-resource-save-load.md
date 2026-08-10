@@ -36,6 +36,14 @@ load or compare `.mppmodel` geometry. Save regenerates `.mppmodel` and `<TrackMe
 current bake. A missing, stale, absent, or unsafe `<ModelFile>` does not block Open; Save repairs it
 with a safe resource-name-derived model filename.
 
+**Schema note (`TRACK_MODEL_LIST_PLAN.md` Milestone 5):** `<TrackData>`/`<ModelFile>` are no longer
+direct children of `<Definition factory="Track">` — they live on the primary (Type=Track) entry of a
+`<Models>` list instead, and the flat `<TrackMeshes>` list is retired outright (superseded by that
+primary entry's own per-mesh `<Meshes>`, which the host now derives independently rather than
+reading — see `docs/tungsten-monoxide.md`). The principle this decision states — JSON is the sole
+editable source, geometry is always regenerated — is unchanged; only the surrounding element names
+are.
+
 ### D3 — Open scans the logical Tracks namespace and exposes invalid entries
 
 **Open Resources XML…** accepts a `<Resources>` document and scans all root-level
@@ -53,6 +61,12 @@ Save generates and replaces the complete matching `Resource type="Track"` elemen
 `ModelFile`, `TrackData`, and `TrackMeshes` are one editor-owned unit. All unrelated XML elements,
 attributes, declarations, and comments remain. TinyXML2 may normalize whitespace/indentation; byte
 formatting is not part of the contract.
+
+**Extended by `TRACK_MODEL_LIST_PLAN.md` Milestone 5.3:** "one editor-owned unit" now applies at
+per-`<Model>` granularity within the `<Models>` list, not the whole `Definition` — Save regenerates
+only the primary Model fresh every time; every other `<Model>` entry (Physical/Decorative props,
+Milestone 6's "Load Model") is sourced from the in-session `TrackDefinition::models` and written back
+via `cpp/model-xml`'s `writeModelFragment`, completely unedited by the save path itself.
 
 An existing malformed XML document or one whose root is not `<Resources>` is never overwritten.
 A nonexistent or empty destination is initialized as a Resources document. A same-name non-Track

@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "ModelXml.hpp"
 #include "Vec3.hpp"
 
 namespace editor {
@@ -67,23 +68,18 @@ struct ReservationEndCap {
 enum class ReservationWidthMode { Fixed,
                                   Percent };
 
-// Mirrors core's tox::ReservationInteriorMode.
-enum class ReservationInteriorMode { Capped,
-                                     Uncapped };
-
 // A central reservation: a void carved out of the road between t0 and t1, tapering from
 // `endCap0`/`endCap1`'s width (zero when Joined) at each end to `width` at the midpoint. `width`
 // is metres when `widthMode` is Fixed, or a percentage in [0,100] of the road's own width when
-// Percent. `wallHeight` <= 0 means "use the engine default" -- see core's
-// tox::ReservationDefinition, which this mirrors (CENTRAL_RESERVATION_PLAN.md).
-// `railClearanceHeight` <= 0 likewise means the engine default; independent of `wallHeight` (M6).
+// Percent. Mirrors core's tox::ReservationDefinition (CENTRAL_RESERVATION_PLAN.md). No collision
+// wall is built around the void (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2 removed the synthetic
+// MeshRegion that used to back it, including the Capped-interior special case, with no interim
+// replacement).
 struct Reservation {
   std::string id;
-  double t0{0.0}, t1{0.0}, width{0.0}, wallHeight{0.0};
+  double t0{0.0}, t1{0.0}, width{0.0};
   ReservationWidthMode widthMode{ReservationWidthMode::Fixed};
   ReservationEndCap endCap0, endCap1;
-  ReservationInteriorMode interiorMode{ReservationInteriorMode::Capped};
-  double railClearanceHeight{0.0};
 };
 
 struct Path {
@@ -99,64 +95,38 @@ struct Path {
   std::vector<Reservation> reservations;
 };
 
-// `attributesJson` carries the geometry-js "attributes" object verbatim as opaque serialized JSON
-// text (default "{}"), so vertex/polygon attributes this editor doesn't understand (UVs, colours,
-// material keys) survive a load/save round trip rather than being silently dropped. Kept as text
-// rather than a structured type so this header doesn't have to depend on a JSON library;
-// EditorTrackDefinition.cpp parses/merges it as needed.
-struct MeshVertex {
-  int id{-1};
-  double x{0.0}, y{0.0};
-  std::string attributesJson{"{}"};
-};
-
-// `attributesJson` holds every edge attribute EXCEPT "rail", which stays its own structured field
-// since the editor actively reads/writes it (Rails mode). The two are merged back together on
-// serialize (see meshAssetToJson).
-struct MeshEdge {
-  int id{-1};
-  int vertex0{-1}, vertex1{-1};
-  bool rail{false};
-  std::string attributesJson{"{}"};
-};
-
-struct DirectedMeshEdge {
-  int edge{-1}, v0{-1}, v1{-1};
-};
-
-struct MeshPolygon {
-  int id{-1};
-  std::vector<DirectedMeshEdge> edges;
-  std::vector<int> holes;
-  bool hole{false};
-  std::string attributesJson{"{}"};
-};
-
-struct MeshAsset {
-  std::string id;
-  std::string name;
-  double railHeight{6.0};
-  std::vector<MeshVertex> vertices;
-  std::vector<MeshEdge> edges;
-  std::vector<MeshPolygon> polygons;
-};
-
-struct MeshPlacement {
-  std::string id;
-  std::string assetId;
-  double x{0.0}, z{0.0}, rotation{0.0}, elevation{0.0};
-};
-
 struct TextureAsset {
   std::string id, name, path;
   int width{1}, height{1}, tileWidth{1}, tileHeight{1};
 };
 
+// Mirrors core's tox::ModelPlacementDefinition (originally DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
+// 3; renamed and generalized by TRACK_MODEL_LIST_PLAN.md Milestone 1.1 to cover Physical AND
+// Decorative model instances, not just drivable ones). `modelId` names an embedded `<Model id>`
+// entry in the enclosing Track resource's `<Models>` list (TRACK_MODEL_LIST_PLAN.md) -- not a raw
+// `.mppmodel` path. This struct itself is pure authored placement data; TRACK_MODEL_LIST_PLAN.md
+// Milestone 4 gives the editor its own from-scratch `.mppmodel` geometry reader to resolve/render a
+// placement's referenced model directly (reversing the older "editor never loads a `.mppmodel`"
+// note this comment used to carry) -- until that milestone lands, resolution is still host-only, as
+// it always has been. `rotation` is yaw/pitch/roll in degrees, applied in that order.
+struct ModelPlacement {
+  std::string id, modelId;
+  tox::Vec3 position;
+  tox::Vec3 rotation;
+  tox::Vec3 scale{1.0, 1.0, 1.0};
+};
+
+// `kind` is `"path"` (`pathId`/`t`/`lateral` valid) or `"meshObject"` (`meshObjectId`/
+// `localPosition`/`localYaw` valid instead -- DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5, mirrors
+// core's tox::ZoneHostDefinition). `localPosition`/`localYaw` are in the referenced placement's own
+// local space, so the zone moves/rotates with the placement automatically.
 struct ZoneHost {
   std::string kind{"path"};
-  std::string pathId, meshId;
+  std::string pathId;
   double t{0.5}, lateral{0.0};
-  double x{0.0}, z{0.0}, rotation{0.0};
+  std::string meshObjectId;
+  tox::Vec3 localPosition;
+  double localYaw{0.0};
 };
 
 struct Zone {
@@ -168,10 +138,13 @@ struct Zone {
   ZoneHost host;
 };
 
+// Same path/meshObject split as ZoneHost above (mirrors core's tox::TriggerHostDefinition).
 struct TriggerHost {
   std::string kind{"path"};
-  std::string pathId, meshId;
-  double t{0.5}, lateral{0.0}, x{0.0}, z{0.0};
+  std::string pathId;
+  double t{0.5}, lateral{0.0};
+  std::string meshObjectId;
+  tox::Vec3 localPosition;
 };
 
 struct Trigger {
@@ -210,19 +183,29 @@ struct Start {
 };
 
 struct TrackDefinition {
-  int version{11};
+  int version{12};
   std::string name{"Untitled Track"};
   int samples{400};
   std::vector<Path> paths;
-  std::map<std::string, MeshAsset> meshAssets;
-  std::vector<MeshPlacement> meshes;
   std::map<std::string, TextureAsset> textureAssets;
+  std::vector<ModelPlacement> meshObjects;
   std::vector<Zone> zones;
   std::vector<Trigger> triggers;
   std::vector<Connection> disjointSeams, junctions;
   std::vector<SelfIntersectionOverride> selfIntersectionOverrides;
   Handling handling;
   Start start;
+
+  // Every non-primary embedded <Model> entry (Physical/Decorative props, TRACK_MODEL_LIST_PLAN.md
+  // Milestone 6's "Load Model") -- an outer-Track-resource-XML-only concept, deliberately NOT part
+  // of the schema-10/12 TrackData JSON this struct's own fromJson/toJson (EditorTrackDefinition.cpp)
+  // read/write, so it's excluded from both directions there. Carried here anyway (rather than only
+  // in TrackResourceCandidate, which is transient/scan-only) purely so it participates naturally in
+  // EditorState's existing whole-struct undo/redo snapshots and in-session mutation, exactly like
+  // every other authored list on this struct -- TrackResourceDocument.cpp seeds it from the parsed
+  // candidate at load, TrackResourceSave.cpp writes it back out at save (both minus whichever entry
+  // is primary, which is regenerated fresh from the bake every save and never lives here).
+  std::vector<modelxml::ModelXmlDefinition> models;
 };
 
 // Backfills missing position-point ids in place. Called after every track construction/
@@ -248,17 +231,5 @@ TrackDefinition fromFile(const std::filesystem::path& path);
 // tox::Track::fromJson for a live preview bake (core's loader/baker is reused unmodified).
 std::string toJson(const TrackDefinition& track);
 void toFile(const TrackDefinition& track, const std::filesystem::path& path);
-
-struct MeshAssetParseResult {
-  std::optional<MeshAsset> asset;
-  std::string error;  // set only when asset is nullopt
-};
-
-// Parses a standalone geometry-js mesh export (the "mesh" field of one track.meshAssets[id]
-// entry, or a bare {vertices,edges,polygons} document straight from the ext/geoemetry-js editor's
-// "Copy JSON" button) for mesh import/paste. Never throws, reports why parsing failed instead. The
-// returned asset's `id`/`name` are unset -- callers assign a fresh id when registering it (see
-// EditorState::importMeshAsset).
-MeshAssetParseResult parseMeshAssetJson(const std::string& text);
 
 }  // namespace editor

@@ -5,23 +5,24 @@
 // docs/adr/0001-model-tool.md, D5.
 //
 // Materials are referenced by name only -- MaterialNames/Materials stay empty, exactly like
-// cpp/editor's own MppModelExport.cpp (MPPMODEL_EXPORT_SPEC.md 5, option 1) -- with a companion
-// Resources.xml-shaped fragment (ModelResourceExport.hpp) declaring the actual Material/Image
-// resources, written by main.cpp beside the .mppmodel. This is a deliberate change from an earlier
-// version of this file, which embedded real ProgrammaticMaterialStream objects via
-// ModelSerializer::addMaterial(): that round-trip through mpp::ResourceStreamSerializer turned out
-// to have several independent bugs once actually exercised (a directory-offset miscalculation, a
-// corrupted string-length prefix, a missing re-attached texture-load function, and a uniform
-// count/size mismatch causing a native crash) -- none of that machinery is invoked at all once
-// materials are described in the companion XML instead of embedded in the binary. Meshes still
-// keep their real AssImp shared-vertex indexing rather than being flattened to a non-indexed
-// triangle soup, matching MPPMODEL_EXPORT_SPEC.md 4.2.
+// cpp/editor's own MppModelExport.cpp (MPPMODEL_EXPORT_SPEC.md 5, option 1). This is a deliberate
+// change from an earlier version of this file, which embedded real ProgrammaticMaterialStream
+// objects via ModelSerializer::addMaterial(): that round-trip through mpp::ResourceStreamSerializer
+// turned out to have several independent bugs once actually exercised (a directory-offset
+// miscalculation, a corrupted string-length prefix, a missing re-attached texture-load function, and
+// a uniform count/size mismatch causing a native crash) -- none of that machinery is invoked at all
+// once materials are referenced by name instead of embedded in the binary. Meshes still keep their
+// real AssImp shared-vertex indexing rather than being flattened to a non-indexed triangle soup,
+// matching MPPMODEL_EXPORT_SPEC.md 4.2.
 //
-// One consequence: reopening a model-tool-saved .mppmodel with nothing else done will show every
-// mesh's material as unresolved (default white, with a warning) until the companion XML is also
-// imported via "Import Materials XML..." -- matching how a Track resource works today (its
-// materials must already be loaded/authored in the consuming project, per
-// cpp/editor/src/MppModelExport.cpp's own comment).
+// TRACK_MODEL_LIST_PLAN.md's own follow-up: the companion Resources.xml-shaped materials fragment
+// this file used to describe (ModelResourceExport.hpp, since deleted) is retired -- the saved
+// .mppmodel's material references are no longer separately declared by model-tool at all, matching
+// how a Track resource already worked (its materials must already be loaded/authored in the
+// consuming project, per cpp/editor/src/MppModelExport.cpp's own comment). Reopening a model-tool-
+// saved .mppmodel with nothing else done still shows every mesh's material as unresolved (default
+// white, with a warning) until matching materials are loaded some other way (e.g. "Import Materials
+// XML..." against an unrelated, hand-authored Resources.xml).
 #pragma once
 
 #include <string>

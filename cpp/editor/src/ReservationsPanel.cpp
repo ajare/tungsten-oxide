@@ -13,7 +13,6 @@ constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsT
 
 constexpr const char* kEndCapStyleNames[] = {"Joined", "Mitred", "Rounded"};
 constexpr const char* kWidthModeNames[] = {"Fixed (m)", "Percent of road (%)"};
-constexpr const char* kInteriorModeNames[] = {"Capped", "Uncapped"};
 
 // Converts `width` in place when the mode toggle flips, so the reservation's actual size stays
 // (approximately) put rather than being silently reinterpreted under the new unit -- e.g. "8"
@@ -77,9 +76,7 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex, const tox::
     ImGui::Text("Reservation: %s", id.c_str());
 
     double t0 = reservation->t0 * 100.0, t1 = reservation->t1 * 100.0, width = reservation->width;
-    double wallHeight = reservation->wallHeight, railClearanceHeight = reservation->railClearanceHeight;
     ReservationWidthMode widthMode = reservation->widthMode;
-    ReservationInteriorMode interiorMode = reservation->interiorMode;
     ReservationEndCap endCap0 = reservation->endCap0, endCap1 = reservation->endCap1;
     bool changed = false;
     ImGui::SetNextItemWidth(120);
@@ -118,25 +115,6 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex, const tox::
     }
     if (widthMode == ReservationWidthMode::Percent && roadWidthHere > 0.0)
       ImGui::Text("  ~%.1f m at this reservation's midpoint", width / 100.0 * roadWidthHere);
-    ImGui::SetNextItemWidth(120);
-    // <= 0 means "use the engine default" (TrackCore::DEFAULT_RAIL_HEIGHT). Purely visual -- the
-    // wall's own render height. See "Rail clearance height" below for the physics side, which is
-    // independent of this (CENTRAL_RESERVATION_PLAN.md M6).
-    changed |= ImGui::InputDouble("Wall height (0 = default)", &wallHeight, 0.0, 0.0, "%.1f", kCommitOnEnter);
-    changed |= ImGui::IsItemDeactivatedAfterEdit();
-
-    ImGui::SetNextItemWidth(140);
-    int interiorIndex = static_cast<int>(interiorMode);
-    if (ImGui::Combo("Interior", &interiorIndex, kInteriorModeNames, IM_ARRAYSIZE(kInteriorModeNames))) {
-      interiorMode = static_cast<ReservationInteriorMode>(interiorIndex);
-      changed = true;
-    }
-    ImGui::SetNextItemWidth(120);
-    // <= 0 means "use the engine default" -- the physics jump-clearance height only (a car above
-    // elevation + this has cleared the rails). Independent of "Wall height" above, which is the
-    // visual wall's own render height; the two used to be the same value.
-    changed |= ImGui::InputDouble("Rail clearance height (0 = default)", &railClearanceHeight, 0.0, 0.0, "%.1f", kCommitOnEnter);
-    changed |= ImGui::IsItemDeactivatedAfterEdit();
 
     changed |= DrawEndCapControls("t0 end", endCap0);
     changed |= DrawEndCapControls("t1 end", endCap1);
@@ -147,9 +125,6 @@ bool DrawReservationsPanel(EditorState& state, int currentPathIndex, const tox::
         target.t1 = t1 / 100.0;
         target.width = width;
         target.widthMode = widthMode;
-        target.wallHeight = wallHeight;
-        target.interiorMode = interiorMode;
-        target.railClearanceHeight = railClearanceHeight;
         target.endCap0 = endCap0;
         target.endCap1 = endCap1;
       });

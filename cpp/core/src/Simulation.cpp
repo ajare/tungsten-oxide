@@ -135,7 +135,12 @@ void addImpactJolt(Physics& p, double normalImpactSpeed) {
 }
 
 // --- Simulation ------------------------------------------------------------
-Simulation::Simulation(const Track& track) : track_(track) {}
+Simulation::Simulation(const Track& track) : track_(track) {
+  // meshPhysicsEnabled_ already defaults true, but set it explicitly here too so forcing doesn't
+  // silently depend on that default's value ever staying true (DRIVABLE_MESH_OBJECTS_PLAN.md
+  // Milestone 8.1).
+  if (meshPhysicsForced()) meshPhysicsEnabled_ = true;
+}
 
 Sample Simulation::sampleTrack(double x, double y, double z) const {
   const auto& paths = track_.paths;
@@ -256,51 +261,27 @@ double Simulation::shipParamG(const Sample& sample) const {
   return ga + (gb - ga) * sample.segT;
 }
 
-const MeshRegion* Simulation::meshRegionAt(double x, double z, double shipY) const {
-  const MeshRegion* best = nullptr;
-  double bestScore = 0;
-  for (const auto& region : track_.meshRegions) {
-    if (!region.withinBounds(x, z) || !region.contains(x, z)) continue;
-    // The floor height under (x,z), not the region's single scalar -- a Capped reservation's floor
-    // curves, so scoring it by one elevation would rank it by a point the ship isn't standing on.
-    const double above = region.elevationAt(x, z) - shipY;
-    const double score = std::fabs(above) + (above > Consts::SURFACE_SNAP_UP ? 1e6 : 0);
-    if (!best || score < bestScore) {
-      best = &region;
-      bestScore = score;
-    }
-  }
-  return best;
-}
 
-const MeshRegion* Simulation::surfaceOwnerAt(double x, double z, double shipY,
-                                             const Sample& corridorSample) const {
-  const MeshRegion* mesh = meshRegionAt(x, z, shipY);
-  if (!mesh) return nullptr;
-  const Projection projection = projectToSurface(corridorSample, x, shipY, z);
-  if (!corridorContains(corridorSample, x, shipY, z, projection)) return mesh;
-  const double corridorY = curvedSurfaceFrame(corridorSample, projection.s).pos.y;
-  return std::fabs(mesh->elevationAt(x, z) - shipY) <= std::fabs(corridorY - shipY) ? mesh : nullptr;
-}
-
-void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample,
-                                    const MeshRegion* meshRegion) const {
+void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample) const {
   Physics& p = ship.physics;
   for (const Zone& z : track_.zones) {
     bool inside = false;
-    if (z.kind == "path") {
-      if (!meshRegion && sample.pathIndex == z.hostPathIndex) {
-        const Projection proj = projectToSurface(sample, p.groundPos.x, p.groundPos.y, p.groundPos.z);
-        inside = TrackCore::zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
-                 std::fabs(proj.s - z.lateral) <= z.halfWidth;
-      }
-    } else if (meshRegion && z.hostRegionIndex >= 0 &&
-               meshRegion == &track_.meshRegions[z.hostRegionIndex]) {
+    if (z.kind == "meshObject") {
+      // World-space rectangle test against the placement's own transform
+      // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5) -- independent of `sample`/`hostPathIndex`,
+      // since core has no "which placement is the ship standing on" concept at all (unlike the old
+      // MeshRegion-ownership check this replaces): a placement's actual collision geometry is
+      // host-supplied and never loaded here (see the plan's "`.mppmodel` loading is host-only"
+      // architecture note), so this only ever tests position, not surface ownership.
       const double dx = p.groundPos.x - z.x, dz = p.groundPos.z - z.z;
       const double cosine = std::cos(z.rotation), sine = std::sin(z.rotation);
       const double localX = dx * cosine + dz * sine;
       const double localZ = -dx * sine + dz * cosine;
       inside = std::fabs(localX) <= z.halfLength && std::fabs(localZ) <= z.halfWidth;
+    } else if (sample.pathIndex == z.hostPathIndex) {
+      const Projection proj = projectToSurface(sample, p.groundPos.x, p.groundPos.y, p.groundPos.z);
+      inside = TrackCore::zoneAlongContains(shipParamG(sample), z.gLo, z.gHi, z.gMax, z.closed) &&
+               std::fabs(proj.s - z.lateral) <= z.halfWidth;
     }
     const bool wasInside = ship.zoneInside.count(z.id) ? ship.zoneInside[z.id] : false;
     if (inside && !wasInside) {

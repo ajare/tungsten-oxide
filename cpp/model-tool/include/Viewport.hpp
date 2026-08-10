@@ -61,6 +61,11 @@ class Viewport {
 
   bool hasModel() const { return built_.has_value(); }
   const BuiltModel* builtModel() const { return built_.has_value() ? &*built_ : nullptr; }
+  // Non-const access for main.cpp's Meshes panel to toggle ImportedMesh::collidable in place
+  // (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.3) -- safe unlike a geometry edit: it never touches
+  // vertex/index data, the live GPU resource, or material references, so it needs none of
+  // replaceSourceGeometry()'s rebuild/reframe/undo-history machinery.
+  BuiltModel* mutableBuiltModel() { return built_.has_value() ? &*built_ : nullptr; }
 
   // Renders one frame and returns a GL texture id ready for ImGui::Image() (see this header's top
   // comment on why the *requested* width/height only drive the camera's aspect ratio, not the
@@ -108,6 +113,14 @@ class Viewport {
   bool canRedo() const { return !redoStack_.empty(); }
   void undo();
   void redo();
+
+  // Public counterpart to the private replaceSourceGeometry() below, for main.cpp's per-mesh
+  // material reassignment (Meshes panel's material combobox) -- rebuilds the GPU model resource
+  // from `newSource` without touching material references or undo history, since reassigning which
+  // already-resolved material a mesh uses isn't a geometry edit the way Bake Scale's vertex
+  // mutation is. The caller is responsible for its own MaterialReference acquire/release (and for
+  // `newSource.materials`/`built->materialRefs` staying parallel) before calling this.
+  void refreshGeometry(ImportedModel newSource) { replaceSourceGeometry(std::move(newSource)); }
 
  private:
   void rebuildGrid();

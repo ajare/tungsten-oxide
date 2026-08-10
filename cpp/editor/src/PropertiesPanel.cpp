@@ -39,7 +39,7 @@ constexpr ImGuiInputTextFlags kCommitOnEnter = ImGuiInputTextFlags_EnterReturnsT
 // Position-only sample of the baked centerline at path parameter g in [0, gMax] (EDITOR_PARITY_
 // GAPS.md gap 2's "convert to Position" case) -- duplicated locally rather than shared, matching
 // this file's/this codebase's existing per-file small-evaluator convention (TopDownCanvas.cpp's
-// own sampleCenterlineAtG, ElevationView.cpp's sampleCenterlinePosAtG).
+// own sampleCenterlineAtG).
 tox::Vec3 sampleCenterlinePositionAtG(const std::vector<tox::Frame>& centerline, bool closed, double g, double gMax) {
   const std::size_t n = centerline.size();
   if (n == 0) return tox::Vec3(0.0, 0.0, 0.0);

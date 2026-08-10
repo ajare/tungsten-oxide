@@ -208,6 +208,10 @@ std::optional<MppModelImportResult> importMppModel(const std::string& utf8Path, 
       }
 
       ImportedMesh mesh;
+      // Mesh names are read completely unchanged now -- the old CollidableFlag.hpp name-suffix
+      // convention is retired (TRACK_MODEL_LIST_PLAN.md Milestone 3.2); Type/Visible metadata comes
+      // only from an associated <Model> XML (loaded separately, see OpenTarget.hpp), so a
+      // .mppmodel opened on its own just gets ImportedMesh's in-memory defaults (Physical/visible).
       mesh.name = ser.getName(i);
       mesh.vertices = unpackVertices(vertexData.get(), vertexCount);
 

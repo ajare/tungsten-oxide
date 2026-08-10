@@ -1,11 +1,10 @@
-// EditorState.hpp — mode/selection/drag/create-draft state for point editing: editMode/
+﻿// EditorState.hpp â€” mode/selection/drag/create-draft state for point editing: editMode/
 // selectedPointId/dragging/createDraft plus setEditMode/nodeAtTop/deleteSelected/createModeClick.
-// M4 adds mesh placement select/drag/rotate/delete: selectedMeshId/meshDragOffset/meshRotateStart
-// and the drag branches in TopDownCanvas.cpp's mousedown handler.
-//
-// M5 adds rail-edge toggling (toggleRailEdge), via TrackMesh.toggleRailEdge and railSel:
-// rails live on the shared MeshAsset, not the placement, so toggling one flips it for every placed
-// instance of that asset.
+// M4/M5 added mesh region placement (select/drag/rotate/delete) and Rails mode (rail-edge
+// toggling on a shared MeshAsset) -- both removed along with MeshRegion/MeshAsset/MeshPlacement
+// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2); selection is a 3-way exclusive point/zone/trigger
+// concept now, not 4-way. Milestone 3/5 add a new drivable-mesh-object-placement selection concept
+// from scratch rather than reviving this one.
 //
 // M7b adds texture asset registration/deletion/tile-sizing and per-path texture assignment:
 // addTextureAsset/deleteTextureAsset/clampTextureTileSize/clearInvalidTextureAssignments/
@@ -13,12 +12,18 @@
 // decoding and GL upload live in TextureCache.hpp/.cpp instead -- EditorState only ever holds the
 // schema-level TextureAsset record (name/path/dimensions), same separation TopDownCanvas.cpp
 // keeps between authored data and its own rendering.
+//
+// DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1 adds ProjectionMode (TopDown/Front/Side), a
+// canvas-wide state orthogonal to EditMode: it picks which plane screen drags project into, not
+// what a click/drag does semantically. TopDown is today's only behavior; Front/Side exist for
+// drivable mesh object placement but apply to every entity's editing.
 #pragma once
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -32,19 +37,20 @@
 namespace editor {
 
 enum class EditMode { Edit,
-                      Create,
-                      Rails };
+                      Create };
+
+// Canvas-wide, orthogonal to EditMode: which plane screen drags project into. TopDown (X/Z, view
+// dir Y = -1) is today's only behavior; Front (X/Y, view dir Z = -1) and Side (Y/Z, view dir X = 1)
+// are added for drivable mesh object placement (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 1) but
+// apply to every entity's editing, not just placements.
+enum class ProjectionMode { TopDown,
+                            Front,
+                            Side };
 
 struct SelectedPoint {
   int pathIndex{-1};
   int pointIndex{-1};
   bool valid() const { return pathIndex >= 0 && pointIndex >= 0; }
-};
-
-// The picked-edge highlight -- meaningful only in Rails mode.
-struct SelectedRail {
-  std::string meshId;  // placement id, so the highlight follows a specific placed instance
-  int edgeId{-1};
 };
 
 class EditorState {
@@ -61,13 +67,22 @@ public:
   EditMode mode() const { return mode_; }
   SelectedPoint selection() const { return selection_; }
   const std::vector<tox::Vec3>& createDraft() const { return createDraft_; }
+  ProjectionMode projectionMode() const { return projectionMode_; }
+
+  // Switching planes mid-gesture would silently change what a drag/rotate's axes mean partway
+  // through, so this drops any in-flight drag/rotate the same way setMode() does on an EditMode
+  // switch -- a dangling half-mutation across a plane change is worse than the gesture just ending.
+  void setProjectionMode(ProjectionMode mode) {
+    projectionMode_ = mode;
+    dragging_ = false;
+    dragMutated_ = false;
+    rotateGestureActive_ = false;
+  }
   bool dragging() const { return dragging_; }
-  const std::optional<std::string>& selectedMeshId() const { return selectedMeshId_; }
-  bool meshDragging() const { return meshDragging_; }
-  bool meshRotating() const { return meshRotating_; }
   const std::optional<std::string>& selectedZoneId() const { return selectedZoneId_; }
   const std::optional<std::string>& selectedTriggerId() const { return selectedTriggerId_; }
   const std::optional<std::string>& selectedReservationId() const { return selectedReservationId_; }
+  const std::optional<std::string>& selectedMeshObjectId() const { return selectedMeshObjectId_; }
 
   // ---- Curve management ----
   //
@@ -101,17 +116,42 @@ public:
     return nullptr;
   }
 
+  const ModelPlacement* findMeshObjectPlacement(const std::string& id) const {
+    for (const auto& placement : track_.meshObjects)
+      if (placement.id == id) return &placement;
+    return nullptr;
+  }
+
+  // Non-const: PropertiesPanel.cpp edits an embedded Model's per-mesh Type/Visible metadata
+  // in place (TRACK_MODEL_LIST_PLAN.md Milestone 6.2) -- callers push undo themselves via
+  // editEmbeddedModel below rather than mutating this pointer directly.
+  modelxml::ModelXmlDefinition* findModel(const std::string& id) {
+    for (auto& model : track_.models)
+      if (model.id == id) return &model;
+    return nullptr;
+  }
+  const modelxml::ModelXmlDefinition* findModel(const std::string& id) const {
+    for (const auto& model : track_.models)
+      if (model.id == id) return &model;
+    return nullptr;
+  }
+
+  // Mutates the embedded Model by id via `mutate`, pushing one undo step first -- mirrors
+  // editMeshObjectPlacement's own pattern, for Milestone 6.2's per-mesh Type/Visible editor.
+  template <typename Mutate>
+  bool editEmbeddedModel(const std::string& id, Mutate&& mutate) {
+    modelxml::ModelXmlDefinition* model = findModel(id);
+    if (model == nullptr) return false;
+    history_.push(track_);
+    mutate(*model);
+    return true;
+  }
+
   // Unlike findZone/findTrigger, reservations are stored per-path, so this scans every path.
   const Reservation* findReservation(const std::string& id) const {
     for (const auto& path : track_.paths)
       for (const auto& reservation : path.reservations)
         if (reservation.id == id) return &reservation;
-    return nullptr;
-  }
-
-  const MeshPlacement* findMeshPlacement(const std::string& id) const {
-    for (const auto& placement : track_.meshes)
-      if (placement.id == id) return &placement;
     return nullptr;
   }
 
@@ -140,22 +180,21 @@ public:
     createDraft_.clear();
     dragging_ = false;
     dragMutated_ = false;
-    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
-    // The picked-edge highlight only means anything inside Rails mode.
-    if (mode != EditMode::Rails) selectedRail_.reset();
+    rotateGestureActive_ = false;
   }
 
-  // Returns true if a position point was hit within `pickRadiusWorld` of (worldX, worldZ).
+  // Returns true if a position point was hit within `pickRadiusWorld` of (planeU, planeV) -- the
+  // active ProjectionMode's plane coordinates (see planeCoords), not necessarily world (x, z).
   // Selects it (Edit mode's plain click) but does not start a drag -- call beginDrag separately
   // once the caller knows the mouse is actually moving.
-  bool selectPositionAt(double worldX, double worldZ, double pickRadiusWorld) {
-    const auto hit = hitTestPosition(worldX, worldZ, pickRadiusWorld);
+  bool selectPositionAt(double planeU, double planeV, double pickRadiusWorld) {
+    const auto hit = hitTestPosition(planeU, planeV, pickRadiusWorld);
     if (!hit) return false;
     selection_ = *hit;
-    // Points/mesh regions/zones/triggers share one selection (props panel).
-    selectedMeshId_.reset();
+    // Points/mesh objects/zones/triggers share one selection (props panel).
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     return true;
   }
 
@@ -170,17 +209,17 @@ public:
   // selected" precedence.
   void deselectAll() {
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   // Read-only counterpart to selectPositionAt: the nearest Position point within
-  // `pickRadiusWorld` of (worldX, worldZ), or nullopt, without mutating selection_ -- used to
-  // render a hover highlight distinct from the actual click-driven selection (see
-  // TopDownCanvas.cpp/ElevationView.cpp's hover-highlight rendering).
-  std::optional<SelectedPoint> hoverTestPosition(double worldX, double worldZ, double pickRadiusWorld) const {
-    return hitTestPosition(worldX, worldZ, pickRadiusWorld);
+  // `pickRadiusWorld` of (planeU, planeV) -- the active ProjectionMode's plane coordinates -- or
+  // nullopt, without mutating selection_ -- used to render a hover highlight distinct from the
+  // actual click-driven selection (see TopDownCanvas.cpp's hover-highlight rendering).
+  std::optional<SelectedPoint> hoverTestPosition(double planeU, double planeV, double pickRadiusWorld) const {
+    return hitTestPosition(planeU, planeV, pickRadiusWorld);
   }
 
   // Whether the current selection is in range AND a Position point specifically -- used to guard
@@ -208,16 +247,172 @@ public:
     return selectionInRange() && track_.paths[selection_.pathIndex].points[selection_.pointIndex].kind == PointKind::CrossSection;
   }
 
-  // ---- Mesh placements (EDITOR_CPP_PORT_PLAN.md M4) ----
+  // ---- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5) ----
+  //
+  // Selection/on-canvas drag+rotate mirrors position points and the old (Milestone 2-removed) mesh
+  // region: click-to-select, plain drag moves (using the shared dragging_/dragMutated_/beginDrag/
+  // endDrag lifecycle, same as dragSelectedTo), shift+drag rotates (using the entity-agnostic
+  // rotateGestureActive_/beginRotateGesture/dragRotateGestureTo/endRotateGesture plumbing Milestone
+  // 1.3 built ahead of time for exactly this). Which plane coordinate a plain drag writes, and
+  // which rotation axis a shift+drag writes, both follow the active ProjectionMode (TopDown moves
+  // X/Z and yaws, Front moves X/Y and pitches, Side moves Y/Z and rolls) -- TopDownCanvas.cpp picks
+  // the field, this class only stores whatever it's told.
+  //
+  // No asset library/thumbnail/bounding-box preview exists here: the editor never loads a
+  // `.mppmodel` (see DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3's "`.mppmodel` loading is host-only"
+  // architecture note), so `modelId` is authored as a plain relative-path string (mirroring
+  // `TextureAsset::path`), picked via a native file-open dialog in main.cpp, not browsed from a
+  // pre-scanned list of known-valid ids.
 
-  void selectMesh(const std::string& placementId) {
-    selectedMeshId_ = placementId;
+  void selectMeshObject(const std::string& id) {
+    selectedMeshObjectId_ = id;
     selection_ = {};
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
   }
 
-  void clearMeshSelection() { selectedMeshId_.reset(); }
+  void clearMeshObjectSelection() { selectedMeshObjectId_.reset(); }
+
+  // Places a new instance of `modelId` at world (x, 0, z), facing/scaled at schema defaults.
+  // Selects the new placement and returns its id.
+  std::string addMeshObjectPlacement(const std::string& modelId, double x, double z) {
+    history_.push(track_);
+    ModelPlacement placement;
+    placement.id = newMeshObjectId();
+    placement.modelId = modelId;
+    placement.position = tox::Vec3(x, 0.0, z);
+    track_.meshObjects.push_back(std::move(placement));
+    const std::string id = track_.meshObjects.back().id;
+    selectMeshObject(id);
+    return id;
+  }
+
+  // "Load Model" (TRACK_MODEL_LIST_PLAN.md Milestone 6, revised so loading no longer implies
+  // placing): embeds `parsed` into `track_.models` -- reusing an existing entry whose ModelFile
+  // already matches `modelFileReference` (dedup, per the locked-in decision) rather than duplicating
+  // it, or appending a fresh entry with a freshly generated id otherwise. Creates no placement --
+  // that's placeModelInstance's job, invoked separately (the canvas's right-click "Place Model"
+  // submenu). Returns the embedded (or reused) Model's own id.
+  std::string embedModel(modelxml::ModelXmlDefinition parsed, const std::string& modelFileReference) {
+    const auto existing = std::find_if(track_.models.begin(), track_.models.end(),
+                                       [&](const modelxml::ModelXmlDefinition& m) { return m.modelFile == modelFileReference; });
+    if (existing != track_.models.end()) return existing->id.value_or(std::string());
+    history_.push(track_);
+    const std::string modelId = newModelId();
+    parsed.id = modelId;
+    parsed.modelFile = modelFileReference;
+    track_.models.push_back(std::move(parsed));
+    return modelId;
+  }
+
+  // Places a new instance of an already-embedded `modelId` (see embedModel above) at whichever
+  // world position the active ProjectionMode's plane maps (planeU, planeV) to -- same
+  // planeCoords/setPlaneCoords convention as every other canvas-placed entity (e.g. the "Add control
+  // point" context-menu items), rather than always writing world X/Z regardless of mode. Selects the
+  // new placement and returns its id.
+  std::string placeModelInstance(const std::string& modelId, double planeU, double planeV) {
+    history_.push(track_);
+    ModelPlacement placement;
+    placement.id = newMeshObjectId();
+    placement.modelId = modelId;
+    setPlaneCoords(projectionMode_, placement.position, planeU, planeV);
+    track_.meshObjects.push_back(std::move(placement));
+    const std::string placementId = track_.meshObjects.back().id;
+    selectMeshObject(placementId);
+    return placementId;
+  }
+
+  // A placement's bounding-box display colour (TopDownCanvas.cpp's drawMeshObjectPlacements) --
+  // purely cosmetic session state, deliberately NOT part of `track_` (not undo-tracked, not
+  // serialized to TrackData JSON, unaffected by the outer <Models>-list-is-editor-only split
+  // either): a placement's colour has no meaning to core or the host, only to this editor's own
+  // canvas. Never explicitly set (`placementColorOverrides_` empty for that id) deterministically
+  // derives one from the placement's own id via randomColorForId -- "randomly-chosen initially"
+  // without needing separate storage for every placement's own generated default, and stable
+  // across reload/undo/redo since it's a pure function of the id string.
+  struct DisplayColor {
+    float r{1.0f}, g{1.0f}, b{1.0f};
+  };
+
+  DisplayColor placementColor(const std::string& id) const {
+    const auto it = placementColorOverrides_.find(id);
+    return it != placementColorOverrides_.end() ? it->second : randomColorForId(id);
+  }
+
+  void setPlacementColor(const std::string& id, DisplayColor color) { placementColorOverrides_[id] = color; }
+
+  // Mutates the placement by id via `mutate`, pushing one undo step first. Also re-clamps `scale`
+  // away from zero/negative (a zero or negative scale axis would collapse or mirror the referenced
+  // model in a way nothing downstream expects), mirroring editZone/editReservation's own
+  // re-clamp-after-mutate pattern.
+  template <typename Mutate>
+  bool editMeshObjectPlacement(const std::string& id, Mutate&& mutate) {
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const ModelPlacement& p) { return p.id == id; });
+    if (it == track_.meshObjects.end()) return false;
+    history_.push(track_);
+    mutate(*it);
+    it->scale.x = std::max(1e-3, it->scale.x);
+    it->scale.y = std::max(1e-3, it->scale.y);
+    it->scale.z = std::max(1e-3, it->scale.z);
+    return true;
+  }
+
+  bool deleteSelectedMeshObjectPlacement() {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    history_.push(track_);
+    track_.meshObjects.erase(it);
+    selectedMeshObjectId_.reset();
+    pruneStaleReferences();
+    return true;
+  }
+
+  // On-canvas plain-drag counterpart to addMeshObjectPlacement's initial position -- (planeU,
+  // planeV) are already projected into the active ProjectionMode's plane (see planeCoords/
+  // setPlaneCoords), same convention dragSelectedTo uses for position points. No-op (returns
+  // false) if nothing is selected or the id no longer resolves (stale selection).
+  bool dragSelectedMeshObjectTo(double planeU, double planeV) {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    setPlaneCoords(projectionMode_, it->position, planeU, planeV);
+    return true;
+  }
+
+  // Shift-drag rotate counterpart to dragSelectedMeshObjectTo above -- writes into whichever of
+  // rotation.x/y/z (yaw/pitch/roll) the active ProjectionMode implies (TopDown=yaw, Front=pitch,
+  // Side=roll), pushing history once per gesture via the SAME dragMutated_ flag
+  // dragSelectedMeshObjectTo uses. Safe to share: a plain drag and a shift-drag rotate are
+  // mutually exclusive per frame (the caller picks one based on whether shift is held, never
+  // both), so there's never a chance of one gesture's flag state leaking into the other's.
+  // Deliberately NOT built on editMeshObjectPlacement -- that pushes history unconditionally on
+  // every call, which called once per dragged frame would push a new undo step every single frame
+  // of the rotate instead of one per gesture.
+  bool dragSelectedMeshObjectRotationTo(double degrees) {
+    if (!selectedMeshObjectId_.has_value()) return false;
+    const auto it = std::find_if(track_.meshObjects.begin(), track_.meshObjects.end(),
+                                 [&](const ModelPlacement& p) { return p.id == *selectedMeshObjectId_; });
+    if (it == track_.meshObjects.end()) return false;
+    if (!dragMutated_) {
+      history_.push(track_);
+      dragMutated_ = true;
+    }
+    switch (projectionMode_) {
+      case ProjectionMode::Front: it->rotation.y = degrees; break;
+      case ProjectionMode::Side: it->rotation.z = degrees; break;
+      case ProjectionMode::TopDown:
+      default: it->rotation.x = degrees; break;
+    }
+    return true;
+  }
 
   // ---- Zones ----
   //
@@ -227,15 +422,14 @@ public:
   // continuously re-project the mouse onto the nearest path -- there is no spline evaluator
   // exposed to cpp/editor for that (core
   // keeps its own Evaluator private to TrackBake.cpp), so reproducing that exactly would mean
-  // porting or exposing one. Only path-hosted zone creation is wired up in the panel (the common
-  // case: boost pads/start grids on a driven path); mesh-hosted zones can still be loaded, viewed,
-  // selected and edited, just not created from scratch here.
+  // porting or exposing one. Every zone is path-hosted now (mesh-hosted zones were removed along
+  // with MeshRegion, DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 2).
 
   void selectZone(const std::string& id) {
     selectedZoneId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearZoneSelection() { selectedZoneId_.reset(); }
@@ -305,8 +499,8 @@ public:
   void selectTrigger(const std::string& id) {
     selectedTriggerId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearTriggerSelection() { selectedTriggerId_.reset(); }
@@ -418,9 +612,9 @@ public:
   void selectReservation(const std::string& id) {
     selectedReservationId_ = id;
     selection_ = {};
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   void clearReservationSelection() { selectedReservationId_.reset(); }
@@ -500,6 +694,7 @@ public:
     selection_ = {};
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     explicitCurrentPathIndex_ = std::clamp(deleteIndex, 0, static_cast<int>(track_.paths.size()) - 1);
     clampStart();
     return true;
@@ -588,7 +783,8 @@ public:
         if (p == excludePathIndex && atEnd == excludeAtEnd) continue;
         const TrackPoint* point = atEnd ? lastPosition(path) : firstPosition(path);
         if (point == nullptr) continue;
-        const double dx = point->pos.x - worldX, dz = point->pos.z - worldZ;
+        const auto [pu, pv] = planeCoords(projectionMode_, point->pos);
+        const double dx = pu - worldX, dz = pv - worldZ;
         const double distSq = dx * dx + dz * dz;
         if (distSq <= bestDistSq) {
           bestDistSq = distSq;
@@ -601,9 +797,10 @@ public:
 
   // Shift-drag-into-empty-space release action: extends an open
   // path by appending (atEnd=true) or prepending (atEnd=false) a new position point at
-  // (worldX, worldZ), inheriting the dragged endpoint's own current Y -- there's no on-curve
-  // sample to inherit from beyond the curve's own end. Delegates to insertPositionOnSegment,
-  // which already pushes undo and selects the new point.
+  // (worldX, worldZ) -- the active ProjectionMode's plane coordinates -- inheriting the dragged
+  // endpoint's own current value on the third axis, outside that plane (there's no on-curve sample
+  // to inherit from beyond the curve's own end). Delegates to insertPositionOnSegment, which
+  // already pushes undo and selects the new point.
   std::optional<int> extendOpenPathFromEndpoint(int pathIndex, bool atEnd, double worldX, double worldZ) {
     if (pathIndex < 0 || pathIndex >= static_cast<int>(track_.paths.size())) return std::nullopt;
     const Path& path = track_.paths[pathIndex];
@@ -611,7 +808,9 @@ public:
     const TrackPoint* fromPoint = atEnd ? lastPosition(path) : firstPosition(path);
     if (fromPoint == nullptr) return std::nullopt;
     const int insertAt = atEnd ? positionCount(path) : 0;
-    return insertPositionOnSegment(pathIndex, insertAt, worldX, fromPoint->pos.y, worldZ);
+    tox::Vec3 newPos = fromPoint->pos;
+    setPlaneCoords(projectionMode_, newPos, worldX, worldZ);
+    return insertPositionOnSegment(pathIndex, insertAt, newPos.x, newPos.y, newPos.z);
   }
 
   // ---- Disjoint / reconnect ----
@@ -857,162 +1056,32 @@ public:
     return true;
   }
 
-  // Adds a new placement of an already-registered mesh asset (see track().meshAssets) at
-  // (x, z), unrotated, selecting it. There is no asset-authoring UI yet, so the caller is
-  // responsible for the asset already existing.
-  bool placeMeshAsset(const std::string& assetId, double x, double z) {
-    if (!track_.meshAssets.count(assetId)) return false;
-    history_.push(track_);
-    MeshPlacement placement;
-    placement.id = newMeshPlacementId();
-    placement.assetId = assetId;
-    placement.x = std::round(x * 10.0) / 10.0;
-    placement.z = std::round(z * 10.0) / 10.0;
-    const std::string placedId = placement.id;
-    track_.meshes.push_back(std::move(placement));
-    selectMesh(placedId);
-    return true;
+  // ---- Generic shift+drag-to-rotate gesture plumbing (DRIVABLE_MESH_OBJECTS_PLAN.md
+  // Milestone 1.3) ----
+  //
+  // Entity-agnostic angle bookkeeping for the canvas's shift+drag rotate gesture: TopDown yields
+  // yaw, Front pitch, Side roll (see TopDownCanvas.cpp's rotateAngleDeg, which produces the
+  // (origin-relative) angles fed in here). Tracks only the accumulated angle delta, since no
+  // entity exists yet to own a yaw/pitch/roll field (drivable mesh object placements land in
+  // Milestone 3; Milestone 5 wires this gesture to one). The gap between the drag's start angle
+  // and the entity's rotation at mousedown is preserved for the whole gesture, so the shape
+  // doesn't jump to face the cursor.
+  bool rotateGestureActive() const { return rotateGestureActive_; }
+
+  void beginRotateGesture(double originRotationDeg, double startAngleDeg) {
+    rotateGestureOriginDeg_ = originRotationDeg;
+    rotateGestureStartAngleDeg_ = startAngleDeg;
+    rotateGestureActive_ = true;
   }
 
-  // Registers a freshly parsed mesh (EDITOR_NATIVE_FILE_IO_PLAN.md M9, e.g. from
-  // parseMeshAssetJson) under a fresh id derived from `name`, rails every boundary edge by
-  // default (mirrors railBoundaryEdges -- an imported region should be enclosed the instant it
-  // lands, not a bare rim the ship slides straight off), and drops one placement of it centred at
-  // (centerWorldX, centerWorldZ) -- the caller passes either the current view centre (toolbar
-  // import) or a click position (paste-from-context-menu), mirroring addMeshAsset's `at` param.
-  // Returns the new asset id.
-  std::string importMeshAsset(MeshAsset asset, const std::string& name, double centerWorldX, double centerWorldZ) {
-    railBoundaryEdgesOf(asset);
-
-    history_.push(track_);
-    const std::string assetId = uniqueMeshAssetId(name);
-    asset.id = assetId;
-    asset.name = assetId;
-
-    double minX = std::numeric_limits<double>::infinity(), maxX = -std::numeric_limits<double>::infinity();
-    double minY = std::numeric_limits<double>::infinity(), maxY = -std::numeric_limits<double>::infinity();
-    for (const auto& v : asset.vertices) {
-      minX = std::min(minX, v.x);
-      maxX = std::max(maxX, v.x);
-      minY = std::min(minY, v.y);
-      maxY = std::max(maxY, v.y);
-    }
-    const double centroidX = std::isfinite(minX) ? (minX + maxX) / 2.0 : 0.0;
-    const double centroidY = std::isfinite(minY) ? (minY + maxY) / 2.0 : 0.0;
-
-    track_.meshAssets.emplace(assetId, std::move(asset));
-
-    MeshPlacement placement;
-    placement.id = newMeshPlacementId();
-    placement.assetId = assetId;
-    placement.x = std::round((centerWorldX - centroidX) * 10.0) / 10.0;
-    placement.z = std::round((centerWorldZ - centroidY) * 10.0) / 10.0;
-    const std::string placedId = placement.id;
-    track_.meshes.push_back(std::move(placement));
-    selectMesh(placedId);
-    return assetId;
+  // Returns the rotation to apply -- origin rotation plus the angle delta since gesture start.
+  // Milestone 5's caller writes this into whichever yaw/pitch/roll field the active
+  // ProjectionMode corresponds to; this class doesn't know about that entity yet.
+  double dragRotateGestureTo(double currentAngleDeg) const {
+    return rotateGestureActive_ ? rotateGestureOriginDeg_ + (currentAngleDeg - rotateGestureStartAngleDeg_) : rotateGestureOriginDeg_;
   }
 
-  // Parses `text` (a file's contents or the clipboard) as a mesh export and imports it via
-  // importMeshAsset if it parses -- the shared path behind both the toolbar's Import/Paste Mesh
-  // buttons and the top-down canvas's right-click "Paste Mesh". Returns
-  // the parse error, or nullopt on success.
-  std::optional<std::string> importMeshFromJsonText(const std::string& text, const std::string& name, double centerWorldX,
-                                                    double centerWorldZ) {
-    MeshAssetParseResult parsed = parseMeshAssetJson(text);
-    if (!parsed.asset) return parsed.error;
-    importMeshAsset(std::move(*parsed.asset), name, centerWorldX, centerWorldZ);
-    return std::nullopt;
-  }
-
-  // One pushUndo() per drag gesture, mirroring dragSelectedTo. `worldX`/`worldZ` is the mouse's
-  // world position at drag start; the offset to the placement's current x/z is preserved for the
-  // whole gesture so the shape doesn't jump to the cursor.
-  void beginMeshDrag(double worldX, double worldZ) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!placement) return;
-    meshDragOffsetX_ = placement->x - worldX;
-    meshDragOffsetZ_ = placement->z - worldZ;
-    meshDragging_ = true;
-    meshDragMutated_ = false;
-  }
-
-  // `worldX`/`worldZ` here is already offset+snapped by the caller (moved = snapWorldXZ({x: w.x +
-  // offset.dx, z: w.z + offset.dz}) before assigning placement.x/z) -- see meshDragOffsetX/Z below
-  // for the raw offset a caller needs to do that.
-  void dragMeshTo(double worldX, double worldZ) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!meshDragging_ || !placement) return;
-    if (!meshDragMutated_) {
-      history_.push(track_);
-      meshDragMutated_ = true;
-    }
-    placement->x = std::round(worldX * 10.0) / 10.0;
-    placement->z = std::round(worldZ * 10.0) / 10.0;
-  }
-
-  double meshDragOffsetX() const { return meshDragOffsetX_; }
-  double meshDragOffsetZ() const { return meshDragOffsetZ_; }
-
-  void endMeshDrag() {
-    meshDragging_ = false;
-    meshDragMutated_ = false;
-  }
-
-  // Shift+drag rotate: `startAngleDeg` is the mouse's angle-from-placement-origin at drag start
-  // (atan2(dz, dx) in degrees, matching TrackMesh's localToWorld convention). The offset between
-  // that and the placement's rotation at
-  // mousedown is preserved for the whole gesture, so the shape doesn't jump to face the cursor the
-  // instant the drag begins (CLAUDE.md's editor-conventions note on this exact interaction).
-  void beginMeshRotate(double startAngleDeg) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!placement) return;
-    meshRotateOriginRotation_ = placement->rotation;
-    meshRotateStartAngle_ = startAngleDeg;
-    meshRotating_ = true;
-    meshRotateMutated_ = false;
-  }
-
-  void dragMeshRotateTo(double currentAngleDeg) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!meshRotating_ || !placement) return;
-    if (!meshRotateMutated_) {
-      history_.push(track_);
-      meshRotateMutated_ = true;
-    }
-    placement->rotation = meshRotateOriginRotation_ + (currentAngleDeg - meshRotateStartAngle_);
-  }
-
-  void endMeshRotate() {
-    meshRotating_ = false;
-    meshRotateMutated_ = false;
-  }
-
-  // ---- Rails (EDITOR_CPP_PORT_PLAN.md M5) ----
-
-  const std::optional<SelectedRail>& selectedRail() const { return selectedRail_; }
-
-  // Flips a shared MeshAsset edge's rail flag -- rails live on the asset, not the placement, so
-  // toggling one affects every placed instance of that asset at once (mirrors
-  // TrackMesh.toggleRailEdge). `meshId` is the placement the edge was picked through, kept only
-  // for the selection highlight. Returns false if the asset/edge no longer exist.
-  bool toggleRailEdge(const std::string& meshId, const std::string& assetId, int edgeId) {
-    const auto assetIt = track_.meshAssets.find(assetId);
-    if (assetIt == track_.meshAssets.end()) return false;
-    const auto edgeIt = std::find_if(assetIt->second.edges.begin(), assetIt->second.edges.end(),
-                                     [&](const MeshEdge& e) { return e.id == edgeId; });
-    if (edgeIt == assetIt->second.edges.end()) return false;
-    history_.push(track_);
-    edgeIt->rail = !edgeIt->rail;
-    selectedMeshId_ = meshId;
-    selection_ = {};
-    selectedZoneId_.reset();
-    selectedTriggerId_.reset();
-    selectedRail_ = SelectedRail{meshId, edgeId};
-    return true;
-  }
-
-  void clearRailSelection() { selectedRail_.reset(); }
+  void endRotateGesture() { rotateGestureActive_ = false; }
 
   // ---- Texture assets (M7b) ----
 
@@ -1116,39 +1185,6 @@ public:
     return true;
   }
 
-  bool deleteSelectedMesh() {
-    if (!selectedMeshId_.has_value()) return false;
-    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(),
-                                 [&](const MeshPlacement& m) { return m.id == *selectedMeshId_; });
-    if (it == track_.meshes.end()) return false;
-    history_.push(track_);
-    track_.meshes.erase(it);
-    selectedMeshId_.reset();
-    return true;
-  }
-
-  // Mutates the mesh placement by id via `mutate`, pushing one undo step first -- mirrors editZone.
-  // X/Z/elevation/rotation are all free-form number fields (no clamp on any of them), so unlike
-  // editZone there's nothing to re-clamp afterward.
-  template <typename Mutate>
-  bool editMeshPlacement(const std::string& id, Mutate&& mutate) {
-    const auto it = std::find_if(track_.meshes.begin(), track_.meshes.end(), [&](const MeshPlacement& m) { return m.id == id; });
-    if (it == track_.meshes.end()) return false;
-    history_.push(track_);
-    mutate(*it);
-    return true;
-  }
-
-  // Rail height lives on the shared MeshAsset, not the placement -- setting it here affects every
-  // placement of that asset at once (same sharing toggleRailEdge already relies on).
-  bool setMeshAssetRailHeight(const std::string& assetId, double height) {
-    const auto it = track_.meshAssets.find(assetId);
-    if (it == track_.meshAssets.end()) return false;
-    history_.push(track_);
-    it->second.railHeight = std::max(0.0, height);
-    return true;
-  }
-
   // Wholesale replacement, e.g. loading a file: clears interaction state that no longer refers to
   // anything meaningful in the new track (the same resets setMode does). Does NOT touch
   // history -- callers that want the old state to remain undoable should push() it first.
@@ -1160,46 +1196,21 @@ public:
     dragMutated_ = false;
   }
 
-  void dragSelectedTo(double worldX, double worldZ) {
+  // (planeU, planeV) are screen-drag coordinates already projected into the active
+  // ProjectionMode's plane (see planeCoords/setPlaneCoords) -- TopDown's (x, z), Front's (x, y), or
+  // Side's (y, z). The third axis, outside that plane, is left as-is.
+  void dragSelectedTo(double planeU, double planeV) {
     if (!dragging_ || !selectionInRange()) return;
     if (!dragMutated_) {
       history_.push(track_);
       dragMutated_ = true;
     }
     TrackPoint& point = track_.paths[selection_.pathIndex].points[selection_.pointIndex];
-    point.pos.x = std::round(worldX * 10.0) / 10.0;
-    point.pos.z = std::round(worldZ * 10.0) / 10.0;
-  }
-
-  // Elevation-view counterpart to dragSelectedTo: same point, same drag lifecycle
-  // (beginDrag/endDrag/one-push-per-gesture), different axis -- shares the same `dragging` state
-  // machine the top-down view's x/z drag uses.
-  void dragSelectedElevationTo(double y) {
-    if (!dragging_ || !selectionInRange()) return;
-    if (!dragMutated_) {
-      history_.push(track_);
-      dragMutated_ = true;
-    }
-    track_.paths[selection_.pathIndex].points[selection_.pointIndex].pos.y = std::round(y * 10.0) / 10.0;
-  }
-
-  // Elevation-view drag for the SELECTED MESH REGION's elevation:
-  // same drag lifecycle and shared dragging_/dragMutated_ state as dragSelectedElevationTo, but a
-  // mesh placement has no `selection_` (mesh/point selection are mutually exclusive -- see
-  // selectMesh/selectPoint), so this reads mutableSelectedMeshPlacement() instead. Rounds to 0.1
-  // precision, same as dragSelectedTo/dragSelectedElevationTo.
-  void dragSelectedMeshElevationTo(double y) {
-    MeshPlacement* placement = mutableSelectedMeshPlacement();
-    if (!dragging_ || placement == nullptr) return;
-    if (!dragMutated_) {
-      history_.push(track_);
-      dragMutated_ = true;
-    }
-    placement->elevation = std::round(y * 10.0) / 10.0;
+    setPlaneCoords(projectionMode_, point.pos, std::round(planeU * 10.0) / 10.0, std::round(planeV * 10.0) / 10.0);
   }
 
   // On-canvas width-handle drag: same drag lifecycle (beginDrag/endDrag/one-push-per-gesture,
-  // sharing dragging_/dragMutated_ with dragSelectedTo/dragSelectedElevationTo) but for a Width
+  // sharing dragging_/dragMutated_ with dragSelectedTo) but for a Width
   // point's `width` field. The caller (TopDownCanvas.cpp) computes the new width value itself:
   // it needs the baked frame's position/h axis at the point's `t`, which EditorState -- deliberately
   // THE-free -- has no access to (see EditorTrackDefinition.hpp's own header comment on why).
@@ -1284,13 +1295,13 @@ public:
   void selectPoint(int pathIndex, int pointIndex) {
     selection_ = {pathIndex, pointIndex};
     // Mirrors selectPositionAt's own clearing of the other three selection kinds -- a point,
-    // mesh region, zone, and trigger share one "the selected object" slot (only one of the four
+    // mesh object, zone, and trigger share one "the selected object" slot (only one of the four
     // is ever selected at a time), so picking one clears the other three. This one had been
     // missing the zone/trigger reset (only mesh was cleared), so clicking a roll/width/cross-
     // section handle while a zone or trigger was selected left both "selected" simultaneously.
-    selectedMeshId_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
   }
 
   // Deletes the currently selected point. For a position point, refuses to drop a path below 4,
@@ -1534,7 +1545,7 @@ public:
     return true;
   }
 
-  // Numeric-field counterpart to dragSelectedTo/dragSelectedElevationTo for a Position point, for
+  // Numeric-field counterpart to dragSelectedTo for a Position point, for
   // the properties panel's typed X/Y/Z/Weight inputs rather than a canvas drag.
   bool setSelectedPositionFields(double x, double y, double z, double weight) {
     if (!selectionInRange()) return false;
@@ -1752,7 +1763,11 @@ public:
       if (withinPick(createDraft_.front(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(true);
       if (createDraft_.size() > 1 && withinPick(createDraft_.back(), worldX, worldZ, pickRadiusWorld)) return finishCreateDraft(false);
     }
-    createDraft_.emplace_back(std::round(snappedX * 10.0) / 10.0, 0.0, std::round(snappedZ * 10.0) / 10.0);
+    // The third axis outside the active plane defaults to 0 -- matching TopDown's own
+    // longstanding behavior of starting every fresh draft point at y=0 regardless of anything else.
+    tox::Vec3 pos(0.0, 0.0, 0.0);
+    setPlaneCoords(projectionMode_, pos, std::round(snappedX * 10.0) / 10.0, std::round(snappedZ * 10.0) / 10.0);
+    createDraft_.push_back(pos);
     return false;
   }
   bool createModeClick(double worldX, double worldZ, double pickRadiusWorld) {
@@ -1842,19 +1857,10 @@ private:
     dragging_ = false;
     dragMutated_ = false;
     createDraft_.clear();
-    selectedMeshId_.reset();
-    meshDragging_ = meshDragMutated_ = meshRotating_ = meshRotateMutated_ = false;
-    selectedRail_.reset();
     selectedZoneId_.reset();
     selectedTriggerId_.reset();
+    selectedMeshObjectId_.reset();
     explicitCurrentPathIndex_ = 0;
-  }
-
-  MeshPlacement* mutableSelectedMeshPlacement() {
-    if (!selectedMeshId_.has_value()) return nullptr;
-    for (auto& placement : track_.meshes)
-      if (placement.id == *selectedMeshId_) return &placement;
-    return nullptr;
   }
 
   // Mirrors TrackMesh.uniqueAssetId, ported for texture asset ids: strip a trailing extension,
@@ -1891,18 +1897,6 @@ private:
     for (int i = 2;; ++i) {
       std::string candidate = base + "-" + std::to_string(i);
       if (!track_.textureAssets.count(candidate)) return candidate;
-    }
-  }
-
-  // Mirrors TrackMesh.uniqueAssetId: same sanitizeAssetId scheme as texture ids, deduped against
-  // mesh asset ids instead -- a re-import of the same file always yields a fresh asset rather than
-  // disturbing existing placements.
-  std::string uniqueMeshAssetId(const std::string& filename) const {
-    const std::string base = sanitizeAssetId(filename);
-    if (!track_.meshAssets.count(base)) return base;
-    for (int i = 2;; ++i) {
-      std::string candidate = base + "-" + std::to_string(i);
-      if (!track_.meshAssets.count(candidate)) return candidate;
     }
   }
 
@@ -1986,11 +1980,6 @@ private:
     // tox::ReservationWidthMode. The old floor of 1.0 only made sense as a minimum metres value;
     // Percent just needs a valid percentage.
     r.width = r.widthMode == ReservationWidthMode::Percent ? std::clamp(r.width, 0.0, 100.0) : std::max(1.0, r.width);
-    // wallHeight/railClearanceHeight <= 0 means "use the engine default" (see
-    // tox::ReservationDefinition), so only clamp away negative values, not zero. Independent of
-    // each other since CENTRAL_RESERVATION_PLAN.md M6.
-    r.wallHeight = std::max(0.0, r.wallHeight);
-    r.railClearanceHeight = std::max(0.0, r.railClearanceHeight);
     // End-cap width never widens past the reservation's own midpoint width (a Mitred/Rounded end
     // narrower than the reservation makes a taper; wider would make it flare out instead). Only
     // enforceable here in Fixed mode, where `r.width` is metres -- in Percent mode it's a 0-100
@@ -2053,13 +2042,6 @@ private:
     return firstUnusedId("p", used);
   }
 
-  // "m" prefix (not "mesh").
-  std::string newMeshPlacementId() const {
-    std::set<std::string> used;
-    for (const auto& placement : track_.meshes) used.insert(placement.id);
-    return firstUnusedId("m", used);
-  }
-
   // "z" prefix for zones.
   std::string newZoneId() const {
     std::set<std::string> used;
@@ -2082,6 +2064,21 @@ private:
     for (const auto& path : track_.paths)
       for (const auto& reservation : path.reservations) used.insert(reservation.id);
     return firstUnusedId("res", used);
+  }
+
+  // "mo" prefix, for drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 5).
+  std::string newMeshObjectId() const {
+    std::set<std::string> used;
+    for (const auto& placement : track_.meshObjects) used.insert(placement.id);
+    return firstUnusedId("mo", used);
+  }
+
+  // "model" prefix, for embedded <Model> entries (TRACK_MODEL_LIST_PLAN.md Milestone 6).
+  std::string newModelId() const {
+    std::set<std::string> used;
+    for (const auto& model : track_.models)
+      if (model.id.has_value()) used.insert(*model.id);
+    return firstUnusedId("model", used);
   }
 
   // Shared id space for junctions ("j" prefix) and disjoint seams ("seam" prefix) -- each still
@@ -2191,19 +2188,25 @@ private:
                        [&](const SelfIntersectionOverride& o) { return !positionIds.count(o.a) || !positionIds.count(o.b); }),
         track_.selfIntersectionOverrides.end());
 
-    std::set<std::string> pathIds, meshIds;
+    std::set<std::string> pathIds;
     for (const auto& p : track_.paths) pathIds.insert(p.id);
-    for (const auto& m : track_.meshes) meshIds.insert(m.id);
-    track_.zones.erase(std::remove_if(track_.zones.begin(), track_.zones.end(),
-                                      [&](const Zone& z) {
-                                        return z.host.kind == "mesh" ? !meshIds.count(z.host.meshId) : !pathIds.count(z.host.pathId);
-                                      }),
+    std::set<std::string> meshObjectIds;
+    for (const auto& p : track_.meshObjects) meshObjectIds.insert(p.id);
+    // A zone/trigger is path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md
+    // Milestone 3.5/5) -- only the host kind actually in use needs its own reference to still
+    // resolve; the other host's now-empty field (pathId for a meshObject host, meshObjectId for a
+    // path host) is never checked.
+    auto zoneHostValid = [&](const Zone& z) {
+      return z.host.kind == "meshObject" ? meshObjectIds.count(z.host.meshObjectId) > 0 : pathIds.count(z.host.pathId) > 0;
+    };
+    auto triggerHostValid = [&](const Trigger& t) {
+      return t.host.kind == "meshObject" ? meshObjectIds.count(t.host.meshObjectId) > 0 : pathIds.count(t.host.pathId) > 0;
+    };
+    track_.zones.erase(std::remove_if(track_.zones.begin(), track_.zones.end(), [&](const Zone& z) { return !zoneHostValid(z); }),
                        track_.zones.end());
-    track_.triggers.erase(std::remove_if(track_.triggers.begin(), track_.triggers.end(),
-                                         [&](const Trigger& t) {
-                                           return t.host.kind == "mesh" ? !meshIds.count(t.host.meshId) : !pathIds.count(t.host.pathId);
-                                         }),
-                          track_.triggers.end());
+    track_.triggers.erase(
+        std::remove_if(track_.triggers.begin(), track_.triggers.end(), [&](const Trigger& t) { return !triggerHostValid(t); }),
+        track_.triggers.end());
     if (!track_.triggers.empty() &&
         std::none_of(track_.triggers.begin(), track_.triggers.end(),
                      [](const Trigger& t) { return t.type == "checkpoint" && t.role == "finish"; })) {
@@ -2215,31 +2218,46 @@ private:
     }
   }
 
-  // Mirrors TrackMesh.railBoundaryEdges: an edge is on the region's rim exactly when a single
-  // polygon claims it (two owners means an interior seam, zero means dangling geometry). Counted
-  // by directed-edge occurrence across every polygon's loop rather than a live Willpower mesh's
-  // edge->polygon backrefs, since editor::MeshAsset (unlike wp::geometry::Mesh) doesn't retain
-  // those -- equivalent as long as no polygon lists the same edge twice, which a valid mesh export
-  // never does.
-  static void railBoundaryEdgesOf(MeshAsset& asset) {
-    std::map<int, int> ownerCount;
-    for (const auto& polygon : asset.polygons)
-      for (const auto& directed : polygon.edges) ++ownerCount[directed.edge];
-    for (auto& edge : asset.edges)
-      if (ownerCount[edge.id] == 1) edge.rail = true;
+  // Extracts/writes the two axes ProjectionMode's drag/render plane covers: TopDown -> (x, z)
+  // (today's only behavior, an existing convention left alone), Front -> (x, -y), Side -> (z, -y).
+  // Shared by every hit-test/drag helper below so a screen-space (u, v) from any canvas projection
+  // mode maps onto the right pair of world axes, leaving the third (the one that mode doesn't
+  // expose) untouched. Y is negated in both Front and Side: the second slot here feeds
+  // TopDownCanvas.cpp's worldToScreen as its screen-Y-bound argument, which increases the pixel
+  // coordinate DOWNWARD -- without the negation, moving up in world Y would draw lower on screen.
+  // Side's first slot is Z, not Y: looking along Side's view direction (X = 1) at the YZ plane, Z
+  // is the "along the track" axis that belongs on the horizontal screen axis, matching X's role for
+  // Front and TopDown. Mirrors TopDownCanvas.cpp's own free planeCoords/setPlaneCoords.
+  static std::pair<double, double> planeCoords(ProjectionMode mode, const tox::Vec3& p) {
+    switch (mode) {
+      case ProjectionMode::Front: return {p.x, -p.y};
+      case ProjectionMode::Side: return {p.z, -p.y};
+      case ProjectionMode::TopDown:
+      default: return {p.x, p.z};
+    }
   }
 
-  static bool withinPick(const tox::Vec3& p, double worldX, double worldZ, double pickRadiusWorld) {
-    const double dx = p.x - worldX, dz = p.z - worldZ;
-    return (dx * dx + dz * dz) <= pickRadiusWorld * pickRadiusWorld;
+  static void setPlaneCoords(ProjectionMode mode, tox::Vec3& p, double u, double v) {
+    switch (mode) {
+      case ProjectionMode::Front: p.x = u; p.y = -v; break;
+      case ProjectionMode::Side: p.z = u; p.y = -v; break;
+      case ProjectionMode::TopDown:
+      default: p.x = u; p.z = v; break;
+    }
   }
 
-  std::optional<SelectedPoint> hitTestPosition(double worldX, double worldZ, double pickRadiusWorld) const {
+  bool withinPick(const tox::Vec3& p, double planeU, double planeV, double pickRadiusWorld) const {
+    const auto [pu, pv] = planeCoords(projectionMode_, p);
+    const double du = pu - planeU, dv = pv - planeV;
+    return (du * du + dv * dv) <= pickRadiusWorld * pickRadiusWorld;
+  }
+
+  std::optional<SelectedPoint> hitTestPosition(double planeU, double planeV, double pickRadiusWorld) const {
     for (int pi = 0; pi < static_cast<int>(track_.paths.size()); ++pi) {
       const auto& points = track_.paths[pi].points;
       for (int i = 0; i < static_cast<int>(points.size()); ++i) {
         if (points[i].kind != PointKind::Position) continue;
-        if (withinPick(points[i].pos, worldX, worldZ, pickRadiusWorld)) return SelectedPoint{pi, i};
+        if (withinPick(points[i].pos, planeU, planeV, pickRadiusWorld)) return SelectedPoint{pi, i};
       }
     }
     return std::nullopt;
@@ -2303,25 +2321,60 @@ private:
     return true;
   }
 
+  // Deterministic hash-seeded HSV->RGB, used by placementColor() above for any id with no explicit
+  // override -- fixed saturation/value keep every generated colour readable against the canvas'
+  // dark background and distinct from the selection-highlight colour, while the hue (and therefore
+  // the colour overall) varies with the id string.
+  static DisplayColor randomColorForId(const std::string& id) {
+    const std::size_t h = std::hash<std::string>{}(id);
+    const double hue = static_cast<double>(h % 360u);
+    constexpr double kSaturation = 0.55, kValue = 0.85;
+    const double c = kValue * kSaturation;
+    const double x = c * (1.0 - std::fabs(std::fmod(hue / 60.0, 2.0) - 1.0));
+    const double m = kValue - c;
+    double r = 0.0, g = 0.0, b = 0.0;
+    if (hue < 60.0) {
+      r = c;
+      g = x;
+    } else if (hue < 120.0) {
+      r = x;
+      g = c;
+    } else if (hue < 180.0) {
+      g = c;
+      b = x;
+    } else if (hue < 240.0) {
+      g = x;
+      b = c;
+    } else if (hue < 300.0) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    return DisplayColor{static_cast<float>(r + m), static_cast<float>(g + m), static_cast<float>(b + m)};
+  }
+
   TrackDefinition track_;
   History history_;
+  std::map<std::string, DisplayColor> placementColorOverrides_;
   std::vector<std::string> availableMaterials_;  // sorted qualified names; see setAvailableMaterials
   EditMode mode_{EditMode::Edit};
+  ProjectionMode projectionMode_{ProjectionMode::TopDown};
   SelectedPoint selection_;
   bool dragging_{false};
   bool dragMutated_{false};
   std::vector<tox::Vec3> createDraft_;
 
-  std::optional<std::string> selectedMeshId_;
-  bool meshDragging_{false}, meshDragMutated_{false};
-  double meshDragOffsetX_{0.0}, meshDragOffsetZ_{0.0};
-  bool meshRotating_{false}, meshRotateMutated_{false};
-  double meshRotateOriginRotation_{0.0}, meshRotateStartAngle_{0.0};
+  // Generic shift+drag-to-rotate gesture state (see rotateGestureActive() above); unused by any
+  // entity until Milestone 5.
+  bool rotateGestureActive_{false};
+  double rotateGestureOriginDeg_{0.0}, rotateGestureStartAngleDeg_{0.0};
 
-  std::optional<SelectedRail> selectedRail_;
   std::optional<std::string> selectedZoneId_;
   std::optional<std::string> selectedTriggerId_;
   std::optional<std::string> selectedReservationId_;
+  std::optional<std::string> selectedMeshObjectId_;
   int explicitCurrentPathIndex_{0};
 };
 

@@ -72,8 +72,7 @@ int main(int argc, char** argv) {
 
   auto track = std::make_shared<Track>(std::move(*loaded.track));
   std::cout << "loaded '" << track->definition.name << "': " << track->paths.size() << " path(s), "
-            << track->meshRegions.size() << " mesh region(s), " << track->geometry.size()
-            << " renderer-neutral geometry batch(es)" << std::endl;
+            << track->geometry.size() << " renderer-neutral geometry batch(es)" << std::endl;
 
   GameSession session(track);
   std::cout << "session ready: " << session.ships().size() << " ship(s) on the starting grid. Press Escape to stop."

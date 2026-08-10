@@ -110,6 +110,19 @@
                 </Definition>
             </Definitions>
         </Resource>
+        <Resource type="Material" name="DefaultRailMaterial">
+            <DependentResources>
+                <DependentResource id="Program" ref="TrackProgram"/>
+                <DependentResource id="Texture" ref="DefaultRailTexture"/>
+            </DependentResources>
+            <Definitions>
+                <Definition>
+                    <Textures>
+                        <Texture type="resource" sampler="TEX1">Texture</Texture>
+                    </Textures>
+                </Definition>
+            </Definitions>
+        </Resource>
         <Resource type="Material" name="DefaultMeshMaterial">
             <DependentResources>
                 <DependentResource id="Program" ref="TrackProgram"/>
@@ -119,6 +132,24 @@
                 <Definition>
                     <Textures>
                         <Texture type="resource" sampler="TEX1">Texture</Texture>
+                    </Textures>
+                </Definition>
+            </Definitions>
+        </Resource>
+        <!-- Untextured white fallback for a drivable mesh object sub-mesh whose .mppmodel embeds
+             model-tool's own placeholder material key (a mesh that was never assigned a real
+             material there; see MaterialLibrary.cpp's defaultFallbackMaterial()). id must stay
+             exactly "ModelTool.DefaultFallbackMaterial3D" wherever it's referenced as a
+             DependentResource id: Map.cpp's resolveMaterialMppName() looks it up by that literal,
+             unnamespaced string, matched verbatim against what's baked into the .mppmodel file. -->
+        <Resource type="Material" name="ModelTool.DefaultFallbackMaterial3D">
+            <DependentResources>
+                <DependentResource id="Program" ref="TrackProgram"/>
+            </DependentResources>
+            <Definitions>
+                <Definition>
+                    <Textures>
+                        <Texture type="default" sampler="TEX1"/>
                     </Textures>
                 </Definition>
             </Definitions>
@@ -212,16 +243,43 @@
                 <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
                 <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
                 <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
+                <DependentResource id="ModelTool.DefaultFallbackMaterial3D" ref="Tracks/ModelTool.DefaultFallbackMaterial3D"/>
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">
-                    <ModelFile>New_Track.mppmodel</ModelFile>
-                    <TrackData>New_Track.json</TrackData>
-                    <TrackMeshes>
-                        <Mesh>path-0-surface</Mesh>
-                        <Mesh>path-0-rail-left</Mesh>
-                        <Mesh>path-0-rail-right</Mesh>
-                    </TrackMeshes>
+                    <Models>
+                        <Model id="NewTrack">
+                            <ModelFile>NewTrack.mppmodel</ModelFile>
+                            <TrackData>NewTrack.json</TrackData>
+                            <Meshes>
+                                <Mesh>
+                                    <Name>path-0-surface</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                                <Mesh>
+                                    <Name>path-0-rail-left</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                                <Mesh>
+                                    <Name>path-0-rail-right</Name>
+                                    <Type>Track</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                            </Meshes>
+                        </Model>
+                        <Model id="model1">
+                            <ModelFile>box.mppmodel</ModelFile>
+                            <Meshes>
+                                <Mesh>
+                                    <Name>Mesh</Name>
+                                    <Type>Physical</Type>
+                                    <Visible>true</Visible>
+                                </Mesh>
+                            </Meshes>
+                        </Model>
+                    </Models>
                 </Definition>
             </Definitions>
         </Resource>

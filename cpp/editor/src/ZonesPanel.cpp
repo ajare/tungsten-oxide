@@ -40,27 +40,39 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
       changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
+    // Path-hosted or drivable-mesh-object-hosted (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.5) --
+    // no placement picker exists yet (Milestone 5), so a meshObject-hosted zone can be edited (its
+    // meshObjectId retyped, its local offset adjusted) but not created from this panel; that's why
+    // "Add Zone" below stays path-only.
+    const bool isMeshObject = zone->host.kind == "meshObject";
     double t = zone->host.t * 100.0, lateral = zone->host.lateral;
-    double hostX = zone->host.x, hostZ = zone->host.z, rotation = zone->host.rotation;
-    const bool isPath = zone->host.kind == "path";
-    if (isPath) {
+    char meshObjectId[128];
+    std::snprintf(meshObjectId, sizeof(meshObjectId), "%s", zone->host.meshObjectId.c_str());
+    double localX = zone->host.localPosition.x, localY = zone->host.localPosition.y, localZ = zone->host.localPosition.z;
+    double localYaw = zone->host.localYaw;
+    if (isMeshObject) {
+      ImGui::SetNextItemWidth(160);
+      changed |= ImGui::InputText("Placement id", meshObjectId, sizeof(meshObjectId), kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local X", &localX, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local Y", &localY, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local Z", &localZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+      ImGui::SetNextItemWidth(90);
+      changed |= ImGui::InputDouble("Local Yaw (deg)", &localYaw, 0.0, 0.0, "%.1f", kCommitOnEnter);
+      changed |= ImGui::IsItemDeactivatedAfterEdit();
+    } else {
       ImGui::Text("Host path: %s", zone->host.pathId.c_str());
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("T (%)", &t, 0.0, 0.0, "%.1f", kCommitOnEnter);
       changed |= ImGui::IsItemDeactivatedAfterEdit();
       ImGui::SetNextItemWidth(120);
       changed |= ImGui::InputDouble("Lateral", &lateral, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-    } else {
-      ImGui::Text("Host mesh: %s", zone->host.meshId.c_str());
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("X", &hostX, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Z", &hostZ, 0.0, 0.0, "%.1f", kCommitOnEnter);
-      changed |= ImGui::IsItemDeactivatedAfterEdit();
-      ImGui::SetNextItemWidth(120);
-      changed |= ImGui::InputDouble("Rotation (deg)", &rotation, 0.0, 0.0, "%.1f", kCommitOnEnter);
       changed |= ImGui::IsItemDeactivatedAfterEdit();
     }
 
@@ -72,13 +84,13 @@ bool DrawZonesPanel(EditorState& state, int currentPathIndex) {
           target.factor = factor;
           target.duration = duration;
         }
-        if (target.host.kind == "path") {
+        if (target.host.kind == "meshObject") {
+          target.host.meshObjectId = meshObjectId;
+          target.host.localPosition = tox::Vec3(localX, localY, localZ);
+          target.host.localYaw = localYaw;
+        } else {
           target.host.t = t / 100.0;
           target.host.lateral = lateral;
-        } else {
-          target.host.x = hostX;
-          target.host.z = hostZ;
-          target.host.rotation = rotation;
         }
       });
     }

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <set>
 
 #include <mpp/ModelSerializer.h>
@@ -19,6 +21,7 @@
 #include "Map.h"
 #include "Simulation.hpp"
 #include "StartGrid.hpp"
+#include "TrackCollisionBuild.h"
 
 using namespace std;
 using namespace wp;
@@ -46,118 +49,124 @@ string resolveMaterialMppName(Map* map, string const& materialKey) {
       map, "material '" + materialKey + "' is a '" + dependent->getType() + "' resource, expected TrackMaterial or Material.");
 }
 
-filesystem::path safeRelativePath(Map* map, filesystem::path const& root, string const& value, char const* field) {
-  filesystem::path relative(value);
-  if (relative.empty() || relative.is_absolute() || relative.has_root_name() || relative.has_root_directory())
-    throw application::resourcesystem::ResourceException(map, string(field) + " must be a non-empty relative path.");
-  for (auto const& part : relative)
-    if (part == "..")
-      throw application::resourcesystem::ResourceException(map, string(field) + " may not traverse outside the resource directory.");
-  return (root / relative).lexically_normal();
-}
+// --- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3) ---------------
+//
+// core never loads or compiles a placement's referenced .mppmodel -- Track::definition.meshObjects
+// carries only authored data (modelId + 6-DOF transform), per the plan's "`.mppmodel` loading is
+// host-only" architecture note. This is the one place it's actually resolved: `modelId` is a
+// filename relative to the same directory-based resource location as the track's own ModelFile/
+// TrackData (resolved via mono::safeRelativePath, exactly like those two), not a declared
+// <DependentResource> -- there's no need for the generic named-resource-dependency machinery
+// materials use (that exists to support cross-Map GPU resource sharing/refcounting; a placement's
+// model is loaded fresh per Map::load() instead, cached only within that one call by modelId so
+// multiple placements sharing one model parse it once, matching the plan's own 3.3 wording).
+//
+// The actual BVH-triangle-building logic (buildCollisionTriangles, buildMeshObjectCollisionTriangles,
+// safeRelativePath, the placement transforms, MeshObjectModel/loadMeshObjectModel) lives in
+// TrackCollisionBuild.h/.cpp, shared with cpp/app/tools/mesh_physics_diag.cpp (Milestone 6.0's
+// headless diagnostic tool) so both build the exact same collision surface. Everything below here
+// wraps mono::'s plain std::runtime_error into this class's own ResourceException, and handles the
+// render-mesh-append pass that only this DLL needs.
 
-bool gameplayKind(tox::GeometryKind kind) {
-  // Everything a ship can physically contact -- drivable surfaces, reservation walls, and both
-  // Path- and MeshRegion-authored rails -- goes into the collision BVH. PathShell stays out: it's
-  // render-only. Must stay in lock-step with the editor's <TrackMeshes> export loop
-  // (MppModelExport.cpp) -- same set, same reasoning.
-  return kind == tox::GeometryKind::PathSurface || kind == tox::GeometryKind::MeshSurface ||
-         kind == tox::GeometryKind::ReservationWall || kind == tox::GeometryKind::PathRail ||
-         kind == tox::GeometryKind::MeshRail;
-}
-
-float readFloat(int8_t const* bytes, size_t offset) {
-  float value;
-  memcpy(&value, bytes + offset, sizeof(value));
-  return value;
-}
-
-bool matchesExportedFloat(double expected, double actual) {
-  return static_cast<double>(static_cast<float>(expected)) == actual;
-}
-
-vector<tox::CollisionTriangle> buildCollisionTriangles(
-    Map* map, mpp::ModelSerializer& serializer, tox::Track const& track, vector<string> const& selectedNames) {
-  set<string> selected(selectedNames.begin(), selectedNames.end());
-  set<string> expectedNames;
-  std::map<string, tox::GeometryBatch const*> expectedByName;
-  for (auto const& batch : track.geometry) {
-    if (!gameplayKind(batch.kind)) continue;
-    expectedNames.insert(batch.id);
-    expectedByName.emplace(batch.id, &batch);
-  }
-  if (selected != expectedNames) {
-    string detail = "TrackMeshes must contain exactly every collidable geometry batch "
-                     "(PathSurface, MeshSurface, ReservationWall, PathRail, MeshRail)";
-    for (auto const& name : expectedNames)
-      if (!selected.count(name)) detail += "; missing '" + name + "'";
-    for (auto const& name : selected)
-      if (!expectedNames.count(name)) detail += "; unexpected '" + name + "'";
-    throw application::resourcesystem::ResourceException(map, detail + ".");
-  }
-
-  std::map<string, size_t> modelByName;
-  for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
-    string const& name = serializer.getName(i);
-    if (!modelByName.emplace(name, i).second)
-      throw application::resourcesystem::ResourceException(map, "model contains duplicate mesh name '" + name + "'.");
-  }
-
-  vector<tox::CollisionTriangle> triangles;
-  int surfaceId = 0;
-  for (string const& name : selectedNames) {
-    auto modelIt = modelByName.find(name);
-    if (modelIt == modelByName.end())
-      throw application::resourcesystem::ResourceException(map, "listed track mesh '" + name + "' is missing from ModelFile.");
-    size_t meshIndex = modelIt->second;
-    if (serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles)
-      throw application::resourcesystem::ResourceException(map, "listed track mesh '" + name + "' is not triangular.");
-
-    size_t vertexCount, stride;
-    shared_ptr<const int8_t> data;
-    serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
-    if (stride != 36 || vertexCount % 3 != 0)
-      throw application::resourcesystem::ResourceException(
-          map, "listed track mesh '" + name + "' must use the exported 36-byte non-indexed triangle layout.");
-
-    auto const& expected = *expectedByName.at(name);
-    if (expected.vertices.size() != vertexCount)
-      throw application::resourcesystem::ResourceException(map, "listed track mesh '" + name + "' triangle count does not match TrackData.");
-
-    vector<tox::RenderVertex> decoded;
-    decoded.reserve(vertexCount);
-    for (size_t v = 0; v < vertexCount; ++v) {
-      auto bytes = data.get() + v * stride;
-      tox::RenderVertex vertex;
-      vertex.position = {readFloat(bytes, 0), readFloat(bytes, 4), readFloat(bytes, 8)};
-      vertex.normal = {readFloat(bytes, 12), readFloat(bytes, 16), readFloat(bytes, 20)};
-      if (glm::dot(vertex.normal, vertex.normal) < 1e-12)
-        throw application::resourcesystem::ResourceException(
-            map, "listed track mesh '" + name + "' contains an unusable vertex normal.");
-      auto const& reference = expected.vertices[v];
-      if (!matchesExportedFloat(reference.position.x, vertex.position.x) ||
-          !matchesExportedFloat(reference.position.y, vertex.position.y) ||
-          !matchesExportedFloat(reference.position.z, vertex.position.z) ||
-          !matchesExportedFloat(reference.normal.x, vertex.normal.x) ||
-          !matchesExportedFloat(reference.normal.y, vertex.normal.y) ||
-          !matchesExportedFloat(reference.normal.z, vertex.normal.z))
-        throw application::resourcesystem::ResourceException(
-            map, "listed track mesh '" + name + "' vertex data does not match TrackData export geometry.");
-      vertex.normal = tox::normalizeSafe(vertex.normal);
-      decoded.push_back(vertex);
-    }
-    for (size_t v = 0; v < decoded.size(); v += 3) {
-      tox::CollisionTriangle triangle;
-      triangle.surfaceId = surfaceId;
-      for (int corner = 0; corner < 3; ++corner) {
-        triangle.positions[corner] = decoded[v + corner].position;
-        triangle.normals[corner] = decoded[v + corner].normal;
+// Rendering (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.4): every sub-mesh of every placement --
+// collidable AND decorative, unlike buildMeshObjectCollisionTriangles above; a decorative sub-mesh
+// still renders, it just isn't in the BVH -- expanded from the referenced model's real indexed
+// triangles into the same flat non-indexed 36-byte layout the road's own meshes already use
+// (trackMeshSpecification()), so it can go into the very same `modelStream` as ordinary model
+// instancing. Position/normal are transformed by the placement; uv/colour pass through unchanged.
+// Mesh names are namespaced by placement id ("meshobject-<placement id>-<sub-mesh name>") so
+// multiple placements sharing one model, or a sub-mesh name that happens to collide with one of the
+// road's own mesh names, never collide in the single shared `modelStream`.
+void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
+                                  mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream,
+                                  std::map<string, shared_ptr<mono::MeshObjectModel>>& cache, vector<mono::EmbeddedModelRef> const& embeddedModels) {
+  for (auto const& placement : track.definition.meshObjects) {
+    auto cached = cache.find(placement.modelId);
+    if (cached == cache.end()) {
+      try {
+        filesystem::path const modelPath =
+            mono::safeRelativePath(root, mono::resolveModelFileReference(placement.modelId, embeddedModels), "modelId");
+        cached = cache.emplace(placement.modelId, mono::loadMeshObjectModel(resourceMgr, modelPath)).first;
+      } catch (exception const& error) {
+        throw application::resourcesystem::ResourceException(map, error.what());
       }
-      triangles.push_back(triangle);
     }
-    ++surfaceId;
+    mono::MeshObjectModel& model = *cached->second;
+
+    for (size_t meshIndex = 0; meshIndex < model.serializer.getMeshCount(); ++meshIndex) {
+      if (model.serializer.getPrimitiveType(meshIndex) != mpp::mesh::Primitive::Type::Triangles) continue;
+
+      string const rawName = model.serializer.getName(meshIndex);
+      // Visible=false is game-hidden (unlike the editor's viewport, which renders it regardless --
+      // TRACK_MODEL_LIST_PLAN.md's locked-in semantics). Unknown metadata defaults to visible,
+      // matching model-tool's own "no XML metadata yet" default.
+      mono::ModelMeshMeta const* meta = mono::findMeshMeta(placement.modelId, rawName, embeddedModels);
+      if (meta != nullptr && !meta->visible) continue;
+
+      string materialMppName;
+      try {
+        materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
+      } catch (exception const& error) {
+        map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                  "'): " + error.what());
+        continue;
+      }
+
+      size_t vertexCount, stride;
+      shared_ptr<const int8_t> data;
+      model.serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
+      if (stride != 36) {
+        map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
+                  "'): unsupported vertex stride.");
+        continue;
+      }
+
+      // Transform once per source vertex (not per expanded triangle corner) -- cheaper, and keeps
+      // this a direct mirror of buildMeshObjectCollisionTriangles's own per-vertex transform pass.
+      vector<int8_t> transformed(vertexCount * stride);
+      for (size_t v = 0; v < vertexCount; ++v) {
+        auto const src = data.get() + v * stride;
+        tox::Vec3 const worldPos =
+            mono::placementTransformPosition(placement, tox::Vec3(mono::readFloat(src, 0), mono::readFloat(src, 4), mono::readFloat(src, 8)));
+        tox::Vec3 const worldNormal = tox::normalizeSafe(
+            mono::placementTransformNormal(placement, tox::Vec3(mono::readFloat(src, 12), mono::readFloat(src, 16), mono::readFloat(src, 20))));
+        auto dst = transformed.data() + v * stride;
+        float const posF[3] = {static_cast<float>(worldPos.x), static_cast<float>(worldPos.y), static_cast<float>(worldPos.z)};
+        float const normalF[3] = {static_cast<float>(worldNormal.x), static_cast<float>(worldNormal.y), static_cast<float>(worldNormal.z)};
+        memcpy(dst, posF, 12);
+        memcpy(dst + 12, normalF, 12);
+        memcpy(dst + 24, src + 24, 12);  // uv (8 bytes) + colour (4 bytes), unchanged
+      }
+
+      vector<uint32_t> indices;
+      if (model.indexStreamIds[meshIndex] == mono::kMeshObjectNoIndexStream) {
+        indices.resize(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v) indices[v] = static_cast<uint32_t>(v);
+      } else {
+        int const indexWidth = model.serializer.getIndexWidth(meshIndex);
+        size_t const indexCount = static_cast<size_t>(model.serializer.getPrimitiveCount(meshIndex)) * 3;
+        shared_ptr<const uint8_t> const indexData = model.serializer.getIndexData(meshIndex);
+        indices.resize(indexCount);
+        uint8_t const* p = indexData.get();
+        size_t const bytesPerIndex = static_cast<size_t>(indexWidth) / 8;
+        for (size_t k = 0; k < indexCount; ++k) {
+          uint32_t index = 0;
+          memcpy(&index, p, bytesPerIndex);
+          indices[k] = index;
+          p += bytesPerIndex;
+        }
+      }
+
+      // Expand indexed -> flat non-indexed (trackMeshSpecification() sets setIndexedVertices(false),
+      // matching every other mesh already in this modelStream).
+      vector<int8_t> flat(indices.size() * stride);
+      for (size_t k = 0; k < indices.size(); ++k) memcpy(flat.data() + k * stride, transformed.data() + static_cast<size_t>(indices[k]) * stride, stride);
+
+      string const meshName = "meshobject-" + placement.id + "-" + rawName;
+      auto meshId = modelStream->createMesh(meshName, meshSpec, materialMppName, 16);
+      modelStream->addVertexData(meshId, flat);
+    }
   }
-  return triangles;
 }
 
 }  // namespace
@@ -170,21 +179,37 @@ Map::Map(string const& name, string const& namesp, string const& source,
 
 Map::~Map() = default;
 
+void Map::warn(string const& message) {
+  mwLogger->warn(message);
+  mLoadWarnings.push_back(message);
+}
+
 bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
   WP_UNUSED(renderSystem);
+  mLoadWarnings.clear();
   auto directoryLocation = dynamic_cast<application::resourcesystem::DirectoryResourceLocation*>(mwLocation);
   if (directoryLocation == nullptr)
     throw application::resourcesystem::ResourceException(this, "Track resources require a directory-based resource location.");
 
   filesystem::path root(directoryLocation->getRootPath());
-  filesystem::path modelPath = safeRelativePath(this, root, mModelFileName, "ModelFile");
-  filesystem::path dataPath = safeRelativePath(this, root, mTrackDataFileName, "TrackData");
+  filesystem::path modelPath, dataPath;
+  try {
+    modelPath = mono::safeRelativePath(root, mModelFileName, "ModelFile");
+    dataPath = mono::safeRelativePath(root, mTrackDataFileName, "TrackData");
+  } catch (exception const& error) {
+    throw application::resourcesystem::ResourceException(this, error.what());
+  }
 
-  tox::TrackLoadResult loaded = tox::Track::fromFile(dataPath);
+  // Track::fromTrackDataFiles (TRACK_MODEL_LIST_PLAN.md Milestone 1.2) rather than fromFile: only
+  // one Track-type Model is currently supported (see MapTungstenMonoxideDefinitionFactory.cpp's own
+  // "more than one Type=Track Model" guard), so this is a single-element call today -- byte-identical
+  // to fromFile -- but telegraphs that a future multi-Model union is this same entry point's job, not
+  // a new one.
+  tox::TrackLoadResult loaded = tox::Track::fromTrackDataFiles({dataPath});
   if (!loaded)
     throw application::resourcesystem::ResourceException(this, "failed to load TrackData '" + dataPath.string() + "': " + loaded.error);
   for (auto const& warning : loaded.warnings)
-    mwLogger->warn("Track '" + getQualifiedName() + "' [" + warning.code + "] " + warning.objectId + ": " + warning.message);
+    warn("Track '" + getQualifiedName() + "' [" + warning.code + "] " + warning.objectId + ": " + warning.message);
   mTrack = make_shared<tox::Track>(std::move(*loaded.track));
 
   mpp::ModelSerializer serializer(resourceMgr);
@@ -194,11 +219,34 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     throw application::resourcesystem::ResourceException(this, "failed to load ModelFile '" + modelPath.string() + "': " + error.what());
   }
 
-  auto collisionTriangles = buildCollisionTriangles(this, serializer, *mTrack, mTrackMeshNames);
+  // Collidable-mesh selection is derived straight from the baked Track (same as
+  // cpp/app/tools/mesh_physics_diag.cpp's own buildCollisionSurface()) rather than read from XML --
+  // the old flat <TrackMeshes> list this replaces was always required to equal this exact set anyway
+  // (see TrackCollisionBuild.cpp's git history), so deriving it loses no real validation: the
+  // dedicated per-mesh-name/vertex-data cross-check against the physical .mppmodel content, just
+  // below, still fires independently of where the name list came from.
+  vector<string> const selectedNames = mono::collidableGeometryBatchIds(*mTrack);
+  vector<tox::CollisionTriangle> collisionTriangles;
+  int nextSurfaceId = static_cast<int>(selectedNames.size());
+  map<string, shared_ptr<mono::MeshObjectModel>> modelCache;
+  try {
+    collisionTriangles = mono::buildCollisionTriangles(serializer, *mTrack, selectedNames);
+    // Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.3, now Type=Physical-
+    // driven -- TRACK_MODEL_LIST_PLAN.md Milestone 7): merged into the same BVH as the road's own
+    // collision triangles above, each collidable sub-mesh transformed by its placement. `modelCache`
+    // is scoped to this one load() call -- nothing outside it needs a loaded placement model, so
+    // there's no reason to keep it (or the mpp::ModelSerializer instances it owns) alive any longer
+    // than building this BVH takes.
+    auto meshObjectTriangles = mono::buildMeshObjectCollisionTriangles(*mTrack, root, resourceMgr, nextSurfaceId, modelCache, mEmbeddedModels);
+    collisionTriangles.insert(collisionTriangles.end(), make_move_iterator(meshObjectTriangles.begin()), make_move_iterator(meshObjectTriangles.end()));
+  } catch (exception const& error) {
+    throw application::resourcesystem::ResourceException(this, error.what());
+  }
   if (collisionTriangles.empty())
     throw application::resourcesystem::ResourceException(
-        this, "TrackMeshes produced no collision triangles -- this track has no drivable/collidable geometry "
-              "and cannot be loaded; re-export it from the editor after adding a path or mesh region.");
+        this, "this track has no drivable/collidable geometry and cannot be loaded; re-export it from "
+              "the editor after adding a path or mesh region.");
+
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
   tox::Simulation simulation(*mTrack);
@@ -224,10 +272,10 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     try {
       materialMppName = resolveMaterialMppName(this, serializer.getMaterial(i));
     } catch (exception const& error) {
-      if (find(mTrackMeshNames.begin(), mTrackMeshNames.end(), serializer.getName(i)) != mTrackMeshNames.end())
+      if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
         throw application::resourcesystem::ResourceException(
             this, "listed track mesh '" + serializer.getName(i) + "' has unresolved material: " + error.what());
-      mwLogger->warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
+      warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
       continue;
     }
 
@@ -240,6 +288,10 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     vector<int8_t> bytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
     modelStream->addVertexData(meshId, bytes);
   }
+
+  // Drivable mesh object placements (Milestone 3.4): reuses `modelCache` from the collision-mesh
+  // pass above, so a model already loaded there isn't reopened from disk here.
+  appendMeshObjectRenderMeshes(this, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache, mEmbeddedModels);
 
   mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
   mMppResource->acquire(this);

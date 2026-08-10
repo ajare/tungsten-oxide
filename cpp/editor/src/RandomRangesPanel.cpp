@@ -25,23 +25,12 @@ void sanitize(RandomTrackRanges& r) {
   r.widthMin = clampNum(r.widthMin, 1.0, 2000.0, d.widthMin);
   r.widthMax = clampNum(r.widthMax, 1.0, 2000.0, d.widthMax);
   r.maxCurvature = clampNum(r.maxCurvature, 0.0, 1.0, d.maxCurvature);
-  r.meshChanceMin = clampNum(r.meshChanceMin, 0.0, 100.0, d.meshChanceMin);
-  r.meshChanceMax = clampNum(r.meshChanceMax, 0.0, 100.0, d.meshChanceMax);
-  r.sequenceChance = clampNum(r.sequenceChance, 0.0, 100.0, d.sequenceChance);
-  r.maxMeshSections = clampInt(r.maxMeshSections, 0, 5);
-  r.meshLengthMin = clampNum(r.meshLengthMin, 60.0, 1000.0, d.meshLengthMin);
-  r.meshLengthMax = clampNum(r.meshLengthMax, 60.0, 1000.0, d.meshLengthMax);
-  r.endDropMin = clampNum(r.endDropMin, 1.0, 200.0, d.endDropMin);
-  r.endDropMax = clampNum(r.endDropMax, 1.0, 200.0, d.endDropMax);
   r.boostMin = clampInt(r.boostMin, 0, 50);
   r.boostMax = clampInt(r.boostMax, 0, 50);
 
   if (r.lengthMax < r.lengthMin) r.lengthMax = r.lengthMin;
   if (r.turnsMax < r.turnsMin) r.turnsMax = r.turnsMin;
   if (r.widthMax < r.widthMin) r.widthMax = r.widthMin;
-  if (r.meshChanceMax < r.meshChanceMin) r.meshChanceMax = r.meshChanceMin;
-  if (r.meshLengthMax < r.meshLengthMin) r.meshLengthMax = r.meshLengthMin;
-  if (r.endDropMax < r.endDropMin) r.endDropMax = r.endDropMin;
   if (r.boostMax < r.boostMin) r.boostMax = r.boostMin;
 }
 
@@ -108,17 +97,6 @@ bool DrawRandomRangesPanel(EditorState& state, RandomTrackRanges& ranges, int& s
   changed |= ImGui::IsItemDeactivatedAfterEdit();
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Mesh Chance (%)");
-  changed |= doubleRow("meshChance", ranges.meshChanceMin, ranges.meshChanceMax);
-  ImGui::SetNextItemWidth(90);
-  changed |= ImGui::InputDouble("Sequence Chance (%)", &ranges.sequenceChance, 0.0, 0.0, "%.1f", kCommitOnEnter);
-  changed |= ImGui::IsItemDeactivatedAfterEdit();
-  ImGui::SetNextItemWidth(90);
-  changed |= ImGui::InputInt("Max Mesh Sections", &ranges.maxMeshSections);
-  ImGui::TextUnformatted("Mesh Length (m)");
-  changed |= doubleRow("meshLength", ranges.meshLengthMin, ranges.meshLengthMax);
-  ImGui::TextUnformatted("End Drop (m)");
-  changed |= doubleRow("endDrop", ranges.endDropMin, ranges.endDropMax);
   ImGui::TextUnformatted("Boost Zones");
   changed |= intRow("boost", ranges.boostMin, ranges.boostMax);
 

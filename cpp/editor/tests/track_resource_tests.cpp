@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -91,6 +92,21 @@ int main(int argc, char** argv) {
         "saved Resources XML discovers one loadable Track");
   check(scan.tracks[0].resourceName == authored.name, "chooser exposes Resource@name");
 
+  // <Models> list (TRACK_MODEL_LIST_PLAN.md Milestone 5): exactly one primary Track-type Model, its
+  // own id present, and a <Meshes> entry (Type=Track) for every baked collidable batch.
+  check(scan.tracks[0].models.size() == 1, "a freshly saved Track resource embeds exactly one Model");
+  std::string primaryModelId;
+  if (scan.tracks[0].models.size() == 1) {
+    const modelxml::ModelXmlDefinition& primary = scan.tracks[0].models[scan.tracks[0].primaryModelIndex];
+    check(primary.id.has_value() && !primary.id->empty(), "the primary Model has a non-empty id");
+    if (primary.id.has_value()) primaryModelId = *primary.id;
+    check(primary.trackData.has_value() && *primary.trackData == scan.tracks[0].trackDataReference,
+          "the primary Model's TrackData matches trackDataReference");
+    check(!primary.meshes.empty() && std::all_of(primary.meshes.begin(), primary.meshes.end(),
+                                                 [](const modelxml::MeshMetadataXmlDefinition& mesh) { return mesh.type == modelxml::MeshType::Track; }),
+          "every mesh in the primary Model is Type=Track");
+  }
+
   const std::string stableIdentity = first.resultingBinding.resourceName;
   authored.name = "Changed JSON Metadata Name";
   const tox::TrackLoadResult changedBake = tox::Track::fromJson(editor::toJson(authored));
@@ -158,6 +174,155 @@ int main(int argc, char** argv) {
       editor::prepareTrackSave(authored, geometryFreeTrack, {}, emptyXml, std::nullopt, true);
   check(!emptyPlan.ok(), "a baked Track with no drivable/collidable geometry is refused at export time");
   check(!std::filesystem::exists(emptyXml), "refused export leaves no partial Resources XML behind");
+
+  // A hand-injected Physical <Model> entry (simulating Milestone 6's "Load Model") must survive an
+  // ordinary bound Save byte-for-byte -- Save regenerates the primary entry fresh, but writes back
+  // whatever the in-session TrackDefinition's own `models` list holds for everything else
+  // (TrackResourceSave.cpp sources `otherModels` from `track.models`, not from disk -- the editor is
+  // the authoritative live source once Milestone 6 exists). parseCandidate() seeds `track->models`
+  // with every non-primary entry at load time (Milestone 6), so round-tripping through a real
+  // load (scanTrackResources) is what's exercised here, not just an in-memory field poke.
+  {
+    std::string xmlWithProp = readFile(resources);
+    const std::string propModel =
+        "<Model id=\"cube-model\"><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
+        "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+        "</Meshes></Model>";
+    const std::size_t pos = xmlWithProp.find("</Models>");
+    check(pos != std::string::npos, "generated XML contains a </Models> closing tag to inject before");
+    if (pos != std::string::npos) {
+      xmlWithProp.insert(pos, propModel);
+      writeFile(resources, xmlWithProp);
+
+      const editor::TrackResourceScanResult withPropScan = editor::scanTrackResources(resources);
+      check(withPropScan.validDocument() && withPropScan.tracks.size() == 1 && withPropScan.tracks[0].models.size() == 2,
+            "the injected Physical Model is discovered alongside the primary");
+      check(withPropScan.tracks.size() == 1 && withPropScan.tracks[0].track.has_value() &&
+                withPropScan.tracks[0].track->models.size() == 1 && withPropScan.tracks[0].track->models[0].id == "cube-model",
+            "loading seeds the editable TrackDefinition's own models list with the non-primary entry");
+
+      // Hand-editing `resources` above is exactly the kind of external change the bound-Save
+      // fingerprint guard exists to catch (it just did, correctly, before this fix) -- so this
+      // resave must bind fresh off the just-rescanned file, mirroring how main.cpp's own load path
+      // populates a TrackSaveBinding from a freshly scanned TrackResourceCandidate, not carry
+      // forward `first.resultingBinding` from before the external edit.
+      const editor::TrackResourceCandidate& withProp = withPropScan.tracks[0];
+      const editor::TrackSaveBinding freshBinding{resources,          withProp.resourceName,       withProp.trackDataReference,
+                                                  withProp.modelFileReference, withProp.resourceFingerprint, withProp.jsonFingerprint};
+      const tox::TrackLoadResult withPropBake = tox::Track::fromJson(editor::toJson(*withProp.track));
+      check(static_cast<bool>(withPropBake), "the freshly loaded-with-prop track still bakes: " + withPropBake.error);
+      editor::TrackSavePlan resaved = editor::prepareTrackSave(*withProp.track, *withPropBake.track, {}, resources, freshBinding, false);
+      check(resaved.ok(), "bound Save succeeds with a Physical Model present: " + resaved.error);
+      std::string commitError2;
+      check(editor::commitTrackSave(resaved, commitError2), "resave transaction commits: " + commitError2);
+
+      const editor::TrackResourceScanResult afterResave = editor::scanTrackResources(resources);
+      check(afterResave.validDocument() && afterResave.tracks.size() == 1 && afterResave.tracks[0].models.size() == 2,
+            "the Physical Model survives a bound Save sourced from the in-session models list");
+      if (afterResave.tracks.size() == 1) {
+        const auto& modelsAfter = afterResave.tracks[0].models;
+        const bool cubeStillPresent = std::any_of(modelsAfter.begin(), modelsAfter.end(), [](const modelxml::ModelXmlDefinition& m) {
+          return m.id.has_value() && *m.id == "cube-model" && m.modelFile == "Cube.mppmodel";
+        });
+        check(cubeStillPresent, "the Physical Model's own id/modelFile are unchanged after resave");
+        check(!primaryModelId.empty() && afterResave.tracks[0].models[afterResave.tracks[0].primaryModelIndex].id == primaryModelId,
+              "the primary Model's own id is stable across saves");
+      }
+    }
+  }
+
+  // A placement (ModelPlacement) referencing an embedded Model, with a non-default transform, must
+  // survive a real save->reload round trip: the model itself through the <Models> XML list (already
+  // covered above), the placement itself -- id, modelId, and its full 6-DOF transform -- through the
+  // TrackData JSON's "meshObjects" field (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.1's schema
+  // addition, parsed back in by the same editor::fromJson that TrackResourceDocument.cpp's
+  // parseCandidate() calls for every load, not a separate/parallel code path).
+  {
+    std::string xmlWithProp = readFile(resources);
+    const std::string propModel =
+        "<Model id=\"prop-model\"><ModelFile>Prop.mppmodel</ModelFile><Meshes>"
+        "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+        "</Meshes></Model>";
+    const std::size_t pos = xmlWithProp.find("</Models>");
+    check(pos != std::string::npos, "generated XML contains a </Models> closing tag to inject before");
+    if (pos != std::string::npos) {
+      xmlWithProp.insert(pos, propModel);
+      writeFile(resources, xmlWithProp);
+
+      editor::TrackResourceScanResult withPlacementScan = editor::scanTrackResources(resources);
+      check(withPlacementScan.validDocument() && withPlacementScan.tracks.size() == 1 &&
+                withPlacementScan.tracks[0].track.has_value(),
+            "the prop Model loads alongside the primary");
+      if (withPlacementScan.tracks.size() == 1 && withPlacementScan.tracks[0].track.has_value()) {
+        editor::TrackResourceCandidate& withPlacement = withPlacementScan.tracks[0];
+
+        editor::ModelPlacement placement;
+        placement.id = "prop-placement-1";
+        placement.modelId = "prop-model";
+        placement.position = tox::Vec3(11.0, 22.0, 33.0);
+        placement.rotation = tox::Vec3(45.0, 15.0, 90.0);
+        placement.scale = tox::Vec3(2.0, 3.0, 4.0);
+        withPlacement.track->meshObjects.push_back(placement);
+
+        check(editor::toJson(*withPlacement.track).find("\"meshObjects\"") != std::string::npos,
+              "a track with a placement serializes a non-empty meshObjects array");
+
+        const tox::TrackLoadResult withPlacementBake = tox::Track::fromJson(editor::toJson(*withPlacement.track));
+        check(static_cast<bool>(withPlacementBake), "a track with a placement still bakes: " + withPlacementBake.error);
+        if (withPlacementBake) {
+          const editor::TrackSaveBinding placementBinding{
+              resources, withPlacement.resourceName, withPlacement.trackDataReference,
+              withPlacement.modelFileReference, withPlacement.resourceFingerprint, withPlacement.jsonFingerprint};
+          editor::TrackSavePlan placementPlan =
+              editor::prepareTrackSave(*withPlacement.track, *withPlacementBake.track, {}, resources, placementBinding, false);
+          check(placementPlan.ok(), "bound Save succeeds with a placement present: " + placementPlan.error);
+          std::string commitError3;
+          check(editor::commitTrackSave(placementPlan, commitError3), "placement resave transaction commits: " + commitError3);
+
+          const editor::TrackResourceScanResult afterPlacementResave = editor::scanTrackResources(resources);
+          check(afterPlacementResave.validDocument() && afterPlacementResave.tracks.size() == 1 &&
+                    afterPlacementResave.tracks[0].track.has_value(),
+                "the track reloads after a Save with a placement present");
+          if (afterPlacementResave.tracks.size() == 1 && afterPlacementResave.tracks[0].track.has_value()) {
+            const auto& reloadedTrack = *afterPlacementResave.tracks[0].track;
+            const bool modelSurvived = std::any_of(reloadedTrack.models.begin(), reloadedTrack.models.end(),
+                                                   [](const modelxml::ModelXmlDefinition& m) {
+                                                     return m.id.has_value() && *m.id == "prop-model" && m.modelFile == "Prop.mppmodel";
+                                                   });
+            check(modelSurvived, "the placement's referenced Model survives the round trip");
+
+            check(reloadedTrack.meshObjects.size() == 1, "exactly one placement survives the round trip");
+            if (reloadedTrack.meshObjects.size() == 1) {
+              const editor::ModelPlacement& reloaded = reloadedTrack.meshObjects[0];
+              check(reloaded.modelId == "prop-model", "the reloaded placement still references its Model by id");
+              check(reloaded.position.x == 11.0 && reloaded.position.y == 22.0 && reloaded.position.z == 33.0,
+                    "the reloaded placement's position survives exactly");
+              check(reloaded.rotation.x == 45.0 && reloaded.rotation.y == 15.0 && reloaded.rotation.z == 90.0,
+                    "the reloaded placement's rotation survives exactly");
+              check(reloaded.scale.x == 2.0 && reloaded.scale.y == 3.0 && reloaded.scale.z == 4.0,
+                    "the reloaded placement's scale survives exactly");
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Hard break, no migration (TRACK_MODEL_LIST_PLAN.md): a Track resource using the old bare
+  // <TrackData>/<ModelFile> shape (no <Models> wrapper) must fail to load with a clear error.
+  {
+    const std::filesystem::path oldShapeXml = temp / "old-shape" / "Resources.xml";
+    std::filesystem::create_directories(oldShapeXml.parent_path());
+    writeFile(oldShapeXml,
+              "<?xml version=\"1.0\"?><Resources><Namespace name=\"Tracks\"><Resource type=\"Track\" name=\"Old\">"
+              "<Definitions><Definition factory=\"Track\"><TrackData>Old.json</TrackData>"
+              "<ModelFile>Old.mppmodel</ModelFile></Definition></Definitions></Resource></Namespace></Resources>");
+    const editor::TrackResourceScanResult oldShapeScan = editor::scanTrackResources(oldShapeXml);
+    check(oldShapeScan.validDocument() && oldShapeScan.tracks.size() == 1 && !oldShapeScan.tracks[0].loadable(),
+          "old bare-shape Track resource (no <Models>) fails to load");
+    check(oldShapeScan.tracks.size() == 1 && oldShapeScan.tracks[0].error.find("Models") != std::string::npos,
+          "the old-shape error names <Models>: " + (oldShapeScan.tracks.empty() ? "" : oldShapeScan.tracks[0].error));
+  }
 
   std::filesystem::remove_all(temp, ec);
   if (failures == 0) std::cout << "PASS: Resources XML Track save/load transaction\n";

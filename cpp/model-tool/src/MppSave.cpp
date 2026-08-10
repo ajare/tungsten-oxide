@@ -65,6 +65,9 @@ bool saveModelAsMppModel(const BuiltModel& built, MaterialLibrary& materialLibra
           meshMaterial.origin == MaterialOrigin::DefaultFallback ? materialLibrary.defaultFallbackMaterial()->getName() : meshMaterial.name;
       const std::size_t indexWidth = mesh.vertices.size() > 65535 ? 32 : 16;
 
+      // Per-mesh Type/Visible metadata no longer rides along in the exported name (TRACK_MODEL_LIST_PLAN.md
+      // Milestone 3.2 retired that convention) -- it lives only in the associated <Model> XML, so the
+      // mesh name is always written completely unchanged now.
       serializer.setName(i, mesh.name);
       serializer.setMaterial(i, materialName);
       serializer.setPrimitiveType(i, mpp::mesh::Primitive::Type::Triangles);

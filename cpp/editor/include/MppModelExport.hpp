@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "EditorTrackDefinition.hpp"
+#include "ModelXml.hpp"
 #include "Ship.hpp"
 #include "Track.hpp"
 
@@ -79,23 +80,26 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track,
 // -- this file only ever emits <DependentResource ref="..."> entries, never full material/program/
 // texture definitions.
 //
-// Model and schema-10 JSON filenames are emitted as <ModelFile> and <TrackData>. <TrackMeshes>
-// contains every baked PathSurface/MeshSurface/ReservationWall/PathRail/MeshRail batch id exactly
-// once -- everything a ship can physically contact, i.e. Map.cpp's gameplayKind() set (PathShell
-// stays out -- render-only); Map::load validates those selected .mppmodel triangles against the
-// JSON bake before making them authoritative collision.
+// The <Definition>'s <Models> list (TRACK_MODEL_LIST_PLAN.md) always has exactly one entry this
+// function regenerates fresh -- the primary Track-type Model, `primaryModelId` (id attribute) with
+// `mppModelFileName`/`trackDataFileName` as its <ModelFile>/<TrackData>, and a <Meshes> entry
+// (Type=Track, Visible=true) for every baked PathSurface/MeshSurface/ReservationWall/PathRail/
+// MeshRail batch id -- everything a ship can physically contact, i.e. Map.cpp's gameplayKind() set
+// (PathShell stays out -- render-only). This supersedes the old flat <TrackMeshes> list entirely
+// (Milestone 7 migrates the host to read it this way instead). `otherModels` are additional
+// Physical/Decorative <Model> entries (Milestone 6's "Load Model") written back verbatim via
+// modelxml::writeModelFragment, completely unowned/unedited by this function.
 // All paths are resource-directory relative. Starting-grid poses are deliberately not duplicated
 // here: Map::load regenerates and triangle-settles the fixed eight-slot grid from TrackData.
-std::string buildTrackResourceXml(const TrackDefinition& track, const tox::Track& bakedTrack,
-                                  const std::string& mppModelFileName, const std::string& trackDataFileName,
-                                  const std::map<std::string, std::string>& trackMaterialToMaterial = {});
-
+//
 // Save/load integration keeps Resource@name stable even when TrackDefinition::name (JSON metadata)
-// changes. This variant therefore accepts the resource identity independently; the legacy helper
-// above continues to use track.name for standalone-export callers and smoke checks.
+// changes, so this always takes the resource identity independently rather than deriving it from
+// `track.name`.
 std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox::Track& bakedTrack,
                                          const std::string& resourceName, const std::string& mppModelFileName,
                                          const std::string& trackDataFileName,
-                                         const std::map<std::string, std::string>& trackMaterialToMaterial = {});
+                                         const std::map<std::string, std::string>& trackMaterialToMaterial,
+                                         const std::string& primaryModelId,
+                                         const std::vector<modelxml::ModelXmlDefinition>& otherModels = {});
 
 }  // namespace editor

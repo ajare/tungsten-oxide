@@ -58,10 +58,12 @@ set(IMGUI_SOURCES
 set(MODEL_TOOL_SOURCES
   src/FileDialog.cpp
   src/AssImpImport.cpp
+  src/NormalSmoothing.cpp
+  src/ObjSmoothingGroups.cpp
+  src/OpenTarget.cpp
   src/TextureLoad.cpp
   src/OrbitCamera.cpp
   src/ModelResources.cpp
-  src/ModelResourceExport.cpp
   src/MaterialXmlImport.cpp
   src/MaterialLibrary.cpp
   src/MppModelImport.cpp
@@ -121,6 +123,9 @@ target_link_libraries(model_tool PRIVATE
   # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
   # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
   Willpower::Common
+  # <Model> XML fragment schema (docs/adr/0003-model-xml-layer.md), also TinyXML2-via-Willpower::Common
+  # under the hood -- shared with cpp/editor, see cpp/model-xml/CMakeLists.txt.
+  model_xml
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
@@ -192,3 +197,25 @@ if (WIN32)
       -P "${CMAKE_CURRENT_BINARY_DIR}/CopyModelToolRuntime.cmake"
     COMMAND_EXPAND_LISTS)
 endif()
+
+# --- Headless tests (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2) ---------------------------
+# NormalSmoothing.cpp/CollidableFlag.cpp deliberately depend on nothing but AssImpImport.hpp's
+# plain data types (no AssImp, no mpp, no SDL/GPU) specifically so they're testable this cheaply --
+# unlike the rest of model_tool, this target needs no runtime-DLL deployment at all.
+enable_testing()
+add_executable(model_tool_tests
+  tests/model_tool_tests.cpp
+  src/NormalSmoothing.cpp
+  src/ObjSmoothingGroups.cpp
+  src/OpenTarget.cpp)
+target_include_directories(model_tool_tests PRIVATE include)
+target_compile_features(model_tool_tests PRIVATE cxx_std_20)
+target_link_libraries(model_tool_tests PRIVATE model_xml)
+add_test(NAME model_tool_tests COMMAND model_tool_tests)
+
+# Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
+# `ctest` can actually launch it (OpenTarget.cpp/model_xml both use TinyXML2 now).
+add_custom_command(TARGET model_tool_tests POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_RUNTIME_DLLS:model_tool_tests> $<TARGET_FILE_DIR:model_tool_tests>
+  COMMAND_EXPAND_LISTS)
