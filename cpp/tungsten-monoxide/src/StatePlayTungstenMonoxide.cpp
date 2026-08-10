@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <iomanip>
 #include <sstream>
 
@@ -100,9 +101,9 @@ vector<string> StatePlayTungstenMonoxide::getDebuggingText() const {
   if (!mGameSession || mGameSession->ships().empty()) return {};
   auto const& ship = mGameSession->ships()[0];
   return {
-      STR_FORMAT("Ship: {:.2f},{:.2f},{:.2f}", ship.physics.groundPos.x, ship.physics.groundPos.y, ship.physics.groundPos.z),
-      STR_FORMAT("Speed: {:.1f} km/h", abs(ship.physics.speed) * 3.6),
-      STR_FORMAT("Laps: {}  checkpoints: {}/{}", ship.race.laps, ship.race.hit.size(), ship.race.intermediateIds.size())};
+      std::format("Ship: {:.2f},{:.2f},{:.2f}", ship.physics.groundPos.x, ship.physics.groundPos.y, ship.physics.groundPos.z),
+      std::format("Speed: {:.1f} km/h", abs(ship.physics.speed) * 3.6),
+      std::format("Laps: {}  checkpoints: {}/{}", ship.race.laps, ship.race.hit.size(), ship.race.intermediateIds.size())};
 }
 
 void StatePlayTungstenMonoxide::createCamera() {

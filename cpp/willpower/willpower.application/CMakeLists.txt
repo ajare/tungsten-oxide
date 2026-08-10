@@ -115,10 +115,19 @@ else()
   set(_willpower_application_lib_type STATIC)
 endif()
 
-# The original project expects this external checkout at <repo>/ext/
-# massivepolypusher. Override the cache entry when it lives elsewhere.
-set(WILLPOWER_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../ext/massivepolypusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency")
+# The project expects this external checkout at <repo>/ext/massive-poly-pusher.
+# Override the cache entry when it lives elsewhere.
+set(_willpower_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../../ext/massivepolypusher")
+set(_willpower_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../../ext/massive-poly-pusher")
+if (WILLPOWER_MPP_DIR STREQUAL _willpower_legacy_mpp_dir)
+  set(WILLPOWER_MPP_DIR "${_willpower_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency" FORCE)
+else()
+  set(WILLPOWER_MPP_DIR "${_willpower_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency")
+endif()
+unset(_willpower_legacy_mpp_dir)
+unset(_willpower_mpp_dir)
 set(WILLPOWER_APPLICATION_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 
 add_library(Willpower.Application ${_willpower_application_lib_type}
@@ -133,19 +142,17 @@ target_include_directories(Willpower.Application PRIVATE
   "${WILLPOWER_MPP_DIR}/mpp-mesh/include"
   "${WILLPOWER_MPP_DIR}/mpp-program/include"
   "${WILLPOWER_MPP_DIR}/vendor/include"
+  "${WILLPOWER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${WILLPOWER_MPP_DIR}/ext/utils/include"
   "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include"
   "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include/fmod/core")
 
 target_link_libraries(Willpower.Application PUBLIC Willpower.Common)
 
-# These are prebuilt SDK/import libraries, matching the vcxproj's Debug/Release
-# names and directories. They are intentionally not required CMake targets.
+# MassivePolyPusher is configured and built separately from its root CMake project. Its import
+# libraries share one output directory and are intentionally consumed as raw library names here.
 target_link_directories(Willpower.Application PRIVATE
-  "${WILLPOWER_MPP_DIR}/mpp/build/vs2026/lib/${WILLPOWER_LIB_ARCH}/$<CONFIG>"
-  "${WILLPOWER_MPP_DIR}/mpp-mesh/build/vs2026/lib/${WILLPOWER_LIB_ARCH}/$<CONFIG>"
-  "${WILLPOWER_MPP_DIR}/mpp-program/build/vs2026/lib/${WILLPOWER_LIB_ARCH}/$<CONFIG>"
-  "${WILLPOWER_MPP_DIR}/ext/utils/build/vs2026/lib/${WILLPOWER_LIB_ARCH}/$<CONFIG>"
+  "${WILLPOWER_MPP_DIR}/build/cmake/lib/$<CONFIG>"
   "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/lib/vs2026/${WILLPOWER_LIB_ARCH}/$<CONFIG>")
 target_link_libraries(Willpower.Application PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>

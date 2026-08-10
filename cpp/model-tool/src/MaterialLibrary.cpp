@@ -1,6 +1,6 @@
 #include "MaterialLibrary.hpp"
 
-#include <mpp/ProgrammaticMaterialStream.h>
+#include <mpp/ProgrammaticBasicMaterialStream.h>
 #include <mpp/ProgrammaticTextureStream.h>
 #include <mpp/ResourceManager.h>
 #include <mpp/ResourceWrangler.h>
@@ -27,7 +27,7 @@ mpp::ResourcePtr MaterialLibrary::defaultFallbackMaterial() {
   if (defaultFallbackMaterial_) return defaultFallbackMaterial_;
 
   const mpp::mesh::MeshSpecification meshSpec = fixedMeshSpecification();
-  auto* matStream = new mpp::ProgrammaticMaterialStream(&resourceMgr_);
+  auto* matStream = new mpp::ProgrammaticBasicMaterialStream(&resourceMgr_);
   matStream->setProgram2d(false);
   matStream->setMeshSpecification(meshSpec);
   matStream->setTexture("TEX1", "__mpp_tex_none__");
@@ -102,7 +102,7 @@ MaterialReference MaterialLibrary::declare(const std::string& qualifiedName, con
     textureResource->load();
   }
 
-  auto* matStream = new mpp::ProgrammaticMaterialStream(&resourceMgr_);
+  auto* matStream = new mpp::ProgrammaticBasicMaterialStream(&resourceMgr_);
   matStream->setProgram2d(false);
   matStream->setMeshSpecification(meshSpec);
   matStream->setTexture("TEX1", textureName);

@@ -24,13 +24,17 @@ authoring them fails to load with an explicit error.
 Use an x64 MSVC Developer prompt (or run `vcvars64.bat` first):
 
 ```text
+git submodule update --init --recursive
+cmake -S ext/massive-poly-pusher -B ext/massive-poly-pusher/build/cmake
+cmake --build ext/massive-poly-pusher/build/cmake --config Release --target MppHelper
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
-The combined build compiles the repository-pinned Willpower sources and copies
-shared-library runtime dependencies next to `parity` and `track_tests`.
+The combined build compiles the repository-pinned Willpower sources and consumes the
+MassivePolyPusher libraries from `ext/massive-poly-pusher/build/cmake`. It copies shared-library
+runtime dependencies next to their executables.
 Single-config generators work too:
 
 ```text

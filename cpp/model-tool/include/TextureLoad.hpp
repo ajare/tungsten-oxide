@@ -2,7 +2,7 @@
 // mpp::ProgrammaticTextureStream::setFile(). model-tool only ever loads externally file-referenced
 // diffuse/base-color textures (embedded textures are skipped at import time, see AssImpImport.hpp)
 // -- there is no existing stb_image+mpp combination anywhere else in this codebase (cpp/editor uses
-// stb_image but never links mpp; ext/massivepolypusher/demo-suite's loadImage uses FreeImage
+// stb_image but never links mpp; ext/massive-poly-pusher/demo-suite's loadImage uses FreeImage
 // instead, a dependency not otherwise used or vendored under cpp/), so this is new, self-contained
 // glue rather than a port of either precedent.
 #pragma once

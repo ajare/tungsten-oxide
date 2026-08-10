@@ -903,7 +903,7 @@ after Milestone 4 lands.
     dependency of `MassivePolyPusher.dll`, not directly linked),
     `Utils(d).dll`, and two of `Utils.dll`'s own transitive dependencies,
     `glew32.dll` and `FreeImage.dll` — all copied post-build from
-    `ext/massivepolypusher/*/build/vs2026/bin/<arch>/<config>` (note: `bin/`
+    `ext/massive-poly-pusher/build/cmake/bin/<config>` (note: `bin/`
     for the `.dll`, not `lib/` where the `.lib` import libs live).
   - Verified: built and ran clean in both Release and Debug configs. Ran
     against a freshly generated (schema-current, not a possibly-stale

@@ -49,8 +49,17 @@ set(LAUNCHER_SOURCES
 
 # The original launcher consumes prebuilt MassivePolyPusher, Utils, GLFW and
 # SDL3 SDK libraries. Override these cache entries when they live elsewhere.
-set(LAUNCHER_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency")
+set(_launcher_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
+set(_launcher_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+if (LAUNCHER_MPP_DIR STREQUAL _launcher_legacy_mpp_dir)
+  set(LAUNCHER_MPP_DIR "${_launcher_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency" FORCE)
+else()
+  set(LAUNCHER_MPP_DIR "${_launcher_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency")
+endif()
+unset(_launcher_legacy_mpp_dir)
+unset(_launcher_mpp_dir)
 set(_launcher_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 set(_launcher_legacy_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/third_party")
 if (LAUNCHER_THIRD_PARTY_DIR STREQUAL _launcher_legacy_third_party_dir)
@@ -98,6 +107,7 @@ target_include_directories(Launcher PRIVATE
   "${LAUNCHER_MPP_DIR}/mpp-mesh/include"
   "${LAUNCHER_MPP_DIR}/mpp-program/include"
   "${LAUNCHER_MPP_DIR}/vendor/include"
+  "${LAUNCHER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${LAUNCHER_MPP_DIR}/ext/utils/include"
   "${LAUNCHER_THIRD_PARTY_DIR}/include"
   "${LAUNCHER_THIRD_PARTY_DIR}/include/fmod/core")
@@ -105,8 +115,7 @@ target_include_directories(Launcher PRIVATE
 target_compile_definitions(Launcher PRIVATE USINGZ)
 
 target_link_directories(Launcher PRIVATE
-  "${LAUNCHER_MPP_DIR}/mpp/build/vs2026/lib/${LAUNCHER_LIB_ARCH}/$<CONFIG>"
-  "${LAUNCHER_MPP_DIR}/ext/utils/build/vs2026/lib/${LAUNCHER_LIB_ARCH}/$<CONFIG>"
+  "${LAUNCHER_MPP_DIR}/build/cmake/lib/$<CONFIG>"
   "${LAUNCHER_THIRD_PARTY_DIR}/lib/vs2026/${LAUNCHER_LIB_ARCH}/$<CONFIG>")
 target_link_libraries(Launcher PRIVATE
   Willpower.Application
@@ -143,11 +152,7 @@ endif()
 set(_runtime_roots
   "@LAUNCHER_SUPPORT_ROOT@/${CONFIG}"
   "@LAUNCHER_THIRD_PARTY_DIR@/bin/vs2026/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/mpp/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/mpp-mesh/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/mpp-program/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/mpp-helper/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/ext/utils/build/vs2026/bin/@LAUNCHER_LIB_ARCH@/${CONFIG}")
+  "@LAUNCHER_MPP_DIR@/build/cmake/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 foreach(_runtime_root IN LISTS _runtime_roots)

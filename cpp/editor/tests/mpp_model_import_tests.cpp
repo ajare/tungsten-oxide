@@ -1,6 +1,6 @@
 // mpp_model_import_tests.cpp — headless tests for MppModelImport.cpp (TRACK_MODEL_LIST_PLAN.md
 // Milestone 4): round-trips MppModelExport.cpp's own non-indexed output, and hand-writes a minimal
-// real INDEXED .mppmodel file byte-for-byte per ext/massivepolypusher/mpp/src/ModelSerializer.cpp's
+// real INDEXED .mppmodel file byte-for-byte per ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp's
 // actual write*() functions (the verified ground truth this reader targets -- see
 // MppModelImport.hpp's header comment) to prove the reader also handles what model-tool's real
 // mpp::ModelSerializer::save() produces, not just the editor's own writer's output.

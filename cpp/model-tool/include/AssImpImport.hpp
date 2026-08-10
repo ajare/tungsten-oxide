@@ -1,6 +1,6 @@
 // AssImpImport.hpp — AssImp (OBJ/FBX/USD/glTF) -> ImportedModel, model-tool's own fixed-layout
 // in-memory representation. Bespoke, AssImp-inspired conversion code (NOT a reuse of
-// ext/massivepolypusher/model-convert's AssImpModelLoader, which is built around an externally
+// ext/massive-poly-pusher/model-convert's AssImpModelLoader, which is built around an externally
 // specified, arbitrary vertex layout via ModelspecStream/MeshSpecification -- model-tool only ever
 // targets one fixed layout, so that indirection buys nothing here). See
 // docs/adr/0001-model-tool.md, decisions D3/D4.

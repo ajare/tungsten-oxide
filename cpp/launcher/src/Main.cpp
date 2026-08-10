@@ -3,6 +3,7 @@
 
 #define WINDOWING_SYSTEM WINDOW_GLFW
 
+#include <format>
 #include <iostream>
 
 #include "utils/StringUtils.h"
@@ -352,7 +353,7 @@ void setupDebugPanel()
 		fpsColour = "[#00FF00FF]";
 	}
 
-	string fpsDisplay = STR_FORMAT("FPS: {}{}", fpsColour, (int)fps);
+	string fpsDisplay = std::format("FPS: {}{}", fpsColour, (int)fps);
 	gRenderSystem->setDebugPreMessages({ fpsDisplay });
 
 	gRenderSystem->setDebugPostMessages(gStateMgr->getDebuggingText());

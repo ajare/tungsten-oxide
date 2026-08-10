@@ -7,6 +7,9 @@ A native C++ (CMake/MSVC) racing track editor and driving game engine.
 Build from an MSVC Developer prompt, from the repo root:
 
 ```sh
+git submodule update --init --recursive
+cmake -S ext/massive-poly-pusher -B ext/massive-poly-pusher/build/cmake
+cmake --build ext/massive-poly-pusher/build/cmake --config Release --target MppHelper
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure

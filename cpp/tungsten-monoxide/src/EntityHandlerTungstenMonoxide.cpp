@@ -1,3 +1,5 @@
+#include <format>
+
 #include <willpower/common/Vector2.h>
 
 #include "EntityHandlerTungstenMonoxide.h"
@@ -41,7 +43,7 @@ string EntityHandlerTungstenMonoxide::getPrototypeName(int type)
 	}
 	else
 	{
-		throw GameException(STR_FORMAT("Unknown entity type: {}", type));
+		throw GameException(std::format("Unknown entity type: {}", type));
 	}
 }
 
@@ -73,7 +75,7 @@ bool EntityHandlerTungstenMonoxide::updateImpl(Entity *entity, bool inputControl
 			break;
 
 		default:
-			throw GameException(STR_FORMAT("Unhandled entity type: {}", (int)entityType));
+			throw GameException(std::format("Unhandled entity type: {}", (int)entityType));
 		}
 	}
 

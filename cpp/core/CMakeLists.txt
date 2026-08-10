@@ -33,7 +33,7 @@ endif()
 # than the old hand-rolled Vec3, so parity fixture tolerances were loosened accordingly — see
 # cpp/test-data/traces/README.md.
 #
-# cpp/tungsten-monoxide links MassivePolyPusher's prebuilt libraries (ext/massivepolypusher), which
+# cpp/tungsten-monoxide links MassivePolyPusher's libraries (ext/massive-poly-pusher), which
 # vendor their own glm 0.9.6 copy and pass glm-typed values across that prebuilt ABI boundary. A
 # second, differently-versioned glm (e.g. a fresh FetchContent) produces a distinct
 # glm::tvec3<double, Q> type in translation units that see both copies, breaking ODR and failing to
@@ -41,7 +41,7 @@ endif()
 # present (the combined cpp/ configure, and any build alongside tungsten-monoxide) so exactly one
 # glm ABI exists in the whole binary; fall back to FetchContent only for a standalone core/editor
 # configure that never links tungsten-monoxide at all.
-set(TOX_VENDORED_GLM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher/vendor/include")
+set(TOX_VENDORED_GLM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/vendor/include")
 if (EXISTS "${TOX_VENDORED_GLM_DIR}/glm/glm.hpp")
   add_library(glm INTERFACE)
   add_library(glm::glm ALIAS glm)

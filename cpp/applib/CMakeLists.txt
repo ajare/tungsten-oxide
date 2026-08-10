@@ -70,8 +70,17 @@ set(APPLIB_SOURCES
   src/TrackMaterialDefaultDefinitionFactory.cpp
   src/TrackMaterialResourceDefinitionFactory.cpp)
 
-set(APPLIB_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency")
+set(_applib_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
+set(_applib_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+if (APPLIB_MPP_DIR STREQUAL _applib_legacy_mpp_dir)
+  set(APPLIB_MPP_DIR "${_applib_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency" FORCE)
+else()
+  set(APPLIB_MPP_DIR "${_applib_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency")
+endif()
+unset(_applib_legacy_mpp_dir)
+unset(_applib_mpp_dir)
 set(_applib_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 # CACHE variables retain their first configured value. Migrate build trees made
 # before third_party/ moved from cpp/willpower/ to cpp/ without overriding an
@@ -109,15 +118,13 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
   "${APPLIB_MPP_DIR}/mpp-program/include"
   "${APPLIB_MPP_DIR}/vendor/include"
+  "${APPLIB_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${APPLIB_MPP_DIR}/ext/utils/include"
   "${APPLIB_THIRD_PARTY_DIR}/include"
   "${APPLIB_THIRD_PARTY_DIR}/include/fmod/core")
 
 target_link_directories(AppLib PRIVATE
-  "${APPLIB_MPP_DIR}/mpp/build/vs2026/lib/${APPLIB_LIB_ARCH}/$<CONFIG>"
-  "${APPLIB_MPP_DIR}/mpp-helper/build/vs2026/lib/${APPLIB_LIB_ARCH}/$<CONFIG>"
-  "${APPLIB_MPP_DIR}/mpp-mesh/build/vs2026/lib/${APPLIB_LIB_ARCH}/$<CONFIG>"
-  "${APPLIB_MPP_DIR}/ext/utils/build/vs2026/lib/${APPLIB_LIB_ARCH}/$<CONFIG>"
+  "${APPLIB_MPP_DIR}/build/cmake/lib/$<CONFIG>"
   "${APPLIB_THIRD_PARTY_DIR}/lib/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
 target_link_libraries(AppLib PRIVATE
   Willpower.Application

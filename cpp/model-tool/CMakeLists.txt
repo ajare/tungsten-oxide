@@ -83,8 +83,17 @@ target_compile_features(model_tool PRIVATE cxx_std_20)
 # createCoreResources() to build the default 3D program model-tool's materials resolve to, see
 # ModelResources.hpp), not something this app calls directly -- matching
 # cpp/tungsten-monoxide/CMakeLists.txt's own link set, which also omits it.
-set(MODEL_TOOL_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency")
+set(_model_tool_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
+set(_model_tool_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+if (MODEL_TOOL_MPP_DIR STREQUAL _model_tool_legacy_mpp_dir)
+  set(MODEL_TOOL_MPP_DIR "${_model_tool_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency" FORCE)
+else()
+  set(MODEL_TOOL_MPP_DIR "${_model_tool_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency")
+endif()
+unset(_model_tool_legacy_mpp_dir)
+unset(_model_tool_mpp_dir)
 set(MODEL_TOOL_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party" CACHE PATH
   "Root of model_tool's third-party SDK headers and libraries (AssImp)")
 set(MODEL_TOOL_LIB_ARCH x64 CACHE STRING "Architecture used by the MassivePolyPusher/AssImp SDK libraries")
@@ -106,14 +115,12 @@ target_include_directories(model_tool PRIVATE
   # still needed even though model-tool never calls into mpp::program:: itself.
   "${MODEL_TOOL_MPP_DIR}/mpp-program/include"
   "${MODEL_TOOL_MPP_DIR}/vendor/include"
+  "${MODEL_TOOL_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${MODEL_TOOL_MPP_DIR}/build/cmake/ext/assimp/include"
   "${MODEL_TOOL_MPP_DIR}/ext/utils/include")
 
 target_link_directories(model_tool PRIVATE
-  "${MODEL_TOOL_MPP_DIR}/mpp/build/vs2026/lib/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>"
-  "${MODEL_TOOL_MPP_DIR}/mpp-helper/build/vs2026/lib/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>"
-  "${MODEL_TOOL_MPP_DIR}/mpp-mesh/build/vs2026/lib/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>"
-  "${MODEL_TOOL_MPP_DIR}/ext/utils/build/vs2026/lib/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>"
-  "${MODEL_TOOL_MPP_DIR}/vendor/lib/vs2026/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>"
+  "${MODEL_TOOL_MPP_DIR}/build/cmake/lib/$<CONFIG>"
   "${MODEL_TOOL_THIRD_PARTY_DIR}/lib/vs2026/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>")
 
 target_link_libraries(model_tool PRIVATE
@@ -156,16 +163,9 @@ endif()
 
 set(_runtime_roots
   "@MODEL_TOOL_THIRD_PARTY_DIR@/bin/vs2026/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  "@MODEL_TOOL_MPP_DIR@/vendor/bin/vs2026/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  "@MODEL_TOOL_MPP_DIR@/mpp/build/vs2026/bin/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  "@MODEL_TOOL_MPP_DIR@/mpp-mesh/build/vs2026/bin/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  # MppProgram.dll: MassivePolyPusher.dll's own import table depends on it (mpp::program::Parser
-  # is an internal implementation detail of RenderSystem::createCoreResources(), see
-  # ModelResources.hpp) -- not something model_tool links against directly, but the OS loader still
-  # needs the file present on disk at process startup.
-  "@MODEL_TOOL_MPP_DIR@/mpp-program/build/vs2026/bin/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  "@MODEL_TOOL_MPP_DIR@/mpp-helper/build/vs2026/bin/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  "@MODEL_TOOL_MPP_DIR@/ext/utils/build/vs2026/bin/@MODEL_TOOL_LIB_ARCH@/${CONFIG}")
+  # The dependency's CMake build places MassivePolyPusher, MppMesh, MppProgram, MppHelper, Utils,
+  # and GLEW runtime DLLs together.
+  "@MODEL_TOOL_MPP_DIR@/build/cmake/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 foreach(_runtime_root IN LISTS _runtime_roots)

@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 
   // RenderSystem's constructor calls glewInit() internally (see mpp/src/RenderSystem.cpp) -- no
   // separate glewInit() call needed here, matching every other host of mpp::RenderSystem in this
-  // codebase (cpp/launcher, ext/massivepolypusher/demo-suite).
+  // codebase (cpp/launcher, ext/massive-poly-pusher/demo-suite).
   auto* renderSystem = new mpp::RenderSystem(static_cast<std::size_t>(drawableWidth), static_cast<std::size_t>(drawableHeight), &mppLogger);
   auto* resourceMgr = new mpp::ResourceManager(renderSystem, &mppLogger);
   renderSystem->createCoreResources(resourceMgr);
@@ -1198,7 +1198,7 @@ int main(int argc, char** argv) {
 
   // Explicit teardown order (viewport/its resources, then the material library, then core
   // resources, then the systems that own them) while the GL context is still current -- mirrors
-  // ext/massivepolypusher/demo-suite's own shutdown() ordering.
+  // ext/massive-poly-pusher/demo-suite's own shutdown() ordering.
   delete viewport;
   delete materialLibrary;
   renderSystem->destroyCoreResources();

@@ -15,7 +15,7 @@ already writes (for baked track geometry, a different source domain).
 Two existing things in the repo look superficially similar but solve different
 problems, and neither one fits whole:
 
-- `ext/massivepolypusher/model-convert` (`ModelConvert.exe`) already does
+- `ext/massive-poly-pusher/model-convert` (`ModelConvert.exe`) already does
   AssImp → `.mppmodel` conversion, but is driven by an external `modelspec.xml`
   (`ModelspecStream`/`MeshSpecification`) so it can target an arbitrary,
   user-specified interleaved vertex layout. It also never bakes AssImp node
@@ -51,7 +51,7 @@ Resource/`ResourceManager` system specifically.
 
 `model-tool` talks to `mpp::RenderSystem`/`mpp::ResourceManager` directly and
 builds `mpp::Model`/`mpp::Material`/`mpp::Texture` objects programmatically at
-runtime (mirroring `ext/massivepolypusher/demo-suite`'s `ModelScene` and
+runtime (mirroring `ext/massive-poly-pusher/demo-suite`'s `ModelScene` and
 `StatePlayTungstenMonoxide::createTorusModel()`), rather than wrapping the
 loaded model as a willpower `Resource`/`Definition` the way
 `cpp/tungsten-monoxide`'s `Map` does.
@@ -89,7 +89,7 @@ emits one fixed 36-byte interleaved vertex layout:
 | uv       | float × 2     | 8     |
 | colour   | unorm8 × 4    | 4     |
 
-This does **not** reuse `ext/massivepolypusher/model-convert`'s
+This does **not** reuse `ext/massive-poly-pusher/model-convert`'s
 `AssImpModelLoader`, which is built around an externally-specified,
 arbitrary vertex layout (`ModelspecStream`/`MeshSpecification`) for a use case
 that only ever has one target layout here. `aiProcess_PreTransformVertices` is

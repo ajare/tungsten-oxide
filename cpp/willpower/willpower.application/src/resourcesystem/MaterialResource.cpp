@@ -1,5 +1,5 @@
 #include "willpower/common/XmlReader.h"
-#include <mpp/ProgrammaticMaterialStream.h>
+#include <mpp/ProgrammaticBasicMaterialStream.h>
 
 #include "willpower/common/Exceptions.h"
 
@@ -27,7 +27,7 @@ namespace WP_NAMESPACE
 
 				auto program = static_cast<ProgramResource*>(getDependentResource("Program").get());
 
-				auto materialStream = new mpp::ProgrammaticMaterialStream(resourceMgr);
+				auto materialStream = new mpp::ProgrammaticBasicMaterialStream(resourceMgr);
 
 				// Program
 				materialStream->setProgram(program->getQualifiedName());

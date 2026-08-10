@@ -10,7 +10,7 @@
 // ("__mpp_p3d_tris_p3n3t2c4__") with exactly this fixed vertex layout (Position3/Normal3/
 // TexCoord2/Colour4) and exactly the shading D6 asked for (ambient + N lights, diffuse + specular,
 // modulated by a diffuse sampler) -- see mpp/DefaultShaders.h's FragmentShader3dTemplate. A
-// ProgrammaticMaterialStream that never calls setProgram() (just setProgram2d(false)) resolves to
+// ProgrammaticBasicMaterialStream that never calls setProgram() (just setProgram2d(false)) resolves to
 // it automatically via ResourceManager::getDefault3dProgram() (see mpp/src/Material.cpp), which is
 // exactly the pattern StatePlayTungstenMonoxide::createTorusMaterial() already uses.
 #pragma once
@@ -71,7 +71,7 @@ void releaseBuiltModel(BuiltModel& built, mpp::ResourceWrangler& wrangler, Mater
 // MppModelImport's unpacking of a loaded .mppmodel's own vertex streams.
 std::vector<std::uint8_t> packVertices(const std::vector<ImportedVertex>& vertices);
 
-// The MeshSpecification every ProgrammaticMaterialStream this app declares is built against (see
+// The MeshSpecification every ProgrammaticBasicMaterialStream this app declares is built against (see
 // this header's top comment) -- shared with MaterialLibrary.cpp, which declares materials outside
 // of any particular model's build, but still needs the identical spec so its materials resolve to
 // the same core default 3D program.

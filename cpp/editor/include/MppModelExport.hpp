@@ -1,6 +1,6 @@
 // MppModelExport.hpp — .mppmodel binary export (MPPMODEL_EXPORT_SPEC.md), a from-scratch native
 // writer of MassivePolyPusher's model format, targeting byte-for-byte compatibility with what
-// mpp::ModelSerializer::load() (ext/massivepolypusher/mpp/src/ModelSerializer.cpp) reads back.
+// mpp::ModelSerializer::load() (ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp) reads back.
 //
 // Deliberately does NOT link mpp::ModelSerializer itself: mpp/include/mpp/ModelSerializer.h
 // unconditionally includes <glew/glew.h>/<gl/gl.h> and transitively drags in

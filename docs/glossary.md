@@ -13,11 +13,11 @@ try to re-document things that are self-evident from file/class names.
   documented in `MPPMODEL_EXPORT_SPEC.md`: a fixed six-entry directory
   (MaterialNames, Materials, VertexData, IndexData, MeshMetadata) over a flat
   array of meshes. Has no node/scene-graph concept — every mesh is independent.
-- **ModelConvert** (`ext/massivepolypusher/model-convert`) — the existing
+- **ModelConvert** (`ext/massive-poly-pusher/model-convert`) — the existing
   AssImp → `.mppmodel` CLI converter, driven by an external `modelspec.xml`
   for an arbitrary vertex layout. Precedent for model-tool's import, but not
   reused directly (see ADR 0001, D3).
-- **AssImpModelLoader** (`ext/massivepolypusher/model-convert/include/
+- **AssImpModelLoader** (`ext/massive-poly-pusher/model-convert/include/
   AssImpModelLoader.h`) — ModelConvert's own AssImp traversal class, built
   around `ModelspecStream`/`MeshSpecification`'s spec-driven arbitrary
   layout. Not reused by model-tool (ADR 0001, D3).

@@ -21,10 +21,17 @@ endif()
 # construction code Map::load() uses) directly as an extra source file rather than linking the
 # TungstenMonoxide DLL target itself, which is a Windows application DLL wired to the willpower
 # resource system/AppLib and not meant to be a library dependency of anything else.
-set(MESH_PHYSICS_DIAG_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency (mesh_physics_diag)")
-set(MESH_PHYSICS_DIAG_LIB_ARCH x64 CACHE STRING "Architecture used by the MassivePolyPusher SDK libraries (mesh_physics_diag)")
-
+set(_mesh_physics_diag_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
+set(_mesh_physics_diag_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+if (MESH_PHYSICS_DIAG_MPP_DIR STREQUAL _mesh_physics_diag_legacy_mpp_dir)
+  set(MESH_PHYSICS_DIAG_MPP_DIR "${_mesh_physics_diag_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency (mesh_physics_diag)" FORCE)
+else()
+  set(MESH_PHYSICS_DIAG_MPP_DIR "${_mesh_physics_diag_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency (mesh_physics_diag)")
+endif()
+unset(_mesh_physics_diag_legacy_mpp_dir)
+unset(_mesh_physics_diag_mpp_dir)
 add_executable(mesh_physics_diag
   tools/mesh_physics_diag.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/src/TrackCollisionBuild.cpp")
@@ -37,12 +44,10 @@ target_include_directories(mesh_physics_diag PRIVATE
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-program/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/include"
+  "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include")
 target_link_directories(mesh_physics_diag PRIVATE
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp/build/vs2026/lib/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>"
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-helper/build/vs2026/lib/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>"
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/build/vs2026/lib/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>"
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/build/vs2026/lib/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>")
+  "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/lib/$<CONFIG>")
 target_link_libraries(mesh_physics_diag PRIVATE
   core
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
@@ -61,19 +66,15 @@ if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
       $<TARGET_RUNTIME_DLLS:mesh_physics_diag> $<TARGET_FILE_DIR:mesh_physics_diag>
     COMMAND_EXPAND_LISTS)
 endif()
-# mpp/Utils DLLs aren't discoverable via $<TARGET_RUNTIME_DLLS:...> (mesh_physics_diag links their
-# prebuilt import libs directly, not a CMake target) -- copy them explicitly, mirroring
-# TungstenMonoxide's own post-build step in cpp/tungsten-monoxide/CMakeLists.txt. MppProgram is a
-# transitive runtime dependency of MppMesh/MassivePolyPusher (not directly linked here) but must
-# still sit beside the exe for the Windows loader to resolve it.
+# MppProgram and GLEW are transitive runtime dependencies that are not represented by CMake
+# targets in this project, so copy the dependency's required DLLs explicitly.
 add_custom_command(TARGET mesh_physics_diag POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp/build/vs2026/bin/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/build/vs2026/bin/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-helper/build/vs2026/bin/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-program/build/vs2026/bin/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/build/vs2026/bin/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/bin/vs2026/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/glew32.dll"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/bin/vs2026/${MESH_PHYSICS_DIAG_LIB_ARCH}/$<CONFIG>/FreeImage.dll"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
+    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/glew32.dll"
     $<TARGET_FILE_DIR:mesh_physics_diag>
   COMMAND_EXPAND_LISTS)

@@ -6,7 +6,7 @@
 //
 // Materials are referenced by name only -- MaterialNames/Materials stay empty, exactly like
 // cpp/editor's own MppModelExport.cpp (MPPMODEL_EXPORT_SPEC.md 5, option 1). This is a deliberate
-// change from an earlier version of this file, which embedded real ProgrammaticMaterialStream
+// change from an earlier version of this file, which embedded real ProgrammaticBasicMaterialStream
 // objects via ModelSerializer::addMaterial(): that round-trip through mpp::ResourceStreamSerializer
 // turned out to have several independent bugs once actually exercised (a directory-offset
 // miscalculation, a corrupted string-length prefix, a missing re-attached texture-load function, and

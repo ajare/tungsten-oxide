@@ -1,3 +1,5 @@
+#include <format>
+
 #include "EntityManager.h"
 #include "Exceptions.h"
 
@@ -30,7 +32,7 @@ namespace applib
 	{
 		if (mFacadeFactories.find(type) != mFacadeFactories.end())
 		{
-			throw Exception(STR_FORMAT("EntityFacadeFactory type  '{}' already registered.", type));
+			throw Exception(std::format("EntityFacadeFactory type  '{}' already registered.", type));
 		}
 		else
 		{
@@ -61,7 +63,7 @@ namespace applib
 		auto factoryIt = mFacadeFactories.find(facadeType);
 		if (factoryIt == mFacadeFactories.end())
 		{
-			throw Exception(STR_FORMAT("EntityFacadeFactory type  '{}' not registered.", facadeType));
+			throw Exception(std::format("EntityFacadeFactory type  '{}' not registered.", facadeType));
 		}
 
 		auto facade = factoryIt->second->create(initialSize);

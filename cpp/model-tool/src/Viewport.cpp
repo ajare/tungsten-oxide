@@ -97,7 +97,7 @@ Viewport::Viewport(mpp::RenderSystem& renderSystem, mpp::ResourceManager& resour
 
   // RenderSystem::renderScene() looks its pipeline name up via getRenderPipeline(), which throws
   // if that name was never registered -- it must be created once via getOrCreateRenderPipeline()
-  // first (matches ext/massivepolypusher/demo-suite/src/ModelScene.cpp's own one-time setup call).
+  // first (matches ext/massive-poly-pusher/demo-suite/src/ModelScene.cpp's own one-time setup call).
   // Kept (not just created-and-discarded): renderFrame() reads back its own internal SceneTarget
   // texture every frame -- see this header's top comment.
   pipeline_ = renderSystem_.getOrCreateRenderPipeline("ModelToolViewport");

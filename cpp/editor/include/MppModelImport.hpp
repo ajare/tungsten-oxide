@@ -7,7 +7,7 @@
 // that link is avoided, and 0003's "why the editor gets its own from-scratch reader" section).
 //
 // The on-disk format is verified field-for-field against the real
-// ext/massivepolypusher/mpp/src/ModelSerializer.cpp read*/write* pairs (the single source of truth
+// ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp read*/write* pairs (the single source of truth
 // -- MPPMODEL_EXPORT_SPEC.md is referenced elsewhere in this codebase but not present in-repo), so
 // this reads back both MppModelExport.cpp's own non-indexed output AND a real indexed file written
 // by model-tool's mpp::ModelSerializer::save(). Materials/MaterialNames sections are Directory-

@@ -1,4 +1,5 @@
 #include <cassert>
+#include <format>
 
 #include "EntityHandler.h"
 #include "Exceptions.h"
@@ -37,7 +38,7 @@ namespace applib
 	{
 		if (mProtoIds.find(protoName) != mProtoIds.end())
 		{
-			throw Exception(STR_FORMAT("Entity prototype '{}' already registered in EntityHandler.", protoName));
+			throw Exception(std::format("Entity prototype '{}' already registered in EntityHandler.", protoName));
 		}
 
 		auto id = mComponentRegistry.create();
@@ -69,7 +70,7 @@ namespace applib
 		auto protoIt = mProtoIds.find(prototypeName);
 		if (protoIt == mProtoIds.end())
 		{
-			throw Exception(STR_FORMAT("Entity prototype '{}' not registered in EntityHandler", prototypeName));
+			throw Exception(std::format("Entity prototype '{}' not registered in EntityHandler", prototypeName));
 		}
 
 		auto protoId = protoIt->second;
