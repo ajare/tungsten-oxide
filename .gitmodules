@@ -4,3 +4,6 @@
 [submodule "ext/massivepolypusher"]
 	path = ext/massivepolypusher
 	url = https://bitbucket.org/wtmrsh/massivepolypusher
+[submodule "ext/massive-poly-pusher"]
+	path = ext/massive-poly-pusher
+	url = https://github.com/ajare/massive-poly-pusher
