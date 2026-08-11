@@ -48,6 +48,16 @@ set(YAML_CPP_INSTALL OFF CACHE BOOL "Do not install yaml-cpp" FORCE)
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build yaml-cpp as a static library" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/yaml-cpp" "${CMAKE_CURRENT_BINARY_DIR}/yaml-cpp" EXCLUDE_FROM_ALL)
 
+# Make Native File Dialog Extended available from source in place of the old
+# prebuilt nfd libraries. Current applications retain their existing dialog
+# wrappers; the source-built target is available for consumers as nfd::nfd.
+set(NFD_BUILD_TESTS OFF CACHE BOOL "Do not build Native File Dialog tests" FORCE)
+set(NFD_BUILD_SDL2_TESTS OFF CACHE BOOL "Do not build Native File Dialog SDL2 tests" FORCE)
+set(NFD_BUILD_GLFW3_TESTS OFF CACHE BOOL "Do not build Native File Dialog GLFW tests" FORCE)
+set(NFD_INSTALL OFF CACHE BOOL "Do not install Native File Dialog" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/nativefiledialog-extended"
+                 "${CMAKE_CURRENT_BINARY_DIR}/nativefiledialog-extended")
+
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)
