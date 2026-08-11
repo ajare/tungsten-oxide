@@ -134,8 +134,29 @@ target_link_libraries(TungstenMonoxide PRIVATE
   AppLib::AppLib
   $<IF:$<CONFIG:Debug>,yaml-cppd,yaml-cpp>)
 
+# TUNGSTEN_MONOXIDE_PBR_MIGRATION_PLAN.md Milestone 0: guard the legacy material-key
+# baseline without creating a renderer or changing runtime resources.
+add_executable(tungsten_monoxide_legacy_pbr_baseline_tests
+  tests/legacy_pbr_baseline_tests.cpp)
+target_compile_features(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE cxx_std_20)
+target_include_directories(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include")
+target_link_libraries(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE Willpower.Common)
+add_test(NAME tungsten_monoxide_legacy_pbr_baseline
+  COMMAND tungsten_monoxide_legacy_pbr_baseline_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/NewTrack.mppmodel"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/Resources.xml")
+if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
+  add_custom_command(TARGET tungsten_monoxide_legacy_pbr_baseline_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:tungsten_monoxide_legacy_pbr_baseline_tests>
+      $<TARGET_FILE_DIR:tungsten_monoxide_legacy_pbr_baseline_tests>
+    COMMAND_EXPAND_LISTS)
+endif()
+
 if (MSVC)
   target_compile_options(TungstenMonoxide PRIVATE /W4)
+  target_compile_options(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE /W4)
 endif()
 if (WIN32)
   target_compile_definitions(TungstenMonoxide PRIVATE UNICODE _UNICODE)
