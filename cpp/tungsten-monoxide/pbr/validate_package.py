@@ -65,6 +65,27 @@ def main() -> None:
         assert text(pipeline, "name") == "TungstenMonoxide.Pbr"
         assert text(scene, "environmentBinding") == "TungstenMonoxide.Environment"
 
+        graph_images = {text(image, "name"): image for image in pipeline.findall("./RenderGraph/Images/Image")}
+        assert text(graph_images["SceneHdr"], "format") == "RGBA16F"
+        assert text(graph_images["Presentation"], "format") == "RGBA8"
+        assert text(graph_images["Presentation"], "import") == "screen"
+        assert text(graph_images["Presentation"], "external") == "true"
+        graph_passes = {text(render_pass, "name"): text(render_pass, "factory") for render_pass in pipeline.findall("./RenderGraph/Passes/Pass")}
+        assert graph_passes == {
+            "ShadowDepth": "MPP.ShadowDepth",
+            "PbrScene": "MPP.PbrScene",
+            "ToneMapPresentation": "MPP.ToneMapPresent",
+        }
+        output = pipeline.find("./Outputs/Output")
+        assert output is not None and text(output, "image") == "Presentation"
+        assert text(output, "AntiAliasing/taa") == "false", "TAA must remain disabled until camera cuts are integrated"
+        shadow_lights = [
+            light
+            for light in scene.findall("./Lights/Light")
+            if text(light, "castsShadows") == "true"
+        ]
+        assert len(shadow_lights) == 1, "the live scene requires exactly one package-authored shadow light"
+
         materials = {}
         for material in pipeline.findall("./LocalResources/PbrMaterial"):
             name = text(material, "name")

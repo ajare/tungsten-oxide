@@ -1,3 +1,5 @@
+#include <stdexcept>
+
 #include <mpp/helper/OrthoCamera.h>
 
 #include <willpower/application/StateExceptions.h>
@@ -46,7 +48,11 @@ namespace applib
 		mwRenderResourceMgr = renderResourceMgr;
 
 		// Create MPP objects
-		mRenderPipeline = renderSystem->getOrCreateRenderPipeline(getName());
+		mRenderPipeline = selectRenderPipeline(renderSystem);
+		if (!mRenderPipeline)
+		{
+			throw runtime_error("State '" + getName() + "' render pipeline selection returned null.");
+		}
 
 		mScene = renderSystem->createScene("Default");
 		mScene->load();
@@ -58,6 +64,11 @@ namespace applib
 
 		// Implementation-specific setup
 		setup(resourceMgr, renderSystem, renderResourceMgr, args);
+	}
+
+	mpp::RenderPipelinePtr State::selectRenderPipeline(mpp::RenderSystem* renderSystem)
+	{
+		return renderSystem->getOrCreateRenderPipeline(getName());
 	}
 
 	void State::exitImpl()

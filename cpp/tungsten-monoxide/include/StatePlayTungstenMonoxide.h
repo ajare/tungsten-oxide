@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,6 +24,8 @@
 #include "DisplayMessage.h"
 #include "GameSession.hpp"
 
+class TungstenPbrPackage;
+
 class TmResourceWrangler : public mpp::ResourceWrangler {
 public:
   TmResourceWrangler()
@@ -41,7 +44,6 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
 
   mpp::ResourcePtr mTrackModel;
   mpp::ResourcePtr mShipModel;
-  mpp::ResourcePtr mPbrShipModel;
   mpp::SceneModel3dPtr mTrackSceneModel;
   std::vector<mpp::SceneModel3dPtr> mShipSceneModels;
   std::unique_ptr<tox::GameSession> mGameSession;
@@ -70,6 +72,9 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   double mCameraHeight{6.4};
   double mLookAtHeight{1.6};
   double mLapFlashUntil{0.0};
+  std::uint32_t mPbrViewportWidth{0};
+  std::uint32_t mPbrViewportHeight{0};
+  bool mPbrRenderValidated{false};
 
   bool mShowDebugUi{false};
   // Every warning collected during this session's Map::load() (Map::loadWarnings()), copied out in
@@ -107,6 +112,8 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
 private:
   mpp::ResourcePtr createShipModel(wp::application::resourcesystem::ResourceManager* resourceMgr,
                                    mpp::ResourceManager* renderResourceMgr);
+  TungstenPbrPackage& pbrPackage() const;
+  void updatePbrViewport();
   void updateShips(float frameTime);
   void updateChaseCamera(float frameTime);
   void renderHud(mpp::RenderSystem* renderSystem) const;
@@ -146,6 +153,8 @@ private:
   void exit();
 
 protected:
+  mpp::RenderPipelinePtr selectRenderPipeline(mpp::RenderSystem* renderSystem) override;
+
   void updateActions(std::vector<std::string> const& activeStates, float frameTime) override;
 
   void updatePreRenderers(float frameTime) override;

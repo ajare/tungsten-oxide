@@ -267,12 +267,18 @@ Exit criteria: every rendered game mesh satisfies its PBR material specification
 
 ### Milestone 5 — Switch Play to the package pipeline
 
+**Status: complete.** AppLib now exposes a legacy-default pipeline-selection hook, while Play selects the already-created package-owned `TungstenMonoxide.Pbr` pipeline without constructing `Play`. The live dynamic scene uses package-authored PBR lights, a ship-focused directional shadow domain, package-bound track and ship models, and the authored `XmlGraphPbrForward` pass/output plan. Each frame renders the graph, blits its tone-mapped presentation target, then draws the HUD and Launcher-owned ImGui. Viewport changes resize the package output before updating the live scene viewport; zero-sized minimized windows are skipped and failed resizes retain the previous target with actionable diagnostics. TAA remains authored off and is guarded by package validation.
+
 Modified files:
 
 - `cpp/applib/include/applib/State.h`
 - `cpp/applib/src/State.cpp`
+- `cpp/launcher/include/ImGuiDataProvider.h`
 - `cpp/tungsten-monoxide/include/StatePlayTungstenMonoxide.h`
+- `cpp/tungsten-monoxide/include/TungstenPbrPackage.h`
+- `cpp/tungsten-monoxide/pbr/validate_package.py`
 - `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
+- `cpp/tungsten-monoxide/src/TungstenPbrPackage.cpp`
 
 Work:
 
@@ -280,6 +286,7 @@ Work:
 - Select `TungstenMonoxide.Pbr` for Play without creating a legacy `Play` pipeline first.
 - Apply package-authored PBR lights to the live scene and configure/update the shadow domain.
 - Render to the package graph, present to the screen, then render HUD.
+- Update the Launcher ImGui backend for MPP's vector-backed texture bindings so debug UI remains usable after presentation.
 - Detect viewport-size changes and call the package runtime's resize path before rendering; retain old resources and report a clear error if resize fails.
 - Ensure camera cuts/respawns notify temporal AA if TAA is enabled. Keep TAA disabled until this is wired and tested.
 

@@ -4,9 +4,12 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <mpp/PbrPipelineDocument.h>
+#include <mpp/PbrLight.h>
 #include <mpp/RenderPipeline.h>
 #include <mpp/RenderTarget.h>
 #include <mpp/Resource.h>
@@ -17,6 +20,7 @@
 namespace mpp {
 class RenderSystem;
 class ResourceManager;
+class Scene;
 
 namespace resource_parsers {
 class PbrPipelineRuntime;
@@ -47,6 +51,10 @@ private:
   mpp::RenderPipelinePtr mPipeline;
   mpp::RenderTargetPtr mPresentationTarget;
   std::map<std::string, mpp::ResourcePtr> mMaterialBindings;
+  std::vector<mpp::PbrLight> mLights;
+  std::optional<mpp::ShadowOptions> mShadowOptions;
+  uint32_t mViewportWidth{0};
+  uint32_t mViewportHeight{0};
   mpp::RenderSystem* mRenderSystem{nullptr};
   mpp::ResourceManager* mResourceManager{nullptr};
   wp::Logger* mLogger{nullptr};
@@ -63,6 +71,10 @@ public:
 
   bool isInitialized() const;
   ResolvedMaterial resolveMaterial(std::string const& binding) const;
+  void applySceneLighting(mpp::Scene* scene) const;
+  void updateShadowFocus(glm::vec3 const& focusPoint);
+  void resize(uint32_t viewportWidth, uint32_t viewportHeight);
+  void present();
 
   std::filesystem::path const& getPackagePath() const;
   std::filesystem::path const& getExtractedDirectory() const;

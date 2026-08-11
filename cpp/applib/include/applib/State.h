@@ -46,6 +46,10 @@ namespace applib
 
 		virtual void teardown() = 0;
 
+		// States use their conventional name by default. Package-backed states can return an
+		// already-created pipeline without briefly creating an incompatible legacy pipeline.
+		virtual mpp::RenderPipelinePtr selectRenderPipeline(mpp::RenderSystem* renderSystem);
+
 		void loadAllReferencedResources();
 
 		std::vector<std::string> getDebuggingText() const override;

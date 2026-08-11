@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <stdexcept>
 
 #include <mpp/BufferDataProvider.h>
 #include <mpp/Resource.h>
@@ -146,7 +147,12 @@ public:
 					vbrc.clipSize[1] = (int)(clipMax.y - clipMin.y);
 
 					auto texId = (uint32_t)pcmd->GetTexID();
-					vbrc.textures[0] = mTextureIdMap[texId];
+					auto textureIt = mTextureIdMap.find(texId);
+					if (textureIt == mTextureIdMap.end())
+					{
+						throw std::runtime_error("ImGui draw command references an unknown texture.");
+					}
+					vbrc.textures.push_back(textureIt->second);
 
 					vbrc.offset = pcmd->IdxOffset;
 					vbrc.count = pcmd->ElemCount;

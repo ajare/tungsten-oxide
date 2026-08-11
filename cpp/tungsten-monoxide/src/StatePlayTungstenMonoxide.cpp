@@ -88,6 +88,22 @@ StatePlayTungstenMonoxide::StatePlayTungstenMonoxide()
 
 StatePlayTungstenMonoxide::~StatePlayTungstenMonoxide() = default;
 
+TungstenPbrPackage& StatePlayTungstenMonoxide::pbrPackage() const {
+  auto model = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
+  if (!model || !model->pbrPackage || !model->pbrPackage->isInitialized())
+    throw std::runtime_error("Play requires an initialized TungstenMonoxide PBR package.");
+  return *model->pbrPackage;
+}
+
+mpp::RenderPipelinePtr StatePlayTungstenMonoxide::selectRenderPipeline(mpp::RenderSystem* renderSystem) {
+  VAR_UNUSED(renderSystem);
+  auto pipeline = pbrPackage().getPipeline();
+  if (!pipeline || pipeline->getName() != TungstenPbrPackage::PipelineName ||
+      pipeline->getOptions().mode != mpp::RenderPipelineMode::XmlGraphPbrForward)
+    throw std::runtime_error("Play requires the package-owned XmlGraphPbrForward pipeline.");
+  return pipeline;
+}
+
 Map* StatePlayTungstenMonoxide::getMap() { return static_cast<Map*>(mMap.get()); }
 Map const* StatePlayTungstenMonoxide::getMap() const { return static_cast<Map const*>(mMap.get()); }
 
@@ -169,8 +185,8 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
         game.get(), "ShipMaterial is missing or is not a PbrMaterialBinding or Material resource.");
   }
 
-  auto buildStream = [&](bool pbr, string const& mppMaterialName) {
-    auto spec = mono::gameMeshSpecification(true, pbr);
+  auto buildStream = [&](string const& mppMaterialName) {
+    auto spec = mono::gameMeshSpecification(true, true);
     auto stream = new mpp::ProgrammaticModelStream(renderResourceMgr);
     for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
       if (serializer.getPrimitiveType(i) != mpp::mesh::Primitive::Type::Triangles)
@@ -208,13 +224,11 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
       }
 
       vector<int8_t> vertices(vertexData.get(), vertexData.get() + vertexCount * stride);
-      if (pbr) {
-        try {
-          vertices = mono::addPbrTangents(vertices, vertexCount, triangleIndices);
-        } catch (exception const& error) {
-          throw application::resourcesystem::ResourceException(
-              game.get(), "ShipModel mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
-        }
+      try {
+        vertices = mono::addPbrTangents(vertices, vertexCount, triangleIndices);
+      } catch (exception const& error) {
+        throw application::resourcesystem::ResourceException(
+            game.get(), "ShipModel mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
       }
       stream->addVertexData(meshId, vertices);
       for (size_t index = 0; index < triangleIndices.size(); index += 3)
@@ -223,25 +237,9 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
     return stream;
   };
 
-  // Prepare the package-backed ship now, but keep Play on its legacy material until the PBR graph
-  // becomes the presentation path in Milestone 5.
-  mPbrShipModel = renderResourceMgr
-                      ->declareResource("TungstenMonoxide.ShipModel.Pbr",
-                                        mpp::ResourceStreamPtr(buildStream(true, materialMppName)))
-                      .first;
-  mPbrShipModel->acquire(&mWrangler);
-  // Loading validates the indexed 52-byte stream against the package material while Play still
-  // presents the parallel compatibility model through the legacy render pass.
-  mPbrShipModel->load();
-
-  auto legacyMaterial = game->getDependentResource("LegacyShipMaterial");
-  if (!legacyMaterial || legacyMaterial->getType() != "Material")
-    throw application::resourcesystem::ResourceException(
-        game.get(), "LegacyShipMaterial is missing or is not a Material resource during staged PBR coexistence.");
   auto resource =
       renderResourceMgr
-          ->declareResource("TungstenMonoxide.ShipModel",
-                            mpp::ResourceStreamPtr(buildStream(false, legacyMaterial->getQualifiedName())))
+          ->declareResource("TungstenMonoxide.ShipModel.Pbr", mpp::ResourceStreamPtr(buildStream(materialMppName)))
           .first;
   resource->acquire(&mWrangler);
   resource->load();
@@ -254,7 +252,10 @@ void StatePlayTungstenMonoxide::createGameObjects(
   VAR_UNUSED(renderSystem);
   VAR_UNUSED(args);
   auto trackResource = resourceMgr->getResource("NewTrack", "Tracks");
-  mTrackModel = trackResource->getMppResource();
+  auto track = dynamic_pointer_cast<Map>(trackResource);
+  if (!track || !track->getPbrMppResource())
+    throw application::resourcesystem::ResourceException(trackResource.get(), "Track has no package-backed PBR model.");
+  mTrackModel = track->getPbrMppResource();
   mTrackModel->acquire(&mWrangler);
   // Map::load only declares the render model because it can run on a worker
   // without an OpenGL context. MapLoad normally uploads it on the main thread;
@@ -313,8 +314,6 @@ void StatePlayTungstenMonoxide::destroyGameObjects() {
   mTrackSceneModel.reset();
   if (mShipModel) mShipModel->release(&mWrangler);
   mShipModel.reset();
-  if (mPbrShipModel) mPbrShipModel->release(&mWrangler);
-  mPbrShipModel.reset();
   if (mTrackModel) mTrackModel->release(&mWrangler);
   mTrackModel.reset();
 }
@@ -324,6 +323,8 @@ void StatePlayTungstenMonoxide::setupEntities() {}
 
 void StatePlayTungstenMonoxide::setupScene() {
   mScene->setClearColour(mpp::Colour::Black);
+  pbrPackage().applySceneLighting(mScene.get());
+  updatePbrViewport();
   updateShips(0.0f);
   updateChaseCamera(0.0f);
 }
@@ -469,7 +470,8 @@ void StatePlayTungstenMonoxide::updateChaseCamera(float frameTime) {
   VAR_UNUSED(frameTime);
   if (!mGameSession || mGameSession->ships().empty()) return;
   auto camera = static_cast<ReactiveCamera*>(mCamera3d.get());
-  camera->setAspectRatio(mwRenderSystem->getWindowWidth() / static_cast<float>(mwRenderSystem->getWindowHeight()));
+  if (mwRenderSystem->getWindowHeight() != 0)
+    camera->setAspectRatio(mwRenderSystem->getWindowWidth() / static_cast<float>(mwRenderSystem->getWindowHeight()));
   auto const& physics = mGameSession->ships()[0].physics;
   auto const& visual = mShipVisualStates[0];
   tox::Vec3 up = visual.up;
@@ -523,12 +525,33 @@ void StatePlayTungstenMonoxide::renderHud(mpp::RenderSystem* renderSystem) const
                            ship.physics.boostActive ? mpp::Colour::Yellow : mpp::Colour::White);
 }
 
+void StatePlayTungstenMonoxide::updatePbrViewport() {
+  auto const width = static_cast<uint32_t>(mwRenderSystem->getWindowWidth());
+  auto const height = static_cast<uint32_t>(mwRenderSystem->getWindowHeight());
+  if (width == 0 || height == 0 || (width == mPbrViewportWidth && height == mPbrViewportHeight)) return;
+
+  pbrPackage().resize(width, height);
+  mScene->setViewport(0, 0, width, height);
+  if (mCamera3d) static_cast<ReactiveCamera*>(mCamera3d.get())->setAspectRatio(width / static_cast<float>(height));
+  mPbrViewportWidth = width;
+  mPbrViewportHeight = height;
+}
+
 void StatePlayTungstenMonoxide::renderImpl(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
   WP_UNUSED(resourceMgr);
-  renderSystem->setAmbientColour(mpp::Colour::Grey25);
-  renderSystem->setLightCount(1);
-  renderSystem->setLight1Colour(mpp::Colour::White);
-  renderSystem->renderScene(mScene, mCamera3d, {0.0f, 0.0f}, getName());
+  updatePbrViewport();
+  if (renderSystem->getWindowWidth() == 0 || renderSystem->getWindowHeight() == 0) return;
+
+  if (!mShipVisualStates.empty()) pbrPackage().updateShadowFocus(toGlm(mShipVisualStates[0].groundPos));
+  renderSystem->renderScene(mScene, mCamera3d, {0.0f, 0.0f}, mRenderPipeline->getName());
+  if (!mPbrRenderValidated) {
+    if (mRenderPipeline->getLastGraphExecutionOrder().empty() || mRenderPipeline->getOutputPlans().empty())
+      throw std::runtime_error("The TungstenMonoxide PBR graph completed without executing its authored passes or output plan.");
+    mwLogger->info("Play is rendering through the package-owned XmlGraphPbrForward pipeline.");
+    mPbrRenderValidated = true;
+  }
+  pbrPackage().present();
+  renderSystem->renderToScreen();
   renderHud(renderSystem);
 }
 

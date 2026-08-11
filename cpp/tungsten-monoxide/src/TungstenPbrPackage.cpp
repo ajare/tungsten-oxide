@@ -10,6 +10,8 @@
 #include <mpp/PbrMaterial.h>
 #include <mpp/RenderGraphStream.h>
 #include <mpp/RenderSystem.h>
+#include <mpp/RenderTexture.h>
+#include <mpp/Scene.h>
 #include <mpp/ResourceManager.h>
 #include <mpp/app/ImageLoader.h>
 #include <mpp/app/PackageManifest.h>
@@ -153,11 +155,27 @@ void TungstenPbrPackage::initialize(mpp::RenderSystem* renderSystem, mpp::Resour
       throw std::runtime_error("PBR package has no presentation target.");
     }
 
+    mLights.clear();
+    mLights.reserve(mSceneDocument->lights.size());
+    for (auto const& authored : mSceneDocument->lights) {
+      mpp::PbrLight light;
+      light.type = authored.type == mpp::SceneLightType::Directional ? mpp::PbrLightType::Directional
+                                                                     : mpp::PbrLightType::Point;
+      light.colour = authored.colour;
+      light.intensity = authored.intensity;
+      light.position = authored.position;
+      light.range = authored.range;
+      light.direction = authored.type == mpp::SceneLightType::Directional ? glm::normalize(authored.direction)
+                                                                          : authored.direction;
+      mLights.push_back(light);
+    }
+
     if (auto direction = mSceneDocument->getShadowLightDirection()) {
       mpp::ShadowOptions shadow;
       shadow.enabled = true;
       shadow.light.direction = glm::normalize(*direction);
       shadow.light.focusPoint = mSceneDocument->camera.target;
+      mShadowOptions = shadow;
       options.shadowDomain = ShadowDomainName;
       renderSystem->configureShadowDomain(options.shadowDomain, shadow);
       options.graphImports["shadowDepth"] = renderSystem->getShadowDomainDepthTarget(options.shadowDomain);
@@ -183,6 +201,8 @@ void TungstenPbrPackage::initialize(mpp::RenderSystem* renderSystem, mpp::Resour
     }
     mPipeline->prepareOutputs(*mPipelineDocument->graph, outputDestinations);
     mRuntime->accept();
+    mViewportWidth = viewportWidth;
+    mViewportHeight = viewportHeight;
 
     if (mLogger) {
       mLogger->info(std::format("Loaded PBR package '{}' with {} material bindings.", mPackagePath.string(), mMaterialBindings.size()));
@@ -200,6 +220,17 @@ void TungstenPbrPackage::initialize(mpp::RenderSystem* renderSystem, mpp::Resour
 
 void TungstenPbrPackage::shutdown() noexcept {
   mMaterialBindings.clear();
+  mLights.clear();
+
+  if (mRenderSystem && mShadowOptions) {
+    try {
+      auto disabled = *mShadowOptions;
+      disabled.enabled = false;
+      mRenderSystem->configureShadowDomain(ShadowDomainName, disabled);
+    } catch (...) {
+    }
+  }
+  mShadowOptions.reset();
 
   if (mRenderSystem && mPipeline) {
     try {
@@ -228,6 +259,8 @@ void TungstenPbrPackage::shutdown() noexcept {
   mPipelineDocument.reset();
   mRenderSystem = nullptr;
   mResourceManager = nullptr;
+  mViewportWidth = 0;
+  mViewportHeight = 0;
 
   if (!mExtractedDirectory.empty()) {
     std::error_code error;
@@ -252,6 +285,64 @@ TungstenPbrPackage::ResolvedMaterial TungstenPbrPackage::resolveMaterial(std::st
     throw std::runtime_error(std::format("PBR material binding '{}' is not available.", binding));
   }
   return {found->second, found->second->getName()};
+}
+
+void TungstenPbrPackage::applySceneLighting(mpp::Scene* scene) const {
+  if (!isInitialized() || !scene) {
+    throw std::logic_error("TungstenMonoxide PBR package cannot apply lighting before initialization.");
+  }
+  scene->setPbrLights(mLights);
+}
+
+void TungstenPbrPackage::updateShadowFocus(glm::vec3 const& focusPoint) {
+  if (!isInitialized()) {
+    throw std::logic_error("TungstenMonoxide PBR package cannot update shadows before initialization.");
+  }
+  if (!mShadowOptions) return;
+  mShadowOptions->light.focusPoint = focusPoint;
+  mRenderSystem->configureShadowDomain(ShadowDomainName, *mShadowOptions);
+}
+
+void TungstenPbrPackage::resize(uint32_t viewportWidth, uint32_t viewportHeight) {
+  if (!isInitialized()) {
+    throw std::logic_error("TungstenMonoxide PBR package cannot resize before initialization.");
+  }
+  if (viewportWidth == 0 || viewportHeight == 0) {
+    throw std::invalid_argument("TungstenMonoxide PBR package cannot resize to a zero dimension.");
+  }
+  if (viewportWidth == mViewportWidth && viewportHeight == mViewportHeight) return;
+  try {
+    mRuntime->resize(viewportWidth, viewportHeight);
+  } catch (std::exception const& error) {
+    throw std::runtime_error(std::format(
+        "PBR presentation resize to {}x{} failed; the previous {}x{} resources were retained: {}",
+        viewportWidth,
+        viewportHeight,
+        mViewportWidth,
+        mViewportHeight,
+        error.what()));
+  }
+  if (mLogger) {
+    mLogger->info(std::format("Resized PBR presentation from {}x{} to {}x{}.",
+                              mViewportWidth,
+                              mViewportHeight,
+                              viewportWidth,
+                              viewportHeight));
+  }
+  mViewportWidth = viewportWidth;
+  mViewportHeight = viewportHeight;
+}
+
+void TungstenPbrPackage::present() {
+  if (!isInitialized()) {
+    throw std::logic_error("TungstenMonoxide PBR package cannot present before initialization.");
+  }
+  auto presentationTexture = std::dynamic_pointer_cast<mpp::RenderTexture>(mPresentationTarget);
+  if (!presentationTexture) {
+    throw std::runtime_error("PBR presentation target is not a render texture.");
+  }
+  mpp::RenderSystem::TextureDiagnosticOptions options;
+  mRenderSystem->renderTextureDiagnostic(presentationTexture.get(), mRenderSystem->getScreenRenderTarget(), options);
 }
 
 std::filesystem::path const& TungstenPbrPackage::getPackagePath() const {
