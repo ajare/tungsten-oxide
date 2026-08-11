@@ -82,13 +82,14 @@ These files are not selected by the current `Tracks/NewTrack` game flow, but are
 
 ## Automated baseline guard
 
-CTest `tungsten_monoxide_legacy_pbr_baseline` reads the real bundled `NewTrack.mppmodel` MeshMetadata section and `Resources.xml`. For every unique embedded material key it verifies:
+The original CTest `tungsten_monoxide_legacy_pbr_baseline` read the real bundled `NewTrack.mppmodel` MeshMetadata section and `Resources.xml`. Milestone 3 advanced it to `tungsten_monoxide_pbr_material_bindings`, which verifies:
 
-1. `Tracks/NewTrack` has a `DependentResource` whose `id` exactly equals the key;
-2. the reference resolves to a declared resource;
-3. during this legacy milestone, the target type is `Material` or `TrackMaterial`.
+1. `Tracks/NewTrack` preserves every embedded `DependentResource` ID;
+2. each authoritative reference resolves to `PbrMaterialBinding`;
+3. all seven track IDs resolve to their exact stable logical binding, and the ship resolves to `Ship.Surface`;
+4. the active model contains no unexpected material key.
 
-The test intentionally does not instantiate `RenderSystem`, load GPU resources, or modify the application. Milestone 3 will update its accepted target type when mappings move to `PbrMaterialBinding`.
+The test intentionally does not instantiate `RenderSystem`, load GPU resources, or modify the application.
 
 ## Milestone 0 validation
 

@@ -18,6 +18,7 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/MapException.h
   include/MetricsDataProvider.h
   include/Platform.h
+  include/PbrVertexConversion.h
   include/ProtoEntity.h
   include/ProtoEntityDefinitionFactory.h
   include/ReactiveCamera.h
@@ -53,6 +54,7 @@ set(TUNGSTEN_MONOXIDE_SOURCES
   src/imgui/implot_items.cpp
   src/Map.cpp
   src/MapTungstenMonoxideDefinitionFactory.cpp
+  src/PbrVertexConversion.cpp
   src/ProtoEntity.cpp
   src/ProtoEntityDefinitionFactory.cpp
   src/ReactiveCamera.cpp
@@ -140,18 +142,28 @@ target_link_libraries(TungstenMonoxide PRIVATE
   AppLib::AppLib
   $<IF:$<CONFIG:Debug>,yaml-cppd,yaml-cpp>)
 
-# TUNGSTEN_MONOXIDE_PBR_MIGRATION_PLAN.md Milestone 0: guard the legacy material-key
-# baseline without creating a renderer or changing runtime resources.
-add_executable(tungsten_monoxide_legacy_pbr_baseline_tests
-  tests/legacy_pbr_baseline_tests.cpp)
-target_compile_features(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE cxx_std_20)
-target_include_directories(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE
+# Guard stable embedded material-key mappings without creating a renderer.
+add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests
+  tests/pbr_material_binding_mapping_tests.cpp)
+target_compile_features(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE cxx_std_20)
+target_include_directories(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include")
-target_link_libraries(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE Willpower.Common)
-add_test(NAME tungsten_monoxide_legacy_pbr_baseline
-  COMMAND tungsten_monoxide_legacy_pbr_baseline_tests
+target_link_libraries(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE Willpower.Common)
+add_test(NAME tungsten_monoxide_pbr_material_bindings
+  COMMAND tungsten_monoxide_pbr_material_binding_mapping_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/NewTrack.mppmodel"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/Resources.xml")
+
+add_executable(tungsten_monoxide_pbr_vertex_conversion_tests
+  tests/pbr_vertex_conversion_tests.cpp
+  src/PbrVertexConversion.cpp)
+target_compile_features(tungsten_monoxide_pbr_vertex_conversion_tests PRIVATE cxx_std_20)
+target_include_directories(tungsten_monoxide_pbr_vertex_conversion_tests PRIVATE
+  include
+  "${TUNGSTEN_MONOXIDE_MPP_DIR}/vendor/include")
+add_test(NAME tungsten_monoxide_pbr_vertex_conversion
+  COMMAND tungsten_monoxide_pbr_vertex_conversion_tests)
+
 # Milestone 1 package validation is intentionally independent of MPP DLLs so it can
 # guard the committed PipelineEditor export before runtime integration is added.
 find_package(Python3 QUIET COMPONENTS Interpreter)
@@ -163,16 +175,17 @@ if (Python3_Interpreter_FOUND)
 endif()
 
 if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
-  add_custom_command(TARGET tungsten_monoxide_legacy_pbr_baseline_tests POST_BUILD
+  add_custom_command(TARGET tungsten_monoxide_pbr_material_binding_mapping_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_RUNTIME_DLLS:tungsten_monoxide_legacy_pbr_baseline_tests>
-      $<TARGET_FILE_DIR:tungsten_monoxide_legacy_pbr_baseline_tests>
+      $<TARGET_RUNTIME_DLLS:tungsten_monoxide_pbr_material_binding_mapping_tests>
+      $<TARGET_FILE_DIR:tungsten_monoxide_pbr_material_binding_mapping_tests>
     COMMAND_EXPAND_LISTS)
 endif()
 
 if (MSVC)
   target_compile_options(TungstenMonoxide PRIVATE /W4)
-  target_compile_options(tungsten_monoxide_legacy_pbr_baseline_tests PRIVATE /W4)
+  target_compile_options(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE /W4)
+  target_compile_options(tungsten_monoxide_pbr_vertex_conversion_tests PRIVATE /W4)
 endif()
 if (WIN32)
   target_compile_definitions(TungstenMonoxide PRIVATE UNICODE _UNICODE)

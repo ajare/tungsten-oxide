@@ -22,6 +22,9 @@ set(APPLIB_HEADERS
   include/applib/ModelInstance.h
   include/applib/ObjectArray.h
   include/applib/PhysicalStats.h
+  include/applib/PbrMaterialBinding.h
+  include/applib/PbrMaterialBindingDefaultDefinitionFactory.h
+  include/applib/PbrMaterialBindingResourceDefinitionFactory.h
   include/applib/Platform.h
   include/applib/ProtoEntity.h
   include/applib/ProtoEntityDefaultDefinitionFactory.h
@@ -53,6 +56,9 @@ set(APPLIB_SOURCES
   src/MapDefaultDefinitionFactory.cpp
   src/MapResourceDefinitionFactory.cpp
   src/ModelInstance.cpp
+  src/PbrMaterialBinding.cpp
+  src/PbrMaterialBindingDefaultDefinitionFactory.cpp
+  src/PbrMaterialBindingResourceDefinitionFactory.cpp
   src/ProtoEntity.cpp
   src/ProtoEntityDefaultDefinitionFactory.cpp
   src/ProtoEntityResourceDefinitionFactory.cpp
@@ -135,8 +141,36 @@ target_link_libraries(AppLib PRIVATE
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
+add_executable(applib_pbr_material_binding_tests tests/pbr_material_binding_tests.cpp)
+target_compile_features(applib_pbr_material_binding_tests PRIVATE cxx_std_23)
+target_include_directories(applib_pbr_material_binding_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.application/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include"
+  "${APPLIB_MPP_DIR}/mpp/include"
+  "${APPLIB_MPP_DIR}/mpp-mesh/include"
+  "${APPLIB_MPP_DIR}/mpp-program/include"
+  "${APPLIB_MPP_DIR}/vendor/include"
+  "${APPLIB_MPP_DIR}/ext/utils/include"
+  "${APPLIB_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include")
+target_link_libraries(applib_pbr_material_binding_tests PRIVATE
+  AppLib
+  Willpower.Application
+  Willpower.Common)
+add_test(NAME applib_pbr_material_binding COMMAND applib_pbr_material_binding_tests)
+set_property(TEST applib_pbr_material_binding PROPERTY ENVIRONMENT_MODIFICATION
+  "PATH=path_list_prepend:${APPLIB_MPP_DIR}/build/cmake/bin/$<CONFIG>"
+  "PATH=path_list_prepend:${APPLIB_THIRD_PARTY_DIR}/bin/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
+if (WIN32)
+  add_custom_command(TARGET applib_pbr_material_binding_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:applib_pbr_material_binding_tests>
+      $<TARGET_FILE_DIR:applib_pbr_material_binding_tests>
+    COMMAND_EXPAND_LISTS)
+endif()
+
 if (MSVC)
   target_compile_options(AppLib PRIVATE /W3)
+  target_compile_options(applib_pbr_material_binding_tests PRIVATE /W4)
 endif()
 if (WIN32)
   target_compile_definitions(AppLib PRIVATE UNICODE _UNICODE)

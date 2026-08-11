@@ -19,10 +19,15 @@
 #include <willpower/application/StateExceptions.h>
 #include <willpower/application/resourcesystem/ResourceExceptions.h>
 
+#include <applib/ModelInstance.h>
+#include <applib/PbrMaterialBinding.h>
+
 #include "StatePlayTungstenMonoxide.h"
 #include "Game.h"
 #include "Map.h"
+#include "PbrVertexConversion.h"
 #include "ReactiveCamera.h"
+#include "TungstenMonoxideModel.h"
 
 using namespace std;
 using namespace wp;
@@ -41,13 +46,15 @@ constexpr double LOOK_AT_UP_MAX = 12.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
 constexpr double SHIP_BOB_AMPLITUDE = 0.06;
 
-mpp::mesh::MeshSpecification shipMeshSpecification() {
+mpp::mesh::MeshSpecification shipMeshSpecification(bool pbr) {
   mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Triangles);
   auto layout = spec.createVertexBufferAttributeLayout(false);
   layout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
   layout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
   layout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
   layout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
+  if (pbr)
+    layout->createAttribute(mpp::mesh::Vertex::Component::Tangent4, mpp::mesh::Vertex::DataType::Float, false);
   spec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
   spec.setIndexedVertices(true);
   return spec;
@@ -150,48 +157,102 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
     throw application::resourcesystem::ResourceException(game.get(), "failed to load ShipModel: " + string(error.what()));
   }
 
-  auto material = resourceMgr->getResource(game->getShipMaterial(), "");
-  if (!material || material->getType() != "Material")
-    throw application::resourcesystem::ResourceException(game.get(), "ShipModel Material is missing or is not a Material resource.");
-
-  auto spec = shipMeshSpecification();
-  auto stream = new mpp::ProgrammaticModelStream(renderResourceMgr);
-  for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
-    if (serializer.getPrimitiveType(i) != mpp::mesh::Primitive::Type::Triangles)
-      throw application::resourcesystem::ResourceException(game.get(), "ShipModel contains a non-triangle mesh.");
-    int indexWidth = serializer.getIndexWidth(i);
-    if (indexWidth != 16 && indexWidth != 32)
+  auto material = game->getDependentResource("ShipMaterial");
+  string materialMppName;
+  if (material && material->getType() == "PbrMaterialBinding") {
+    auto binding = static_cast<applib::PbrMaterialBinding*>(material.get())->getBinding();
+    if (binding != game->getShipMaterialBinding())
       throw application::resourcesystem::ResourceException(
-          game.get(), "ShipModel must contain indexed meshes with 16- or 32-bit indices.");
-    auto meshId = stream->createMesh(serializer.getName(i), spec, material->getQualifiedName(), indexWidth);
-    size_t vertexCount, stride;
-    shared_ptr<const int8_t> vertexData;
-    serializer.getVertexStream(i, 0, &vertexCount, &stride, &vertexData);
-    if (stride != spec.getVertexStrideInBytes())
-      throw application::resourcesystem::ResourceException(game.get(), "ShipModel has an unsupported vertex layout.");
-    stream->addVertexData(meshId, vector<int8_t>(vertexData.get(), vertexData.get() + vertexCount * stride));
-    auto indices = serializer.getIndexData(i);
-    for (int triangle = 0; triangle < serializer.getPrimitiveCount(i); ++triangle) {
-      uint32_t corners[3];
-      for (int corner = 0; corner < 3; ++corner) {
-        const size_t index = static_cast<size_t>(triangle) * 3 + corner;
-        if (indexWidth == 16) {
-          uint16_t value;
-          memcpy(&value, indices.get() + index * sizeof(value), sizeof(value));
-          corners[corner] = value;
-        } else {
-          memcpy(&corners[corner], indices.get() + index * sizeof(corners[corner]),
-                 sizeof(corners[corner]));
-        }
-        if (corners[corner] >= vertexCount)
-          throw application::resourcesystem::ResourceException(
-              game.get(), "ShipModel contains an out-of-range triangle index.");
-      }
-      stream->addTriangle(meshId, corners[0], corners[1], corners[2]);
+          game.get(), "ShipModel logical material '" + game->getShipMaterialBinding() +
+                          "' does not match its PbrMaterialBinding '" + binding + "'.");
+    auto model = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
+    if (!model || !model->pbrPackage)
+      throw application::resourcesystem::ResourceException(game.get(), "ShipModel PBR package service is unavailable.");
+    try {
+      materialMppName = model->pbrPackage->resolveMaterial(binding).resourceName;
+    } catch (exception const& error) {
+      throw application::resourcesystem::ResourceException(
+          game.get(), "ShipModel could not resolve PBR binding '" + binding + "': " + error.what());
     }
+  } else if (material && material->getType() == "Material") {
+    // Staged migration compatibility for legacy game definitions.
+    materialMppName = material->getQualifiedName();
+  } else {
+    throw application::resourcesystem::ResourceException(
+        game.get(), "ShipMaterial is missing or is not a PbrMaterialBinding or Material resource.");
   }
 
-  auto resource = renderResourceMgr->declareResource("TungstenMonoxide.ShipModel", mpp::ResourceStreamPtr(stream)).first;
+  auto buildStream = [&](bool pbr, string const& mppMaterialName) {
+    auto spec = shipMeshSpecification(pbr);
+    auto stream = new mpp::ProgrammaticModelStream(renderResourceMgr);
+    for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
+      if (serializer.getPrimitiveType(i) != mpp::mesh::Primitive::Type::Triangles)
+        throw application::resourcesystem::ResourceException(game.get(), "ShipModel contains a non-triangle mesh.");
+      int indexWidth = serializer.getIndexWidth(i);
+      if (indexWidth != 16 && indexWidth != 32)
+        throw application::resourcesystem::ResourceException(
+            game.get(), "ShipModel must contain indexed meshes with 16- or 32-bit indices.");
+      auto meshId = stream->createMesh(serializer.getName(i), spec, mppMaterialName, indexWidth);
+      size_t vertexCount, stride;
+      shared_ptr<const int8_t> vertexData;
+      serializer.getVertexStream(i, 0, &vertexCount, &stride, &vertexData);
+      if (stride != mono::LegacyPbrVertexStride)
+        throw application::resourcesystem::ResourceException(game.get(), "ShipModel has an unsupported vertex layout.");
+
+      vector<uint32_t> triangleIndices;
+      triangleIndices.reserve(static_cast<size_t>(serializer.getPrimitiveCount(i)) * 3);
+      auto indices = serializer.getIndexData(i);
+      for (int triangle = 0; triangle < serializer.getPrimitiveCount(i); ++triangle) {
+        for (int corner = 0; corner < 3; ++corner) {
+          const size_t index = static_cast<size_t>(triangle) * 3 + corner;
+          uint32_t value = 0;
+          if (indexWidth == 16) {
+            uint16_t value16;
+            memcpy(&value16, indices.get() + index * sizeof(value16), sizeof(value16));
+            value = value16;
+          } else {
+            memcpy(&value, indices.get() + index * sizeof(value), sizeof(value));
+          }
+          if (value >= vertexCount)
+            throw application::resourcesystem::ResourceException(
+                game.get(), "ShipModel contains an out-of-range triangle index.");
+          triangleIndices.push_back(value);
+        }
+      }
+
+      vector<int8_t> vertices(vertexData.get(), vertexData.get() + vertexCount * stride);
+      if (pbr) {
+        try {
+          vertices = mono::addPbrTangents(vertices, vertexCount, triangleIndices);
+        } catch (exception const& error) {
+          throw application::resourcesystem::ResourceException(
+              game.get(), "ShipModel mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
+        }
+      }
+      stream->addVertexData(meshId, vertices);
+      for (size_t index = 0; index < triangleIndices.size(); index += 3)
+        stream->addTriangle(meshId, triangleIndices[index], triangleIndices[index + 1], triangleIndices[index + 2]);
+    }
+    return stream;
+  };
+
+  // Prepare the package-backed ship now, but keep Play on its legacy material until the PBR graph
+  // becomes the presentation path in Milestone 5.
+  mPbrShipModel = renderResourceMgr
+                      ->declareResource("TungstenMonoxide.ShipModel.Pbr",
+                                        mpp::ResourceStreamPtr(buildStream(true, materialMppName)))
+                      .first;
+  mPbrShipModel->acquire(&mWrangler);
+
+  auto legacyMaterial = game->getDependentResource("LegacyShipMaterial");
+  if (!legacyMaterial || legacyMaterial->getType() != "Material")
+    throw application::resourcesystem::ResourceException(
+        game.get(), "LegacyShipMaterial is missing or is not a Material resource during staged PBR coexistence.");
+  auto resource =
+      renderResourceMgr
+          ->declareResource("TungstenMonoxide.ShipModel",
+                            mpp::ResourceStreamPtr(buildStream(false, legacyMaterial->getQualifiedName())))
+          .first;
   resource->acquire(&mWrangler);
   resource->load();
   return resource;

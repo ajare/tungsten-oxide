@@ -1,7 +1,6 @@
-// Legacy PBR migration baseline guard. This intentionally reads only .mppmodel metadata and the
-// resource declaration that Map::load() uses; it does not create an MPP renderer or alter runtime
-// resources. Its purpose is to catch a newly exported material key that has no matching
-// DependentResource mapping before the PBR binding migration starts.
+// Material-binding migration guard. This reads only .mppmodel metadata and Resources.xml; it does
+// not create an MPP renderer or alter runtime resources. Embedded material keys must retain their
+// exact DependentResource IDs while resolving through stable logical PBR bindings.
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +25,7 @@ struct DirectoryEntry {
 
 struct ResourceDeclaration {
   std::string type;
+  std::string binding;
   std::map<std::string, std::string> dependents;
 };
 
@@ -116,6 +116,10 @@ void scanResources(wp::XmlNode* parent, const std::string& namesp, ResourceDecla
 
     ResourceDeclaration declaration;
     declaration.type = type;
+    if (wp::XmlNode* definitions = resource->getOptionalChild("Definitions"))
+      if (wp::XmlNode* definition = definitions->getOptionalChild("Definition"))
+        if (wp::XmlNode* binding = definition->getOptionalChild("Binding"))
+          declaration.binding = binding->getValue();
     if (wp::XmlNode* dependencies = resource->getOptionalChild("DependentResources")) {
       if (wp::XmlNode* dependent = dependencies->getOptionalChild("DependentResource")) {
         do {
@@ -166,8 +170,37 @@ int main(int argc, char** argv) {
     if (track == declarations.end() || track->second.type != "Track")
       throw std::runtime_error("Resources.xml does not declare Track resource 'Tracks/NewTrack'.");
 
+    const std::map<std::string, std::string> expectedBindings{
+        {"Tracks/TrackAsphaltMaterial", "Track.Asphalt"},
+        {"Tracks/DefaultRailMaterial", "Track.Rail"},
+        {"Tracks/DefaultMeshMaterial", "Track.Mesh"},
+        {"Tracks/DefaultShellMaterial", "Track.Shell"},
+        {"Tracks/DefaultZoneMaterial", "Track.Zone"},
+        {"Tracks/DefaultTriggerMaterial", "Track.Trigger"},
+        {"ModelTool.DefaultFallbackMaterial3D", "Track.Fallback"},
+    };
+
     bool failed = false;
-    for (const std::string& key : materialKeys) {
+    const auto game = declarations.find("TungstenMonoxide");
+    if (game == declarations.end() || game->second.type != "Game") {
+      std::cerr << "FAIL: Resources.xml does not declare Game resource 'TungstenMonoxide'.\n";
+      failed = true;
+    } else {
+      const auto shipMapping = game->second.dependents.find("ShipMaterial");
+      if (shipMapping == game->second.dependents.end()) {
+        std::cerr << "FAIL: Game has no ShipMaterial dependent resource.\n";
+        failed = true;
+      } else {
+        const auto target = declarations.find(resolveReference("TungstenMonoxide", shipMapping->second));
+        if (target == declarations.end() || target->second.type != "PbrMaterialBinding" ||
+            target->second.binding != "Ship.Surface") {
+          std::cerr << "FAIL: ShipMaterial does not resolve to PbrMaterialBinding 'Ship.Surface'.\n";
+          failed = true;
+        }
+      }
+    }
+
+    for (const auto& [key, expectedBinding] : expectedBindings) {
       const auto mapping = track->second.dependents.find(key);
       if (mapping == track->second.dependents.end()) {
         std::cerr << "FAIL: NewTrack.mppmodel material key '" << key
@@ -181,9 +214,20 @@ int main(int argc, char** argv) {
       if (target == declarations.end()) {
         std::cerr << "FAIL: material key '" << key << "' maps to missing resource '" << targetName << "'.\n";
         failed = true;
-      } else if (target->second.type != "Material" && target->second.type != "TrackMaterial") {
+      } else if (target->second.type != "PbrMaterialBinding") {
         std::cerr << "FAIL: material key '" << key << "' maps to '" << targetName << "' of type '"
-                  << target->second.type << "', expected the legacy Material or TrackMaterial baseline.\n";
+                  << target->second.type << "', expected PbrMaterialBinding.\n";
+        failed = true;
+      } else if (target->second.binding != expectedBinding) {
+        std::cerr << "FAIL: material key '" << key << "' resolves to logical binding '"
+                  << target->second.binding << "', expected '" << expectedBinding << "'.\n";
+        failed = true;
+      }
+    }
+
+    for (const std::string& key : materialKeys) {
+      if (!expectedBindings.contains(key)) {
+        std::cerr << "FAIL: NewTrack.mppmodel contains unexpected material key '" << key << "'.\n";
         failed = true;
       }
     }
@@ -194,8 +238,9 @@ int main(int argc, char** argv) {
     }
     if (failed) return 1;
 
-    std::cout << "Validated " << materialKeys.size()
-              << " unique NewTrack.mppmodel material keys against Tracks/NewTrack mappings.\n";
+    std::cout << "Validated " << expectedBindings.size()
+              << " stable Tracks/NewTrack PBR material bindings and " << materialKeys.size()
+              << " embedded model material keys.\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

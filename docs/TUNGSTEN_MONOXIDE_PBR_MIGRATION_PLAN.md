@@ -152,7 +152,7 @@ The committed `.mpppackage` is generated only through PipelineEditor's Export Pa
 
 ### Milestone 0 — Capture the legacy baseline
 
-**Status: complete.** See `TUNGSTEN_MONOXIDE_PBR_LEGACY_BASELINE.md` and CTest `tungsten_monoxide_legacy_pbr_baseline`.
+**Status: complete.** See `TUNGSTEN_MONOXIDE_PBR_LEGACY_BASELINE.md`; its mapping guard was advanced in Milestone 3 to CTest `tungsten_monoxide_pbr_material_bindings`.
 
 Files: tests and documentation only.
 
@@ -210,6 +210,8 @@ Exit criteria: Launcher reaches MapLoad with the package pipeline and all materi
 
 ### Milestone 3 — Binding resources and staged coexistence
 
+**Status: complete.** AppLib now owns the lightweight `PbrMaterialBinding` resource and factories. The ship and all seven embedded track material IDs resolve through the package's stable logical bindings. Package-backed track and ship streams are prepared with concrete runtime PBR material names during threaded loading. Parallel legacy streams remain the presented Play models until Milestone 5 because MPP intentionally rejects `PbrMaterial` in the legacy render pass; this is explicit staged coexistence, not an error fallback.
+
 New files:
 
 - `cpp/applib/include/applib/PbrMaterialBinding.h`
@@ -238,10 +240,12 @@ Exit criteria: generated track and ship model streams reference package-owned `P
 
 ### Milestone 4 — Tangent-capable geometry
 
+**Status: in progress.** Milestone 3's staged PBR streams already use the exact 52-byte layout and generate indexed ship, flat track, and placed-mesh tangent frames. Conventional, mirrored-UV, shared-indexed-vertex, and degenerate-UV cases have focused coverage in CTest `tungsten_monoxide_pbr_vertex_conversion`. The remaining geometry-specific cases and visual verification stay in this milestone.
+
 New shared files:
 
-- `cpp/tungsten-monoxide/include/PbrMeshData.h`
-- `cpp/tungsten-monoxide/src/PbrMeshData.cpp`
+- `cpp/tungsten-monoxide/include/PbrVertexConversion.h`
+- `cpp/tungsten-monoxide/src/PbrVertexConversion.cpp`
 - focused unit tests
 
 Modified files:

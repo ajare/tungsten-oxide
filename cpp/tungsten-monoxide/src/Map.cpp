@@ -12,6 +12,8 @@
 
 #include <utils/FileSystem.h>
 
+#include <applib/ModelInstance.h>
+#include <applib/PbrMaterialBinding.h>
 #include <applib/TrackMaterial.h>
 
 #include <willpower/application/resourcesystem/DirectoryResourceLocation.h>
@@ -19,34 +21,62 @@
 #include <willpower/application/resourcesystem/ResourceExceptions.h>
 
 #include "Map.h"
+#include "PbrVertexConversion.h"
 #include "Simulation.hpp"
 #include "StartGrid.hpp"
 #include "TrackCollisionBuild.h"
+#include "TungstenMonoxideModel.h"
 
 using namespace std;
 using namespace wp;
 
 namespace {
 
-mpp::mesh::MeshSpecification trackMeshSpecification() {
+mpp::mesh::MeshSpecification trackMeshSpecification(bool pbr) {
   mpp::mesh::MeshSpecification meshSpec(mpp::mesh::Primitive::Type::Triangles);
   auto attribLayout = meshSpec.createVertexBufferAttributeLayout(false);
   attribLayout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
   attribLayout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
   attribLayout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
   attribLayout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
+  if (pbr)
+    attribLayout->createAttribute(mpp::mesh::Vertex::Component::Tangent4, mpp::mesh::Vertex::DataType::Float, false);
   meshSpec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
   meshSpec.setIndexedVertices(false);
   return meshSpec;
 }
 
-string resolveMaterialMppName(Map* map, string const& materialKey) {
-  auto dependent = map->getDependentResource(materialKey);
+string resolveLegacyMaterialMppName(Map* map, string const& materialKey) {
+  auto dependent = map->getDependentResource("Legacy." + materialKey);
   if (dependent->getType() == "TrackMaterial")
     return static_cast<applib::TrackMaterial*>(dependent.get())->getMaterial()->getQualifiedName();
   if (dependent->getType() == "Material") return dependent->getQualifiedName();
   throw application::resourcesystem::ResourceException(
-      map, "material '" + materialKey + "' is a '" + dependent->getType() + "' resource, expected TrackMaterial or Material.");
+      map, "legacy material '" + materialKey + "' is a '" + dependent->getType() +
+               "' resource, expected TrackMaterial or Material.");
+}
+
+string resolveMaterialMppName(Map* map, string const& materialKey) {
+  auto dependent = map->getDependentResource(materialKey);
+  if (dependent->getType() == "PbrMaterialBinding") {
+    auto binding = static_cast<applib::PbrMaterialBinding*>(dependent.get())->getBinding();
+    auto model = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
+    if (!model || !model->pbrPackage)
+      throw application::resourcesystem::ResourceException(
+          map, "material '" + materialKey + "' uses PBR binding '" + binding + "', but the package service is unavailable.");
+    try {
+      return model->pbrPackage->resolveMaterial(binding).resourceName;
+    } catch (exception const& error) {
+      throw application::resourcesystem::ResourceException(
+          map, "material '" + materialKey + "' could not resolve PBR binding '" + binding + "': " + error.what());
+    }
+  }
+  if (dependent->getType() == "TrackMaterial")
+    return static_cast<applib::TrackMaterial*>(dependent.get())->getMaterial()->getQualifiedName();
+  if (dependent->getType() == "Material") return dependent->getQualifiedName();
+  throw application::resourcesystem::ResourceException(
+      map, "material '" + materialKey + "' is a '" + dependent->getType() +
+               "' resource, expected PbrMaterialBinding, TrackMaterial, or Material.");
 }
 
 // --- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3) ---------------
@@ -71,14 +101,14 @@ string resolveMaterialMppName(Map* map, string const& materialKey) {
 // Rendering (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3.4): every sub-mesh of every placement --
 // collidable AND decorative, unlike buildMeshObjectCollisionTriangles above; a decorative sub-mesh
 // still renders, it just isn't in the BVH -- expanded from the referenced model's real indexed
-// triangles into the same flat non-indexed 36-byte layout the road's own meshes already use
-// (trackMeshSpecification()), so it can go into the very same `modelStream` as ordinary model
-// instancing. Position/normal are transformed by the placement; uv/colour pass through unchanged.
+// triangles into the same flat non-indexed PBR layout the road's own meshes use, so it can go into
+// the same `modelStream` as ordinary model instancing. Position/normal are transformed by the
+// placement; uv/colour pass through unchanged and tangent4 is regenerated after expansion.
 // Mesh names are namespaced by placement id ("meshobject-<placement id>-<sub-mesh name>") so
 // multiple placements sharing one model, or a sub-mesh name that happens to collide with one of the
 // road's own mesh names, never collide in the single shared `modelStream`.
 void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem::path const& root, mpp::ResourceManager* resourceMgr,
-                                  mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream,
+                                  mpp::mesh::MeshSpecification const& meshSpec, mpp::ProgrammaticModelStream* modelStream, bool pbr,
                                   std::map<string, shared_ptr<mono::MeshObjectModel>>& cache, vector<mono::EmbeddedModelRef> const& embeddedModels) {
   for (auto const& placement : track.definition.meshObjects) {
     auto cached = cache.find(placement.modelId);
@@ -105,7 +135,8 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
 
       string materialMppName;
       try {
-        materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
+        materialMppName = pbr ? resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex))
+                              : resolveLegacyMaterialMppName(map, model.serializer.getMaterial(meshIndex));
       } catch (exception const& error) {
         map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
                   "'): " + error.what());
@@ -161,10 +192,19 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
       // matching every other mesh already in this modelStream).
       vector<int8_t> flat(indices.size() * stride);
       for (size_t k = 0; k < indices.size(); ++k) memcpy(flat.data() + k * stride, transformed.data() + static_cast<size_t>(indices[k]) * stride, stride);
+      vector<int8_t> outputVertices = std::move(flat);
+      if (pbr) {
+        try {
+          outputVertices = mono::addPbrTangentsToFlatTriangles(outputVertices, indices.size());
+        } catch (exception const& error) {
+          throw application::resourcesystem::ResourceException(
+              map, "drivable mesh object sub-mesh '" + rawName + "' could not generate PBR tangents: " + error.what());
+        }
+      }
 
       string const meshName = "meshobject-" + placement.id + "-" + rawName;
       auto meshId = modelStream->createMesh(meshName, meshSpec, materialMppName, 16);
-      modelStream->addVertexData(meshId, flat);
+      modelStream->addVertexData(meshId, outputVertices);
     }
   }
 }
@@ -244,8 +284,9 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
   }
   if (collisionTriangles.empty())
     throw application::resourcesystem::ResourceException(
-        this, "this track has no drivable/collidable geometry and cannot be loaded; re-export it from "
-              "the editor after adding a path or mesh region.");
+        this,
+        "this track has no drivable/collidable geometry and cannot be loaded; re-export it from "
+        "the editor after adding a path or mesh region.");
 
   mTrack->collisionSurface = make_shared<tox::TrackCollisionSurface>(std::move(collisionTriangles));
 
@@ -265,35 +306,52 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     pose.forward = tox::normalizeSafe(pose.forward);
   }
 
-  auto meshSpec = trackMeshSpecification();
-  auto modelStream = new mpp::ProgrammaticModelStream(resourceMgr);
-  for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
-    string materialMppName;
-    try {
-      materialMppName = resolveMaterialMppName(this, serializer.getMaterial(i));
-    } catch (exception const& error) {
-      if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
-        throw application::resourcesystem::ResourceException(
-            this, "listed track mesh '" + serializer.getName(i) + "' has unresolved material: " + error.what());
-      warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
-      continue;
+  auto buildModelStream = [&](bool pbr) {
+    auto meshSpec = trackMeshSpecification(pbr);
+    auto modelStream = new mpp::ProgrammaticModelStream(resourceMgr);
+    for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
+      string materialMppName;
+      try {
+        materialMppName = pbr ? resolveMaterialMppName(this, serializer.getMaterial(i))
+                              : resolveLegacyMaterialMppName(this, serializer.getMaterial(i));
+      } catch (exception const& error) {
+        if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
+          throw application::resourcesystem::ResourceException(
+              this, "listed track mesh '" + serializer.getName(i) + "' has unresolved material: " + error.what());
+        warn("Map '" + getQualifiedName() + "': skipping mesh '" + serializer.getName(i) + "': " + error.what());
+        continue;
+      }
+
+      auto meshId = modelStream->createMesh(serializer.getName(i), meshSpec, materialMppName, 16);
+      size_t vertexCount, vertexStride;
+      shared_ptr<const int8_t> vertexData;
+      serializer.getVertexStream(i, 0, &vertexCount, &vertexStride, &vertexData);
+      if (vertexStride != mono::LegacyPbrVertexStride)
+        throw application::resourcesystem::ResourceException(this, "mesh '" + serializer.getName(i) + "' has an unsupported vertex stride.");
+      vector<int8_t> bytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
+      if (pbr) {
+        try {
+          bytes = mono::addPbrTangentsToFlatTriangles(bytes, vertexCount);
+        } catch (exception const& error) {
+          throw application::resourcesystem::ResourceException(
+              this, "mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
+        }
+      }
+      modelStream->addVertexData(meshId, bytes);
     }
 
-    auto meshId = modelStream->createMesh(serializer.getName(i), meshSpec, materialMppName, 16);
-    size_t vertexCount, vertexStride;
-    shared_ptr<const int8_t> vertexData;
-    serializer.getVertexStream(i, 0, &vertexCount, &vertexStride, &vertexData);
-    if (vertexStride != meshSpec.getVertexStrideInBytes())
-      throw application::resourcesystem::ResourceException(this, "mesh '" + serializer.getName(i) + "' has an unsupported vertex stride.");
-    vector<int8_t> bytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
-    modelStream->addVertexData(meshId, bytes);
-  }
+    // Drivable mesh object placements reuse `modelCache` from the collision-mesh pass above, so a
+    // model already loaded there isn't reopened from disk here.
+    appendMeshObjectRenderMeshes(this, *mTrack, root, resourceMgr, meshSpec, modelStream, pbr, modelCache, mEmbeddedModels);
+    return modelStream;
+  };
 
-  // Drivable mesh object placements (Milestone 3.4): reuses `modelCache` from the collision-mesh
-  // pass above, so a model already loaded there isn't reopened from disk here.
-  appendMeshObjectRenderMeshes(this, *mTrack, root, resourceMgr, meshSpec, modelStream, modelCache, mEmbeddedModels);
-
-  mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(modelStream)).first;
+  // Stage the package-backed PBR model now. The legacy Play pass continues to consume mMppResource
+  // until the render-pipeline migration switches presentation in Milestone 5.
+  mPbrMppResource =
+      resourceMgr->declareResource(getQualifiedName() + ".Pbr", mpp::ResourceStreamPtr(buildModelStream(true))).first;
+  mPbrMppResource->acquire(this);
+  mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(buildModelStream(false))).first;
   mMppResource->acquire(this);
   // Do not call mMppResource->load() here. Map resources can be created on the
   // threaded Willpower loading worker, which has no OpenGL context. The map
@@ -305,6 +363,8 @@ bool Map::unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resource
   WP_UNUSED(renderSystem);
   WP_UNUSED(resourceMgr);
   if (mMppResource) mMppResource->release(this);
+  if (mPbrMppResource) mPbrMppResource->release(this);
+  mPbrMppResource.reset();
   mTrack.reset();
   mStartGridPoses.clear();
   return true;

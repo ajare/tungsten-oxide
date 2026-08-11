@@ -2,15 +2,21 @@
 <Resources>
     <Resource type="Game" name="TungstenMonoxide">
         <DependentResources>
-            <DependentResource id="ShipMaterial" ref="Texture"/>
+            <DependentResource id="ShipMaterial" ref="ShipPbrMaterial"/>
+            <DependentResource id="LegacyShipMaterial" ref="Texture"/>
         </DependentResources>
         <Definitions>
             <Definition>
                 <ShipModel>
                     <ModelFile>box.mppmodel</ModelFile>
-                    <Material>Texture</Material>
+                    <Material>Ship.Surface</Material>
                 </ShipModel>
             </Definition>
+        </Definitions>
+    </Resource>
+    <Resource type="PbrMaterialBinding" name="ShipPbrMaterial">
+        <Definitions>
+            <Definition><Binding>Ship.Surface</Binding></Definition>
         </Definitions>
     </Resource>
     <Resource type="Image" name="BoxTexture" location="images/CesiumLogoFlat.png"/>
@@ -31,6 +37,27 @@
 	Maps
 	-->
     <Namespace name="Tracks">
+        <Resource type="PbrMaterialBinding" name="TrackAsphaltPbr">
+            <Definitions><Definition><Binding>Track.Asphalt</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackRailPbr">
+            <Definitions><Definition><Binding>Track.Rail</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackMeshPbr">
+            <Definitions><Definition><Binding>Track.Mesh</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackShellPbr">
+            <Definitions><Definition><Binding>Track.Shell</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackZonePbr">
+            <Definitions><Definition><Binding>Track.Zone</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackTriggerPbr">
+            <Definitions><Definition><Binding>Track.Trigger</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="TrackFallbackPbr">
+            <Definitions><Definition><Binding>Track.Fallback</Binding></Definition></Definitions>
+        </Resource>
         <Resource type="Shader" name="TrackVertexShader" location="shaders/track.vert"/>
         <Resource type="Shader" name="TrackFragmentShader" location="shaders/track.frag">
             <Definitions>
@@ -237,13 +264,22 @@
         </Resource>
         <Resource type="Track" name="NewTrack">
             <DependentResources>
-                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
-                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
-                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
-                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
-                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
-                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
-                <DependentResource id="ModelTool.DefaultFallbackMaterial3D" ref="Tracks/ModelTool.DefaultFallbackMaterial3D"/>
+                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltPbr"/>
+                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/TrackRailPbr"/>
+                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/TrackMeshPbr"/>
+                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/TrackShellPbr"/>
+                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/TrackZonePbr"/>
+                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/TrackTriggerPbr"/>
+                <DependentResource id="ModelTool.DefaultFallbackMaterial3D" ref="Tracks/TrackFallbackPbr"/>
+                <!-- Staged coexistence: the IDs above are the authoritative package bindings;
+                     Play keeps these prefixed dependencies until the PBR render pass is enabled. -->
+                <DependentResource id="Legacy.Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
+                <DependentResource id="Legacy.Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
+                <DependentResource id="Legacy.Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
+                <DependentResource id="Legacy.Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
+                <DependentResource id="Legacy.Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
+                <DependentResource id="Legacy.Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
+                <DependentResource id="Legacy.ModelTool.DefaultFallbackMaterial3D" ref="Tracks/ModelTool.DefaultFallbackMaterial3D"/>
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">

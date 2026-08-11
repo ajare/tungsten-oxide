@@ -41,6 +41,7 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
 
   mpp::ResourcePtr mTrackModel;
   mpp::ResourcePtr mShipModel;
+  mpp::ResourcePtr mPbrShipModel;
   mpp::SceneModel3dPtr mTrackSceneModel;
   std::vector<mpp::SceneModel3dPtr> mShipSceneModels;
   std::unique_ptr<tox::GameSession> mGameSession;

@@ -13,7 +13,7 @@ class Game : public applib::Game {
   friend class GameDefinitionFactory;
 
   std::string mShipModelFile;
-  std::string mShipMaterial;
+  std::string mShipMaterialBinding;
 
 public:
   Game(std::string const& name,
@@ -23,7 +23,7 @@ public:
        wp::application::resourcesystem::ResourceLocation* location);
 
   std::string const& getShipModelFile() const { return mShipModelFile; }
-  std::string const& getShipMaterial() const { return mShipMaterial; }
+  std::string const& getShipMaterialBinding() const { return mShipMaterialBinding; }
   std::string getShipModelPath() const;
 };
 
