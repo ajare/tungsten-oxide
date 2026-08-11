@@ -3,7 +3,7 @@
 // mpp::ModelSerializer::load() (ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp) reads back.
 //
 // Deliberately does NOT link mpp::ModelSerializer itself: mpp/include/mpp/ModelSerializer.h
-// unconditionally includes <glew/glew.h>/<gl/gl.h> and transitively drags in
+// unconditionally includes <GL/glew.h>/<gl/gl.h> and transitively drags in
 // mpp/ResourceManager.h -> mpp/RenderSystem.h (MassivePolyPusher's whole OpenGL rendering/
 // resource-management subsystem) just to compile the header, even though ModelSerializer::save()
 // itself never calls a GL function. Linking that in would mean adding GLEW as a second GL loader
