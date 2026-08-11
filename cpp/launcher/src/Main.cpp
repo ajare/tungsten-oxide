@@ -267,6 +267,11 @@ ProgramOptions startup(string const& configFile)
 //
 void shutdown()
 {
+	// States own scenes, package runtimes, and resources backed by the systems below.
+	// Unwind them while every dependency and the application DLL are still alive.
+	delete gStateMgr;
+	gStateMgr = nullptr;
+
 	// ImGui
 	delete gImGuiRenderer;
 	gImGuiRenderer = nullptr;
@@ -313,10 +318,6 @@ void shutdown()
 	// Shut down GLFW
 	glfwTerminate();
 #endif
-
-	// Destroy state manager
-	delete gStateMgr;
-	gStateMgr = nullptr;
 
 	// Destroy application
 	delete gAppSettings;

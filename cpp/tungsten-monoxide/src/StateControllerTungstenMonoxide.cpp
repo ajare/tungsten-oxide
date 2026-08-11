@@ -1,10 +1,14 @@
+#include <mpp/RenderSystem.h>
+
 #include <willpower/application/StateExceptions.h>
 #include <willpower/application/ServiceLocator.h>
 #include <willpower/application/ApplicationSettings.h>
 
 #include <applib/Exceptions.h>
+#include <applib/ModelInstance.h>
 
 #include "StateControllerTungstenMonoxide.h"
+#include "TungstenMonoxideModel.h"
 
 using namespace std;
 using namespace wp;
@@ -15,6 +19,34 @@ StateControllerTungstenMonoxide::StateControllerTungstenMonoxide()
 	, mMapCount(0)
 	, mNumMaps(1)
 {
+}
+
+void StateControllerTungstenMonoxide::setup(application::resourcesystem::ResourceManager* resourceMgr,
+                                             mpp::RenderSystem* renderSystem,
+                                             mpp::ResourceManager* renderResourceMgr,
+                                             void* args)
+{
+	applib::StateController::setup(resourceMgr, renderSystem, renderResourceMgr, args);
+
+	auto tungstenModel = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
+	if (!tungstenModel || !tungstenModel->pbrPackage)
+	{
+		throw applib::Exception("TungstenMonoxide PBR package service is unavailable.");
+	}
+	tungstenModel->pbrPackage->initialize(
+		renderSystem,
+		renderResourceMgr,
+		static_cast<uint32_t>(renderSystem->getWindowWidth()),
+		static_cast<uint32_t>(renderSystem->getWindowHeight()));
+}
+
+void StateControllerTungstenMonoxide::teardown()
+{
+	if (auto tungstenModel = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get()); tungstenModel && tungstenModel->pbrPackage)
+	{
+		tungstenModel->pbrPackage->shutdown();
+	}
+	applib::StateController::teardown();
 }
 
 string StateControllerTungstenMonoxide::getNextStateName(string const& prevStateName, applib::StateTransitionData* transitionData)

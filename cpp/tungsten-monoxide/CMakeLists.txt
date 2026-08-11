@@ -28,6 +28,7 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/StateMapUnloadTungstenMonoxide.h
   include/StatePlayTungstenMonoxide.h
   include/TrackCollisionBuild.h
+  include/TungstenPbrPackage.h
   include/imgui/imconfig.h
   include/imgui/imgui.h
   include/imgui/imgui_internal.h
@@ -60,7 +61,8 @@ set(TUNGSTEN_MONOXIDE_SOURCES
   src/StateMapTransitionTungstenMonoxide.cpp
   src/StateMapUnloadTungstenMonoxide.cpp
   src/StatePlayTungstenMonoxide.cpp
-  src/TrackCollisionBuild.cpp)
+  src/TrackCollisionBuild.cpp
+  src/TungstenPbrPackage.cpp)
 
 set(_tungsten_monoxide_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
 set(_tungsten_monoxide_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
@@ -111,6 +113,8 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.geometry/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-helper/include"
+  "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-app-support/include"
+  "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-resource-parsers/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-mesh/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-program/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/vendor/include"
@@ -130,6 +134,8 @@ target_link_libraries(TungstenMonoxide PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
+  $<IF:$<CONFIG:Debug>,MppResourceParsersd,MppResourceParsers>
+  $<IF:$<CONFIG:Debug>,MppAppSupportd,MppAppSupport>
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>
   AppLib::AppLib
   $<IF:$<CONFIG:Debug>,yaml-cppd,yaml-cpp>)

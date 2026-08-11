@@ -52,6 +52,7 @@ static StatePlayTungstenMonoxideFactory* statePlayTungstenMonoxideFactory = null
 
 // Arguments
 static bool gThreadedLoading = true;
+static std::string gPbrPackage = "../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage";
 
 extern "C"
 {
@@ -78,6 +79,14 @@ extern "C"
 			{
 				return 1;
 			}
+		}
+		else if (!strcmp(arg, "PbrPackage"))
+		{
+			if (!value || !*value)
+			{
+				return 1;
+			}
+			gPbrPackage = value;
 		}
 
 		return 0;
@@ -125,7 +134,7 @@ extern "C"
 			return new EntityHandlerTungstenMonoxide();
 		};
 
-		model = new TungstenMonoxideModel(entityHandlerFactory, resourceMgr);
+		model = new TungstenMonoxideModel(entityHandlerFactory, resourceMgr, gPbrPackage, logger);
 		applib::ModelInstance::set(model);
 
 		// Create state factories

@@ -22,6 +22,13 @@ private:
 
 protected:
 
+	void setup(wp::application::resourcesystem::ResourceManager* resourceMgr,
+	           mpp::RenderSystem* renderSystem,
+	           mpp::ResourceManager* renderResourceMgr,
+	           void* args = nullptr) override;
+
+	void teardown() override;
+
 public:
 
 	StateControllerTungstenMonoxide();

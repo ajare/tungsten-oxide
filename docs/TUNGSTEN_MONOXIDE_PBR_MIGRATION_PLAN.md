@@ -180,6 +180,8 @@ Exit criteria: DemoSuite can load the package with `--package`, preview all bind
 
 ### Milestone 2 — Package host and build integration
 
+**Status: complete.** `TungstenPbrPackage` now follows DemoSuite's manifest/extraction/document/runtime/graph/pipeline workflow, validates all eight PBR bindings, and is initialized by Controller before Load and MapLoad. Debug and Release launcher configurations provide the package path; legacy Play rendering remains active.
+
 New files (names may be adjusted to project conventions):
 
 - `cpp/tungsten-monoxide/include/TungstenPbrPackage.h`

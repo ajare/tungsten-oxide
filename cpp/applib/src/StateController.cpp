@@ -50,6 +50,9 @@ namespace applib
 
 	void StateController::exitImpl()
 	{
+		// Controller is suspended while child states run, but still needs the normal
+		// State teardown when the stack finally unwinds.
+		State::exitImpl();
 	}
 
 	void StateController::suspendImpl(void* args)
