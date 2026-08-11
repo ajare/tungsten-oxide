@@ -1,7 +1,6 @@
 # TungstenMonoxide — the Windows application DLL loaded by Launcher.
-# Converted from build/vs2026/TungstenMonoxide.vcxproj. It relies on the legacy
-# AppLib, Willpower Collide/Viz/Serialization, MassivePolyPusher, Utils and
-# yaml-cpp dependencies, which are not all present in this checkout.
+# Converted from build/vs2026/TungstenMonoxide.vcxproj. It relies on AppLib,
+# Willpower, MassivePolyPusher, Utils, and yaml-cpp.
 set(TUNGSTEN_MONOXIDE_HEADERS
   include/TungstenMonoxideModel.h
   include/DebugLineDataProvider.h
@@ -102,7 +101,6 @@ target_compile_features(TungstenMonoxide PRIVATE cxx_std_23)
 target_compile_definitions(TungstenMonoxide PRIVATE
   APPLICATION_DLL_EXPORT
   WP_USE_ASSERT_TRACE
-  YAML_CPP_STATIC_DEFINE
   $<$<CONFIG:Debug>:WP_USE_MEMLEAK_TRACKING>)
 set_target_properties(TungstenMonoxide PROPERTIES DEBUG_POSTFIX d)
 
@@ -142,7 +140,7 @@ target_link_libraries(TungstenMonoxide PRIVATE
   $<IF:$<CONFIG:Debug>,MppAppSupportd,MppAppSupport>
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>
   AppLib::AppLib
-  $<IF:$<CONFIG:Debug>,yaml-cppd,yaml-cpp>)
+  yaml-cpp::yaml-cpp)
 
 # Guard stable embedded material-key mappings without creating a renderer.
 add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests

@@ -39,6 +39,15 @@ project(TungstenOxideCpp CXX)
 # discovers core's parity and focused track tests.
 enable_testing()
 
+# Build yaml-cpp from the repository submodule instead of carrying a duplicate
+# header set and prebuilt libraries under third_party.
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "Do not build yaml-cpp contrib sources" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "Do not build yaml-cpp tools" FORCE)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "Do not build yaml-cpp tests" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "Do not install yaml-cpp" FORCE)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build yaml-cpp as a static library" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/yaml-cpp" "${CMAKE_CURRENT_BINARY_DIR}/yaml-cpp" EXCLUDE_FROM_ALL)
+
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)

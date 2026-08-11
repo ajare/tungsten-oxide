@@ -4,3 +4,6 @@
 [submodule "ext/massive-poly-pusher"]
 	path = ext/massive-poly-pusher
 	url = https://github.com/ajare/massive-poly-pusher
+[submodule "ext/yaml-cpp"]
+	path = ext/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp

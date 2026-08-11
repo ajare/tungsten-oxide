@@ -3,7 +3,7 @@
 #
 # This target is a direct CMake conversion of build/vs2026/
 # Willpower.Application.vcxproj. It retains the original dependency on the
-# MassivePolyPusher, FreeImage and FMOD binary SDKs.
+# MassivePolyPusher and FMOD binary SDKs.
 set(WILLPOWER_APPLICATION_HEADERS
   include/willpower/application/ApplicationSettings.h
   include/willpower/application/AudioOptions.h
@@ -159,7 +159,7 @@ target_link_libraries(Willpower.Application PRIVATE
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
   $<IF:$<CONFIG:Debug>,MppProgramd,MppProgram>
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>
-  FreeImage fmod_vc fmodstudio_vc fsbank_vc)
+  fmod_vc fmodstudio_vc fsbank_vc)
 
 target_compile_definitions(Willpower.Application PRIVATE
   WP_USE_ASSERT_TRACE

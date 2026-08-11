@@ -1,215 +1,164 @@
-#include <freeimage/FreeImage.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
 
 #include <mpp/ProgrammaticTextureStream.h>
+
+#include <limits>
+#include <memory>
 
 #include "willpower/common/Exceptions.h"
 
 #include "willpower/application/resourcesystem/ImageResource.h"
 #include "willpower/application/resourcesystem/ResourceExceptions.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			using namespace std;
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
+using namespace std;
 
-			bool isBigEndian()
-			{
-				union
-				{
-					uint32_t i;
-					char c[4];
-				} bint{ 0x01020304 };
+ImageResource::ImageResource(string const& name, string const& namesp, string const& source, map<string, string> const& tags, ResourceLocation* location)
+    : Resource(name, namesp, "Image", source, tags, location), mData(nullptr), mSize(0), mWidth(0), mHeight(0), mNumChannels(0) {
+}
 
-				return bint.c[0] == 1;
-			}
+void ImageResource::parseData(DataStreamPtr dataPtr) {
+  if (dataPtr->getSize() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    throw ResourceException(this, "image data is too large.");
+  }
 
-			void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message)
-			{
-				WP_UNUSED(fif);
-				WP_UNUSED(message);
-				
-				// Hook into logging
-				// ...
-			}
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
+      stbi_load_from_memory(dataPtr->getData(), static_cast<int>(dataPtr->getSize()), &width, &height, &channels, 0), stbi_image_free);
+  if (decoded == nullptr) {
+    throw ResourceException(this, "failed to decode image.");
+  }
 
-			ImageResource::ImageResource(string const& name, string const& namesp, string const& source, map<string, string> const& tags, ResourceLocation* location)
-				: Resource(name, namesp, "Image", source, tags, location)
-				, mData(nullptr)
-				, mSize(0)
-				, mWidth(0)
-				, mHeight(0)
-				, mNumChannels(0)
-			{
-			}
+  if (channels != 3 && channels != 4) {
+    throw ResourceException(this, "unsupported image channel count. Only RGB and RGBA images are supported.");
+  }
 
-			void ImageResource::parseData(DataStreamPtr dataPtr)
-			{
-				FIMEMORY* fibuf = FreeImage_OpenMemory((BYTE*)dataPtr->getData(), dataPtr->getSize());
-				FIBITMAP* bitmap = FreeImage_LoadFromMemory(FreeImage_GetFIFFromFilename(getSource().c_str()), fibuf);
+  const size_t rowSize = static_cast<size_t>(width) * channels;
+  if (rowSize > std::numeric_limits<uint32_t>::max() / static_cast<size_t>(height)) {
+    throw ResourceException(this, "decoded image is too large.");
+  }
 
-				if (bitmap)
-				{
-					// Check it's supported
-					FREE_IMAGE_TYPE imageType = FreeImage_GetImageType(bitmap);
+  mWidth = width;
+  mHeight = height;
+  mNumChannels = channels;
+  mSize = static_cast<uint32_t>(rowSize * mHeight);
+  mData = new uint8_t[mSize];
 
-					if (imageType != FIT_BITMAP)
-					{
-						FreeImage_Unload(bitmap);
-						throw ResourceException(this, "unsupported image type.");
-					}
+  // Convert top-to-bottom decoded rows to the bottom-to-top layout expected by
+  // the existing OpenGL texture path.
+  for (int y = 0; y < mHeight; ++y) {
+    memcpy(mData + static_cast<size_t>(y) * rowSize, decoded.get() + static_cast<size_t>(mHeight - y - 1) * rowSize, rowSize);
+  }
+}
 
-					// Convert to 8 bit.
-					if (imageType == FIT_RGB16 ||
-						imageType == FIT_RGBA16 ||
-						imageType == FIT_RGBF ||
-						imageType == FIT_RGBAF)
-					{
-						bitmap = FreeImage_ColorQuantizeEx(bitmap, FIQ_WUQUANT);
-						bitmap = FreeImage_ConvertTo8Bits(bitmap);
-					}
+void ImageResource::destroy() {
+  delete[] mData;
+  mData = nullptr;
 
-					mWidth = (int)FreeImage_GetWidth(bitmap);
-					mHeight = (int)FreeImage_GetHeight(bitmap);
-					mNumChannels = (int)FreeImage_GetBPP(bitmap) / 8;
+  mSize = 0;
+  mWidth = 0;
+  mHeight = 0;
+  mNumChannels = 0;
+}
 
-					uint32_t dataSpan = mWidth * mNumChannels;
-					mSize = dataSpan * mHeight;
+bool ImageResource::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
+  WP_UNUSED(renderSystem);
 
-					mData = new uint8_t[mSize];
-					memcpy(mData, (uint8_t*)FreeImage_GetBits(bitmap), mSize * sizeof(uint8_t));
+  // Is this to be treated as an atlas?
+  auto tags = getTags();
 
-					FreeImage_Unload(bitmap);
-				}
-				else
-				{
-					// Error
-					// ...
-				}
-			}
+  bool atlas = false;
+  if (tags.find("uv-style") != tags.end()) {
+    if (tags["uv-style"] == "atlas") {
+      atlas = true;
+    }
+  }
 
-			void ImageResource::destroy()
-			{
-				delete[] mData;
-				mData = nullptr;
+  mpp::ProgrammaticTextureStream* textureStream = new mpp::ProgrammaticTextureStream(resourceMgr);
 
-				mSize = 0;
-				mWidth = 0;
-				mHeight = 0;
-				mNumChannels = 0;
-			}
+  textureStream->setAtlas(atlas);
+  textureStream->setTarget(mpp::TextureTarget::Texture2D);
+  textureStream->setData([this](string const& id) {
+    WP_UNUSED(id);
 
-			bool ImageResource::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
-			{
-				WP_UNUSED(renderSystem);
+    mpp::TextureData data;
 
-				// Is this to be treated as an atlas?
-				auto tags = getTags();
+    data.width = getWidth();
+    data.height = getHeight();
+    data.bitsPerPixel = getNumChannels() * 8;
+    data.dataType = GL_UNSIGNED_BYTE;
 
-				bool atlas = false;
-				if (tags.find("uv-style") != tags.end())
-				{
-					if (tags["uv-style"] == "atlas")
-					{
-						atlas = true;
-					}
-				}
+    switch (data.bitsPerPixel) {
+      case 24:
+        data.pixelFormat = GL_RGB;
+        break;
+      case 32:
+        data.pixelFormat = GL_RGBA;
+        break;
+      default:
+        throw ResourceException(this, "unsupported image bit depth.  Only 24- and 32-bit images are supported.");
+    }
 
-				mpp::ProgrammaticTextureStream* textureStream = new mpp::ProgrammaticTextureStream(resourceMgr);
+    size_t dataSize = (data.width * data.height * data.bitsPerPixel / 8);
 
-				textureStream->setAtlas(atlas);
-				textureStream->setTarget(mpp::TextureTarget::Texture2D);
-				textureStream->setData([this](string const& id)
-				{
-					WP_UNUSED(id);
+    data.data = new uint8_t[dataSize];
+    memcpy(data.data, mData, dataSize);
+    return data;
+  });
 
-					mpp::TextureData data;
+  // Other tags
+  bool filtered = true;
+  if (tags.find("filtering") != tags.end()) {
+    if (tags["filtering"] == "none") {
+      filtered = false;
+    }
+  }
 
-					data.width = getWidth();
-					data.height = getHeight();
-					data.bitsPerPixel = getNumChannels() * 8;
-					data.dataType = GL_UNSIGNED_BYTE;
+  if (filtered) {
+    textureStream->setFiltering(mpp::TextureParams::MinFilter::Linear, mpp::TextureParams::MagFilter::Linear);
+  } else {
+    textureStream->setFiltering(mpp::TextureParams::MinFilter::Nearest, mpp::TextureParams::MagFilter::Nearest);
+  }
 
-					switch (data.bitsPerPixel)
-					{
-					case 24:
-						data.pixelFormat = isBigEndian() ? GL_RGB : GL_BGR;
-						break;
-					case 32:
-						data.pixelFormat = isBigEndian() ? GL_RGBA : GL_BGRA;
-						break;
-					default:
-						throw ResourceException(this, "unsupported image bit depth.  Only 24- and 32-bit images are supported.");
-					}
+  mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(textureStream)).first;
+  mMppResource->acquire(this);
 
-					size_t dataSize = (data.width * data.height * data.bitsPerPixel / 8);
+  return true;
+}
 
-					data.data = new uint8_t[dataSize];
-					memcpy(data.data, mData, dataSize);
-					return data;
-				});
+bool ImageResource::unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
+  WP_UNUSED(renderSystem);
+  WP_UNUSED(resourceMgr);
 
-				// Other tags
-				bool filtered = true;
-				if (tags.find("filtering") != tags.end())
-				{
-					if (tags["filtering"] == "none")
-					{
-						filtered = false;
-					}
-				}
+  mMppResource->release(this);
+  return true;
+}
 
-				if (filtered)
-				{
-					textureStream->setFiltering(mpp::TextureParams::MinFilter::Linear, mpp::TextureParams::MagFilter::Linear);
-				}
-				else
-				{
-					textureStream->setFiltering(mpp::TextureParams::MinFilter::Nearest, mpp::TextureParams::MagFilter::Nearest);
-				}
+uint8_t const* ImageResource::getData() const {
+  return mData;
+}
 
-				mMppResource = resourceMgr->declareResource(getQualifiedName(), mpp::ResourceStreamPtr(textureStream)).first;
-				mMppResource->acquire(this);
+uint32_t ImageResource::getSize() const {
+  return mSize;
+}
 
-				return true;
-			}
+int ImageResource::getWidth() const {
+  return mWidth;
+}
 
-			bool ImageResource::unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
-			{
-				WP_UNUSED(renderSystem);
-				WP_UNUSED(resourceMgr);
+int ImageResource::getHeight() const {
+  return mHeight;
+}
 
-				mMppResource->release(this);
-				return true;
-			}
+int ImageResource::getNumChannels() const {
+  return mNumChannels;
+}
 
-			uint8_t const* ImageResource::getData() const
-			{
-				return mData;
-			}
-
-			uint32_t ImageResource::getSize() const
-			{
-				return mSize;
-			}
-
-			int ImageResource::getWidth() const
-			{
-				return mWidth;
-			}
-
-			int ImageResource::getHeight() const
-			{
-				return mHeight;
-			}
-
-			int ImageResource::getNumChannels() const
-			{
-				return mNumChannels;
-			}
-
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

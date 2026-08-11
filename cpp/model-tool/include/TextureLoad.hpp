@@ -1,10 +1,7 @@
 // TextureLoad.hpp — a mpp::ImageLoadFunction backed by stb_image, for
 // mpp::ProgrammaticTextureStream::setFile(). model-tool only ever loads externally file-referenced
-// diffuse/base-color textures (embedded textures are skipped at import time, see AssImpImport.hpp)
-// -- there is no existing stb_image+mpp combination anywhere else in this codebase (cpp/editor uses
-// stb_image but never links mpp; ext/massive-poly-pusher/demo-suite's loadImage uses FreeImage
-// instead, a dependency not otherwise used or vendored under cpp/), so this is new, self-contained
-// glue rather than a port of either precedent.
+// diffuse/base-color textures (embedded textures are skipped at import time, see AssImpImport.hpp).
+// The decoded bytes are adapted to MassivePolyPusher's texture ownership contract.
 #pragma once
 
 #include <mpp/TextureStream.h>

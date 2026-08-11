@@ -57,15 +57,15 @@ endif()
 set(WILLPOWER_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ext" CACHE PATH
   "Root of the ext/ dependencies (MassivePolyPusher, Utils)")
 set(WILLPOWER_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor" CACHE PATH
-  "Root of the vendor/ third-party libs (FreeImage, fmod, ...)")
+  "Root of the vendor/ third-party libs (fmod, ...)")
 
 # Willpower only targets x64.
 set(WILLPOWER_LIB_ARCH "x64")
 
 # The vendored external import libs use a trailing "d" on the Debug .lib and no
 # suffix in Release (Utils.lib/Utilsd.lib, MppMesh.lib/MppMeshd.lib, ...).
-# FreeImage.lib and the FMOD libs use the SAME name in both
-# configs, so don't route them through this helper.
+# The FMOD libs use the SAME name in both configs, so don't route them through
+# this helper.
 function(willpower_link_debug_release target)
   foreach(lib ${ARGN})
     target_link_libraries(${target} PRIVATE $<IF:$<CONFIG:Debug>,${lib}d,${lib}>)
