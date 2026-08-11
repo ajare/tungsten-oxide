@@ -39,10 +39,7 @@ set(APPLIB_HEADERS
   include/applib/StatePlay.h
   include/applib/StateTransitionData.h
   include/applib/StateUnload.h
-  include/applib/ThreadableLoadState.h
-  include/applib/TrackMaterial.h
-  include/applib/TrackMaterialDefaultDefinitionFactory.h
-  include/applib/TrackMaterialResourceDefinitionFactory.h)
+  include/applib/ThreadableLoadState.h)
 
 set(APPLIB_SOURCES
   src/Entity.cpp
@@ -71,10 +68,7 @@ set(APPLIB_SOURCES
   src/StateMapUnload.cpp
   src/StatePlay.cpp
   src/StateUnload.cpp
-  src/ThreadableLoadState.cpp
-  src/TrackMaterial.cpp
-  src/TrackMaterialDefaultDefinitionFactory.cpp
-  src/TrackMaterialResourceDefinitionFactory.cpp)
+  src/ThreadableLoadState.cpp)
 
 set(_applib_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
 set(_applib_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")

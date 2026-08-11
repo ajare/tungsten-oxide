@@ -51,15 +51,12 @@ struct MppModelExportResult {
 // plus Tracks/DefaultShellMaterial, Tracks/DefaultZoneMaterial, and Tracks/DefaultTriggerMaterial
 // for shells/zones/triggers (all declared in Resources.xml).
 //
-// `trackMaterialToMaterial` maps a TrackMaterial's qualified name (what path.material/
-// batch.materialKey actually holds for path-surface geometry -- see MaterialsPanel.cpp) to the
-// underlying Material resource it wraps (MaterialCatalog::MaterialEntry::materialQualifiedName):
-// a mesh's material reference is written as the resolved Material name whenever batch.materialKey
-// has an entry here, since a TrackMaterial isn't itself a renderable resource (see
-// applib::TrackMaterial::getMaterial()) and this exporter has no other way to name the thing a
-// mesh should actually render with. A materialKey with no entry (the fixed rail/shell/zone/
-// trigger materials, which already name real Materials directly, or an empty/legacy "road"
-// literal) passes through unchanged. Defaults to empty (no resolution, matching this function's
+// `trackMaterialToMaterial` maps an editor-facing track material choice (what path.material/
+// batch.materialKey holds for path-surface geometry -- see MaterialsPanel.cpp) to the stable
+// `PbrMaterialBinding` dependency key in MaterialCatalog::MaterialEntry::materialQualifiedName.
+// A mesh's material reference is written as that resolved key whenever batch.materialKey has an
+// entry here. Fixed rail/mesh/shell/zone/trigger keys and an empty/legacy "road" literal pass
+// through unchanged. Defaults to empty (no resolution, matching this function's
 // old behavior) so existing self-check call sites that don't have a MaterialCatalog handy still
 // compile unchanged.
 MppModelExportResult exportTrackToMppModel(const tox::Track& track,
@@ -75,10 +72,9 @@ MppModelExportResult exportTrackToMppModel(const tox::Track& track,
 // (Tracks/DefaultRailMaterial, Tracks/DefaultMeshMaterial, Tracks/DefaultShellMaterial,
 // Tracks/DefaultZoneMaterial, Tracks/DefaultTriggerMaterial -- must stay in sync with
 // cpp/core/src/TrackBake.cpp's and TrackMesh.cpp's hardcoded materialKey strings). Meant to be
-// merged into the game's real Resources.xml, where those TrackMaterial/Material resources are
-// expected to already be declared
-// -- this file only ever emits <DependentResource ref="..."> entries, never full material/program/
-// texture definitions.
+// merged into the game's real Resources.xml, where matching PbrMaterialBinding resources are
+// expected to already be declared. This file only emits <DependentResource ref="..."> entries,
+// never package material definitions.
 //
 // The <Definition>'s <Models> list (TRACK_MODEL_LIST_PLAN.md) always has exactly one entry this
 // function regenerates fresh -- the primary Track-type Model, `primaryModelId` (id attribute) with

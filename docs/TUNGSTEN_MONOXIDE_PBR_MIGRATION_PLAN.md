@@ -294,12 +294,28 @@ Exit criteria: the bundled race renders entirely through `XmlGraphPbrForward`; H
 
 ### Milestone 6 — Remove TungstenMonoxide legacy materials
 
+**Status: complete.** TungstenMonoxide now declares only package-backed `PbrMaterialBinding` resources for 3D rendering. Stable embedded model keys remain unchanged, but resolve directly to those bindings; the parallel legacy track model, ship fallback, programs, shaders, render materials, and represented loose images are gone. AppLib's now-unused runtime `TrackMaterial` wrapper and factories were removed. The editor preserves its authored `Tracks/AsphaltTrack`/`Tracks/DefaultTrack` choices through editor-only metadata on PBR bindings and exports the same stable model keys without loading legacy render resources.
+
 Modified files:
 
+- `cpp/applib/CMakeLists.txt`
+- `cpp/applib/include/applib/TrackMaterial*.h` (removed)
+- `cpp/applib/src/TrackMaterial*.cpp` (removed)
+- `cpp/editor/include/MaterialCatalog.hpp`
+- `cpp/editor/include/MppModelExport.hpp`
+- `cpp/editor/main.cpp`
+- `cpp/editor/src/MaterialCatalog.cpp`
+- `cpp/editor/src/MppModelExport.cpp`
+- `cpp/tungsten-monoxide/include/Map.h`
 - `cpp/tungsten-monoxide/resources/Resources.xml`
-- `cpp/tungsten-monoxide/resources/shaders/**`
+- `cpp/tungsten-monoxide/resources/images/**` (represented legacy images removed)
+- `cpp/tungsten-monoxide/resources/model.xml` (removed)
+- `cpp/tungsten-monoxide/resources/shaders/**` (removed)
+- `cpp/tungsten-monoxide/src/DLL.cpp`
 - `cpp/tungsten-monoxide/src/Map.cpp`
-- AppLib TrackMaterial files if no other target uses them
+- `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
+- `cpp/tungsten-monoxide/tests/pbr_material_binding_mapping_tests.cpp`
+- `docs/tungsten-monoxide.md`
 
 Work:
 

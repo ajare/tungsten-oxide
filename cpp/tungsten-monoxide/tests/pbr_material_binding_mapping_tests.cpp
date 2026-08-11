@@ -236,10 +236,24 @@ int main(int argc, char** argv) {
       std::cerr << "FAIL: NewTrack.mppmodel contains no mesh material keys.\n";
       failed = true;
     }
+
+    const std::set<std::string> removedLegacyTypes{"Material", "Program", "Shader", "TrackMaterial"};
+    for (const auto& [name, declaration] : declarations) {
+      if (removedLegacyTypes.contains(declaration.type)) {
+        std::cerr << "FAIL: legacy resource '" << name << "' still has type '" << declaration.type << "'.\n";
+        failed = true;
+      }
+      for (const auto& [id, reference] : declaration.dependents) {
+        if (id.starts_with("Legacy.") || reference.find("TrackProgram") != std::string::npos) {
+          std::cerr << "FAIL: resource '" << name << "' retains legacy dependency '" << id << "'.\n";
+          failed = true;
+        }
+      }
+    }
     if (failed) return 1;
 
-    std::cout << "Validated " << expectedBindings.size()
-              << " stable Tracks/NewTrack PBR material bindings and " << materialKeys.size()
+    std::cout << "Validated legacy-free PBR resources, " << expectedBindings.size()
+              << " stable Tracks/NewTrack bindings, and " << materialKeys.size()
               << " embedded model material keys.\n";
     return 0;
   } catch (const std::exception& error) {

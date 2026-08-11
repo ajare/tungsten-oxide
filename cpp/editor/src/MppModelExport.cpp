@@ -291,11 +291,11 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
                                          const std::string& primaryModelId,
                                          const std::vector<modelxml::ModelXmlDefinition>& otherModels) {
   // Every distinct material this track's curves are actually assigned to, in first-seen order,
-  // plus the fixed rail/mesh/shell/zone/trigger materials every export depends on regardless of
+  // plus the fixed rail/mesh/shell/zone/trigger bindings every export depends on regardless of
   // curve content. Resolved through trackMaterialToMaterial first (see MppModelExport.hpp's
   // comment) so this dependency list always matches what the exported mesh's own material
-  // reference resolves to -- two different TrackMaterials that happen to wrap the same underlying
-  // Material collapse to one dependency here, which `seen` already handles.
+  // reference resolves to -- choices that map to the same PBR binding key collapse to one
+  // dependency here, which `seen` already handles.
   std::vector<std::string> materials;
   std::set<std::string> seen;
   for (const auto& path : track.paths) {
@@ -310,7 +310,7 @@ std::string buildTrackResourceXmlForName(const TrackDefinition& track, const tox
   }
 
   std::string xml = "<?xml version=\"1.0\"?>\n<Resources>\n\t<Namespace name=\"Tracks\">\n";
-  // No `location=` attribute: Track is always composite (it lists TrackMaterial dependents below),
+  // No `location=` attribute: Track is always composite (it lists PBR binding dependents below),
   // and ResourceManager::instantiateResource() unconditionally discards a composite resource's own
   // `location`/source. The .mppmodel filename instead travels via <Definition><File> below, which
   // MapTungstenMonoxideDefinitionFactory::create() reads into Map::mModelFileName.

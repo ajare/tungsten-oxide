@@ -33,9 +33,6 @@ class Map : public applib::Map {
   // mesh's Type/Visible metadata. See TrackCollisionBuild.h's EmbeddedModelRef.
   std::vector<mono::EmbeddedModelRef> mEmbeddedModels;
   std::shared_ptr<tox::Track> mTrack;
-  // Prepared in parallel with the legacy Play model. Milestone 5 switches presentation to this
-  // package-material model; until then mMppResource remains the legacy-rendering compatibility path.
-  mpp::ResourcePtr mPbrMppResource;
 
   // Eight poses regenerated from schema-10 metadata and settled onto selected model triangles
   // during load; no duplicate StartGrid payload exists in resource XML.
@@ -54,7 +51,7 @@ private:
   // Materials section, which cpp/editor's MppModelExport.cpp deliberately leaves empty; see
   // Map.cpp's comment on resolveMaterialMppName). Instead this builds an
   // mpp::ProgrammaticModelStream mesh-by-mesh, resolving each mesh's material string against this
-  // resource's own already-loaded TrackMaterial/Material dependents (see Resources.xml's
+  // resource's own already-loaded PbrMaterialBinding dependents (see Resources.xml's
   // DependentResources on the Track resource). A mesh whose material has no matching dependent
   // (e.g. PathShell's "shell", ZoneSurface's "zone-<effect>" -- auxiliary geometry
   // buildTrackResourceXml doesn't currently declare a material dependent for) is skipped with a
@@ -78,7 +75,6 @@ public:
 
   std::vector<tox::Pose> const& getStartGridPoses() const { return mStartGridPoses; }
   std::shared_ptr<tox::Track> const& getTrack() const { return mTrack; }
-  mpp::ResourcePtr const& getPbrMppResource() const { return mPbrMppResource; }
 
   // Every non-fatal issue logged during the most recent load() -- skipped meshes, unresolved
   // materials, TrackData warnings -- so the host can surface them to the player directly

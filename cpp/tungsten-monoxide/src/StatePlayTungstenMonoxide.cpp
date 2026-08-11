@@ -161,28 +161,25 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
   }
 
   auto material = game->getDependentResource("ShipMaterial");
-  string materialMppName;
-  if (material && material->getType() == "PbrMaterialBinding") {
-    auto binding = static_cast<applib::PbrMaterialBinding*>(material.get())->getBinding();
-    if (binding != game->getShipMaterialBinding())
-      throw application::resourcesystem::ResourceException(
-          game.get(), "ShipModel logical material '" + game->getShipMaterialBinding() +
-                          "' does not match its PbrMaterialBinding '" + binding + "'.");
-    auto model = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
-    if (!model || !model->pbrPackage)
-      throw application::resourcesystem::ResourceException(game.get(), "ShipModel PBR package service is unavailable.");
-    try {
-      materialMppName = model->pbrPackage->resolveMaterial(binding).resourceName;
-    } catch (exception const& error) {
-      throw application::resourcesystem::ResourceException(
-          game.get(), "ShipModel could not resolve PBR binding '" + binding + "': " + error.what());
-    }
-  } else if (material && material->getType() == "Material") {
-    // Staged migration compatibility for legacy game definitions.
-    materialMppName = material->getQualifiedName();
-  } else {
+  if (!material || material->getType() != "PbrMaterialBinding")
     throw application::resourcesystem::ResourceException(
-        game.get(), "ShipMaterial is missing or is not a PbrMaterialBinding or Material resource.");
+        game.get(), "ShipMaterial is missing or is not a PbrMaterialBinding resource.");
+
+  auto binding = static_cast<applib::PbrMaterialBinding*>(material.get())->getBinding();
+  if (binding != game->getShipMaterialBinding())
+    throw application::resourcesystem::ResourceException(
+        game.get(), "ShipModel logical material '" + game->getShipMaterialBinding() +
+                        "' does not match its PbrMaterialBinding '" + binding + "'.");
+  auto model = dynamic_cast<TungstenMonoxideModel*>(applib::ModelInstance::get());
+  if (!model || !model->pbrPackage)
+    throw application::resourcesystem::ResourceException(game.get(), "ShipModel PBR package service is unavailable.");
+
+  string materialMppName;
+  try {
+    materialMppName = model->pbrPackage->resolveMaterial(binding).resourceName;
+  } catch (exception const& error) {
+    throw application::resourcesystem::ResourceException(
+        game.get(), "ShipModel could not resolve PBR binding '" + binding + "': " + error.what());
   }
 
   auto buildStream = [&](string const& mppMaterialName) {
@@ -253,9 +250,9 @@ void StatePlayTungstenMonoxide::createGameObjects(
   VAR_UNUSED(args);
   auto trackResource = resourceMgr->getResource("NewTrack", "Tracks");
   auto track = dynamic_pointer_cast<Map>(trackResource);
-  if (!track || !track->getPbrMppResource())
+  if (!track || !track->getMppResource())
     throw application::resourcesystem::ResourceException(trackResource.get(), "Track has no package-backed PBR model.");
-  mTrackModel = track->getPbrMppResource();
+  mTrackModel = track->getMppResource();
   mTrackModel->acquire(&mWrangler);
   // Map::load only declares the render model because it can run on a worker
   // without an OpenGL context. MapLoad normally uploads it on the main thread;

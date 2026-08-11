@@ -1762,16 +1762,16 @@ int main(int, char**) {
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
   editor::EditorState editorState(buildStarterTrack());
   editor::TextureCache textureCache;
-  // Loaded once at startup (editor.ini -> Resources.xml -> TrackMaterial entries + their
-  // textures, eager-loaded into textureCache above) and unloaded on exit when this local goes
+  // Loaded once at startup (editor.ini -> Resources.xml -> editor-authored PBR material choices
+  // and their preview textures, eager-loaded into textureCache above) and unloaded on exit when this local goes
   // out of scope at the end of main() -- same RAII lifetime as textureCache itself. Must happen
   // before the first bake below: setAvailableMaterials backfills the starter track's paths (still
-  // material == "" at this point) to the alphabetically-first TrackMaterial, and that backfill has
+  // material == "" at this point) to the alphabetically-first material choice, and that backfill has
   // to be visible in the very first tox::Track::fromJson bake, not just after the first rebake().
   StartupMaterials startupMaterials = loadMaterialCatalog(window, glContext, textureCache);
   const std::filesystem::path materialResourcesPath = std::move(startupMaterials.resourcesPath);
   editor::MaterialCatalog materialCatalog = std::move(startupMaterials.catalog);
-  std::fprintf(stdout, "MaterialCatalog: %zu TrackMaterial resource(s) loaded\n", materialCatalog.materials().size());
+  std::fprintf(stdout, "MaterialCatalog: %zu PBR track material choice(s) loaded\n", materialCatalog.materials().size());
   std::fflush(stdout);
   {
     std::vector<std::string> qualifiedNames;

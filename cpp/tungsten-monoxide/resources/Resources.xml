@@ -3,7 +3,6 @@
     <Resource type="Game" name="TungstenMonoxide">
         <DependentResources>
             <DependentResource id="ShipMaterial" ref="ShipPbrMaterial"/>
-            <DependentResource id="LegacyShipMaterial" ref="Texture"/>
         </DependentResources>
         <Definitions>
             <Definition>
@@ -19,267 +18,56 @@
             <Definition><Binding>Ship.Surface</Binding></Definition>
         </Definitions>
     </Resource>
-    <Resource type="Image" name="BoxTexture" location="images/CesiumLogoFlat.png"/>
-    <Resource type="Material" name="Texture">
-        <DependentResources>
-            <DependentResource id="Program" ref="Tracks/TrackProgram"/>
-            <DependentResource id="Texture" ref="BoxTexture"/>
-        </DependentResources>
-        <Definitions>
-            <Definition>
-                <Textures>
-                    <Texture type="resource" sampler="TEX1">Texture</Texture>
-                </Textures>
-            </Definition>
-        </Definitions>
-    </Resource>
     <!--
-	Maps
-	-->
+    Maps. editorTrackMaterial/editorMaterialKey/editorTexture are editor-only authoring metadata;
+    the runtime factory reads Binding and ignores the additional attributes.
+    -->
     <Namespace name="Tracks">
-        <Resource type="PbrMaterialBinding" name="TrackAsphaltPbr">
+        <Resource type="PbrMaterialBinding" name="TrackAsphaltMaterial"
+                  editorTrackMaterial="AsphaltTrack"
+                  editorMaterialKey="Tracks/TrackAsphaltMaterial"
+                  editorTexture="../pbr/textures/asphalt.png">
             <Definitions><Definition><Binding>Track.Asphalt</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackRailPbr">
+        <Resource type="PbrMaterialBinding" name="DefaultTrackChoice"
+                  editorTrackMaterial="DefaultTrack"
+                  editorMaterialKey="Tracks/TrackAsphaltMaterial"
+                  editorTexture="../pbr/textures/asphalt.png">
+            <Definitions><Definition><Binding>Track.Asphalt</Binding></Definition></Definitions>
+        </Resource>
+        <Resource type="PbrMaterialBinding" name="DefaultRailMaterial"
+                  editorMaterialKey="Tracks/DefaultRailMaterial">
             <Definitions><Definition><Binding>Track.Rail</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackMeshPbr">
+        <Resource type="PbrMaterialBinding" name="DefaultMeshMaterial"
+                  editorMaterialKey="Tracks/DefaultMeshMaterial">
             <Definitions><Definition><Binding>Track.Mesh</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackShellPbr">
+        <Resource type="PbrMaterialBinding" name="DefaultShellMaterial"
+                  editorMaterialKey="Tracks/DefaultShellMaterial">
             <Definitions><Definition><Binding>Track.Shell</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackZonePbr">
+        <Resource type="PbrMaterialBinding" name="DefaultZoneMaterial"
+                  editorMaterialKey="Tracks/DefaultZoneMaterial">
             <Definitions><Definition><Binding>Track.Zone</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackTriggerPbr">
+        <Resource type="PbrMaterialBinding" name="DefaultTriggerMaterial"
+                  editorMaterialKey="Tracks/DefaultTriggerMaterial">
             <Definitions><Definition><Binding>Track.Trigger</Binding></Definition></Definitions>
         </Resource>
-        <Resource type="PbrMaterialBinding" name="TrackFallbackPbr">
+        <Resource type="PbrMaterialBinding" name="ModelTool.DefaultFallbackMaterial3D"
+                  editorMaterialKey="ModelTool.DefaultFallbackMaterial3D">
             <Definitions><Definition><Binding>Track.Fallback</Binding></Definition></Definitions>
-        </Resource>
-        <Resource type="Shader" name="TrackVertexShader" location="shaders/track.vert"/>
-        <Resource type="Shader" name="TrackFragmentShader" location="shaders/track.frag">
-            <Definitions>
-                <Definition>
-                    <textures>1</textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Program" name="TrackProgram">
-            <DependentResources>
-                <DependentResource id="Vertex" ref="TrackVertexShader"/>
-                <DependentResource id="Fragment" ref="TrackFragmentShader"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <!-- attribs:
-					- textures: if >0, 'textures' is set (defaults to 0)
-					- colours: if true, 'colours' is set (defaults to false)
-					- diffuse: if true, 'diffuse' is set (defaults to false)
-					-->
-                    <Attribs>
-                        <textures>1</textures>
-                        <!-- <diffuse>true</diffuse> -->
-                    </Attribs>
-                    <MeshSpecification>
-                        <primitive>triangles</primitive>
-                        <indexed>false</indexed>
-                        <storage>dynamic</storage>
-                        <Buffers>
-                            <Buffer>
-                                <Channels>
-                                    <Channel>
-                                        <data>position3</data>
-                                        <type>float32</type>
-                                    </Channel>
-                                    <Channel>
-                                        <data>normal3</data>
-                                        <type>float32</type>
-                                    </Channel>
-                                </Channels>
-                            </Buffer>
-                            <Buffer>
-                                <Channels>
-                                    <Channel>
-                                        <data>texcoord2</data>
-                                        <type>float32</type>
-                                    </Channel>
-                                    <Channel>
-                                        <data>colour4</data>
-                                        <type>uint8</type>
-                                        <normalised>true</normalised>
-                                    </Channel>
-                                </Channels>
-                            </Buffer>
-                        </Buffers>
-                    </MeshSpecification>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Image" name="DefaultRailTexture" location="images/chevrons.png"/>
-        <Resource type="Image" name="DefaultMeshTexture" location="images/test.png"/>
-        <Resource type="Image" name="DefaultShellTexture" location="images/tiled-metal.png"/>
-        <Resource type="Image" name="DefaultZoneTexture" location="images/test.png"/>
-        <Resource type="Image" name="DefaultTriggerTexture" location="images/test.png"/>
-        <Resource type="Image" name="DefaultTrackTexture" location="images/test.png"/>
-        <Resource type="Image" name="TrackTexture" location="images/wipeout_seamless_track_texture_512x512.png"/>
-        <Resource type="Material" name="DefaultRailMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultRailTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultRailMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultRailTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultMeshMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultMeshTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <!-- Untextured white fallback for a drivable mesh object sub-mesh whose .mppmodel embeds
-             model-tool's own placeholder material key (a mesh that was never assigned a real
-             material there; see MaterialLibrary.cpp's defaultFallbackMaterial()). id must stay
-             exactly "ModelTool.DefaultFallbackMaterial3D" wherever it's referenced as a
-             DependentResource id: Map.cpp's resolveMaterialMppName() looks it up by that literal,
-             unnamespaced string, matched verbatim against what's baked into the .mppmodel file. -->
-        <Resource type="Material" name="ModelTool.DefaultFallbackMaterial3D">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="default" sampler="TEX1"/>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultShellMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultShellTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultZoneMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultZoneTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultTriggerMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultTriggerTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="DefaultTrackMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="DefaultTrackTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="Material" name="TrackAsphaltMaterial">
-            <DependentResources>
-                <DependentResource id="Program" ref="TrackProgram"/>
-                <DependentResource id="Texture" ref="TrackTexture"/>
-            </DependentResources>
-            <Definitions>
-                <Definition>
-                    <Textures>
-                        <Texture type="resource" sampler="TEX1">Texture</Texture>
-                    </Textures>
-                </Definition>
-            </Definitions>
-        </Resource>
-        <Resource type="TrackMaterial" name="DefaultTrack">
-            <DependentResources>
-                <DependentResource id="Material" ref="DefaultTrackMaterial"/>
-            </DependentResources>
-            <Definitions>
-                <Definition/>
-            </Definitions>
-        </Resource>
-        <Resource type="TrackMaterial" name="AsphaltTrack">
-            <DependentResources>
-                <DependentResource id="Material" ref="TrackAsphaltMaterial"/>
-            </DependentResources>
-            <Definitions>
-                <Definition/>
-            </Definitions>
         </Resource>
         <Resource type="Track" name="NewTrack">
             <DependentResources>
-                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltPbr"/>
-                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/TrackRailPbr"/>
-                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/TrackMeshPbr"/>
-                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/TrackShellPbr"/>
-                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/TrackZonePbr"/>
-                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/TrackTriggerPbr"/>
-                <DependentResource id="ModelTool.DefaultFallbackMaterial3D" ref="Tracks/TrackFallbackPbr"/>
-                <!-- Staged coexistence: the IDs above are the authoritative package bindings;
-                     Play keeps these prefixed dependencies until the PBR render pass is enabled. -->
-                <DependentResource id="Legacy.Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
-                <DependentResource id="Legacy.Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
-                <DependentResource id="Legacy.Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
-                <DependentResource id="Legacy.Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
-                <DependentResource id="Legacy.Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
-                <DependentResource id="Legacy.Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
-                <DependentResource id="Legacy.ModelTool.DefaultFallbackMaterial3D" ref="Tracks/ModelTool.DefaultFallbackMaterial3D"/>
+                <DependentResource id="Tracks/TrackAsphaltMaterial" ref="Tracks/TrackAsphaltMaterial"/>
+                <DependentResource id="Tracks/DefaultRailMaterial" ref="Tracks/DefaultRailMaterial"/>
+                <DependentResource id="Tracks/DefaultMeshMaterial" ref="Tracks/DefaultMeshMaterial"/>
+                <DependentResource id="Tracks/DefaultShellMaterial" ref="Tracks/DefaultShellMaterial"/>
+                <DependentResource id="Tracks/DefaultZoneMaterial" ref="Tracks/DefaultZoneMaterial"/>
+                <DependentResource id="Tracks/DefaultTriggerMaterial" ref="Tracks/DefaultTriggerMaterial"/>
+                <DependentResource id="ModelTool.DefaultFallbackMaterial3D" ref="Tracks/ModelTool.DefaultFallbackMaterial3D"/>
             </DependentResources>
             <Definitions>
                 <Definition factory="Track">
