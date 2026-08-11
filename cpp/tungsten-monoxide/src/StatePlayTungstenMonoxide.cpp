@@ -25,6 +25,7 @@
 #include "StatePlayTungstenMonoxide.h"
 #include "Game.h"
 #include "Map.h"
+#include "PbrMeshSpecification.h"
 #include "PbrVertexConversion.h"
 #include "ReactiveCamera.h"
 #include "TungstenMonoxideModel.h"
@@ -45,20 +46,6 @@ constexpr double LOOK_AT_UP_MIN = -6.0;
 constexpr double LOOK_AT_UP_MAX = 12.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
 constexpr double SHIP_BOB_AMPLITUDE = 0.06;
-
-mpp::mesh::MeshSpecification shipMeshSpecification(bool pbr) {
-  mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Triangles);
-  auto layout = spec.createVertexBufferAttributeLayout(false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
-  if (pbr)
-    layout->createAttribute(mpp::mesh::Vertex::Component::Tangent4, mpp::mesh::Vertex::DataType::Float, false);
-  spec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
-  spec.setIndexedVertices(true);
-  return spec;
-}
 
 glm::vec3 toGlm(tox::Vec3 const& value) {
   return {static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
@@ -183,7 +170,7 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
   }
 
   auto buildStream = [&](bool pbr, string const& mppMaterialName) {
-    auto spec = shipMeshSpecification(pbr);
+    auto spec = mono::gameMeshSpecification(true, pbr);
     auto stream = new mpp::ProgrammaticModelStream(renderResourceMgr);
     for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
       if (serializer.getPrimitiveType(i) != mpp::mesh::Primitive::Type::Triangles)
@@ -243,6 +230,9 @@ mpp::ResourcePtr StatePlayTungstenMonoxide::createShipModel(
                                         mpp::ResourceStreamPtr(buildStream(true, materialMppName)))
                       .first;
   mPbrShipModel->acquire(&mWrangler);
+  // Loading validates the indexed 52-byte stream against the package material while Play still
+  // presents the parallel compatibility model through the legacy render pass.
+  mPbrShipModel->load();
 
   auto legacyMaterial = game->getDependentResource("LegacyShipMaterial");
   if (!legacyMaterial || legacyMaterial->getType() != "Material")
@@ -323,6 +313,8 @@ void StatePlayTungstenMonoxide::destroyGameObjects() {
   mTrackSceneModel.reset();
   if (mShipModel) mShipModel->release(&mWrangler);
   mShipModel.reset();
+  if (mPbrShipModel) mPbrShipModel->release(&mWrangler);
+  mPbrShipModel.reset();
   if (mTrackModel) mTrackModel->release(&mWrangler);
   mTrackModel.reset();
 }

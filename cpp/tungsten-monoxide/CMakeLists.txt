@@ -18,6 +18,7 @@ set(TUNGSTEN_MONOXIDE_HEADERS
   include/MapException.h
   include/MetricsDataProvider.h
   include/Platform.h
+  include/PbrMeshSpecification.h
   include/PbrVertexConversion.h
   include/ProtoEntity.h
   include/ProtoEntityDefinitionFactory.h
@@ -54,6 +55,7 @@ set(TUNGSTEN_MONOXIDE_SOURCES
   src/imgui/implot_items.cpp
   src/Map.cpp
   src/MapTungstenMonoxideDefinitionFactory.cpp
+  src/PbrMeshSpecification.cpp
   src/PbrVertexConversion.cpp
   src/ProtoEntity.cpp
   src/ProtoEntityDefinitionFactory.cpp

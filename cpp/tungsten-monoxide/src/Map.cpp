@@ -21,6 +21,7 @@
 #include <willpower/application/resourcesystem/ResourceExceptions.h>
 
 #include "Map.h"
+#include "PbrMeshSpecification.h"
 #include "PbrVertexConversion.h"
 #include "Simulation.hpp"
 #include "StartGrid.hpp"
@@ -31,20 +32,6 @@ using namespace std;
 using namespace wp;
 
 namespace {
-
-mpp::mesh::MeshSpecification trackMeshSpecification(bool pbr) {
-  mpp::mesh::MeshSpecification meshSpec(mpp::mesh::Primitive::Type::Triangles);
-  auto attribLayout = meshSpec.createVertexBufferAttributeLayout(false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
-  attribLayout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
-  if (pbr)
-    attribLayout->createAttribute(mpp::mesh::Vertex::Component::Tangent4, mpp::mesh::Vertex::DataType::Float, false);
-  meshSpec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
-  meshSpec.setIndexedVertices(false);
-  return meshSpec;
-}
 
 string resolveLegacyMaterialMppName(Map* map, string const& materialKey) {
   auto dependent = map->getDependentResource("Legacy." + materialKey);
@@ -188,7 +175,7 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
         }
       }
 
-      // Expand indexed -> flat non-indexed (trackMeshSpecification() sets setIndexedVertices(false),
+      // Expand indexed -> flat non-indexed (the track specification is non-indexed,
       // matching every other mesh already in this modelStream).
       vector<int8_t> flat(indices.size() * stride);
       for (size_t k = 0; k < indices.size(); ++k) memcpy(flat.data() + k * stride, transformed.data() + static_cast<size_t>(indices[k]) * stride, stride);
@@ -307,7 +294,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
   }
 
   auto buildModelStream = [&](bool pbr) {
-    auto meshSpec = trackMeshSpecification(pbr);
+    auto meshSpec = mono::gameMeshSpecification(false, pbr);
     auto modelStream = new mpp::ProgrammaticModelStream(resourceMgr);
     for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
       string materialMppName;

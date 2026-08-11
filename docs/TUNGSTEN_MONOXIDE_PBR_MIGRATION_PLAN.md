@@ -240,10 +240,12 @@ Exit criteria: generated track and ship model streams reference package-owned `P
 
 ### Milestone 4 — Tangent-capable geometry
 
-**Status: in progress.** Milestone 3's staged PBR streams already use the exact 52-byte layout and generate indexed ship, flat track, and placed-mesh tangent frames. Conventional, mirrored-UV, shared-indexed-vertex, and degenerate-UV cases have focused coverage in CTest `tungsten_monoxide_pbr_vertex_conversion`. The remaining geometry-specific cases and visual verification stay in this milestone.
+**Status: complete.** `gameMeshSpecification()` now defines the shared indexed/non-indexed game contract and asserts its 36-byte compatibility or exact 52-byte PBR stride. Indexed ship, flat track, and placed-mesh streams generate stable tangent frames; the package-backed streams are loaded to validate them against their concrete PBR materials while legacy Play remains the presentation path until Milestone 5. CTest covers conventional and mirrored UVs, shared indexed vertices, degenerate UV fallback, transformed placement data, preserved source channels, out-of-range indices, and non-finite position/normal/UV rejection.
 
 New shared files:
 
+- `cpp/tungsten-monoxide/include/PbrMeshSpecification.h`
+- `cpp/tungsten-monoxide/src/PbrMeshSpecification.cpp`
 - `cpp/tungsten-monoxide/include/PbrVertexConversion.h`
 - `cpp/tungsten-monoxide/src/PbrVertexConversion.cpp`
 - focused unit tests

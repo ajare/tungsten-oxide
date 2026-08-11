@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 #pragma warning(push)
 #pragma warning(disable : 4201)
@@ -25,9 +26,16 @@ glm::vec2 readVec2(const std::int8_t* data, std::size_t offset) {
   return {readFloat(data, offset), readFloat(data, offset + 4)};
 }
 
+bool finite(glm::vec2 const& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+bool finite(glm::vec3 const& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
 bool usable(glm::vec3 const& value) {
-  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) &&
-         glm::dot(value, value) > 1e-20f;
+  return finite(value) && glm::dot(value, value) > 1e-20f;
 }
 
 glm::vec3 fallbackTangent(glm::vec3 const& normal) {
@@ -44,6 +52,19 @@ std::vector<std::int8_t> addPbrTangents(std::span<const std::int8_t> vertices,
     throw std::invalid_argument("legacy PBR vertex data must have a 36-byte stride");
   if (triangleIndices.size() % 3 != 0)
     throw std::invalid_argument("PBR tangent index count must be divisible by three");
+
+  for (std::size_t vertex = 0; vertex < vertexCount; ++vertex) {
+    auto const* source = vertices.data() + vertex * LegacyPbrVertexStride;
+    if (!finite(readVec3(source, 0)))
+      throw std::invalid_argument("PBR vertex position contains a non-finite value at vertex " +
+                                  std::to_string(vertex));
+    if (!finite(readVec3(source, 12)))
+      throw std::invalid_argument("PBR vertex normal contains a non-finite value at vertex " +
+                                  std::to_string(vertex));
+    if (!finite(readVec2(source, 24)))
+      throw std::invalid_argument("PBR vertex texture coordinate contains a non-finite value at vertex " +
+                                  std::to_string(vertex));
+  }
 
   std::vector<glm::vec3> tangentSums(vertexCount, glm::vec3(0.0f));
   std::vector<glm::vec3> bitangentSums(vertexCount, glm::vec3(0.0f));
