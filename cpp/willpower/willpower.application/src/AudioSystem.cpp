@@ -12,6 +12,7 @@ namespace WP_NAMESPACE
 
 		using namespace std;
 
+#ifdef WP_APPLICATION_USE_FMOD
 		AudioSystem::AudioSystem(AudioOptions const& options)
 			: mSystem(nullptr)
 		{
@@ -125,6 +126,24 @@ namespace WP_NAMESPACE
 				throw exception(FMOD_ErrorString(res));
 			}
 		}
+#else
+		AudioSystem::AudioSystem(AudioOptions const& options)
+		{
+			WP_UNUSED(options);
+		}
+
+		AudioSystem::~AudioSystem() = default;
+
+		void AudioSystem::createAudioBank(resourcesystem::AudioBankResource* audioBank, resourcesystem::DataStreamPtr dataPtr)
+		{
+			WP_UNUSED(audioBank);
+			WP_UNUSED(dataPtr);
+		}
+
+		void AudioSystem::update()
+		{
+		}
+#endif
 
 	} // application
 } // WP_NAMESPACE

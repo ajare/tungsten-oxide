@@ -38,7 +38,7 @@ add_executable(mesh_physics_diag
 target_compile_features(mesh_physics_diag PRIVATE cxx_std_20)
 target_include_directories(mesh_physics_diag PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../core/third_party"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-helper/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/include"

@@ -3,7 +3,7 @@
 #
 # This target is a direct CMake conversion of build/vs2026/
 # Willpower.Application.vcxproj. It retains the original dependency on the
-# MassivePolyPusher and FMOD binary SDKs.
+# MassivePolyPusher SDK. The FMOD binary SDK is enabled only on Windows.
 set(WILLPOWER_APPLICATION_HEADERS
   include/willpower/application/ApplicationSettings.h
   include/willpower/application/AudioOptions.h
@@ -144,22 +144,28 @@ target_include_directories(Willpower.Application PRIVATE
   "${WILLPOWER_MPP_DIR}/vendor/include"
   "${WILLPOWER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${WILLPOWER_MPP_DIR}/ext/utils/include"
-  "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include"
-  "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include/fmod/core")
+  "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include")
 
 target_link_libraries(Willpower.Application PUBLIC Willpower.Common)
 
 # MassivePolyPusher is configured and built separately from its root CMake project. Its import
 # libraries share one output directory and are intentionally consumed as raw library names here.
 target_link_directories(Willpower.Application PRIVATE
-  "${WILLPOWER_MPP_DIR}/build/cmake/lib/$<CONFIG>"
-  "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/lib/vs2026/${WILLPOWER_LIB_ARCH}/$<CONFIG>")
+  "${WILLPOWER_MPP_DIR}/build/cmake/lib/$<CONFIG>")
 target_link_libraries(Willpower.Application PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
   $<IF:$<CONFIG:Debug>,MppProgramd,MppProgram>
-  $<IF:$<CONFIG:Debug>,Utilsd,Utils>
-  fmod_vc fmodstudio_vc fsbank_vc)
+  $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
+
+if (WIN32)
+  target_compile_definitions(Willpower.Application PUBLIC WP_APPLICATION_USE_FMOD)
+  target_include_directories(Willpower.Application PUBLIC
+    "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include/fmod/core")
+  target_link_directories(Willpower.Application PRIVATE
+    "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/lib/vs2026/${WILLPOWER_LIB_ARCH}/$<CONFIG>")
+  target_link_libraries(Willpower.Application PRIVATE fmod_vc fmodstudio_vc fsbank_vc)
+endif()
 
 target_compile_definitions(Willpower.Application PRIVATE
   WP_USE_ASSERT_TRACE

@@ -1,6 +1,8 @@
+#ifdef WP_APPLICATION_USE_FMOD
 #include <fmod/core/fmod.hpp>
 #include <fmod/core/fmod_errors.h>
 #include <fmod/studio/fmod_studio.hpp>
+#endif
 
 #include "willpower/application/resourcesystem/ResourceExceptions.h"
 #include "willpower/application/resourcesystem/AudioBankResource.h"
@@ -24,7 +26,9 @@ namespace WP_NAMESPACE
 				AudioSystem* audioSystem)
 				: application::resourcesystem::Resource(name, namesp, "AudioBank", source, tags, location)
 				, mwAudioSystem(audioSystem)
+#ifdef WP_APPLICATION_USE_FMOD
 				, mBank(nullptr)
+#endif
 			{
 			}
 
@@ -45,6 +49,7 @@ namespace WP_NAMESPACE
 
 			void AudioBankResource::destroy()
 			{
+#ifdef WP_APPLICATION_USE_FMOD
 				if (mwAudioSystem)
 				{
 					auto res = mBank->unload();
@@ -55,6 +60,7 @@ namespace WP_NAMESPACE
 						throw application::resourcesystem::ResourceException(this, (FMOD_ErrorString(res)));
 					}
 				}
+#endif
 			}
 
 			bool AudioBankResource::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
@@ -62,6 +68,7 @@ namespace WP_NAMESPACE
 				WP_UNUSED(renderSystem);
 				WP_UNUSED(resourceMgr);
 
+#ifdef WP_APPLICATION_USE_FMOD
 				if (mwAudioSystem)
 				{
 					auto res = mBank->loadSampleData();
@@ -71,6 +78,7 @@ namespace WP_NAMESPACE
 						throw application::resourcesystem::ResourceException(this, (FMOD_ErrorString(res)));
 					}
 				}
+#endif
 
 				return true;
 			}
@@ -80,6 +88,7 @@ namespace WP_NAMESPACE
 				WP_UNUSED(renderSystem);
 				WP_UNUSED(resourceMgr);
 
+#ifdef WP_APPLICATION_USE_FMOD
 				if (mwAudioSystem)
 				{
 					auto res = mBank->unloadSampleData();
@@ -89,6 +98,7 @@ namespace WP_NAMESPACE
 						throw application::resourcesystem::ResourceException(this, (FMOD_ErrorString(res)));
 					}
 				}
+#endif
 
 				return true;
 			}

@@ -15,6 +15,7 @@ endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(TOX_SHARED_THIRD_PARTY_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include")
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -87,7 +88,7 @@ add_library(core STATIC
   src/ShipFactory.cpp
   src/GameSession.cpp
   ${CORE_HEADERS})
-target_include_directories(core PUBLIC include PRIVATE third_party)
+target_include_directories(core PUBLIC include PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower::Geometry)
 
 # Headers carry no build step of their own, but listing them as sources (above)
@@ -96,26 +97,26 @@ target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower::Geometry)
 source_group("Header Files" FILES ${CORE_HEADERS})
 
 add_executable(parity tests/parity_main.cpp)
-target_include_directories(parity PRIVATE third_party)
+target_include_directories(parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(parity PRIVATE core)
 
 # Focused loader, bake, topology, render-geometry, and mesh-query tests without
 # making the existing baked-world parity replayer responsible for everything.
 add_executable(track_tests tests/track_tests.cpp)
-target_include_directories(track_tests PRIVATE third_party)
+target_include_directories(track_tests PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(track_tests PRIVATE core)
 
 # Cross-language renderer-neutral geometry parity over deterministic randomly
 # generated current-schema JSON tracks.
 add_executable(random_geometry_parity tests/random_geometry_parity_main.cpp)
-target_include_directories(random_geometry_parity PRIVATE third_party)
+target_include_directories(random_geometry_parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(random_geometry_parity PRIVATE core)
 
 # Raw-session parity (NATIVE_GAME_RUNTIME_PLAN.md): native ship/session
 # initialization and GameSession frame-stepping/events, independently from
 # schema-10 JSON plus scripted controls only.
 add_executable(raw_session_parity tests/raw_session_parity_main.cpp)
-target_include_directories(raw_session_parity PRIVATE third_party)
+target_include_directories(raw_session_parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(raw_session_parity PRIVATE core)
 
 # Multi-config generators leave Willpower DLLs in sibling output directories.

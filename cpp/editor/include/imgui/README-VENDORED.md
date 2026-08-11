@@ -1,7 +1,7 @@
 # Vendored: Dear ImGui (docking branch)
 
 Copied per the project convention of embedding third-party sources directly
-(see `cpp/core/third_party/nlohmann`) rather than a submodule/FetchContent,
+(see `cpp/third_party/include/nlohmann`) rather than a submodule/FetchContent,
 because the brief calls for ImGui files living under this project's own
 `include`/`src`.
 

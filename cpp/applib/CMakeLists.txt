@@ -120,8 +120,7 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_MPP_DIR}/vendor/include"
   "${APPLIB_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${APPLIB_MPP_DIR}/ext/utils/include"
-  "${APPLIB_THIRD_PARTY_DIR}/include"
-  "${APPLIB_THIRD_PARTY_DIR}/include/fmod/core")
+  "${APPLIB_THIRD_PARTY_DIR}/include")
 
 target_link_directories(AppLib PRIVATE
   "${APPLIB_MPP_DIR}/build/cmake/lib/$<CONFIG>"

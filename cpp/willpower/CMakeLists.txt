@@ -31,8 +31,8 @@ endif()
 if (NOT WIN32)
   message(WARNING
     "Willpower was authored as a Windows/MSVC codebase (manual __declspec "
-    "DLL exports, StackWalker.h, FMOD binaries) — configuring anyway, but "
-    "expect it to need real portability work off Windows.")
+    "DLL exports and StackWalker.h) — configuring anyway, but expect it to "
+    "need additional portability work off Windows.")
 endif()
 
 if (MSVC)
@@ -57,15 +57,15 @@ endif()
 set(WILLPOWER_EXT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ext" CACHE PATH
   "Root of the ext/ dependencies (MassivePolyPusher, Utils)")
 set(WILLPOWER_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor" CACHE PATH
-  "Root of the vendor/ third-party libs (fmod, ...)")
+  "Root of the vendor/ third-party libraries")
 
 # Willpower only targets x64.
 set(WILLPOWER_LIB_ARCH "x64")
 
 # The vendored external import libs use a trailing "d" on the Debug .lib and no
 # suffix in Release (Utils.lib/Utilsd.lib, MppMesh.lib/MppMeshd.lib, ...).
-# The FMOD libs use the SAME name in both configs, so don't route them through
-# this helper.
+# Libraries with the same name in both configurations should not be routed
+# through this helper.
 function(willpower_link_debug_release target)
   foreach(lib ${ARGN})
     target_link_libraries(${target} PRIVATE $<IF:$<CONFIG:Debug>,${lib}d,${lib}>)

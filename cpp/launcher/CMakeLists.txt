@@ -109,8 +109,7 @@ target_include_directories(Launcher PRIVATE
   "${LAUNCHER_MPP_DIR}/vendor/include"
   "${LAUNCHER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${LAUNCHER_MPP_DIR}/ext/utils/include"
-  "${LAUNCHER_THIRD_PARTY_DIR}/include"
-  "${LAUNCHER_THIRD_PARTY_DIR}/include/fmod/core")
+  "${LAUNCHER_THIRD_PARTY_DIR}/include")
 
 target_compile_definitions(Launcher PRIVATE USINGZ)
 

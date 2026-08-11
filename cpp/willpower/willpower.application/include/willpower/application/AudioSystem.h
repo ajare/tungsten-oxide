@@ -1,8 +1,10 @@
 #pragma once
 
+#ifdef WP_APPLICATION_USE_FMOD
 #include <fmod/core/fmod.hpp>
 #include <fmod/core/fmod_errors.h>
 #include <fmod/studio/fmod_studio.hpp>
+#endif
 
 #include "willpower/application/Platform.h"
 #include "willpower/application/AudioOptions.h"
@@ -20,7 +22,9 @@ namespace WP_NAMESPACE
 
 		class WP_APPLICATION_API AudioSystem
 		{
+#ifdef WP_APPLICATION_USE_FMOD
 			FMOD::Studio::System* mSystem;
+#endif
 
 		public:
 
@@ -30,9 +34,11 @@ namespace WP_NAMESPACE
 
 			void createAudioBank(resourcesystem::AudioBankResource* audioBank, resourcesystem::DataStreamPtr dataPtr);
 
+#ifdef WP_APPLICATION_USE_FMOD
 			FMOD::Studio::EventInstance* startEvent(std::string const& eventName);
 
 			void setEventVolume(FMOD::Studio::EventInstance* inst, float volume);
+#endif
 
 			void update();
 		};

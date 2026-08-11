@@ -15,6 +15,7 @@ project(track_editor CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(TOX_SHARED_THIRD_PARTY_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include")
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -95,7 +96,7 @@ target_include_directories(track_editor PRIVATE
   include
   include/imgui
   include/gl3w
-  third_party)
+  "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 
 target_link_libraries(track_editor PRIVATE
   core
@@ -111,7 +112,9 @@ add_executable(editor_track_resource_tests
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/FileDialog.cpp)
-target_include_directories(editor_track_resource_tests PRIVATE include third_party)
+target_include_directories(editor_track_resource_tests PRIVATE
+  include
+  "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common model_xml)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
@@ -123,7 +126,9 @@ add_executable(mpp_model_import_tests
   tests/mpp_model_import_tests.cpp
   src/MppModelImport.cpp
   src/MppModelExport.cpp)
-target_include_directories(mpp_model_import_tests PRIVATE include third_party)
+target_include_directories(mpp_model_import_tests PRIVATE
+  include
+  "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(mpp_model_import_tests PRIVATE core Willpower::Common model_xml)
 add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
 

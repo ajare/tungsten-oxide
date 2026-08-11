@@ -122,8 +122,7 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/vendor/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/ext/utils/include"
-  "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include"
-  "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include/fmod/core")
+  "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include")
 
 target_link_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/lib/$<CONFIG>"

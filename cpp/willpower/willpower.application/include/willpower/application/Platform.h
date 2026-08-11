@@ -49,7 +49,7 @@
 #			define WP_APPLICATION_API __declspec( dllimport )
 #		endif
 #	endif
-#elif WP_PLATFORM == WP_PLATFORM_LINUX
+#else
 #	if defined(WP_APPLICATION_DLL_EXPORT)
 #		define WP_APPLICATION_API __attribute__((visibility("default")))
 #	else

@@ -1,7 +1,7 @@
 # Vendored: stb_image
 
 Single-header image decoder (`stb_image.h`), copied per the project convention
-of embedding third-party sources directly (see `cpp/core/third_party/nlohmann`,
+of embedding third-party sources directly (see `cpp/third_party/include/nlohmann`,
 `cpp/editor/include/gl3w`).
 
 Source: https://raw.githubusercontent.com/nothings/stb/master/stb_image.h

@@ -2,7 +2,7 @@
 
 Pre-generated OpenGL core-profile loader (`GL/gl3w.h`, `GL/glcorearb.h`,
 `src/gl3w/gl3w.c`), copied per the project convention of embedding third-party
-sources directly (see `cpp/core/third_party/nlohmann`).
+sources directly (see `cpp/third_party/include/nlohmann`).
 
 Source: the last commit of `ocornut/imgui` before its `examples/libs/gl3w`
 directory was removed in favor of an embedded loader

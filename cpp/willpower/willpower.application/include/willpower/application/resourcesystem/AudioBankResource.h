@@ -24,7 +24,9 @@ namespace WP_NAMESPACE
 
 				AudioSystem* mwAudioSystem;
 
+#ifdef WP_APPLICATION_USE_FMOD
 				FMOD::Studio::Bank* mBank;
+#endif
 
 			private:
 
