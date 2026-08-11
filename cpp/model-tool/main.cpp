@@ -4,7 +4,7 @@
 //
 // GLEW must be the first GL-touching include in this translation unit (before SDL.h/windows.h),
 // matching the rest of this app's GLEW-as-GL-loader choice (ADR D2, include/imgui/imconfig.h).
-#include <glew/glew.h>
+#include <GL/glew.h>
 
 #pragma warning(push)
 #pragma warning(disable : 4201)

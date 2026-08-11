@@ -10,7 +10,7 @@
 #include <glm/vec3.hpp>
 #pragma warning(pop)
 
-#include <glew/glew.h>
+#include <GL/glew.h>
 
 #include <mpp/ProgrammaticModelStream.h>
 #include <mpp/RenderSystem.h>

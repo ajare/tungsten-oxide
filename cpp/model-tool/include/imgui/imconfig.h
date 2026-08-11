@@ -20,4 +20,4 @@
 // tells imgui_impl_opengl3.cpp to skip its own embedded minimal loader and assume GL function
 // pointers are already available from whatever loader header the app provides here.
 #define IMGUI_IMPL_OPENGL_LOADER_CUSTOM
-#include <glew/glew.h>
+#include <GL/glew.h>

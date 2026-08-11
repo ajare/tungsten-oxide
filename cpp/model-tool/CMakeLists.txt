@@ -94,19 +94,10 @@ else()
 endif()
 unset(_model_tool_legacy_mpp_dir)
 unset(_model_tool_mpp_dir)
-set(MODEL_TOOL_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party" CACHE PATH
-  "Root of model_tool's third-party SDK headers and libraries (AssImp)")
-set(MODEL_TOOL_LIB_ARCH x64 CACHE STRING "Architecture used by the MassivePolyPusher/AssImp SDK libraries")
-
 target_include_directories(model_tool PRIVATE
   include
   include/imgui
   include/stb
-  # Listed before vendor/include on purpose: both it and vendor/include/ have their own assimp/
-  # headers (vendor's is an older bundled copy lacking aiTextureType_BASE_COLOR/
-  # aiScene::GetEmbeddedTexture, which AssImpImport.cpp needs) -- first match on the include path
-  # wins, and this app was asked to use the third_party/ AssImp specifically.
-  "${MODEL_TOOL_THIRD_PARTY_DIR}/include"
   "${MODEL_TOOL_MPP_DIR}/mpp/include"
   "${MODEL_TOOL_MPP_DIR}/mpp-helper/include"
   "${MODEL_TOOL_MPP_DIR}/mpp-mesh/include"
@@ -116,12 +107,13 @@ target_include_directories(model_tool PRIVATE
   "${MODEL_TOOL_MPP_DIR}/mpp-program/include"
   "${MODEL_TOOL_MPP_DIR}/vendor/include"
   "${MODEL_TOOL_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  # Use the Assimp headers and generated configuration matching the binaries built by MPP.
   "${MODEL_TOOL_MPP_DIR}/build/cmake/ext/assimp/include"
+  "${MODEL_TOOL_MPP_DIR}/ext/assimp/include"
   "${MODEL_TOOL_MPP_DIR}/ext/utils/include")
 
 target_link_directories(model_tool PRIVATE
-  "${MODEL_TOOL_MPP_DIR}/build/cmake/lib/$<CONFIG>"
-  "${MODEL_TOOL_THIRD_PARTY_DIR}/lib/vs2026/${MODEL_TOOL_LIB_ARCH}/$<CONFIG>")
+  "${MODEL_TOOL_MPP_DIR}/build/cmake/lib/$<CONFIG>")
 
 target_link_libraries(model_tool PRIVATE
   SDL2::SDL2
@@ -161,23 +153,19 @@ if (NOT DEFINED OUTPUT_DIR OR NOT DEFINED CONFIG)
   message(FATAL_ERROR "OUTPUT_DIR and CONFIG are required")
 endif()
 
-set(_runtime_roots
-  "@MODEL_TOOL_THIRD_PARTY_DIR@/bin/vs2026/@MODEL_TOOL_LIB_ARCH@/${CONFIG}"
-  # The dependency's CMake build places MassivePolyPusher, MppMesh, MppProgram, MppHelper, Utils,
-  # and GLEW runtime DLLs together.
-  "@MODEL_TOOL_MPP_DIR@/build/cmake/bin/${CONFIG}")
+# The dependency's CMake build places Assimp, MassivePolyPusher, MppMesh, MppProgram, MppHelper,
+# Utils, and GLEW runtime DLLs together.
+set(_runtime_root "@MODEL_TOOL_MPP_DIR@/build/cmake/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
-foreach(_runtime_root IN LISTS _runtime_roots)
-  if (EXISTS "${_runtime_root}")
-    file(GLOB _runtime_files LIST_DIRECTORIES false "${_runtime_root}/*")
-    if (_runtime_files)
-      execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_runtime_files} "${OUTPUT_DIR}"
-        COMMAND_ERROR_IS_FATAL ANY)
-    endif()
+if (EXISTS "${_runtime_root}")
+  file(GLOB _runtime_files LIST_DIRECTORIES false "${_runtime_root}/*")
+  if (_runtime_files)
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_runtime_files} "${OUTPUT_DIR}"
+      COMMAND_ERROR_IS_FATAL ANY)
   endif()
-endforeach()
+endif()
 ]=])
 file(CONFIGURE
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CopyModelToolRuntime.cmake"

@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include <glew/glew.h>
+#include <GL/glew.h>
 
 // This is the one translation unit that owns stb_image's implementation (mirrors
 // cpp/editor/src/TextureCache.cpp's own comment on the same convention).
