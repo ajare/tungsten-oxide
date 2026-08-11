@@ -78,3 +78,9 @@ add_custom_command(TARGET mesh_physics_diag POST_BUILD
     "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/glew32.dll"
     $<TARGET_FILE_DIR:mesh_physics_diag>
   COMMAND_EXPAND_LISTS)
+
+add_test(NAME mesh_physics_diag_bundled_track
+  COMMAND mesh_physics_diag --validate
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/resources/NewTrack.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/resources/NewTrack.mppmodel"
+    1)

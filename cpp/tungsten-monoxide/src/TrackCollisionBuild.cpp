@@ -188,12 +188,18 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
       auto const& reference = expected.vertices[v];
       if (!matchesExportedFloat(reference.position.x, vertex.position.x) ||
           !matchesExportedFloat(reference.position.y, vertex.position.y) ||
-          !matchesExportedFloat(reference.position.z, vertex.position.z) ||
-          !matchesExportedFloat(reference.normal.x, vertex.normal.x) ||
-          !matchesExportedFloat(reference.normal.y, vertex.normal.y) ||
-          !matchesExportedFloat(reference.normal.z, vertex.normal.z))
-        throw runtime_error("listed track mesh '" + name + "' vertex data does not match TrackData export geometry.");
-      vertex.normal = tox::normalizeSafe(vertex.normal);
+          !matchesExportedFloat(reference.position.z, vertex.position.z))
+        throw runtime_error("listed track mesh '" + name + "' vertex " + to_string(v) +
+                            " position does not match TrackData export geometry (expected " +
+                            to_string(static_cast<float>(reference.position.x)) + ", " +
+                            to_string(static_cast<float>(reference.position.y)) + ", " +
+                            to_string(static_cast<float>(reference.position.z)) + "; actual " +
+                            to_string(vertex.position.x) + ", " + to_string(vertex.position.y) + ", " +
+                            to_string(vertex.position.z) + ").");
+      // TrackData is authoritative for physics. The serialized model can contain different
+      // smooth normals across MassivePolyPusher/exporter versions even when its triangle positions
+      // match exactly, so retain the freshly baked normal.
+      vertex.normal = tox::normalizeSafe(reference.normal);
       decoded.push_back(vertex);
     }
     for (size_t v = 0; v < decoded.size(); v += 3) {
