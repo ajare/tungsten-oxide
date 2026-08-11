@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scene>
+  <version>1</version>
+  <name>TungstenMonoxide PBR Materials</name>
+  <environmentBinding>TungstenMonoxide.Environment</environmentBinding>
+  <Camera><position>0 7 17</position><target>0 1 0</target><fov>52</fov><near>0.1</near><far>2000</far></Camera>
+  <Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer><Layer>Ground</Layer></Layers>
+  <Models>
+    <Model><id>Ship</id><source>mppmodel</source><file>models/indexed-preview.mppmodel</file><translation>-6 3 0</translation><scale>1.25 0.6 1.8</scale><materialBinding>Ship.Surface</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Asphalt</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>-2 3 0</translation><scale>1.5 0.3 1.5</scale><materialBinding>Track.Asphalt</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Rail</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>2 3 0</translation><scale>1.5 0.3 1.5</scale><materialBinding>Track.Rail</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Mesh</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>6 3 0</translation><scale>1.2 1.2 1.2</scale><materialBinding>Track.Mesh</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Shell</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>-6 -1 0</translation><scale>1.2 1.2 1.2</scale><materialBinding>Track.Shell</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Zone</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>-2 -1 0</translation><scale>1.2 1.2 1.2</scale><materialBinding>Track.Zone</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Trigger</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>2 -1 0</translation><scale>1.2 1.2 1.2</scale><materialBinding>Track.Trigger</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+    <Model><id>Fallback</id><source>mppmodel</source><file>models/flat-preview.mppmodel</file><translation>6 -1 0</translation><scale>1.2 1.2 1.2</scale><materialBinding>Track.Fallback</materialBinding><Layers><Layer>Default</Layer><Layer>ShadowCasters</Layer></Layers></Model>
+  </Models>
+  <Lights>
+    <Light><id>Key</id><type>directional</type><colour>1 0.94 0.86</colour><intensity>4.5</intensity><direction>-0.45 -1 -0.3</direction><castsShadows>true</castsShadows></Light>
+    <Light><id>Fill</id><type>point</type><colour>0.3 0.5 1</colour><intensity>45</intensity><position>3 8 8</position><range>35</range></Light>
+  </Lights>
+</Scene>

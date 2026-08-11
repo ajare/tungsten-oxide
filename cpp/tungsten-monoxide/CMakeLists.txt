@@ -146,6 +146,16 @@ add_test(NAME tungsten_monoxide_legacy_pbr_baseline
   COMMAND tungsten_monoxide_legacy_pbr_baseline_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/NewTrack.mppmodel"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/Resources.xml")
+# Milestone 1 package validation is intentionally independent of MPP DLLs so it can
+# guard the committed PipelineEditor export before runtime integration is added.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+  add_test(NAME tungsten_monoxide_pbr_package
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/pbr/validate_package.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/resources/TungstenMonoxide.mpppackage")
+endif()
+
 if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
   add_custom_command(TARGET tungsten_monoxide_legacy_pbr_baseline_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

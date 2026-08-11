@@ -165,6 +165,8 @@ Exit criteria: the visual and data baseline is checked in or linked from this pl
 
 ### Milestone 1 — PBR package authoring spike
 
+**Status: complete.** The authored workspace is under `cpp/tungsten-monoxide/pbr/`, the standard PipelineEditor export is `cpp/tungsten-monoxide/resources/TungstenMonoxide.mpppackage`, and `pbr/validate_package.py` guards its self-contained binding and geometry contract. PipelineEditor validation, package export, and DemoSuite `--package-smoke-test` pass.
+
 Files: `cpp/tungsten-monoxide/pbr/**`, temporary package-validation test.
 
 - Create the pipeline workspace in PipelineEditor from the Shadows template.
