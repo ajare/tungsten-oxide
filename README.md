@@ -15,7 +15,7 @@ cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
-- **`cpp/editor`** builds `track_editor`, the native ImGui/SDL2/OpenGL track editor: author tracks in a top-down + elevation view, export/import as JSON. `E`/`C`/`R` switch between Edit, Create and Rails modes.
+- **`cpp/editor`** builds `track_editor`, the native ImGui/SDL3/OpenGL track editor: author tracks in a top-down + elevation view, export/import as JSON. `E`/`C`/`R` switch between Edit, Create and Rails modes.
 - **`cpp/tungsten-monoxide`** builds the playable driving game.
 - **`cpp/app`** builds `track_runner`, a headless CLI session host for a compiled track.
 

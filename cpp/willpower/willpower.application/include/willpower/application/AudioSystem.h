@@ -1,48 +1,42 @@
 #pragma once
 
-#ifdef WP_APPLICATION_USE_FMOD
+#include "willpower/application/Platform.h"
+
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS && defined(WP_APPLICATION_USE_FMOD)
 #include <fmod/core/fmod.hpp>
 #include <fmod/core/fmod_errors.h>
 #include <fmod/studio/fmod_studio.hpp>
 #endif
-
-#include "willpower/application/Platform.h"
 #include "willpower/application/AudioOptions.h"
 #include "willpower/application/resourcesystem/Resource.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
+namespace WP_NAMESPACE {
+namespace application {
 
-		namespace resourcesystem
-		{
-			class AudioBankResource;
-		}
+namespace resourcesystem {
+class AudioBankResource;
+}
 
-		class WP_APPLICATION_API AudioSystem
-		{
-#ifdef WP_APPLICATION_USE_FMOD
-			FMOD::Studio::System* mSystem;
+class WP_APPLICATION_API AudioSystem {
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS && defined(WP_APPLICATION_USE_FMOD)
+  FMOD::Studio::System* mSystem;
 #endif
 
-		public:
+public:
+  explicit AudioSystem(AudioOptions const& options);
 
-			explicit AudioSystem(AudioOptions const& options);
+  ~AudioSystem();
 
-			~AudioSystem();
+  void createAudioBank(resourcesystem::AudioBankResource* audioBank, resourcesystem::DataStreamPtr dataPtr);
 
-			void createAudioBank(resourcesystem::AudioBankResource* audioBank, resourcesystem::DataStreamPtr dataPtr);
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS && defined(WP_APPLICATION_USE_FMOD)
+  FMOD::Studio::EventInstance* startEvent(std::string const& eventName);
 
-#ifdef WP_APPLICATION_USE_FMOD
-			FMOD::Studio::EventInstance* startEvent(std::string const& eventName);
-
-			void setEventVolume(FMOD::Studio::EventInstance* inst, float volume);
+  void setEventVolume(FMOD::Studio::EventInstance* inst, float volume);
 #endif
 
-			void update();
-		};
+  void update();
+};
 
-	} // application
-} // WP_NAMESPACE
-
+}  // namespace application
+}  // namespace WP_NAMESPACE

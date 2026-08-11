@@ -10,8 +10,8 @@ commit `ca49eff3980443a97c470e09fe55b1740cfb9584`.
 
 Files: core (`imgui.h/.cpp`, `imgui_internal.h`, `imgui_draw.cpp`,
 `imgui_tables.cpp`, `imgui_widgets.cpp`, `imgui_demo.cpp`, `imconfig.h`,
-`imstb_*.h`) plus the SDL2 and OpenGL3 backends
-(`backends/imgui_impl_sdl2.*`, `backends/imgui_impl_opengl3.*`).
+`imstb_*.h`) plus the SDL3 and OpenGL3 backends
+(`backends/imgui_impl_sdl3.*`, `backends/imgui_impl_opengl3.*`).
 
 Do not hand-edit; re-copy from upstream `docking` to update. `imconfig.h` may
 be locally edited if the editor needs custom ImGui config defines later —

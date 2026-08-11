@@ -1,3 +1,7 @@
+#include "Platform.h"
+
+#if MIM_PLATFORM == MIM_PLATFORM_WIN32
+
 #include <willpower/common/Logger.h>
 
 #include <willpower/application/StateFactory.h>
@@ -190,3 +194,7 @@ extern "C"
 	}
 
 }
+
+#else
+#error "The TungstenMonoxide application DLL is supported only on Windows."
+#endif

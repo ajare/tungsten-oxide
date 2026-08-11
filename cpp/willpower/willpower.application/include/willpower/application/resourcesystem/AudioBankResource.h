@@ -6,68 +6,55 @@
 #include "willpower/application/resourcesystem/AnimationSetResourceDefinitionFactory.h"
 #include "willpower/application/AudioSystem.h"
 
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
+class WP_APPLICATION_API AudioBankResource : public Resource {
+  friend class AudioBankResourceDefinitionFactory;
 
-			class WP_APPLICATION_API AudioBankResource : public Resource
-			{
-				friend class AudioBankResourceDefinitionFactory;
+  friend class AudioSystem;
 
-				friend class AudioSystem;
+private:
+  AudioSystem* mwAudioSystem;
 
-			private:
-
-				AudioSystem* mwAudioSystem;
-
-#ifdef WP_APPLICATION_USE_FMOD
-				FMOD::Studio::Bank* mBank;
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS && defined(WP_APPLICATION_USE_FMOD)
+  FMOD::Studio::Bank* mBank;
 #endif
 
-			private:
+private:
+  void create(wp::application::resourcesystem::DataStreamPtr dataPtr, wp::application::resourcesystem::ResourceManager* resourceMgr) override;
 
-				void create(wp::application::resourcesystem::DataStreamPtr dataPtr, wp::application::resourcesystem::ResourceManager* resourceMgr) override;
+  void destroy() override;
 
-				void destroy() override;
+  bool load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
 
-				bool load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
+  bool unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
 
-				bool unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) override;
+public:
+  AudioBankResource(std::string const& name,
+                    std::string const& namesp,
+                    std::string const& source,
+                    std::map<std::string, std::string> const& tags,
+                    wp::application::resourcesystem::ResourceLocation* location,
+                    AudioSystem* audioSystem);
 
-			public:
+  ~AudioBankResource();
+};
 
-				AudioBankResource(std::string const& name,
-					std::string const& namesp,
-					std::string const& source,
-					std::map<std::string, std::string> const& tags,
-					wp::application::resourcesystem::ResourceLocation* location,
-					AudioSystem* audioSystem);
+class AudioBankResourceFactory : public wp::application::resourcesystem::ResourceFactory {
+  AudioSystem* mwAudioSystem;
 
-				~AudioBankResource();
-			};
+public:
+  explicit AudioBankResourceFactory(AudioSystem* audioSystem)
+      : wp::application::resourcesystem::ResourceFactory("AudioBank"), mwAudioSystem(audioSystem) {
+  }
 
-			class AudioBankResourceFactory : public wp::application::resourcesystem::ResourceFactory
-			{
-				AudioSystem* mwAudioSystem;
+  wp::application::resourcesystem::Resource* createResource(std::string const& name, std::string const& namesp, std::string const& source, std::map<std::string, std::string> const& tags, wp::application::resourcesystem::ResourceLocation* location) override {
+    return new AudioBankResource(name, namesp, source, tags, location, mwAudioSystem);
+  }
+};
 
-			public:
-
-				explicit AudioBankResourceFactory(AudioSystem* audioSystem)
-					: wp::application::resourcesystem::ResourceFactory("AudioBank")
-					, mwAudioSystem(audioSystem)
-				{
-				}
-
-				wp::application::resourcesystem::Resource* createResource(std::string const& name, std::string const& namesp, std::string const& source, std::map<std::string, std::string> const& tags, wp::application::resourcesystem::ResourceLocation* location) override
-				{
-					return new AudioBankResource(name, namesp, source, tags, location, mwAudioSystem);
-				}
-			};
-
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

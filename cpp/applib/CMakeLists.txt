@@ -123,8 +123,11 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_THIRD_PARTY_DIR}/include")
 
 target_link_directories(AppLib PRIVATE
-  "${APPLIB_MPP_DIR}/build/cmake/lib/$<CONFIG>"
-  "${APPLIB_THIRD_PARTY_DIR}/lib/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
+  "${APPLIB_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+if (WIN32)
+  target_link_directories(AppLib PRIVATE
+    "${APPLIB_THIRD_PARTY_DIR}/lib/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
+endif()
 target_link_libraries(AppLib PRIVATE
   Willpower.Application
   Willpower.Common
@@ -151,9 +154,10 @@ target_link_libraries(applib_pbr_material_binding_tests PRIVATE
   Willpower.Common)
 add_test(NAME applib_pbr_material_binding COMMAND applib_pbr_material_binding_tests)
 set_property(TEST applib_pbr_material_binding PROPERTY ENVIRONMENT_MODIFICATION
-  "PATH=path_list_prepend:${APPLIB_MPP_DIR}/build/cmake/bin/$<CONFIG>"
-  "PATH=path_list_prepend:${APPLIB_THIRD_PARTY_DIR}/bin/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
+  "PATH=path_list_prepend:${APPLIB_MPP_DIR}/build/cmake/bin/$<CONFIG>")
 if (WIN32)
+  set_property(TEST applib_pbr_material_binding APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${APPLIB_THIRD_PARTY_DIR}/bin/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
   add_custom_command(TARGET applib_pbr_material_binding_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       $<TARGET_RUNTIME_DLLS:applib_pbr_material_binding_tests>

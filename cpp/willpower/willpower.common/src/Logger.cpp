@@ -1,3 +1,7 @@
+#include "willpower/common/Platform.h"
+
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS
+
 #include <iomanip>
 #include <ctime>
 
@@ -132,3 +136,7 @@ namespace WP_NAMESPACE
 	}
 
 } // WP_NAMESPACE
+
+#else
+#error "Willpower Logger is supported only on Windows."
+#endif

@@ -1,17 +1,16 @@
-# cpp/editor — the native ImGui/SDL2/OpenGL track editor. Sits alongside cpp/core and
+# cpp/editor — the native ImGui/SDL3/OpenGL track editor. Sits alongside cpp/core and
 # cpp/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
 # as a black box) and `Willpower::Common` directly for material catalog parsing.
 #
-# Dear ImGui (docking branch) and its SDL2/OpenGL3 backends, plus the gl3w GL loader, are copied
-# into include/ and src/ rather than pulled in as a submodule/FetchContent — see the
-# README-VENDORED.md files under include/imgui and include/gl3w for exact provenance. SDL2 itself
-# is fetched and built from source via FetchContent.
+# Dear ImGui (docking branch) and its SDL3/OpenGL3 backends, plus the gl3w GL loader, are copied
+# into include/ and src/ — see the README-VENDORED.md files under include/imgui and include/gl3w
+# for exact provenance. SDL3 is built from MassivePolyPusher's pinned source submodule.
 #
 # Build (from an x64 MSVC Developer prompt, as part of the combined cpp/ configure):
 #   cmake -S cpp -B cpp/build
 #   cmake --build cpp/build --config Release
 cmake_minimum_required(VERSION 3.20)
-project(track_editor CXX)
+project(track_editor C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,27 +21,29 @@ endif()
 
 if (NOT WIN32)
   message(WARNING
-    "cpp/editor targets Windows/MSVC only (matching cpp/willpower's existing constraint) — "
-    "configuring anyway, but expect SDL2/OpenGL/gl3w wiring to need real portability work off "
-    "Windows.")
+    "cpp/editor is Windows-only; its platform guards intentionally fail compilation off Windows.")
 endif()
 
 if (MSVC)
   add_compile_options(/W3 /EHsc)
 endif()
 
-# --- SDL2 (FetchContent, built from source) ---------------------------------
-include(FetchContent)
-set(SDL_TEST OFF CACHE BOOL "" FORCE)
-set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-set(SDL_SHARED ON CACHE BOOL "" FORCE)
-set(SDL_STATIC OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  SDL2
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG release-2.30.9
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(SDL2)
+# --- SDL3 (MassivePolyPusher source submodule) ------------------------------
+if (NOT TARGET SDL3::SDL3)
+  set(TOX_SDL_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/ext/sdl")
+  if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "SDL3 submodule is missing; run: git submodule update --init --recursive")
+  endif()
+  set(SDL_SHARED ON CACHE BOOL "Build SDL3 as a shared library" FORCE)
+  set(SDL_STATIC OFF CACHE BOOL "Do not build the SDL3 static library" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "Do not build the SDL3 test library" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "Do not build SDL3 tests" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "Do not build SDL3 examples" FORCE)
+  set(SDL_INSTALL OFF CACHE BOOL "Do not install SDL3" FORCE)
+  add_subdirectory("${TOX_SDL_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl3" EXCLUDE_FROM_ALL)
+endif()
 
 # --- Vendored Dear ImGui (docking) + backends -------------------------------
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include/imgui)
@@ -52,7 +53,7 @@ set(IMGUI_SOURCES
   src/imgui/imgui_draw.cpp
   src/imgui/imgui_tables.cpp
   src/imgui/imgui_widgets.cpp
-  src/imgui/imgui_impl_sdl2.cpp
+  src/imgui/imgui_impl_sdl3.cpp
   src/imgui/imgui_impl_opengl3.cpp)
 
 # --- Vendored gl3w GL loader -------------------------------------------------
@@ -102,8 +103,7 @@ target_link_libraries(track_editor PRIVATE
   core
   Willpower::Common
   model_xml
-  SDL2::SDL2
-  SDL2::SDL2main)
+  SDL3::SDL3)
 
 add_executable(editor_track_resource_tests
   tests/track_resource_tests.cpp
@@ -135,12 +135,12 @@ add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
 if (WIN32)
   target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)
   target_link_libraries(editor_track_resource_tests PRIVATE ole32 shell32 uuid)
-  # windows.h's min/max macros (pulled in transitively via <SDL.h> and gl3w.c) collide with
+  # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h> and gl3w.c) collide with
   # std::min/std::max and Willpower/nlohmann headers; suppress them everywhere in this target.
   target_compile_definitions(track_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-# SDL2 (and, with multi-config generators, Willpower) leave shared-library
+# SDL3 (and, with multi-config generators, Willpower) leaves shared-library
 # runtime dependencies in sibling output directories; copy them beside the
 # executable so a direct run/F5 works, matching cpp/app's track_runner.
 add_custom_command(TARGET track_editor POST_BUILD

@@ -1,4 +1,4 @@
-// cpp/editor/main.cpp — track_editor: native ImGui/SDL2/OpenGL track editor.
+// cpp/editor/main.cpp — track_editor: native ImGui/SDL3/OpenGL track editor.
 // M0 (EDITOR_CPP_PORT_PLAN.md) proved the toolchain: window + one ImGui frame + core linked.
 // M1 wired in the editor-owned authoring model (EditorTrackDefinition, undo/redo), verified with a
 // startup smoke check. M2 added the top-down 2D view: the baked road/centerline and authored
@@ -58,9 +58,9 @@
 #include "imgui.h"
 #include "imgui_internal.h"  // ImGui::DockBuilder* -- used once at startup to build the fixed layout
 #include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdl3.h"
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include "Clipboard.hpp"
 #include "EditorHistory.hpp"
@@ -1434,9 +1434,9 @@ std::filesystem::path findEditorResourceFile(const std::string& filename) {
 [[noreturn]] void failStartup(SDL_Window* window, SDL_GLContext glContext, const std::string& message) {
   std::fprintf(stderr, "%s\n", message.c_str());
   ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
+  ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
-  SDL_GL_DeleteContext(glContext);
+  SDL_GL_DestroyContext(glContext);
   SDL_DestroyWindow(window);
   SDL_Quit();
   std::exit(1);
@@ -1449,12 +1449,10 @@ std::filesystem::path findEditorResourceFile(const std::string& filename) {
 // against the executable's own directory via SDL_GetBasePath() so a stray source-tree
 // editor.ini can never shadow what was actually deployed alongside the running exe.
 std::filesystem::path exeDirEditorIniPath() {
-  char* base = SDL_GetBasePath();
+  const char* base = SDL_GetBasePath();
   if (base == nullptr) return {};
 
-  std::filesystem::path result = std::filesystem::path(base) / "editor.ini";
-  SDL_free(base);
-  return result;
+  return std::filesystem::path(base) / "editor.ini";
 }
 
 std::filesystem::path configuredMaterialResourcesPath() {
@@ -1487,7 +1485,7 @@ StartupMaterials loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext
 }
 
 int main(int, char**) {
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
     return 1;
   }
@@ -1502,10 +1500,8 @@ int main(int, char**) {
   SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
   const SDL_WindowFlags windowFlags =
-      static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-  SDL_Window* window =
-      SDL_CreateWindow("track_editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800,
-                       windowFlags);
+      static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  SDL_Window* window = SDL_CreateWindow("track_editor", 1280, 800, windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
     SDL_Quit();
@@ -1524,7 +1520,7 @@ int main(int, char**) {
 
   if (gl3wInit() != 0) {
     std::fprintf(stderr, "gl3wInit failed\n");
-    SDL_GL_DeleteContext(glContext);
+    SDL_GL_DestroyContext(glContext);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 1;
@@ -1569,11 +1565,11 @@ int main(int, char**) {
     iconConfig.GlyphMinAdvanceX = kIconFontSize;
     io.Fonts->AddFontFromFileTTF(editor::pathToUtf8(iconFontPath).c_str(), kIconFontSize, &iconConfig, iconRanges);
   }
-  // No manual io.Fonts->Build() here: this vendored ImGui's OpenGL3/SDL2 backends use the newer
+  // No manual io.Fonts->Build() here: this vendored ImGui's OpenGL3/SDL3 backends use the newer
   // texture-management path (ImGuiBackendFlags_RendererHasTextures, set by ImGui_ImplOpenGL3_Init
   // below), which builds/uploads the atlas lazily on first use -- calling Build() before that flag
   // is set logs an imgui-error every frame.
-  ImGui_ImplSDL2_InitForOpenGL(window, glContext);
+  ImGui_ImplSDL3_InitForOpenGL(window, glContext);
   ImGui_ImplOpenGL3_Init(glslVersion);
 
   const SmokeCheckResult smoke = runSmokeCheck();
@@ -2009,16 +2005,16 @@ int main(int, char**) {
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) requestedAction = DocumentAction::Exit;
-      if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE &&
+      ImGui_ImplSDL3_ProcessEvent(&event);
+      if (event.type == SDL_EVENT_QUIT) requestedAction = DocumentAction::Exit;
+      if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
           event.window.windowID == SDL_GetWindowID(window)) {
         requestedAction = DocumentAction::Exit;
       }
     }
 
     ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
     // E/C switch mode, Ctrl+Z/Ctrl+Y undo/redo -- all global
@@ -2672,7 +2668,7 @@ int main(int, char**) {
     }
     if (ImGui::CollapsingHeader("Diagnostics")) {
       ImGui::PushID("Diagnostics");
-      ImGui::TextUnformatted("SDL2 + OpenGL3 + ImGui (docking) + gl3w link up.");
+      ImGui::TextUnformatted("SDL3 + OpenGL3 + ImGui (docking) + gl3w link up.");
       ImGui::Separator();
       ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
       ImGui::BulletText("JSON round-trip (toJson . fromJson . toJson idempotent): %s", smoke.roundTripOk ? "OK" : "MISMATCH");
@@ -2852,7 +2848,7 @@ int main(int, char**) {
 
     ImGui::Render();
     int drawableWidth = 0, drawableHeight = 0;
-    SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
+    SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
     glViewport(0, 0, drawableWidth, drawableHeight);
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -2862,10 +2858,10 @@ int main(int, char**) {
   }
 
   ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
+  ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
 
-  SDL_GL_DeleteContext(glContext);
+  SDL_GL_DestroyContext(glContext);
   SDL_DestroyWindow(window);
   SDL_Quit();
   return 0;

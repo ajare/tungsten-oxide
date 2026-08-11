@@ -67,17 +67,19 @@ if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))
     COMMAND_EXPAND_LISTS)
 endif()
 # MppProgram and GLEW are transitive runtime dependencies that are not represented by CMake
-# targets in this project, so copy the dependency's required DLLs explicitly.
-add_custom_command(TARGET mesh_physics_diag POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
-    "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/glew32.dll"
-    $<TARGET_FILE_DIR:mesh_physics_diag>
-  COMMAND_EXPAND_LISTS)
+# targets in this project, so copy the dependency's required Windows DLLs explicitly.
+if (WIN32)
+  add_custom_command(TARGET mesh_physics_diag POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
+      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/glew32.dll"
+      $<TARGET_FILE_DIR:mesh_physics_diag>
+    COMMAND_EXPAND_LISTS)
+endif()
 
 add_test(NAME mesh_physics_diag_bundled_track
   COMMAND mesh_physics_diag --validate

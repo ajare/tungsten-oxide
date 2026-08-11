@@ -1,6 +1,5 @@
-# Launcher — the Windows host executable for a Willpower application DLL.
-# Converted from build/vs2026/Launcher.vcxproj. The original project uses the
-# GLFW path (WINDOWING_SYSTEM defaults to WINDOW_GLFW in src/Main.cpp).
+# Launcher — the Windows SDL3 host executable for a Willpower application DLL.
+# Converted from build/vs2026/Launcher.vcxproj.
 set(LAUNCHER_HEADERS
   include/ApplicationDLL.h
   include/ExitApplicationException.h
@@ -11,12 +10,10 @@ set(LAUNCHER_HEADERS
   include/Timer.h
   include/Window.h
   include/ZipResourceLocation.h
-  include/glfw/ImGuiGLFW.h
-  include/glfw/TimerGLFW.h
-  include/glfw/WindowGLFW.h
   include/imgui/imconfig.h
   include/imgui/imgui.h
   include/imgui/imgui_internal.h
+  include/imgui/imgui_impl_sdl3.h
   include/imgui/implot.h
   include/imgui/implot_internal.h
   include/imgui/imstb_rectpack.h
@@ -27,14 +24,12 @@ set(LAUNCHER_HEADERS
 
 set(LAUNCHER_SOURCES
   src/ApplicationDLL.cpp
-  src/glfw/ImGuiGLFW.cpp
-  src/glfw/TimerGLFW.cpp
-  src/glfw/WindowGLFW.cpp
   src/imgui/imgui.cpp
   src/imgui/imgui_demo.cpp
   src/imgui/imgui_draw.cpp
   src/imgui/imgui_tables.cpp
   src/imgui/imgui_widgets.cpp
+  src/imgui/imgui_impl_sdl3.cpp
   src/imgui/implot.cpp
   src/imgui/implot_demo.cpp
   src/imgui/implot_items.cpp
@@ -47,8 +42,8 @@ set(LAUNCHER_SOURCES
   src/Window.cpp
   src/ZipResourceLocation.cpp)
 
-# The original launcher consumes prebuilt MassivePolyPusher, Utils, GLFW and
-# SDL3 SDK libraries. Override these cache entries when they live elsewhere.
+# The launcher consumes prebuilt MassivePolyPusher and Utils libraries. SDL3
+# comes from MassivePolyPusher's pinned source submodule.
 set(_launcher_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
 set(_launcher_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
 if (LAUNCHER_MPP_DIR STREQUAL _launcher_legacy_mpp_dir)
@@ -78,8 +73,8 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/version/Version.rc")
   list(APPEND _launcher_resources version/Version.rc)
 endif()
 
-# WIN32 matches the vcxproj's Windows subsystem and the GLFW WinMain entry
-# point. This executable is Windows-specific because it loads game DLLs with
+# WIN32 matches the vcxproj's Windows subsystem; SDL provides the platform
+# entry point. This executable is Windows-specific because it loads game DLLs with
 # LoadLibrary/GetProcAddress.
 add_executable(Launcher WIN32 ${LAUNCHER_SOURCES} ${LAUNCHER_HEADERS} ${_launcher_resources})
 target_compile_features(Launcher PRIVATE cxx_std_20)
@@ -114,13 +109,15 @@ target_include_directories(Launcher PRIVATE
 target_compile_definitions(Launcher PRIVATE USINGZ)
 
 target_link_directories(Launcher PRIVATE
-  "${LAUNCHER_MPP_DIR}/build/cmake/lib/$<CONFIG>"
-  "${LAUNCHER_THIRD_PARTY_DIR}/lib/vs2026/${LAUNCHER_LIB_ARCH}/$<CONFIG>")
+  "${LAUNCHER_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+if (WIN32)
+  target_link_directories(Launcher PRIVATE
+    "${LAUNCHER_THIRD_PARTY_DIR}/lib/vs2026/${LAUNCHER_LIB_ARCH}/$<CONFIG>")
+endif()
 target_link_libraries(Launcher PRIVATE
   Willpower.Application
   Willpower.Common
-  SDL3
-  glfw3
+  SDL3::SDL3
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>)
 
@@ -132,7 +129,9 @@ if (WIN32)
   # LoadLibrary macro resolve to LoadLibraryW for the std::wstring argument.
   target_compile_definitions(Launcher PRIVATE UNICODE _UNICODE)
 else()
-  message(WARNING "Launcher uses the Windows-only WinMain/LoadLibrary implementation.")
+  message(WARNING
+    "Launcher uses Windows application DLL loading; its platform guards intentionally fail "
+    "compilation off Windows.")
 endif()
 
 # Runtime deployment, converted from build/CopyWillpowerBinaries.bat. The

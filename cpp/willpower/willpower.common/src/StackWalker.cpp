@@ -79,6 +79,10 @@
  *   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  **********************************************************************/
+#include "willpower/common/Platform.h"
+
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS
+
 #include <windows.h>
 #include <tchar.h>
 #include <stdio.h>
@@ -651,7 +655,7 @@ private:
     pGMI = (tGMI) GetProcAddress( hPsapi, "GetModuleInformation" );
     if ( (pEPM == NULL) || (pGMFNE == NULL) || (pGMBN == NULL) || (pGMI == NULL) )
     {
-      // we couldn´t find all functions
+      // we couldnï¿½t find all functions
       FreeLibrary(hPsapi);
       return FALSE;
     }
@@ -1352,3 +1356,7 @@ void StackWalker::OnOutput(LPCSTR buffer)
 {
   OutputDebugStringA(buffer);
 }
+
+#else
+#error "Willpower StackWalker implementation is supported only on Windows."
+#endif

@@ -30,9 +30,8 @@ endif()
 
 if (NOT WIN32)
   message(WARNING
-    "Willpower was authored as a Windows/MSVC codebase (manual __declspec "
-    "DLL exports and StackWalker.h) — configuring anyway, but expect it to "
-    "need additional portability work off Windows.")
+    "Willpower contains Windows-only Logger, StackWalker, and Scheduler implementations; "
+    "their platform guards intentionally fail compilation off Windows.")
 endif()
 
 if (MSVC)

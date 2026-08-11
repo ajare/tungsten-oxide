@@ -1,46 +1,46 @@
 #pragma once
 
+#include "willpower/application/Platform.h"
+
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS
+
 #include <windows.h>
 #include <vector>
-
-#include "willpower/application/Platform.h"
 #include "willpower/application/SchedulerTask.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
+namespace WP_NAMESPACE {
+namespace application {
 
-		class WP_APPLICATION_API Scheduler
-		{
-			struct CurrentTask
-			{
-				SchedulerTask* task;
-				int cumulativeMilliseconds;
-			};
+class WP_APPLICATION_API Scheduler {
+  struct CurrentTask {
+    SchedulerTask* task;
+    int cumulativeMilliseconds;
+  };
 
-		private:
+private:
+  LARGE_INTEGER mFrequency;
 
-			LARGE_INTEGER mFrequency;
+  int mMicroseconds, mTotalMicrosecondsAllocated;
 
-			int mMicroseconds, mTotalMicrosecondsAllocated;
+  std::vector<CurrentTask> mTasks;
 
-			std::vector<CurrentTask> mTasks;
+  bool mExecuting;
 
-			bool mExecuting;
+public:
+  explicit Scheduler(int microseconds);
 
-		public:
+  void setMicrosecondsAllocated(int microseconds);
 
-			explicit Scheduler(int microseconds);
+  int getMicrosecondsAllocated() const;
 
-			void setMicrosecondsAllocated(int microseconds);
+  void addTask(SchedulerTask* task, int microseconds);
 
-			int getMicrosecondsAllocated() const;
+  void execute(float frameTime);
+};
 
-			void addTask(SchedulerTask* task, int microseconds);
+}  // namespace application
+}  // namespace WP_NAMESPACE
 
-			void execute(float frameTime);
-		};
-
-	} // application
-} // WP_NAMESPACE
+#else
+#error "Willpower Scheduler is supported only on Windows."
+#endif

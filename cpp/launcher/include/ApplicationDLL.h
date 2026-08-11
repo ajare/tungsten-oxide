@@ -3,8 +3,8 @@
 #include "Platform.h"
 
 #if APP_PLATFORM == APP_PLATFORM_WINDOWS
-#	include <Windows.h>
-#endif
+
+#include <Windows.h>
 
 #include <string>
 #include <vector>
@@ -17,71 +17,71 @@
 
 #include "StateManager.h"
 
-class ApplicationDLL
-{
-	typedef char const*(*DllGetNameFunction)();
+class ApplicationDLL {
+  typedef char const* (*DllGetNameFunction)();
 
-	typedef wp::application::StateFactory*(*DllGetNextStateFactoryFunction)();
+  typedef wp::application::StateFactory* (*DllGetNextStateFactoryFunction)();
 
-	typedef void(*DllOnEntryFunction)(wp::Logger*, wp::application::resourcesystem::ResourceManager*);
+  typedef void (*DllOnEntryFunction)(wp::Logger*, wp::application::resourcesystem::ResourceManager*);
 
-	typedef void(*DllOnExitFunction)();
+  typedef void (*DllOnExitFunction)();
 
-	typedef int(*DllSetArgumentFunction)(char const*, char const*);
+  typedef int (*DllSetArgumentFunction)(char const*, char const*);
 
 private:
-
 #if APP_PLATFORM == APP_PLATFORM_WINDOWS
-	HINSTANCE mGetProcIDDLL;
+  HINSTANCE mGetProcIDDLL;
 #endif
 
-	std::string mFilepath;
+  std::string mFilepath;
 
-	std::string mName;
+  std::string mName;
 
-	// Required DLL functions
-	DllGetNameFunction mGetNameFunction;
+  // Required DLL functions
+  DllGetNameFunction mGetNameFunction;
 
-	DllGetNextStateFactoryFunction mGetNextStateFactoryFunction;
+  DllGetNextStateFactoryFunction mGetNextStateFactoryFunction;
 
-	DllSetArgumentFunction mSetArgumentFunction;
-	
-	static std::string msGetNameFunction;
-	
-	static std::string msCreateApplicationFunctionName, msDestroyApplicationFunctionName;
+  DllSetArgumentFunction mSetArgumentFunction;
 
-	static std::string msGetNextStateFactoryFunctionName;
+  static std::string msGetNameFunction;
 
-	static std::string msGetNextResourceFactoryFunctionName;
+  static std::string msCreateApplicationFunctionName, msDestroyApplicationFunctionName;
 
-	static std::string msSetArgumentFunctionName;
+  static std::string msGetNextStateFactoryFunctionName;
 
-	// Optional DLL functions
-	DllOnEntryFunction mOnEntryFunction;
+  static std::string msGetNextResourceFactoryFunctionName;
 
-	DllOnExitFunction mOnExitFunction;
+  static std::string msSetArgumentFunctionName;
 
-	static std::string msOnEntryFunctionName, msOnExitFunctionName;
+  // Optional DLL functions
+  DllOnEntryFunction mOnEntryFunction;
+
+  DllOnExitFunction mOnExitFunction;
+
+  static std::string msOnEntryFunctionName, msOnExitFunctionName;
 
 private:
+  void registerRequiredFunctions();
 
-	void registerRequiredFunctions();
-
-	void registerOptionalFunctions();
+  void registerOptionalFunctions();
 
 public:
+  ApplicationDLL();
 
-	ApplicationDLL();
+  ~ApplicationDLL();
 
-	~ApplicationDLL();
+  std::string const& getFilepath() const;
 
-	std::string const& getFilepath() const;
+  void load(std::string const& file, std::map<std::string, std::string> const& arguments, wp::Logger* logger, wp::application::resourcesystem::ResourceManager* resourceMgr);
 
-	void load(std::string const& file, std::map<std::string, std::string> const& arguments, wp::Logger* logger, wp::application::resourcesystem::ResourceManager* resourceMgr);
+  void unload();
 
-	void unload();
+  std::string getApplicationName() const;
 
-	std::string getApplicationName() const;
-
-	void registerStateFactories(StateManager* stateMgr);
+  void registerStateFactories(StateManager* stateMgr);
 };
+
+#else
+#error "Launcher application DLL loading is supported only on Windows."
+#endif

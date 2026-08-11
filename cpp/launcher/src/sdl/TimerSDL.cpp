@@ -1,4 +1,4 @@
-#include <sdl3/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "sdl/TimerSDL.h"
 

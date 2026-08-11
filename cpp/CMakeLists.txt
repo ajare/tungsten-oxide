@@ -13,7 +13,7 @@
 #               applib/CMakeLists.txt.
 #   tungsten-monoxide/  TungstenMonoxide application DLL — see
 #               tungsten-monoxide/CMakeLists.txt.
-#   editor/     track_editor, the native ImGui/SDL2/OpenGL track editor — see
+#   editor/     track_editor, the native ImGui/SDL3/OpenGL track editor — see
 #               editor/CMakeLists.txt and ../EDITOR_CPP_PORT_PLAN.md.
 #   model-tool/ model_tool, the AssImp import/preview/save tool for MassivePolyPusher's model
 #               format — see model-tool/CMakeLists.txt and ../docs/adr/0001-model-tool.md.
@@ -32,7 +32,23 @@
 #   cmake -S cpp -B cpp/build-all -G Ninja
 #   cmake --build cpp/build-all
 cmake_minimum_required(VERSION 3.20)
-project(TungstenOxideCpp CXX)
+project(TungstenOxideCpp C CXX)
+
+# Build SDL3 once from MassivePolyPusher's pinned source submodule. All cpp/
+# applications consume this target instead of carrying or fetching their own SDL copies.
+set(TOX_SDL_SOURCE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../ext/massive-poly-pusher/ext/sdl")
+if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
+  message(FATAL_ERROR
+    "SDL3 submodule is missing; run: git submodule update --init --recursive")
+endif()
+set(SDL_SHARED ON CACHE BOOL "Build SDL3 as a shared library" FORCE)
+set(SDL_STATIC OFF CACHE BOOL "Do not build the SDL3 static library" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "Do not build the SDL3 test library" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "Do not build SDL3 tests" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "Do not build SDL3 examples" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "Do not install SDL3" FORCE)
+add_subdirectory("${TOX_SDL_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl3" EXCLUDE_FROM_ALL)
 
 # Register tests from child projects in the combined build's top-level
 # CTestTestfile.cmake, so the documented `ctest --test-dir cpp/build` command

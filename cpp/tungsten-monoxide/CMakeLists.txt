@@ -125,8 +125,11 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include")
 
 target_link_directories(TungstenMonoxide PRIVATE
-  "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/lib/$<CONFIG>"
-  "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/lib/vs2026/${TUNGSTEN_MONOXIDE_LIB_ARCH}/$<CONFIG>")
+  "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+if (WIN32)
+  target_link_directories(TungstenMonoxide PRIVATE
+    "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/lib/vs2026/${TUNGSTEN_MONOXIDE_LIB_ARCH}/$<CONFIG>")
+endif()
 target_link_libraries(TungstenMonoxide PRIVATE
   core
   Willpower.Application
@@ -202,5 +205,7 @@ if (WIN32)
       COMMAND_EXPAND_LISTS)
   endif()
 else()
-  message(WARNING "TungstenMonoxide is a Windows application DLL and has not been ported off Windows.")
+  message(WARNING
+    "TungstenMonoxide is a Windows application DLL; its platform guards intentionally fail "
+    "compilation off Windows.")
 endif()

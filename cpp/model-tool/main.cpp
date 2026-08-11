@@ -2,7 +2,7 @@
 // .mppmodel file (see MppModelImport.hpp), previews the result in a live mpp viewport, and saves
 // it back out as .mppmodel. See docs/adr/0001-model-tool.md for the design this implements.
 //
-// GLEW must be the first GL-touching include in this translation unit (before SDL.h/windows.h),
+// GLEW must be the first GL-touching include in this translation unit (before SDL/windows.h),
 // matching the rest of this app's GLEW-as-GL-loader choice (ADR D2, include/imgui/imconfig.h).
 #include <GL/glew.h>
 
@@ -27,9 +27,9 @@
 #include "imgui.h"
 #include "imgui_internal.h"  // ImGui::DockBuilder* -- used once at startup to build the fixed layout
 #include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdl3.h"
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include <mpp/Logger.h>
 #include <mpp/RenderSystem.h>
@@ -78,14 +78,14 @@ bool hasExtension(const std::string& utf8Path, const char* extensionLowercase) {
 // Keys every viewport resource against, mirroring cpp/tungsten-monoxide's TmResourceWrangler
 // (StatePlayTungstenMonoxide.h) -- a plain named ResourceWrangler with no behaviour of its own.
 class AppWrangler : public mpp::ResourceWrangler {
- public:
+public:
   AppWrangler() : ResourceWrangler("ModelTool") {}
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
     return 1;
   }
@@ -98,8 +98,9 @@ int main(int argc, char** argv) {
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-  const SDL_WindowFlags windowFlags = static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-  SDL_Window* window = SDL_CreateWindow("model_tool", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 800, windowFlags);
+  const SDL_WindowFlags windowFlags =
+      static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+  SDL_Window* window = SDL_CreateWindow("model_tool", 1280, 800, windowFlags);
   if (window == nullptr) {
     std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
     SDL_Quit();
@@ -122,7 +123,7 @@ int main(int argc, char** argv) {
   }
 
   int drawableWidth = 0, drawableHeight = 0;
-  SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
+  SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
 
   // RenderSystem's constructor calls glewInit() internally (see mpp/src/RenderSystem.cpp) -- no
   // separate glewInit() call needed here, matching every other host of mpp::RenderSystem in this
@@ -169,11 +170,11 @@ int main(int argc, char** argv) {
     iconConfig.GlyphMinAdvanceX = kIconFontSize;
     io.Fonts->AddFontFromFileTTF(modeltool::pathToUtf8(iconFontPath).c_str(), kIconFontSize, &iconConfig, iconRanges);
   }
-  // No manual io.Fonts->Build() here: this vendored ImGui's OpenGL3/SDL2 backends use the newer
+  // No manual io.Fonts->Build() here: this vendored ImGui's OpenGL3/SDL3 backends use the newer
   // texture-management path (ImGuiBackendFlags_RendererHasTextures, set by ImGui_ImplOpenGL3_Init
   // below), which builds/uploads the atlas lazily on first use.
 
-  ImGui_ImplSDL2_InitForOpenGL(window, glContext);
+  ImGui_ImplSDL3_InitForOpenGL(window, glContext);
   ImGui_ImplOpenGL3_Init("#version 130");
 
   // Status bar message, mirrors cpp/editor/main.cpp's own showStatus() convention: the most recent
@@ -232,7 +233,7 @@ int main(int argc, char** argv) {
     std::string sourceFile;
     int choice{0};
     std::optional<std::size_t> modelMaterialIndex;  // set => belongs to pendingModelImport below
-    mpp::ResourceStreamPtr embeddedStream;           // set only for a .mppmodel Embedded conflict
+    mpp::ResourceStreamPtr embeddedStream;          // set only for a .mppmodel Embedded conflict
   };
   std::vector<PendingMaterialConflict> pendingConflicts;
   bool openConflictDialog = false;
@@ -245,7 +246,7 @@ int main(int argc, char** argv) {
     modeltool::ImportedModel imported;
     std::string sourceFileForDisplay;
     std::vector<std::optional<modeltool::MaterialReference>> materialRefs;  // parallel to imported.materials
-    std::vector<std::string> unresolvedMaterialNames;                      // for the finish-up status message
+    std::vector<std::string> unresolvedMaterialNames;                       // for the finish-up status message
     // Set only when this import came from a <Model> XML (standalone or embedded) -- applied onto
     // the built model's meshes by name once finalizeModelBuild() actually has them, and committed
     // to the outer modelXmlOrigin so Save knows where to write back to.
@@ -350,9 +351,9 @@ int main(int argc, char** argv) {
   // only populated (non-null entries) for .mppmodel-sourced Embedded materials -- empty for AssImp,
   // whose Embedded materials are always built fresh from a texture file path instead.
   auto beginModelImport = [&](modeltool::ImportedModel imported, const std::string& sourceFileForDisplay,
-                               std::vector<mpp::ResourceStreamPtr> embeddedStreams, std::vector<std::string> unresolvedMaterialNames,
-                               std::optional<std::vector<modelxml::MeshMetadataXmlDefinition>> xmlMeshMetadata = std::nullopt,
-                               ModelXmlOrigin xmlOrigin = {}) {
+                              std::vector<mpp::ResourceStreamPtr> embeddedStreams, std::vector<std::string> unresolvedMaterialNames,
+                              std::optional<std::vector<modelxml::MeshMetadataXmlDefinition>> xmlMeshMetadata = std::nullopt,
+                              ModelXmlOrigin xmlOrigin = {}) {
     PendingModelImport pending;
     pending.sourceFileForDisplay = sourceFileForDisplay;
     pending.unresolvedMaterialNames = std::move(unresolvedMaterialNames);
@@ -392,7 +393,7 @@ int main(int argc, char** argv) {
               pending.materialRefs[i] =
                   (i < embeddedStreams.size() && embeddedStreams[i])
                       ? materialLibrary->declareModelOwnedFromStream(material.name, embeddedStreams[i], material.diffuseTexturePath,
-                                                                      sourceFileForDisplay)
+                                                                     sourceFileForDisplay)
                       : materialLibrary->declareModelOwned(material.name, material.diffuseTexturePath, sourceFileForDisplay);
             }
             break;
@@ -455,7 +456,7 @@ int main(int argc, char** argv) {
       return;
     }
     beginModelImport(std::move(result->model), modeltool::pathToUtf8(mppPath), std::move(result->embeddedMaterialStreams),
-                      std::move(result->unresolvedMaterialNames), def.meshes, std::move(origin));
+                     std::move(result->unresolvedMaterialNames), def.meshes, std::move(origin));
   };
 
   // "Open..." is <Model> XML only -- standalone or embedded in a Track resource. Classifies the
@@ -735,14 +736,14 @@ int main(int argc, char** argv) {
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) running = false;
-      if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
+      ImGui_ImplSDL3_ProcessEvent(&event);
+      if (event.type == SDL_EVENT_QUIT) running = false;
+      if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
         running = false;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
     // Ctrl+O/Ctrl+S/Ctrl+Z/Ctrl+Y, global since there's no text-input widget yet that would need to
@@ -1183,7 +1184,7 @@ int main(int argc, char** argv) {
     ImGui::PopStyleVar();
 
     ImGui::Render();
-    SDL_GL_GetDrawableSize(window, &drawableWidth, &drawableHeight);
+    SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
     glViewport(0, 0, drawableWidth, drawableHeight);
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1193,7 +1194,7 @@ int main(int argc, char** argv) {
   }
 
   ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
+  ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
 
   // Explicit teardown order (viewport/its resources, then the material library, then core
@@ -1205,7 +1206,7 @@ int main(int argc, char** argv) {
   delete resourceMgr;
   delete renderSystem;
 
-  SDL_GL_DeleteContext(glContext);
+  SDL_GL_DestroyContext(glContext);
   SDL_DestroyWindow(window);
   SDL_Quit();
   return 0;

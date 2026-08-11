@@ -1,41 +1,40 @@
 #pragma once
 
-#include <windows.h>
-
 #include "willpower/application/Platform.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS
 
-		class WP_APPLICATION_API SchedulerTask
-		{
-			LARGE_INTEGER mFrequency, mStartTime;
+#include <windows.h>
 
-			int mMicroseconds;
+namespace WP_NAMESPACE {
+namespace application {
 
-			bool mExecuting;
+class WP_APPLICATION_API SchedulerTask {
+  LARGE_INTEGER mFrequency, mStartTime;
 
-		private:
+  int mMicroseconds;
 
-			virtual void executeImpl(float frameTime) = 0;
+  bool mExecuting;
 
-		protected:
+private:
+  virtual void executeImpl(float frameTime) = 0;
 
-			int getMicrosecondsSpent() const;
+protected:
+  int getMicrosecondsSpent() const;
 
-		public:
+public:
+  SchedulerTask();
 
-			SchedulerTask();
+  void setMicrosecondsAllocated(int microseconds);
 
-			void setMicrosecondsAllocated(int microseconds);
+  int getMicrosecondsAllocated() const;
 
-			int getMicrosecondsAllocated() const;
+  void execute(float frameTime);
+};
 
-			void execute(float frameTime);
-		};
+}  // namespace application
+}  // namespace WP_NAMESPACE
 
-	} // application
-} // WP_NAMESPACE
-
+#else
+#error "Willpower SchedulerTask is supported only on Windows."
+#endif

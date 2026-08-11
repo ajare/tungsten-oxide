@@ -1,39 +1,44 @@
 #pragma once
 
-#include <sdl3/SDL.h>
+#include <SDL3/SDL.h>
 
 #include "Window.h"
 
-class WindowSDL : public Window
-{
-	SDL_Window* mWindow;
+class WindowSDL : public Window {
+  SDL_Window* mWindow;
 
-	SDL_GLContext mContextGL;
+  SDL_GLContext mContextGL;
 
-	// Input translation
-	std::map<int, wp::application::Key> mKeyTranslator;
+  // Input translation
+  std::map<int, wp::application::Key> mKeyTranslator;
 
-	wp::application::MouseButton* mButtonTranslator;
+  wp::application::MouseButton* mButtonTranslator;
 
 private:
-
-	wp::application::KeyModifiers getKeyModifiers(uint16_t mod);
+  wp::application::KeyModifiers getKeyModifiers(SDL_Keymod mod);
 
 public:
+  WindowSDL(std::string const& title, ProgramOptions const& options);
 
-	WindowSDL(std::string const& title, ProgramOptions const& options);
+  ~WindowSDL();
 
-	~WindowSDL();
+  SDL_Window* getWindow() const;
 
-	void create();
+  SDL_GLContext getContext() const;
 
-	void destroy();
+  float getContentScale() const;
 
-	void setFullscreen(bool fullscreen);
+  void create();
 
-	void setSize(int width, int height);
-	
-	void show();
+  void destroy();
 
-	void processEvents(StateManager* stateMgr);
+  void setFullscreen(bool fullscreen);
+
+  void setSize(int width, int height);
+
+  void show();
+
+  void showCursor(bool show);
+
+  void processEvents(StateManager* stateMgr);
 };

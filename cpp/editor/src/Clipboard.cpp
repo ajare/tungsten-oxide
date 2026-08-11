@@ -1,3 +1,5 @@
+#if defined(_WIN32)
+
 #include "Clipboard.hpp"
 
 #include <windows.h>
@@ -27,3 +29,7 @@ std::optional<std::string> readClipboardText() {
 }
 
 }  // namespace editor
+
+#else
+#error "The track editor clipboard integration is supported only on Windows."
+#endif

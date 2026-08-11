@@ -1,82 +1,78 @@
+#include "willpower/common/Platform.h"
+
+#if WP_PLATFORM == WP_PLATFORM_WINDOWS
+
 #include <regex>
 
 #include <willpower/common/StringUtils.h>
 
 #include "willpower/common/WillpowerWalker.h"
 
-namespace WP_NAMESPACE
-{
+namespace WP_NAMESPACE {
 
-	using namespace std;
+using namespace std;
 
-	// Singleton instantiation
-	WillpowerWalker* StackWalkerInstance::mInstance = nullptr;
+// Singleton instantiation
+WillpowerWalker* StackWalkerInstance::mInstance = nullptr;
 
-	WillpowerWalker::WillpowerWalker(string const& logfile)
-		//: StackWalker(StackWalkOptions::RetrieveLine | StackWalkOptions::RetrieveSymbol)
-		: StackWalker()
-		, mNewTrace(true)
-	{
-		mLogger = new Logger();
-		mLogger->open(logfile);
-	}
+WillpowerWalker::WillpowerWalker(string const& logfile)
+    //: StackWalker(StackWalkOptions::RetrieveLine | StackWalkOptions::RetrieveSymbol)
+    : StackWalker(), mNewTrace(true) {
+  mLogger = new Logger();
+  mLogger->open(logfile);
+}
 
-	WillpowerWalker::~WillpowerWalker()
-	{
-		delete mLogger;
-	}
+WillpowerWalker::~WillpowerWalker() {
+  delete mLogger;
+}
 
-	void WillpowerWalker::OnOutput(LPCSTR szText)
-	{
-		string msg(szText);
+void WillpowerWalker::OnOutput(LPCSTR szText) {
+  string msg(szText);
 
-		// Only print what we care about, which is the actual callstack.
-		// Format is: <filepath><whitespace>(<line-number>)<colon><whitespace><function>
-			
-		// Dirty hack time
-		string thisFilepath = __FILE__;
-		size_t stempos = thisFilepath.find("willpower\\willpower\\willpower.common\\src\\willpowerwalker.cpp");
-		string filestem = thisFilepath.substr(0, stempos);
+  // Only print what we care about, which is the actual callstack.
+  // Format is: <filepath><whitespace>(<line-number>)<colon><whitespace><function>
 
-		if (StringUtils::startsWith(msg, filestem) &&
-			!StringUtils::endsWith(msg, "ShowCallstack") &&
-			!StringUtils::endsWith(msg, "logStackTraceFormatted"))
-		{
-			mLogger->info(msg);
-		}
+  // Dirty hack time
+  string thisFilepath = __FILE__;
+  size_t stempos = thisFilepath.find("willpower\\willpower\\willpower.common\\src\\willpowerwalker.cpp");
+  string filestem = thisFilepath.substr(0, stempos);
 
-		mNewTrace = false;
-	}
+  if (StringUtils::startsWith(msg, filestem) &&
+      !StringUtils::endsWith(msg, "ShowCallstack") &&
+      !StringUtils::endsWith(msg, "logStackTraceFormatted")) {
+    mLogger->info(msg);
+  }
 
-	void WillpowerWalker::logStackTraceFormatted()
-	{
-		mNewTrace = true;
-		ShowCallstack();
-	}
+  mNewTrace = false;
+}
 
-	StackWalkerInstance::StackWalkerInstance()
-	{
-	}
+void WillpowerWalker::logStackTraceFormatted() {
+  mNewTrace = true;
+  ShowCallstack();
+}
 
-	WillpowerWalker* StackWalkerInstance::getInstance()
-	{
-		if (!mInstance)
-		{
-			mInstance = new WillpowerWalker("DebugStackTracer.html");
-		}
+StackWalkerInstance::StackWalkerInstance() {
+}
 
-		return mInstance;
-	}
+WillpowerWalker* StackWalkerInstance::getInstance() {
+  if (!mInstance) {
+    mInstance = new WillpowerWalker("DebugStackTracer.html");
+  }
 
-	bool StackWalkerInstance::hasInstance()
-	{
-		return mInstance != nullptr;
-	}
+  return mInstance;
+}
 
-	void StackWalkerInstance::deleteInstance()
-	{
-		delete mInstance;
-		mInstance = nullptr;
-	}
-	
-} // WP_NAMESPACE
+bool StackWalkerInstance::hasInstance() {
+  return mInstance != nullptr;
+}
+
+void StackWalkerInstance::deleteInstance() {
+  delete mInstance;
+  mInstance = nullptr;
+}
+
+}  // namespace WP_NAMESPACE
+
+#else
+#error "Willpower stack-trace implementation is available only on Windows."
+#endif

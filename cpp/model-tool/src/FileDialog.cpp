@@ -1,3 +1,5 @@
+#if defined(_WIN32)
+
 #include "FileDialog.hpp"
 
 #include <shlobj.h>
@@ -137,3 +139,7 @@ std::string wideToUtf8(const std::wstring& wide) {
 std::string pathToUtf8(const std::filesystem::path& path) { return wideToUtf8(path.native()); }
 
 }  // namespace modeltool
+
+#else
+#error "The model tool native file dialog is supported only on Windows."
+#endif

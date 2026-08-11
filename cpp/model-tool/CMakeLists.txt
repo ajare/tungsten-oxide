@@ -1,8 +1,8 @@
-# cpp/model-tool — model_tool: a standalone ImGui/SDL2/mpp app that imports 3D model files (OBJ/
+# cpp/model-tool — model_tool: a standalone ImGui/SDL3/mpp app that imports 3D model files (OBJ/
 # FBX/USD/glTF, via AssImp) into MassivePolyPusher's runtime shape, previews them in a live mpp
 # viewport, and saves them out as .mppmodel. See docs/adr/0001-model-tool.md for the design.
 #
-# Docked menubar/toolbar/statusbar/panel shell mirrors cpp/editor's own SDL2 + Dear ImGui (docking
+# Docked menubar/toolbar/statusbar/panel shell mirrors cpp/editor's own SDL3 + Dear ImGui (docking
 # branch) bootstrap (vendored copies under include/imgui, src/imgui) -- but unlike editor, this app
 # links real mpp::RenderSystem for its viewport (ADR D9), so its ImGui OpenGL3 backend shares GLEW
 # as its GL loader instead of editor's vendored gl3w (ADR D2; see include/imgui/imconfig.h).
@@ -11,7 +11,7 @@
 #   cmake -S cpp -B cpp/build
 #   cmake --build cpp/build --config Release
 cmake_minimum_required(VERSION 3.20)
-project(model_tool CXX)
+project(model_tool C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,29 +21,31 @@ endif()
 
 if (NOT WIN32)
   message(WARNING
-    "cpp/model-tool targets Windows/MSVC only (matching cpp/editor's and cpp/tungsten-monoxide's "
-    "existing constraint) -- configuring anyway, but expect SDL2/OpenGL/mpp wiring to need real "
-    "portability work off Windows.")
+    "cpp/model-tool is Windows-only; its platform guards intentionally fail compilation "
+    "off Windows.")
 endif()
 
 if (MSVC)
   add_compile_options(/W3 /EHsc)
 endif()
 
-# --- SDL2 (FetchContent, built from source) ---------------------------------
-# Same SDL2, same version, as cpp/editor -- model-tool copies editor's exact docked-shell
-# bootstrap (ADR 0001 "windowing lib" decision), so it uses the same backend (imgui_impl_sdl2).
-include(FetchContent)
-set(SDL_TEST OFF CACHE BOOL "" FORCE)
-set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-set(SDL_SHARED ON CACHE BOOL "" FORCE)
-set(SDL_STATIC OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  SDL2
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG release-2.30.9
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(SDL2)
+# --- SDL3 (MassivePolyPusher source submodule) ------------------------------
+# Same SDL3 target as cpp/editor, pinned by MassivePolyPusher's nested submodule.
+if (NOT TARGET SDL3::SDL3)
+  set(TOX_SDL_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/ext/sdl")
+  if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "SDL3 submodule is missing; run: git submodule update --init --recursive")
+  endif()
+  set(SDL_SHARED ON CACHE BOOL "Build SDL3 as a shared library" FORCE)
+  set(SDL_STATIC OFF CACHE BOOL "Do not build the SDL3 static library" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "Do not build the SDL3 test library" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "Do not build SDL3 tests" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "Do not build SDL3 examples" FORCE)
+  set(SDL_INSTALL OFF CACHE BOOL "Do not install SDL3" FORCE)
+  add_subdirectory("${TOX_SDL_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl3" EXCLUDE_FROM_ALL)
+endif()
 
 # --- Vendored Dear ImGui (docking) + backends -------------------------------
 set(IMGUI_SOURCES
@@ -52,7 +54,7 @@ set(IMGUI_SOURCES
   src/imgui/imgui_draw.cpp
   src/imgui/imgui_tables.cpp
   src/imgui/imgui_widgets.cpp
-  src/imgui/imgui_impl_sdl2.cpp
+  src/imgui/imgui_impl_sdl3.cpp
   src/imgui/imgui_impl_opengl3.cpp)
 
 set(MODEL_TOOL_SOURCES
@@ -116,8 +118,7 @@ target_link_directories(model_tool PRIVATE
   "${MODEL_TOOL_MPP_DIR}/build/cmake/lib/$<CONFIG>")
 
 target_link_libraries(model_tool PRIVATE
-  SDL2::SDL2
-  SDL2::SDL2main
+  SDL3::SDL3
   # Willpower::Common's XmlReader parses imported Resources.xml-shaped material files (see
   # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
   # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
@@ -128,23 +129,24 @@ target_link_libraries(model_tool PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
-  $<IF:$<CONFIG:Debug>,Utilsd,Utils>
-  $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>
-  # The dynamic import lib (glew32), not the static glew32s -- must be the exact same GLEW as
-  # MassivePolyPusher.dll itself links (also dynamic), so both it and model_tool's own GL calls
-  # (imgui_impl_opengl3.cpp, main.cpp) share the one process-wide GLEW function-pointer table that
-  # RenderSystem's constructor initializes via glewInit(). Linking the static lib instead would give
-  # model_tool its own separate, never-glewInit'd pointer table.
-  glew32)
+  $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
 if (WIN32)
-  target_link_libraries(model_tool PRIVATE opengl32 ole32 shell32 uuid)
-  # windows.h's min/max macros (pulled in transitively via <SDL.h>/GLEW/mpp headers) collide with
+  # Use the MSVC Assimp library built by MPP and the dynamic GLEW import library. Both model_tool
+  # and MassivePolyPusher.dll must share GLEW's one process-wide function-pointer table.
+  target_link_libraries(model_tool PRIVATE
+    $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>
+    glew32
+    opengl32
+    ole32
+    shell32
+    uuid)
+  # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h>/GLEW/mpp headers) collide with
   # std::min/std::max; suppress them everywhere in this target (same fix cpp/editor applies).
   target_compile_definitions(model_tool PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 endif()
 
-# --- Runtime deployment: SDL2's own DLL, plus MassivePolyPusher/AssImp DLLs, none of which CMake's
+# --- Runtime deployment: SDL3's own DLL, plus MassivePolyPusher/AssImp DLLs, none of which CMake's
 # $<TARGET_RUNTIME_DLLS:...> can discover on its own (they're linked via raw lib names + explicit
 # target_link_directories, not as CMake IMPORTED targets) -- mirrors cpp/launcher's own generated-
 # script approach for the identical problem, just scoped to what model_tool actually links. ---------

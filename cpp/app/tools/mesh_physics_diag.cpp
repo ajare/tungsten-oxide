@@ -24,6 +24,10 @@
 // Not track_runner: track_runner (cpp/app/main.cpp) deliberately leaves Track::collisionSurface
 // null and only ever drives analytic-mode physics (see cpp/core/CLAUDE.md's "Limitations" section)
 // -- this tool exists specifically to exercise mesh-mode, which requires a real collision BVH.
+#if !defined(_WIN32)
+#error "mesh_physics_diag requires the Windows WGL headless OpenGL context implementation."
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <exception>
