@@ -58,6 +58,16 @@ set(NFD_INSTALL OFF CACHE BOOL "Do not install Native File Dialog" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/nativefiledialog-extended"
                  "${CMAKE_CURRENT_BINARY_DIR}/nativefiledialog-extended")
 
+# Build GoogleTest from its repository submodule instead of carrying prebuilt
+# configuration-specific libraries under third_party.
+set(BUILD_GMOCK OFF CACHE BOOL "Do not build GoogleMock" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "Do not install GoogleTest" FORCE)
+set(gtest_build_tests OFF CACHE BOOL "Do not build GoogleTest's own tests" FORCE)
+set(gtest_build_samples OFF CACHE BOOL "Do not build GoogleTest samples" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "Use the shared MSVC runtime for GoogleTest" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/googletest"
+                 "${CMAKE_CURRENT_BINARY_DIR}/googletest")
+
 add_subdirectory(willpower)
 add_subdirectory(core)
 add_subdirectory(app)

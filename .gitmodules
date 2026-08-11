@@ -10,3 +10,6 @@
 [submodule "ext/nativefiledialog-extended"]
 	path = ext/nativefiledialog-extended
 	url = https://github.com/btzy/nativefiledialog-extended
+[submodule "ext/googletest"]
+	path = ext/googletest
+	url = https://github.com/google/googletest
