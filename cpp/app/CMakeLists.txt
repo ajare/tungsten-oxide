@@ -32,6 +32,8 @@ else()
 endif()
 unset(_mesh_physics_diag_legacy_mpp_dir)
 unset(_mesh_physics_diag_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${MESH_PHYSICS_DIAG_MPP_DIR}")
 add_executable(mesh_physics_diag
   tools/mesh_physics_diag.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/src/TrackCollisionBuild.cpp")
@@ -44,10 +46,10 @@ target_include_directories(mesh_physics_diag PRIVATE
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-program/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/include"
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include")
 target_link_directories(mesh_physics_diag PRIVATE
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 target_link_libraries(mesh_physics_diag PRIVATE
   core
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
@@ -71,12 +73,12 @@ endif()
 if (WIN32)
   add_custom_command(TARGET mesh_physics_diag POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
-      "${MESH_PHYSICS_DIAG_MPP_DIR}/build/cmake/bin/$<CONFIG>/glew32.dll"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,glew32d.dll,glew32.dll>"
       $<TARGET_FILE_DIR:mesh_physics_diag>
     COMMAND_EXPAND_LISTS)
 endif()

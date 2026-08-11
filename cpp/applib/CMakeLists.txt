@@ -81,6 +81,8 @@ else()
 endif()
 unset(_applib_legacy_mpp_dir)
 unset(_applib_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${APPLIB_MPP_DIR}")
 set(_applib_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 # CACHE variables retain their first configured value. Migrate build trees made
 # before third_party/ moved from cpp/willpower/ to cpp/ without overriding an
@@ -118,12 +120,12 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
   "${APPLIB_MPP_DIR}/mpp-program/include"
   "${APPLIB_MPP_DIR}/vendor/include"
-  "${APPLIB_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${APPLIB_MPP_DIR}/ext/utils/include"
   "${APPLIB_THIRD_PARTY_DIR}/include")
 
 target_link_directories(AppLib PRIVATE
-  "${APPLIB_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(AppLib PRIVATE
     "${APPLIB_THIRD_PARTY_DIR}/lib/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
@@ -147,14 +149,14 @@ target_include_directories(applib_pbr_material_binding_tests PRIVATE
   "${APPLIB_MPP_DIR}/mpp-program/include"
   "${APPLIB_MPP_DIR}/vendor/include"
   "${APPLIB_MPP_DIR}/ext/utils/include"
-  "${APPLIB_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include")
+  "${TOX_MPP_GLEW_INCLUDE_DIR}")
 target_link_libraries(applib_pbr_material_binding_tests PRIVATE
   AppLib
   Willpower.Application
   Willpower.Common)
 add_test(NAME applib_pbr_material_binding COMMAND applib_pbr_material_binding_tests)
 set_property(TEST applib_pbr_material_binding PROPERTY ENVIRONMENT_MODIFICATION
-  "PATH=path_list_prepend:${APPLIB_MPP_DIR}/build/cmake/bin/$<CONFIG>")
+  "PATH=path_list_prepend:${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>")
 if (WIN32)
   set_property(TEST applib_pbr_material_binding APPEND PROPERTY ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${APPLIB_THIRD_PARTY_DIR}/bin/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")

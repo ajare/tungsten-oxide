@@ -33,8 +33,10 @@ ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
 The combined build compiles the repository-pinned Willpower sources and consumes the
-MassivePolyPusher libraries from `ext/massive-poly-pusher/build/cmake`. It copies shared-library
-runtime dependencies next to their executables.
+MassivePolyPusher libraries from its build tree. It copies shared-library runtime dependencies next
+to their executables. The MassivePolyPusher build directory above is a suggestion, not a
+requirement: `cpp/cmake/MppBuildTree.cmake` accepts either `ext/massive-poly-pusher/build/cmake` or
+`ext/massive-poly-pusher/build`, and warns at configure time when it finds neither.
 Single-config generators work too:
 
 ```text

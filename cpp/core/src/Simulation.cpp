@@ -261,7 +261,6 @@ double Simulation::shipParamG(const Sample& sample) const {
   return ga + (gb - ga) * sample.segT;
 }
 
-
 void Simulation::detectZoneTriggers(Ship& ship, const Sample& sample) const {
   Physics& p = ship.physics;
   for (const Zone& z : track_.zones) {
@@ -302,13 +301,17 @@ void Simulation::detectTriggers(Ship& ship, const Vec3& p0, const Vec3& p1) cons
     const double d1 = (p1.x - c.x) * tr.fwd.x + (p1.y - c.y) * tr.fwd.y + (p1.z - c.z) * tr.fwd.z;
     const double rr = (p1.x - c.x) * tr.right.x + (p1.y - c.y) * tr.right.y + (p1.z - c.z) * tr.right.z;
     const double uu = (p1.x - c.x) * tr.up.x + (p1.y - c.y) * tr.up.y + (p1.z - c.z) * tr.up.z;
-    if (!state.armed && (std::fabs(rr) > tr.halfWidth || uu < 0 || uu > tr.height || std::fabs(d1) > Consts::TRIGGER_REARM_MARGIN)) state.armed = true;
+    // Both the re-arm test and the crossing test below share one set of quad bounds, slackened at
+    // the base by TRIGGER_BASE_MARGIN -- see its comment for why a zero-slack base plane silently
+    // kills gates in mesh mode.
+    const double uLo = -Consts::TRIGGER_BASE_MARGIN, uHi = tr.height;
+    if (!state.armed && (std::fabs(rr) > tr.halfWidth || uu < uLo || uu > uHi || std::fabs(d1) > Consts::TRIGGER_REARM_MARGIN)) state.armed = true;
     if (state.armed && d0 != d1 && ((d0 <= 0 && d1 > 0) || (d0 >= 0 && d1 < 0))) {
       const double t = d0 / (d0 - d1);
       const double xr = (p0.x + (p1.x - p0.x) * t - c.x), yr = (p0.y + (p1.y - p0.y) * t - c.y), zr = (p0.z + (p1.z - p0.z) * t - c.z);
       const double lr = xr * tr.right.x + yr * tr.right.y + zr * tr.right.z;
       const double lu = xr * tr.up.x + yr * tr.up.y + zr * tr.up.z;
-      if (std::fabs(lr) <= tr.halfWidth && lu >= 0 && lu <= tr.height) {
+      if (std::fabs(lr) <= tr.halfWidth && lu >= uLo && lu <= uHi) {
         const std::string dir = d1 > d0 ? "forward" : "backward";
         if (tr.direction == "both" || tr.direction == dir) {
           fireTrigger(ship, tr, dir);

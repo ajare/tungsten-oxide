@@ -55,6 +55,8 @@ else()
 endif()
 unset(_launcher_legacy_mpp_dir)
 unset(_launcher_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${LAUNCHER_MPP_DIR}")
 set(_launcher_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 set(_launcher_legacy_third_party_dir "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/third_party")
 if (LAUNCHER_THIRD_PARTY_DIR STREQUAL _launcher_legacy_third_party_dir)
@@ -102,14 +104,14 @@ target_include_directories(Launcher PRIVATE
   "${LAUNCHER_MPP_DIR}/mpp-mesh/include"
   "${LAUNCHER_MPP_DIR}/mpp-program/include"
   "${LAUNCHER_MPP_DIR}/vendor/include"
-  "${LAUNCHER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${LAUNCHER_MPP_DIR}/ext/utils/include"
   "${LAUNCHER_THIRD_PARTY_DIR}/include")
 
 target_compile_definitions(Launcher PRIVATE USINGZ)
 
 target_link_directories(Launcher PRIVATE
-  "${LAUNCHER_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(Launcher PRIVATE
     "${LAUNCHER_THIRD_PARTY_DIR}/lib/vs2026/${LAUNCHER_LIB_ARCH}/$<CONFIG>")
@@ -150,7 +152,7 @@ endif()
 set(_runtime_roots
   "@LAUNCHER_SUPPORT_ROOT@/${CONFIG}"
   "@LAUNCHER_THIRD_PARTY_DIR@/bin/vs2026/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@LAUNCHER_MPP_DIR@/build/cmake/bin/${CONFIG}")
+  "@TOX_MPP_BUILD_DIR@/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 foreach(_runtime_root IN LISTS _runtime_roots)

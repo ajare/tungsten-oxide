@@ -128,6 +128,8 @@ else()
 endif()
 unset(_willpower_legacy_mpp_dir)
 unset(_willpower_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${WILLPOWER_MPP_DIR}")
 set(WILLPOWER_APPLICATION_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party")
 
 add_library(Willpower.Application ${_willpower_application_lib_type}
@@ -142,7 +144,7 @@ target_include_directories(Willpower.Application PRIVATE
   "${WILLPOWER_MPP_DIR}/mpp-mesh/include"
   "${WILLPOWER_MPP_DIR}/mpp-program/include"
   "${WILLPOWER_MPP_DIR}/vendor/include"
-  "${WILLPOWER_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${WILLPOWER_MPP_DIR}/ext/utils/include"
   "${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/include")
 
@@ -151,7 +153,7 @@ target_link_libraries(Willpower.Application PUBLIC Willpower.Common)
 # MassivePolyPusher is configured and built separately from its root CMake project. Its import
 # libraries share one output directory and are intentionally consumed as raw library names here.
 target_link_directories(Willpower.Application PRIVATE
-  "${WILLPOWER_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 target_link_libraries(Willpower.Application PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>

@@ -78,6 +78,8 @@ else()
 endif()
 unset(_tungsten_monoxide_legacy_mpp_dir)
 unset(_tungsten_monoxide_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${TUNGSTEN_MONOXIDE_MPP_DIR}")
 # AppLib is built by the combined cpp/ project before this directory; retain a
 # cache override only for standalone/legacy layouts.
 set(TUNGSTEN_MONOXIDE_APPLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../applib" CACHE PATH
@@ -120,12 +122,12 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-mesh/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-program/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/vendor/include"
-  "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/ext/utils/include"
   "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include")
 
 target_link_directories(TungstenMonoxide PRIVATE
-  "${TUNGSTEN_MONOXIDE_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(TungstenMonoxide PRIVATE
     "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/lib/vs2026/${TUNGSTEN_MONOXIDE_LIB_ARCH}/$<CONFIG>")

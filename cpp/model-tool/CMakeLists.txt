@@ -96,6 +96,8 @@ else()
 endif()
 unset(_model_tool_legacy_mpp_dir)
 unset(_model_tool_mpp_dir)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${MODEL_TOOL_MPP_DIR}")
 target_include_directories(model_tool PRIVATE
   include
   include/imgui
@@ -108,14 +110,14 @@ target_include_directories(model_tool PRIVATE
   # still needed even though model-tool never calls into mpp::program:: itself.
   "${MODEL_TOOL_MPP_DIR}/mpp-program/include"
   "${MODEL_TOOL_MPP_DIR}/vendor/include"
-  "${MODEL_TOOL_MPP_DIR}/build/cmake/_deps/glew-2.3.1/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   # Use the Assimp headers and generated configuration matching the binaries built by MPP.
-  "${MODEL_TOOL_MPP_DIR}/build/cmake/ext/assimp/include"
+  "${TOX_MPP_BUILD_DIR}/ext/assimp/include"
   "${MODEL_TOOL_MPP_DIR}/ext/assimp/include"
   "${MODEL_TOOL_MPP_DIR}/ext/utils/include")
 
 target_link_directories(model_tool PRIVATE
-  "${MODEL_TOOL_MPP_DIR}/build/cmake/lib/$<CONFIG>")
+  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 
 target_link_libraries(model_tool PRIVATE
   SDL3::SDL3
@@ -136,7 +138,7 @@ if (WIN32)
   # and MassivePolyPusher.dll must share GLEW's one process-wide function-pointer table.
   target_link_libraries(model_tool PRIVATE
     $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>
-    glew32
+    $<IF:$<CONFIG:Debug>,glew32d,glew32>
     opengl32
     ole32
     shell32
@@ -157,7 +159,7 @@ endif()
 
 # The dependency's CMake build places Assimp, MassivePolyPusher, MppMesh, MppProgram, MppHelper,
 # Utils, and GLEW runtime DLLs together.
-set(_runtime_root "@MODEL_TOOL_MPP_DIR@/build/cmake/bin/${CONFIG}")
+set(_runtime_root "@TOX_MPP_BUILD_DIR@/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 if (EXISTS "${_runtime_root}")

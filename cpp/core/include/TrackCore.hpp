@@ -78,6 +78,15 @@ namespace Consts {
 constexpr double ZONE_RELEASE = 1.0;
 constexpr double CHECKPOINT_FLASH_MS = 500.0;
 constexpr double TRIGGER_REARM_MARGIN = 3.0;
+// Downward slack on a trigger gate's base plane. A gate quad is baked with its base exactly on the
+// analytic road surface (TrackBake.cpp: frame position + crossSectionHeight lift), while the value
+// tested against it -- Physics::groundPos -- is a contact point on the *tessellated* road in mesh
+// mode, which on any banked or vertically curved section chords a centimetre or two below that
+// analytic surface. Without slack, `lu >= 0` rejects the crossing outright and the gate is
+// permanently dead. Measured worst case on the shipped starter track is ~2.2 cm; 0.5 m is ample for
+// far coarser tessellation while staying negligible against a gate's 12 m height, so it cannot make
+// a ship passing under a raised gate register a false crossing.
+constexpr double TRIGGER_BASE_MARGIN = 0.5;
 constexpr double SURFACE_SNAP_UP = 3.0;
 constexpr double RESPAWN_FALL_DEPTH = 100.0;
 constexpr double CORRIDOR_ALONG_TOL = 8.0;
