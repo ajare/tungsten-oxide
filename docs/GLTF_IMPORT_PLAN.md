@@ -3,7 +3,7 @@
 Branch: `gltf-import`. The matching MassivePolyPusher submodule change (the `RSE4`
 stream format, see M1) is on `rse4-texture-colour-space` in that repository.
 
-Overall status: **M1–M2 complete; M3–M5 not started.**
+Overall status: **M1–M3 complete; M4–M5 not started.**
 
 ## Goal
 
@@ -203,14 +203,55 @@ because the changed behaviour is otherwise reachable only through the GUI.
 
 ### M3 — `track_editor` GLEW migration
 
-**Status: not started.**
+**Status: complete.** Split into three independently verifiable chunks, because
+this milestone is the highest-risk one and has nothing to do with glTF — it
+exists only because the editor now links mpp.
 
-Drop `include/gl3w`/`src/gl3w`, point `imconfig.h` at `<GL/glew.h>`, call
-`glewInit()` at startup, link `glew32`, and deploy the mpp/AssImp/Draco runtime
-DLL set via a script mirroring `model-tool`'s `CopyModelToolRuntime.cmake`.
+The GL surface turned out to be far smaller than feared: only two non-vendored
+translation units touch GL at all (`main.cpp` and `TextureCache.cpp`), between
+them using eight distinct GL entry points.
 
-This milestone is high-risk and has nothing to do with glTF. It exists only
-because the editor now links mpp. Land and verify it on its own.
+**M3.1 — GL loader swap.** `imconfig.h` and `TextureCache.cpp` point at
+`<GL/glew.h>`; `main.cpp` calls `glewInit()`; `include/gl3w`/`src/gl3w` are
+deleted; `glew32` is linked and its DLL deployed. The editor still links no mpp
+at this point, so the loader change is isolated from everything else.
+
+`glewExperimental = GL_TRUE` is set before `glewInit()`, and the error queue is
+drained afterwards. Both are required, not incidental: the editor requests a
+**core** 3.0 profile, and GLEW's normal path enumerates through
+`glGetString(GL_EXTENSIONS)`, which a core context returns NULL for — leaving it
+to fail or build a broken function table. Draining the queue clears the
+`GL_INVALID_ENUM` that probing under a core profile leaves behind, so the first
+real `glGetError()` of a frame is not this one.
+`mpp::RenderSystem::initialise()` sets the same flag for the same reason, so the
+two agree wherever both end up in one process.
+
+**M3.2 — `track_editor` links `model_io_core`** (not `model_io_gltf`: the editor
+reads and writes `.mppmodel` files and shares the vertex-layout contract, but
+imports no assets, so it has no reason to pull in AssImp). The mpp runtime DLL
+set is deployed via `model_io_deploy_runtime`, shared with `cpp/model-tool` and
+`cpp/gltf-convert`.
+
+**M3.3 — `mpp_model_import_tests` links `model_io_core`** for a bridge
+assertion: the editor's from-scratch writer and reader each hard-code a 36-byte
+stride and a channel order, entirely independently of `model_io`'s definition of
+that layout. M4 replaces both, so the test pins that they already agree —
+stride, per-channel offsets and the normalised colour flag. A silent
+disagreement would otherwise surface as corrupt geometry at the moment of the
+swap rather than as a failing test now. They do agree.
+
+`editor_track_resource_tests` was deliberately left alone: it exercises XML only
+and has no use for the layer.
+
+Verified at runtime, not just at build time: `track_editor.exe` launches, passes
+every one of its startup smoke checks, and reaches its main loop with empty
+stderr — so `glewInit()` genuinely succeeds against a real context.
+
+Consequences recorded rather than glossed: `mpp_model_import_tests` loses the
+"no Willpower/SDL/mpp dependency" property its comment advertised, and the
+runtime deployment copies the whole mpp `bin/` DLL set — including
+`assimp-vc145-mt.dll`, which the editor does not use — because the shared deploy
+script globs the directory rather than resolving per-target dependencies.
 
 ### M4 — editor `.mppmodel` I/O, 52-byte track export, `Map.cpp`
 

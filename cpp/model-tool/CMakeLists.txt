@@ -3,9 +3,10 @@
 # viewport, and saves them out as .mppmodel. See docs/adr/0001-model-tool.md for the design.
 #
 # Docked menubar/toolbar/statusbar/panel shell mirrors cpp/editor's own SDL3 + Dear ImGui (docking
-# branch) bootstrap (vendored copies under include/imgui, src/imgui) -- but unlike editor, this app
-# links real mpp::RenderSystem for its viewport (ADR D9), so its ImGui OpenGL3 backend shares GLEW
-# as its GL loader instead of editor's vendored gl3w (ADR D2; see include/imgui/imconfig.h).
+# branch) bootstrap (vendored copies under include/imgui, src/imgui), including GLEW as the ImGui
+# OpenGL3 backend's GL loader (ADR D2; see include/imgui/imconfig.h). This app links real
+# mpp::RenderSystem for its viewport (ADR D9); cpp/editor used to vendor gl3w instead, but moved to
+# GLEW too in docs/GLTF_IMPORT_PLAN.md M3, so both apps now share one loader choice.
 #
 # Build (from an x64 MSVC Developer prompt, as part of the combined cpp/ configure):
 #   cmake -S cpp -B cpp/build

@@ -2,16 +2,18 @@
 // writer of MassivePolyPusher's model format, targeting byte-for-byte compatibility with what
 // mpp::ModelSerializer::load() (ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp) reads back.
 //
-// Deliberately does NOT link mpp::ModelSerializer itself: mpp/include/mpp/ModelSerializer.h
-// unconditionally includes <GL/glew.h>/<gl/gl.h> and transitively drags in
-// mpp/ResourceManager.h -> mpp/RenderSystem.h (MassivePolyPusher's whole OpenGL rendering/
-// resource-management subsystem) just to compile the header, even though ModelSerializer::save()
-// itself never calls a GL function. Linking that in would mean adding GLEW as a second GL loader
-// alongside cpp/editor's existing gl3w (real duplicate-symbol risk) and compiling/linking a large
-// slice of mpp's resource subsystem just to satisfy the linker for code paths (writeMaterial) this
-// exporter never exercises. This writer instead emits the documented binary layout directly (see
-// MPPMODEL_EXPORT_SPEC.md 2.1) using only tox::GeometryBatch, verified field-for-field against
-// ModelSerializer.cpp's write*/read* pairs -- no new build dependency, no GL-loader risk.
+// SUPERSEDED, pending removal in docs/GLTF_IMPORT_PLAN.md M4. This writer exists because the
+// editor used to refuse to link mpp: mpp/include/mpp/ModelSerializer.h unconditionally includes
+// <GL/glew.h> and transitively drags in mpp/ResourceManager.h -> mpp/RenderSystem.h just to
+// compile the header, which would have meant adding GLEW as a second GL loader alongside the
+// editor's vendored gl3w (a real duplicate-symbol risk). Both halves of that reasoning are now
+// gone: the editor moved to GLEW in M3 and links model_io_core, so mpp::ModelSerializer is
+// available and this from-scratch writer is redundant. M4 replaces it, and the note below on
+// ModelSerializer::save()'s directory backpatch stays relevant to whoever does that.
+//
+// Until then this writer emits the documented binary layout directly (see MPPMODEL_EXPORT_SPEC.md
+// 2.1) using only tox::GeometryBatch, verified field-for-field against ModelSerializer.cpp's
+// write*/read* pairs.
 //
 // One correction versus what ModelSerializer::save() actually does on disk: its
 // updateDirectoryEntry() seeks to `sizeof(Header) + type * sizeof(Directory::Entry)` to backpatch

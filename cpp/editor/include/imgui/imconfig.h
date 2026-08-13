@@ -149,9 +149,14 @@ namespace ImGui
 }
 */
 
-//---- track_editor: use the vendored gl3w loader (cpp/editor/include/gl3w) instead of ImGui's
-// own embedded loader. imgui_impl_opengl3.cpp's own comment says this define "needs to be visible
-// from the imgui_impl_opengl3.cpp compilation unit... define globally or in imconfig.h" — this file
-// is included by imgui.h before that backend's GL header block, so it satisfies that from here.
+//---- track_editor: use GLEW instead of ImGui's own embedded loader. imgui_impl_opengl3.cpp's own
+// comment says this define "needs to be visible from the imgui_impl_opengl3.cpp compilation
+// unit... define globally or in imconfig.h" — this file is included by imgui.h before that
+// backend's GL header block, so it satisfies that from here.
+//
+// This was the vendored gl3w loader until docs/GLTF_IMPORT_PLAN.md M3. The editor now links mpp
+// (docs/adr/0004-gltf-import.md, D1), and mpp's headers pull in GLEW unconditionally, so a second
+// independent loader in the same binary is exactly the duplicate-symbol risk cpp/model-tool's own
+// imconfig.h describes. One loader per process; GLEW is the one mpp brings.
 #define IMGUI_IMPL_OPENGL_LOADER_CUSTOM
-#include <GL/gl3w.h>
+#include <GL/glew.h>

@@ -2,9 +2,10 @@
 # cpp/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
 # as a black box) and `Willpower::Common` directly for material catalog parsing.
 #
-# Dear ImGui (docking branch) and its SDL3/OpenGL3 backends, plus the gl3w GL loader, are copied
-# into include/ and src/ — see the README-VENDORED.md files under include/imgui and include/gl3w
-# for exact provenance. SDL3 is built from MassivePolyPusher's pinned source submodule.
+# Dear ImGui (docking branch) and its SDL3/OpenGL3 backends are copied into include/ and src/ —
+# see the README-VENDORED.md file under include/imgui for exact provenance. SDL3 is built from
+# MassivePolyPusher's pinned source submodule, and the GL loader is GLEW from that same build tree
+# (it was a vendored gl3w copy until docs/GLTF_IMPORT_PLAN.md M3 — see include/imgui/imconfig.h).
 #
 # Build (from an x64 MSVC Developer prompt, as part of the combined cpp/ configure):
 #   cmake -S cpp -B cpp/build
@@ -56,8 +57,19 @@ set(IMGUI_SOURCES
   src/imgui/imgui_impl_sdl3.cpp
   src/imgui/imgui_impl_opengl3.cpp)
 
-# --- Vendored gl3w GL loader -------------------------------------------------
-set(GL3W_SOURCES src/gl3w/gl3w.c)
+# --- GL loader: GLEW, from MassivePolyPusher's build tree ----------------------------------------
+# Was a vendored gl3w copy until docs/GLTF_IMPORT_PLAN.md M3. The editor now links mpp, whose
+# headers pull in GLEW unconditionally, so a second independent loader in the same binary would be
+# a duplicate-symbol hazard -- see include/imgui/imconfig.h and docs/adr/0004-gltf-import.md D1.
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
+tox_resolve_mpp_build_tree("${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+
+# --- Shared .mppmodel/vertex-layout layer (docs/GLTF_IMPORT_PLAN.md, M3) -------------------------
+# model_io_core, not model_io_gltf: the editor reads and writes .mppmodel files and shares the
+# vertex-layout contract, but does not import assets, so it has no reason to pull in AssImp.
+if (NOT TARGET model_io_core)
+  add_subdirectory(../model-io ${CMAKE_CURRENT_BINARY_DIR}/model-io)
+endif()
 
 # --- Editor-owned authoring model (M1) + views (M2/M6) + export/gen (M7a) + textures (M7b) +
 # native file I/O (EDITOR_NATIVE_FILE_IO_PLAN.md M8) ---
@@ -90,19 +102,19 @@ set(EDITOR_SOURCES
 add_executable(track_editor
   main.cpp
   ${EDITOR_SOURCES}
-  ${IMGUI_SOURCES}
-  ${GL3W_SOURCES})
+  ${IMGUI_SOURCES})
 
 target_include_directories(track_editor PRIVATE
   include
   include/imgui
-  include/gl3w
+  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 
 target_link_libraries(track_editor PRIVATE
   core
   Willpower::Common
   model_xml
+  model_io_core
   SDL3::SDL3)
 
 add_executable(editor_track_resource_tests
@@ -120,8 +132,9 @@ add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
 
 # Headless test for the from-scratch .mppmodel geometry reader (TRACK_MODEL_LIST_PLAN.md Milestone
-# 4) -- deliberately no Willpower/SDL/mpp dependency, matching MppModelImport.cpp/MppModelExport.cpp
-# themselves.
+# 4). It links model_io_core since docs/GLTF_IMPORT_PLAN.md M3, for the bridge assertion that pins
+# the editor's hard-coded 36-byte layout against model_io's definition of it before M4 replaces
+# both -- so the "deliberately no mpp dependency" property this target used to have is gone.
 add_executable(mpp_model_import_tests
   tests/mpp_model_import_tests.cpp
   src/MppModelImport.cpp
@@ -129,13 +142,19 @@ add_executable(mpp_model_import_tests
 target_include_directories(mpp_model_import_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
-target_link_libraries(mpp_model_import_tests PRIVATE core Willpower::Common model_xml)
+target_link_libraries(mpp_model_import_tests PRIVATE core Willpower::Common model_xml model_io_core)
 add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
+model_io_deploy_runtime(mpp_model_import_tests)
 
 if (WIN32)
-  target_link_libraries(track_editor PRIVATE opengl32 ole32 shell32 uuid)
+  # The dynamic GLEW import library, from the same build tree its header came from. If mpp is ever
+  # loaded into this process too, both must share GLEW's one function-pointer table.
+  target_link_directories(track_editor PRIVATE "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  target_link_libraries(track_editor PRIVATE
+    $<IF:$<CONFIG:Debug>,glew32d,glew32>
+    opengl32 ole32 shell32 uuid)
   target_link_libraries(editor_track_resource_tests PRIVATE ole32 shell32 uuid)
-  # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h> and gl3w.c) collide with
+  # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h> and GLEW) collide with
   # std::min/std::max and Willpower/nlohmann headers; suppress them everywhere in this target.
   target_compile_definitions(track_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -147,6 +166,11 @@ add_custom_command(TARGET track_editor POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     $<TARGET_RUNTIME_DLLS:track_editor> $<TARGET_FILE_DIR:track_editor>
   COMMAND_EXPAND_LISTS)
+
+# mpp's libraries (and GLEW, and AssImp) are linked by raw name against MassivePolyPusher's build
+# tree rather than as CMake IMPORTED targets, so $<TARGET_RUNTIME_DLLS:...> above cannot discover
+# them. This copies the whole set beside the executable, exactly as cpp/model-tool does.
+model_io_deploy_runtime(track_editor)
 
 # Editor config .ini, copied beside the executable so a direct run/F5 picks it up.
 add_custom_command(TARGET track_editor POST_BUILD

@@ -1,6 +1,6 @@
 #include "TextureCache.hpp"
 
-#include <GL/gl3w.h>
+#include <GL/glew.h>
 
 // This is the one translation unit that owns stb_image's implementation.
 #define STB_IMAGE_IMPLEMENTATION

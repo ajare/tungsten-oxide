@@ -54,7 +54,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "imconfig.h"  // pulls in the vendored gl3w loader (see imconfig.h)
+#include "imconfig.h"  // pulls in the GLEW loader (see imconfig.h)
 #include "imgui.h"
 #include "imgui_internal.h"  // ImGui::DockBuilder* -- used once at startup to build the fixed layout
 #include "imgui_impl_opengl3.h"
@@ -1518,12 +1518,22 @@ int main(int, char**) {
   SDL_GL_MakeCurrent(window, glContext);
   SDL_GL_SetSwapInterval(1);  // vsync
 
-  if (gl3wInit() != 0) {
-    std::fprintf(stderr, "gl3wInit failed\n");
+  // GL_TRUE is required under a core profile (requested above): GLEW's normal path enumerates via
+  // glGetString(GL_EXTENSIONS), which a core context returns NULL for, leaving it to fail or build
+  // a broken function table. mpp::RenderSystem::initialise() sets the same flag for the same
+  // reason, so the two agree wherever both end up in one process.
+  glewExperimental = GL_TRUE;
+  const GLenum glewStatus = glewInit();
+  if (glewStatus != GLEW_OK) {
+    std::fprintf(stderr, "glewInit failed: %s\n", reinterpret_cast<const char*>(glewGetErrorString(glewStatus)));
     SDL_GL_DestroyContext(glContext);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 1;
+  }
+  // glewExperimental makes GLEW probe entry points that a core profile rejects, which leaves a
+  // GL_INVALID_ENUM queued. Drain it so the first real glGetError() of the frame is not this one.
+  while (glGetError() != GL_NO_ERROR) {
   }
 
   IMGUI_CHECKVERSION();
@@ -2668,7 +2678,7 @@ int main(int, char**) {
     }
     if (ImGui::CollapsingHeader("Diagnostics")) {
       ImGui::PushID("Diagnostics");
-      ImGui::TextUnformatted("SDL3 + OpenGL3 + ImGui (docking) + gl3w link up.");
+      ImGui::TextUnformatted("SDL3 + OpenGL3 + ImGui (docking) + GLEW link up.");
       ImGui::Separator();
       ImGui::TextUnformatted("Startup smoke check (starter track -> EditorTrackDefinition -> JSON):");
       ImGui::BulletText("JSON round-trip (toJson . fromJson . toJson idempotent): %s", smoke.roundTripOk ? "OK" : "MISMATCH");

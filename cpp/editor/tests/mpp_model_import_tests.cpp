@@ -15,6 +15,7 @@
 #include "MppModelExport.hpp"
 #include "MppModelImport.hpp"
 #include "Track.hpp"
+#include "modelio/MeshLayout.hpp"
 
 namespace {
 
@@ -199,12 +200,37 @@ void testBadMagicThrows() {
   std::remove(path.string().c_str());
 }
 
+// Bridge assertion for docs/GLTF_IMPORT_PLAN.md M3/M4. The editor's from-scratch writer hard-codes
+// a 36-byte stride and this reader hard-codes the same, entirely independently of
+// cpp/model-io's own definition of that layout. M4 replaces both with model_io, so the two must
+// already agree beforehand -- a silent disagreement would otherwise surface as corrupt geometry at
+// the moment of the swap, rather than as a failing test now.
+void testEditorStrideMatchesModelIoContract() {
+  const mpp::mesh::MeshSpecification legacy = modelio::gameMeshSpecification(/*indexed=*/false, /*pbr=*/false);
+  check(legacy.getVertexStrideInBytes() == 36,
+        "model_io's legacy layout is the 36 bytes the editor's writer and reader both assume");
+  check(modelio::LegacyPbrVertexStride == 36, "the published legacy stride constant agrees");
+
+  // Channel order matters as much as the total: the editor packs position, normal, uv, colour in
+  // that order at fixed offsets.
+  const auto position = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Position3);
+  const auto normal = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Normal3);
+  const auto uv = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::TexCoord2);
+  const auto colour = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Colour4);
+  check(position && position->offsetInBytes == 0, "position3 sits at offset 0");
+  check(normal && normal->offsetInBytes == 12, "normal3 sits at offset 12");
+  check(uv && uv->offsetInBytes == 24, "texcoord2 sits at offset 24");
+  check(colour && colour->offsetInBytes == 32, "colour4 sits at offset 32");
+  check(colour && colour->normalised, "colour4 is normalised unsigned bytes");
+}
+
 }  // namespace
 
 int main() {
   testRoundTripEditorWrittenFile();
   testRoundTripRealIndexedFile();
   testBadMagicThrows();
+  testEditorStrideMatchesModelIoContract();
 
   if (failures) {
     std::cerr << failures << " mpp_model_import test(s) failed\n";
