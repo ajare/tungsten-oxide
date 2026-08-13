@@ -25,6 +25,13 @@ if (NOT WIN32)
     "off Windows.")
 endif()
 
+# --- Shared glTF/.mppmodel conversion layer (docs/GLTF_IMPORT_PLAN.md, M2) ----------------------
+# AssImpImport.cpp and MppSave.cpp are adapters over model_io now rather than their own AssImp walk
+# and ModelSerializer driving, and ModelResources.cpp takes the 36-byte layout from there too.
+if (NOT TARGET model_io_gltf)
+  add_subdirectory(../model-io ${CMAKE_CURRENT_BINARY_DIR}/model-io)
+endif()
+
 if (MSVC)
   add_compile_options(/W3 /EHsc)
 endif()
@@ -111,9 +118,8 @@ target_include_directories(model_tool PRIVATE
   "${MODEL_TOOL_MPP_DIR}/mpp-program/include"
   "${MODEL_TOOL_MPP_DIR}/vendor/include"
   "${TOX_MPP_GLEW_INCLUDE_DIR}"
-  # Use the Assimp headers and generated configuration matching the binaries built by MPP.
-  "${TOX_MPP_BUILD_DIR}/ext/assimp/include"
-  "${MODEL_TOOL_MPP_DIR}/ext/assimp/include"
+  # No Assimp include directory: since M2 this app calls no AssImp API directly (the walk lives in
+  # model_io_gltf, which carries its own PUBLIC Assimp includes for anything that still needs them).
   "${MODEL_TOOL_MPP_DIR}/ext/utils/include")
 
 target_link_directories(model_tool PRIVATE
@@ -121,6 +127,10 @@ target_link_directories(model_tool PRIVATE
 
 target_link_libraries(model_tool PRIVATE
   SDL3::SDL3
+  # Carries AssImp and the mpp include/link set transitively. The explicit mpp entries below are
+  # kept because this app still calls mpp directly for its viewport; AssImp's are not, because it
+  # no longer calls AssImp at all.
+  model_io_gltf
   # Willpower::Common's XmlReader parses imported Resources.xml-shaped material files (see
   # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
   # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
@@ -134,10 +144,10 @@ target_link_libraries(model_tool PRIVATE
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
 if (WIN32)
-  # Use the MSVC Assimp library built by MPP and the dynamic GLEW import library. Both model_tool
-  # and MassivePolyPusher.dll must share GLEW's one process-wide function-pointer table.
+  # The dynamic GLEW import library: both model_tool and MassivePolyPusher.dll must share GLEW's one
+  # process-wide function-pointer table. Assimp is no longer linked here -- it arrives transitively
+  # through model_io_gltf, which is the only thing that calls it now.
   target_link_libraries(model_tool PRIVATE
-    $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>
     $<IF:$<CONFIG:Debug>,glew32d,glew32>
     opengl32
     ole32
@@ -197,13 +207,21 @@ endif()
 enable_testing()
 add_executable(model_tool_tests
   tests/model_tool_tests.cpp
+  src/AssImpImport.cpp
   src/NormalSmoothing.cpp
   src/ObjSmoothingGroups.cpp
   src/OpenTarget.cpp)
 target_include_directories(model_tool_tests PRIVATE include)
 target_compile_features(model_tool_tests PRIVATE cxx_std_20)
-target_link_libraries(model_tool_tests PRIVATE model_xml)
+# AssImpImport.cpp is now an adapter over model_io_gltf, so this target links it and gains the
+# mpp/AssImp runtime DLLs. That gives up the "needs neither AssImp nor a GPU" property this target
+# used to have, in exchange for actually covering importModel() -- the one part of model_tool M2
+# changed behaviourally, and otherwise only reachable through the GUI.
+target_link_libraries(model_tool_tests PRIVATE model_xml model_io_gltf)
+target_compile_definitions(model_tool_tests PRIVATE
+  "MODEL_TOOL_GLTF_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../test-data/fixtures/gltf\"")
 add_test(NAME model_tool_tests COMMAND model_tool_tests)
+model_io_deploy_runtime(model_tool_tests)
 
 # Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
 # `ctest` can actually launch it (OpenTarget.cpp/model_xml both use TinyXML2 now).

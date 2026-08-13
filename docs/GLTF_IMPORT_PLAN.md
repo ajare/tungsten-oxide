@@ -3,7 +3,7 @@
 Branch: `gltf-import`. The matching MassivePolyPusher submodule change (the `RSE4`
 stream format, see M1) is on `rse4-texture-colour-space` in that repository.
 
-Overall status: **M1 complete; M2–M5 not started.**
+Overall status: **M1–M2 complete; M3–M5 not started.**
 
 ## Goal
 
@@ -91,6 +91,8 @@ during the grilling pass; do not reintroduce it as a "while we're here".
   tangents**, and `Map.cpp` accepts both 36- and 52-byte strides.
 - **`cpp/model-tool` is refactored onto the new libraries**, accepting that its
   scene flattening behaviour changes (meshes are no longer merged by material).
+  Its `ImportedModel` view model is kept rather than replaced by `ModelData` —
+  see M2 for why.
 
 ## Architecture
 
@@ -120,7 +122,7 @@ Each milestone is independently revertible.
 ### M1 — libraries, console tool, tests
 
 **Status: complete.** `model_io_core`, `model_io_gltf`, `gltf_convert` and
-`model_io_tests` (15 groups) are in and green, alongside the existing suite —
+`model_io_tests` are in and green, alongside the existing suite —
 `ctest --test-dir cpp/build -C Release` passes 12/12. Verified end-to-end against
 the real `TungstenMonoxide.pipeline.xml`: material listing, conversion against
 `Ship.Surface`, and `--strict` correctly refusing a model that needs synthesis.
@@ -159,13 +161,45 @@ target changes behaviour.
 
 ### M2 — `model_tool` refactor
 
-**Status: not started.**
+**Status: complete.** `AssImpImport.cpp` and `MppSave.cpp` are adapters over
+`model_io` (roughly 200 and 90 lines of duplicated AssImp walking and
+`ModelSerializer` driving replaced), and `ModelResources.cpp`'s
+`fixedMeshSpecification()` — byte-for-byte `gameMeshSpecification(true, false)` —
+now defers to it. `model_tool` no longer references AssImp anywhere: its direct
+include and link entries are gone, arriving transitively through
+`model_io_gltf`. `ctest` passes 12/12.
 
-Reimplement `AssImpImport`/`MppSave` over `model_io_*`. This reaches further
-than those two files: `NormalSmoothing`, `ObjSmoothingGroups`, `MppModelImport`,
-`ModelResources`, `MaterialLibrary` and the UI all consume `ImportedModel`/
-`ImportedVertex`. Scene flattening changes as noted above — a deliberate
-behaviour change that fixes today's lost per-mesh names.
+**Scoping decision.** `ImportedModel`/`ImportedVertex` are *kept*, not replaced
+by `modelio::ModelData`. They are model-tool's view model — carrying
+`MaterialOrigin`, the single diffuse texture path, and per-mesh `model_xml`
+`Type`/`Visible` metadata — consumed by `MaterialLibrary` bookkeeping, the
+viewport and 1213 lines of UI. Migrating the type through those 17 files would
+push model-tool's resource-management concerns into a shared conversion library
+for no gain; replacing the *implementations* removes the actual duplication.
+So `NormalSmoothing`, `ObjSmoothingGroups`, `MppModelImport`, `ModelResources`,
+`MaterialLibrary` and the UI are untouched apart from the one-line spec change.
+
+**Behaviour change, as designed.** Scene flattening moves from
+`aiProcess_PreTransformVertices` to the manual node walk, so a multi-object
+source keeps one mesh per node, named after it, instead of collapsing into one
+mesh per material. That fixes the lost per-mesh names at the cost of more,
+smaller meshes.
+
+Two `model_io` capabilities were added to serve this consumer:
+`EmbeddedTexturePolicy::Skip` (model-tool drops an unreferenceable image and
+flags the material, rather than refusing the import, per ADR 0001 D4) and
+`pruneUnreferencedMaterials`, both covered by new `model_io_tests` groups.
+The importer was renamed `importGltf` →
+`importAsset` (`GltfImport.hpp` → `AssetImport.hpp`), since it now serves
+model-tool's OBJ/FBX/USD as well; and `writeMppModelWithNamedMaterials` was
+split out for callers with no PBR pipeline to embed against. The importer also
+gained AssImp's `GetEmbeddedTexture` check, which model-tool had and `model_io`
+lacked.
+
+`model_tool_tests` gains `importModel()` coverage over the shared glTF fixtures,
+pinning the per-node flattening, the Skip policy and external-texture
+resolution. That target is consequently no longer AssImp-free — accepted,
+because the changed behaviour is otherwise reachable only through the GUI.
 
 ### M3 — `track_editor` GLEW migration
 

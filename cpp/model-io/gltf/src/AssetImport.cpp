@@ -1,4 +1,4 @@
-#include "modelio/GltfImport.hpp"
+#include "modelio/AssetImport.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -116,8 +116,21 @@ AlphaMode alphaModeOf(const aiMaterial& material) {
   return AlphaMode::Opaque;
 }
 
+// Reports and returns false only under EmbeddedTexturePolicy::Reject; under Skip the binding is
+// dropped, flagged on the material and reported as a warning.
+bool handleUnreferenceableTexture(const char* code, const std::string& message, EmbeddedTexturePolicy policy,
+                                  MaterialData& material, Report& report) {
+  if (policy == EmbeddedTexturePolicy::Reject) {
+    report.error(code, message, {}, material.name);
+    return false;
+  }
+  material.skippedEmbeddedTexture = true;
+  report.warn(code, message + " (binding dropped)", {}, material.name);
+  return true;
+}
+
 bool readMaterials(const aiScene& scene, const std::filesystem::path& sourceDirectory, const std::string& modelStem,
-                   ModelData& model, Report& report) {
+                   const ImportOptions& options, ModelData& model, Report& report) {
   std::set<std::string> usedNames;
   bool ok = true;
 
@@ -169,19 +182,31 @@ bool readMaterials(const aiScene& scene, const std::filesystem::path& sourceDire
       // AssImp reports a container-embedded image as "*<index>"; a glTF may also inline one as a
       // data: URI. Neither can be named by a path from an embedded material.
       if (!raw.empty() && raw[0] == '*') {
-        report.error("texture.embedded-in-container",
-                     "sampler " + std::string(binding.sampler) +
-                         " uses an image packed inside the container; re-export with external images",
-                     {}, material.name);
-        ok = false;
+        if (!handleUnreferenceableTexture("texture.embedded-in-container",
+                                          "sampler " + std::string(binding.sampler) +
+                                              " uses an image packed inside the container; re-export with "
+                                              "external images",
+                                          options.embeddedTextures, material, report))
+          ok = false;
         continue;
       }
       if (raw.rfind("data:", 0) == 0) {
-        report.error("texture.data-uri",
-                     "sampler " + std::string(binding.sampler) +
-                         " uses an inline data: URI image; re-export with external images",
-                     {}, material.name);
-        ok = false;
+        if (!handleUnreferenceableTexture("texture.data-uri",
+                                          "sampler " + std::string(binding.sampler) +
+                                              " uses an inline data: URI image; re-export with external images",
+                                          options.embeddedTextures, material, report))
+          ok = false;
+        continue;
+      }
+      // Some formats name an embedded image by an ordinary-looking filename that AssImp resolves
+      // to an aiTexture rather than to anything on disk. Nothing would be there to open.
+      if (scene.GetEmbeddedTexture(raw.c_str()) != nullptr) {
+        if (!handleUnreferenceableTexture("texture.embedded-in-container",
+                                          "sampler " + std::string(binding.sampler) + " names '" + raw +
+                                              "', which resolves to an image packed inside the container rather "
+                                              "than a file",
+                                          options.embeddedTextures, material, report))
+          ok = false;
         continue;
       }
 
@@ -324,7 +349,31 @@ void walkNode(const aiScene& scene, const aiNode& node, const aiMatrix4x4& paren
 
 }  // namespace
 
-std::optional<ModelData> importGltf(const std::filesystem::path& path, const ImportOptions& options, Report& report) {
+// Drops materials no mesh references and remaps the surviving indices. AssImp's glTF2 importer
+// appends a default material to every scene whether or not anything uses it.
+void pruneUnreferencedMaterials(ModelData& model) {
+  std::vector<bool> referenced(model.materials.size(), false);
+  for (const MeshData& mesh : model.meshes) referenced[static_cast<std::size_t>(mesh.materialIndex)] = true;
+
+  std::vector<MaterialData> kept;
+  std::vector<int> remapped(model.materials.size(), -1);
+  for (std::size_t i = 0; i < model.materials.size(); ++i) {
+    if (!referenced[i]) continue;
+    remapped[i] = static_cast<int>(kept.size());
+    kept.push_back(std::move(model.materials[i]));
+  }
+
+  // Never leave the model with no material at all: every mesh's materialIndex must stay valid.
+  if (kept.empty()) {
+    kept.push_back(MaterialData{});
+    for (MeshData& mesh : model.meshes) mesh.materialIndex = 0;
+  } else {
+    for (MeshData& mesh : model.meshes) mesh.materialIndex = remapped[static_cast<std::size_t>(mesh.materialIndex)];
+  }
+  model.materials = std::move(kept);
+}
+
+std::optional<ModelData> importAsset(const std::filesystem::path& path, const ImportOptions& options, Report& report) {
   Assimp::Importer importer;
 
   // Deliberately no aiProcess_GenSmoothNormals: normals are generated later, only when absent, so
@@ -346,7 +395,7 @@ std::optional<ModelData> importGltf(const std::filesystem::path& path, const Imp
       path.has_parent_path() ? path.parent_path() : std::filesystem::current_path();
   const std::string stem = path.stem().string();
 
-  if (!readMaterials(*scene, sourceDirectory, stem, model, report)) return std::nullopt;
+  if (!readMaterials(*scene, sourceDirectory, stem, options, model, report)) return std::nullopt;
 
   std::set<std::string> usedNames;
   walkNode(*scene, *scene->mRootNode, aiMatrix4x4(), usedNames, model, report);
@@ -355,6 +404,8 @@ std::optional<ModelData> importGltf(const std::filesystem::path& path, const Imp
     report.error("source.no-meshes", "'" + path.string() + "' contains no triangle mesh data");
     return std::nullopt;
   }
+
+  if (options.pruneUnreferencedMaterials) pruneUnreferencedMaterials(model);
 
   return model;
 }

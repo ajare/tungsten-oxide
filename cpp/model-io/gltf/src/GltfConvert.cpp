@@ -3,7 +3,7 @@
 #include <set>
 #include <string>
 
-#include "modelio/GltfImport.hpp"
+#include "modelio/AssetImport.hpp"
 #include "modelio/MeshLayout.hpp"
 #include "modelio/MppModelIo.hpp"
 #include "modelio/Tangents.hpp"
@@ -98,7 +98,7 @@ bool convertGltf(const mpp::PbrPipelineDocument& pipeline, const ConvertOptions&
   ImportOptions importOptions;
   importOptions.joinIdenticalVertices = target->meshSpec.verticesIndexed();
 
-  std::optional<ModelData> model = importGltf(options.input, importOptions, report);
+  std::optional<ModelData> model = importAsset(options.input, importOptions, report);
   if (!model) return false;
 
   if (!validateAgainstTarget(*model, *target, report)) return false;

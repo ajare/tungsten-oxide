@@ -29,10 +29,17 @@
 namespace modelio {
 
 // Writes every mesh in `model`, packed to `target`'s MeshSpecification, with one embedded
-// PbrMaterial per entry in `model.materials`. Texture paths are resolved relative to the output
-// file's own directory. Returns false having reported; no partial file is left behind.
+// PbrMaterial for each material some mesh references. Texture paths are resolved relative to the
+// output file's own directory. Returns false having reported; no partial file is left behind.
 bool writeMppModel(const ModelData& model, const TargetMaterial& target, const std::filesystem::path& outPath,
                    Report& report);
+
+// As above, but the MaterialNames/Materials sections stay empty and each mesh references its
+// material by name only, to be resolved by the consuming project. This is what cpp/model-tool and
+// cpp/editor's track export both want: they have no PBR pipeline to validate against, and their
+// materials are authored separately (MPPMODEL_EXPORT_SPEC.md 5, option 1).
+bool writeMppModelWithNamedMaterials(const ModelData& model, const mpp::mesh::MeshSpecification& meshSpec,
+                                     const std::filesystem::path& outPath, Report& report);
 
 // Read-back, for verification and round-trip tests. Geometry only: materials are reported by name,
 // not deserialized, since checking that the bytes we wrote come back is the point.

@@ -19,7 +19,7 @@
 #include <mpp/resource-parsers/PbrPipelineDocumentLoader.h>
 
 #include "modelio/GltfConvert.hpp"
-#include "modelio/GltfImport.hpp"
+#include "modelio/AssetImport.hpp"
 #include "modelio/MeshLayout.hpp"
 #include "modelio/MppModelIo.hpp"
 #include "modelio/PipelineMaterial.hpp"
@@ -100,7 +100,7 @@ void testChannelSynthesis() {
   Report report;
   ImportOptions options;
   options.joinIdenticalVertices = true;
-  std::optional<ModelData> model = importGltf(fixture("triangle-plain.gltf"), options, report);
+  std::optional<ModelData> model = importAsset(fixture("triangle-plain.gltf"), options, report);
   check(model.has_value(), "triangle-plain imports");
   if (!model) return;
 
@@ -131,7 +131,7 @@ void testStrictPromotesWarnings() {
   report.setStrict(true);
   ImportOptions options;
   options.joinIdenticalVertices = true;
-  std::optional<ModelData> model = importGltf(fixture("triangle-plain.gltf"), options, report);
+  std::optional<ModelData> model = importAsset(fixture("triangle-plain.gltf"), options, report);
   check(model.has_value(), "triangle-plain imports under strict");
   if (!model) return;
 
@@ -146,7 +146,7 @@ void testTangentUnderivableWithoutUvs() {
   const TargetMaterial withoutTangents = *findPipelineMaterial(pipeline, "Test.Flat", setup);
 
   Report report;
-  std::optional<ModelData> model = importGltf(fixture("triangle-no-uv.gltf"), {}, report);
+  std::optional<ModelData> model = importAsset(fixture("triangle-no-uv.gltf"), {}, report);
   check(model.has_value(), "triangle-no-uv imports");
   if (!model) return;
 
@@ -164,7 +164,7 @@ void testTangentUnderivableWithoutUvs() {
 
 void testEmbeddedTextureRejected() {
   Report report;
-  const std::optional<ModelData> model = importGltf(fixture("textured-embedded.gltf"), {}, report);
+  const std::optional<ModelData> model = importAsset(fixture("textured-embedded.gltf"), {}, report);
   check(!model.has_value(), "an image inlined as a data: URI is refused");
   // AssImp resolves a data: URI image into a container-embedded texture and reports it as "*0",
   // so this fixture lands on the embedded-in-container branch. The data-uri branch remains as
@@ -173,9 +173,47 @@ void testEmbeddedTextureRejected() {
         "the refusal names an unreferenceable embedded image");
 }
 
+// cpp/model-tool references materials by name and only wants a path to preview with, so an
+// unreferenceable image costs it a placeholder rather than the whole import (ADR 0001 D4).
+void testEmbeddedTextureSkippedUnderSkipPolicy() {
+  Report report;
+  ImportOptions options;
+  options.embeddedTextures = EmbeddedTexturePolicy::Skip;
+
+  const std::optional<ModelData> model = importAsset(fixture("textured-embedded.gltf"), options, report);
+  check(model.has_value(), "Skip policy imports a model whose image is packed in the container");
+  if (!model) return;
+  check(!report.hasErrors(), "Skip policy records the dropped binding as a warning, not an error");
+
+  const MaterialData& material = model->materials.front();
+  check(material.skippedEmbeddedTexture, "the material is flagged as having lost a texture");
+  check(material.textures.empty(), "the unreferenceable binding is dropped rather than kept");
+}
+
+// AssImp's glTF2 importer appends a default material to every scene whether or not anything uses
+// it; a UI listing materials should not show it.
+void testUnreferencedMaterialsPruned() {
+  Report unpruned;
+  const std::optional<ModelData> withDefault = importAsset(fixture("triangle-plain.gltf"), {}, unpruned);
+  check(withDefault.has_value(), "triangle-plain imports without pruning");
+
+  Report report;
+  ImportOptions options;
+  options.pruneUnreferencedMaterials = true;
+  const std::optional<ModelData> pruned = importAsset(fixture("triangle-plain.gltf"), options, report);
+  check(pruned.has_value(), "triangle-plain imports with pruning");
+  if (!withDefault || !pruned) return;
+
+  check(withDefault->materials.size() == 2, "AssImp contributes an unreferenced default material");
+  check(pruned->materials.size() == 1, "pruning drops it");
+  for (const MeshData& mesh : pruned->meshes)
+    check(mesh.materialIndex >= 0 && static_cast<std::size_t>(mesh.materialIndex) < pruned->materials.size(),
+          "every mesh's material index is remapped into range");
+}
+
 void testExternalTextureAccepted() {
   Report report;
-  const std::optional<ModelData> model = importGltf(fixture("textured-external.gltf"), {}, report);
+  const std::optional<ModelData> model = importAsset(fixture("textured-external.gltf"), {}, report);
   check(model.has_value(), "an external texture is accepted");
   if (!model) return;
   check(model->materials.front().textures.size() == 1, "the base-colour texture is captured");
@@ -186,14 +224,14 @@ void testExternalTextureAccepted() {
 
 void testUnsupportedMaterialFeature() {
   Report report;
-  const std::optional<ModelData> model = importGltf(fixture("material-transmission.gltf"), {}, report);
+  const std::optional<ModelData> model = importAsset(fixture("material-transmission.gltf"), {}, report);
   check(!model.has_value(), "KHR_materials_transmission is refused");
   check(report.has("material.unsupported-feature"), "the refusal is reported as an unsupported feature");
 }
 
 void testVertexColoursPreserved() {
   Report report;
-  const std::optional<ModelData> model = importGltf(fixture("triangle-coloured.gltf"), {}, report);
+  const std::optional<ModelData> model = importAsset(fixture("triangle-coloured.gltf"), {}, report);
   check(model.has_value(), "triangle-coloured imports");
   if (!model) return;
   check(model->meshes.front().source.colours, "COLOR_0 is recognised as present");
@@ -203,7 +241,7 @@ void testVertexColoursPreserved() {
 
 void testNodeHierarchyIsWalked() {
   Report report;
-  const std::optional<ModelData> model = importGltf(fixture("hierarchy.gltf"), {}, report);
+  const std::optional<ModelData> model = importAsset(fixture("hierarchy.gltf"), {}, report);
   check(model.has_value(), "hierarchy imports");
   if (!model) return;
 
@@ -400,6 +438,8 @@ int main() {
     testStrictPromotesWarnings();
     testTangentUnderivableWithoutUvs();
     testEmbeddedTextureRejected();
+    testEmbeddedTextureSkippedUnderSkipPolicy();
+    testUnreferencedMaterialsPruned();
     testExternalTextureAccepted();
     testUnsupportedMaterialFeature();
     testVertexColoursPreserved();

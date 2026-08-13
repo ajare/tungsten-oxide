@@ -83,9 +83,9 @@ endif()
 # --- model_io_gltf -----------------------------------------------------------------------------
 add_library(model_io_gltf STATIC
   gltf/include/modelio/GltfConvert.hpp
-  gltf/include/modelio/GltfImport.hpp
+  gltf/include/modelio/AssetImport.hpp
   gltf/src/GltfConvert.cpp
-  gltf/src/GltfImport.cpp)
+  gltf/src/AssetImport.cpp)
 
 target_compile_features(model_io_gltf PUBLIC cxx_std_20)
 target_include_directories(model_io_gltf PUBLIC

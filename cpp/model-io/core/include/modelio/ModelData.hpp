@@ -70,6 +70,11 @@ struct MaterialData {
   float alphaCutoff{0.5f};
   bool doubleSided{false};
   std::vector<TextureRef> textures;
+  // Set when the source bound a texture that had to be dropped because it was packed inside the
+  // container rather than sitting beside it as a file, and the caller asked for
+  // EmbeddedTexturePolicy::Skip. Surfaced so a caller can say so rather than silently presenting
+  // the material as untextured.
+  bool skippedEmbeddedTexture{false};
 };
 
 struct ModelData {

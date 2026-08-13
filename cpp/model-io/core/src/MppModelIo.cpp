@@ -45,8 +45,12 @@ std::shared_ptr<const std::int8_t> copyVertexBytes(const std::vector<std::int8_t
 
 }  // namespace
 
-bool writeMppModel(const ModelData& model, const TargetMaterial& target, const std::filesystem::path& outPath,
-                   Report& report) {
+namespace {
+
+// `target` is null for the name-only form, in which case no material is embedded and the
+// MaterialNames/Materials sections stay empty.
+bool writeMppModelImpl(const ModelData& model, const mpp::mesh::MeshSpecification& meshSpec,
+                       const TargetMaterial* target, const std::filesystem::path& outPath, Report& report) {
   if (model.meshes.empty()) {
     report.error("model.no-meshes", "the source asset produced no meshes to write");
     return false;
@@ -62,23 +66,25 @@ bool writeMppModel(const ModelData& model, const TargetMaterial& target, const s
   // actually uses are embedded -- AssImp's glTF2 importer appends a default material to every
   // scene whether or not anything references it, and embedding that would put a material in the
   // file that no mesh can ever resolve to.
-  std::set<int> usedMaterials;
-  for (const MeshData& mesh : model.meshes) usedMaterials.insert(mesh.materialIndex);
+  if (target != nullptr) {
+    std::set<int> usedMaterials;
+    for (const MeshData& mesh : model.meshes) usedMaterials.insert(mesh.materialIndex);
 
-  for (const int index : usedMaterials) {
-    const MaterialData& material = model.materials[static_cast<std::size_t>(index)];
-    mpp::ResourceStreamPtr stream = buildEmbeddedPbrMaterial(material, target, modelDirectory, report);
-    if (!stream) return false;
-    serializer.addMaterial(material.name, stream);
+    for (const int index : usedMaterials) {
+      const MaterialData& material = model.materials[static_cast<std::size_t>(index)];
+      mpp::ResourceStreamPtr stream = buildEmbeddedPbrMaterial(material, *target, modelDirectory, report);
+      if (!stream) return false;
+      serializer.addMaterial(material.name, stream);
+    }
   }
 
-  const bool indexed = target.meshSpec.verticesIndexed();
+  const bool indexed = meshSpec.verticesIndexed();
 
   for (std::size_t i = 0; i < model.meshes.size(); ++i) {
     const MeshData& mesh = model.meshes[i];
 
     PackedMesh packed;
-    if (!packMesh(mesh, target.meshSpec, packed, report)) return false;
+    if (!packMesh(mesh, meshSpec, packed, report)) return false;
 
     if (packed.vertexCount == 0) {
       report.error("mesh.empty", "mesh has no triangles after conversion", mesh.name);
@@ -88,7 +94,7 @@ bool writeMppModel(const ModelData& model, const TargetMaterial& target, const s
     serializer.setName(i, mesh.name);
     serializer.setPrimitiveType(i, mpp::mesh::Primitive::Type::Triangles);
     serializer.setMaterial(i, model.materials[static_cast<std::size_t>(mesh.materialIndex)].name);
-    serializer.addVertexStream(i, packed.vertexCount, target.meshSpec.getVertexStrideInBytes(),
+    serializer.addVertexStream(i, packed.vertexCount, meshSpec.getVertexStrideInBytes(),
                                copyVertexBytes(packed.vertexBytes));
 
     if (indexed) {
@@ -116,6 +122,18 @@ bool writeMppModel(const ModelData& model, const TargetMaterial& target, const s
   }
 
   return true;
+}
+
+}  // namespace
+
+bool writeMppModel(const ModelData& model, const TargetMaterial& target, const std::filesystem::path& outPath,
+                   Report& report) {
+  return writeMppModelImpl(model, target.meshSpec, &target, outPath, report);
+}
+
+bool writeMppModelWithNamedMaterials(const ModelData& model, const mpp::mesh::MeshSpecification& meshSpec,
+                                     const std::filesystem::path& outPath, Report& report) {
+  return writeMppModelImpl(model, meshSpec, nullptr, outPath, report);
 }
 
 ReadModel readMppModel(const std::filesystem::path& path, bool indexed) {
