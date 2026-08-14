@@ -3,7 +3,7 @@
 Branch: `gltf-import`. The matching MassivePolyPusher submodule change (the `RSE4`
 stream format, see M1) is on `rse4-texture-colour-space` in that repository.
 
-Overall status: **M1–M4 complete; M5 not started.**
+Overall status: **M1–M5 complete.**
 
 ## Goal
 
@@ -313,18 +313,47 @@ output.
 
 ### M5 — editor import UI
 
-**Status: not started.**
+**Status: complete.** `track_editor` now links `model_io_gltf` (adding AssImp
+to its dependency closure for the first time — `mpp_model_import_tests`/
+`editor_track_resource_tests` stay on `model_io_core` alone, since neither
+imports glTF). `ctest` passes 12/12 and `track_editor.exe` was launched
+directly to confirm startup still succeeds with the new pipeline-loading code
+present but untriggered (it's lazy — see below).
 
-An "Import glTF…" modal presenting the full validation report — per-mesh
-channel synthesis, per-material findings, the chosen pipeline material — before
-converting. On accept it writes the `.mppmodel` and feeds it through the
-existing `EditorState::loadModel` path, so dedup, placement and per-mesh
-metadata work unchanged.
-
-The pipeline XML path lives in `editor.ini`, defaulting to
-`cpp/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.xml` resolved through the
-existing repo-root discovery convention. The target material is picked per
-import from that pipeline's material list, with the last choice remembered.
+- **"Import glTF…"** sits in the same File-menu group as "Load Model…". It
+  picks a source `.gltf`/`.glb`, lazily loads the configured PBR pipeline
+  document (`ensureGltfPipelineLoaded`, sticking with whatever error it first
+  hit rather than re-reading a bad `editor.ini` entry on every click), and
+  opens the **"Import glTF"** modal.
+- The modal shows the source path, a combo box of the pipeline's material
+  names (`modelio::pipelineMaterialNames`), and the full diagnostics report
+  from a `modelio::convertGltf(..., validateOnly=true)` pass — re-run every
+  time the material selection changes — coloured by severity, matching what
+  `gltf_convert`'s own stderr output shows for the same call. The **Import**
+  button is disabled until validation against the current material selection
+  has passed.
+- On accept, `convertGltf` runs again with `validateOnly=false` against an
+  output path derived from the source (`<source-stem>.mppmodel`, beside the
+  source file), and the result is embedded through the *exact* helper
+  ("Load Model..."'s `resolveModelFileReference`, hoisted out to be shared
+  between the two entry points) and `EditorState::embedModel` call the raw-
+  `.mppmodel` branch of "Load Model…" already uses — so dedup, placement and
+  per-mesh metadata all work unchanged, and a glTF import is indistinguishable
+  from a hand-picked `.mppmodel` from that point on.
+- The pipeline XML path lives in `editor.ini`'s new `[GltfImport]
+  PipelinePath` key (resolved relative to the executable's directory, like
+  `[Resources] Path`), defaulting to
+  `cpp/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.xml` via a repo-root
+  walk (`defaultGltfPipelinePath`, the same technique
+  `findEditorResourceFile` already used) when the key is absent. The target
+  material is remembered across imports for the running session
+  (`lastGltfImportMaterial`, a local -- not persisted back to `editor.ini`,
+  since `EditorIni` is read-only).
+- Verified end-to-end against the real `TungstenMonoxide.pipeline.xml` and a
+  fixture from `cpp/test-data/fixtures/gltf/` via `gltf_convert` (the
+  headless twin calling the identical `modelio::convertGltf`/
+  `PbrPipelineDocumentLoader` API the modal now calls) — `--validate-only`
+  and a real write both succeed, confirming the plumbing the modal drives.
 
 ## Conventions
 

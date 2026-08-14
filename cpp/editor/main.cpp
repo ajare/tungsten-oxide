@@ -62,6 +62,12 @@
 
 #include <SDL3/SDL.h>
 
+#include <mpp/resource-parsers/PbrPipelineDocumentLoader.h>
+
+#include "modelio/Diagnostics.hpp"
+#include "modelio/GltfConvert.hpp"
+#include "modelio/PipelineMaterial.hpp"
+
 #include "Clipboard.hpp"
 #include "EditorHistory.hpp"
 #include "EditorIni.hpp"
@@ -1487,6 +1493,34 @@ std::filesystem::path configuredMaterialResourcesPath() {
   return (iniPath.parent_path() / *resourcesPath).lexically_normal();
 }
 
+// Repo-root-relative fallback for [GltfImport] PipelinePath below, when editor.ini has no entry
+// for it -- the same walk-up-from-CWD technique as findEditorResourceFile() above, since this is a
+// source-tree file the editor doesn't ship/copy anywhere (docs/GLTF_IMPORT_PLAN.md M5).
+std::filesystem::path defaultGltfPipelinePath() {
+  std::filesystem::path dir = std::filesystem::current_path();
+  for (int depth = 0; depth < 8; ++depth) {
+    std::error_code ec;
+    const std::filesystem::path candidate = dir / "cpp" / "tungsten-monoxide" / "pbr" / "TungstenMonoxide.pipeline.xml";
+    if (std::filesystem::exists(candidate, ec)) return candidate;
+    if (!dir.has_parent_path() || dir.parent_path() == dir) break;
+    dir = dir.parent_path();
+  }
+  return {};
+}
+
+// [GltfImport] PipelinePath in editor.ini, resolved relative to the executable's own directory
+// like [Resources] Path above -- or defaultGltfPipelinePath()'s repo-root walk when editor.ini has
+// no such entry, so "Import glTF..." works without editor.ini changes.
+std::filesystem::path configuredGltfPipelinePath() {
+  const std::filesystem::path iniPath = exeDirEditorIniPath();
+  if (!iniPath.empty() && std::filesystem::exists(iniPath)) {
+    const editor::EditorIni ini = editor::EditorIni::load(iniPath);
+    const std::optional<std::string> configured = ini.get("GltfImport", "PipelinePath");
+    if (configured.has_value() && !configured->empty()) return (iniPath.parent_path() / *configured).lexically_normal();
+  }
+  return defaultGltfPipelinePath();
+}
+
 struct StartupMaterials {
   std::filesystem::path resourcesPath;
   editor::MaterialCatalog catalog;
@@ -1886,6 +1920,20 @@ int main(int, char**) {
     return !cleanTrackJson.has_value() || editor::toJson(editorState.track()) != *cleanTrackJson;
   };
 
+  // Shared by "Load Model..." and "Import glTF..." below: turns an absolute .mppmodel path into
+  // what gets stored as a placement's ModelFile reference -- relative to the bound Save location
+  // when one exists, or the absolute path itself otherwise (fine for this session's own canvas
+  // rendering; the author can retype a real relative path once the track has a save location).
+  auto resolveModelFileReference = [&](const std::filesystem::path& absoluteMppModelPath) {
+    if (saveBinding.has_value()) {
+      std::error_code relError;
+      const std::filesystem::path relative =
+          std::filesystem::relative(absoluteMppModelPath, saveBinding->xmlPath.parent_path(), relError);
+      if (!relError && !relative.empty()) return editor::pathToUtf8(relative);
+    }
+    return editor::pathToUtf8(absoluteMppModelPath);
+  };
+
   auto materialMap = [&]() {
     std::map<std::string, std::string> result;
     for (const editor::MaterialEntry& entry : materialCatalog.materials())
@@ -1942,6 +1990,55 @@ int main(int, char**) {
   editor::TrackResourceScanResult chooserScan;
   int chooserSelectedTrack = -1;
   bool openTrackChooser = false;
+
+  // "Import glTF..." (docs/GLTF_IMPORT_PLAN.md M5). The pipeline document and its material list
+  // are loaded lazily on first use, not at startup like MaterialCatalog -- unlike Resources.xml, a
+  // missing/bad pipeline file isn't fatal to the rest of the editor (see configuredGltfPipelinePath
+  // above); ensureGltfPipelineLoaded below sticks with whatever gltfPipelineError it first hit
+  // rather than retrying every click, so a bad editor.ini entry doesn't stat the filesystem anew on
+  // every "Import glTF..." click.
+  std::optional<mpp::PbrPipelineDocument> gltfPipeline;
+  std::vector<std::string> gltfPipelineMaterialNames;
+  std::string gltfPipelineError;
+  std::string lastGltfImportMaterial;  // remembered across imports for this running session only
+
+  std::filesystem::path gltfImportSourcePath;
+  int gltfImportMaterialIndex = -1;
+  modelio::Report gltfImportReport;
+  bool gltfImportSucceeded = false;
+  bool openGltfImportModal = false;
+
+  auto ensureGltfPipelineLoaded = [&]() {
+    if (gltfPipeline.has_value() || !gltfPipelineError.empty()) return;
+    const std::filesystem::path pipelinePath = configuredGltfPipelinePath();
+    try {
+      if (pipelinePath.empty() || !std::filesystem::exists(pipelinePath))
+        throw std::runtime_error("could not locate a PBR pipeline XML (set [GltfImport] PipelinePath in editor.ini).");
+      gltfPipeline = mpp::resource_parsers::PbrPipelineDocumentLoader::fromFile(pipelinePath.string());
+      gltfPipelineMaterialNames = modelio::pipelineMaterialNames(*gltfPipeline);
+    } catch (const std::exception& error) {
+      gltfPipelineError = std::string("Could not load PBR pipeline '") + editor::pathToUtf8(pipelinePath) + "': " + error.what();
+    }
+  };
+
+  // Re-runs validation only (writes nothing) against whichever pipeline material is currently
+  // selected, so the modal's report reflects the dropdown's live choice.
+  auto revalidateGltfImport = [&]() {
+    gltfImportReport = modelio::Report{};
+    gltfImportSucceeded = false;
+    if (!gltfPipeline.has_value() || gltfImportMaterialIndex < 0 ||
+        gltfImportMaterialIndex >= static_cast<int>(gltfPipelineMaterialNames.size()))
+      return;
+    modelio::ConvertOptions options;
+    options.input = gltfImportSourcePath;
+    options.materialName = gltfPipelineMaterialNames[static_cast<std::size_t>(gltfImportMaterialIndex)];
+    options.validateOnly = true;
+    try {
+      gltfImportSucceeded = modelio::convertGltf(*gltfPipeline, options, gltfImportReport);
+    } catch (const std::exception& error) {
+      gltfImportReport.error("import.exception", error.what());
+    }
+  };
   std::optional<editor::TrackSavePlan> pendingSavePlan;
   bool openOverwriteConfirmation = false;
   bool openSaveConflict = false;
@@ -2118,24 +2215,6 @@ int main(int, char**) {
           const editor::FileDialogResult picked = editor::showOpenFileDialog(
               L"Load Model", {{L"MassivePolyPusher Model (*.mppmodel)", L"*.mppmodel"}, {L"Model XML (*.xml)", L"*.xml"}});
           if (picked.ok) {
-            auto resolveModelFileReference = [&](const std::filesystem::path& absoluteMppModelPath) {
-              if (saveBinding.has_value()) {
-                std::error_code relError;
-                const std::filesystem::path relative =
-                    std::filesystem::relative(absoluteMppModelPath, saveBinding->xmlPath.parent_path(), relError);
-                if (!relError && !relative.empty()) return editor::pathToUtf8(relative);
-              }
-              // No save location bound yet -- store the absolute path so placement rendering can
-              // still resolve it this session (TopDownCanvas.cpp's loadCachedPlacementGeometry
-              // joins ModelFile against the track's save directory, but std::filesystem::path's
-              // `/` operator returns the right-hand side unchanged when it's already absolute, so
-              // this round-trips correctly even before modelBaseDir exists). The author can still
-              // retype a real relative path once the track has a home (Properties panel) -- a bare
-              // filename here would have silently discarded the only path that worked, whereas an
-              // absolute path is only inconvenient, never wrong.
-              return editor::pathToUtf8(absoluteMppModelPath);
-            };
-
             const bool isModelXml = picked.path.extension() == L".xml" || picked.path.extension() == L".XML";
             try {
               modelxml::ModelXmlDefinition parsed;
@@ -2156,6 +2235,27 @@ int main(int, char**) {
             } catch (const std::exception& error) {
               showStatus(std::string("Load Model failed: ") + error.what());
             }
+          }
+        }
+        // "Import glTF..." (docs/GLTF_IMPORT_PLAN.md M5): converts a glTF/GLB into an embedded
+        // PbrMaterial .mppmodel via cpp/model-io, same as gltf_convert, but through a modal that
+        // shows the validation report and lets the pipeline material be picked before writing
+        // anything. On accept the written file is embedded through the exact same
+        // resolveModelFileReference/embedModel path "Load Model..." above uses for a raw
+        // .mppmodel, so dedup/placement/per-mesh metadata all work unchanged.
+        if (ImGui::MenuItem("Import glTF...")) {
+          const editor::FileDialogResult picked =
+              editor::showOpenFileDialog(L"Import glTF", {{L"glTF/GLB", L"*.gltf;*.glb"}});
+          if (picked.ok) {
+            gltfImportSourcePath = picked.path;
+            ensureGltfPipelineLoaded();
+            gltfImportMaterialIndex = -1;
+            if (gltfPipeline.has_value() && !gltfPipelineMaterialNames.empty()) {
+              const auto found = std::find(gltfPipelineMaterialNames.begin(), gltfPipelineMaterialNames.end(), lastGltfImportMaterial);
+              gltfImportMaterialIndex = static_cast<int>(found != gltfPipelineMaterialNames.end() ? found - gltfPipelineMaterialNames.begin() : 0);
+              revalidateGltfImport();
+            }
+            openGltfImportModal = true;
           }
         }
         ImGui::Separator();
@@ -2270,6 +2370,10 @@ int main(int, char**) {
     if (openTrackChooser) {
       ImGui::OpenPopup("Load Track from Resources XML");
       openTrackChooser = false;
+    }
+    if (openGltfImportModal) {
+      ImGui::OpenPopup("Import glTF");
+      openGltfImportModal = false;
     }
 
     if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -2440,6 +2544,98 @@ int main(int, char**) {
         loadTrackCandidate(*selected);
         ImGui::CloseCurrentPopup();
       }
+      ImGui::EndPopup();
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(640.0f, 520.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Import glTF")) {
+      ImGui::TextDisabled("Source");
+      ImGui::SameLine();
+      ImGui::TextWrapped("%s", editor::pathToUtf8(gltfImportSourcePath).c_str());
+      ImGui::Separator();
+
+      if (!gltfPipelineError.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.35f, 0.35f, 1.0f));
+        ImGui::TextWrapped("%s", gltfPipelineError.c_str());
+        ImGui::PopStyleColor();
+      } else if (gltfPipelineMaterialNames.empty()) {
+        ImGui::TextDisabled("The configured PBR pipeline declares no PbrMaterial resources.");
+      } else {
+        ImGui::TextDisabled("Target material");
+        ImGui::SameLine();
+        const char* preview = gltfImportMaterialIndex >= 0 && gltfImportMaterialIndex < static_cast<int>(gltfPipelineMaterialNames.size())
+                                  ? gltfPipelineMaterialNames[static_cast<std::size_t>(gltfImportMaterialIndex)].c_str()
+                                  : "";
+        if (ImGui::BeginCombo("##gltfImportMaterial", preview)) {
+          for (std::size_t i = 0; i < gltfPipelineMaterialNames.size(); ++i) {
+            const bool selected = static_cast<int>(i) == gltfImportMaterialIndex;
+            if (ImGui::Selectable(gltfPipelineMaterialNames[i].c_str(), selected)) {
+              gltfImportMaterialIndex = static_cast<int>(i);
+              revalidateGltfImport();
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+
+        ImGui::Separator();
+        if (gltfImportSucceeded)
+          ImGui::TextUnformatted("Validation passed.");
+        else
+          ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Validation failed.");
+
+        if (ImGui::BeginChild("gltfImportDiagnostics", ImVec2(0.0f, 300.0f), true)) {
+          if (gltfImportReport.diagnostics().empty()) {
+            ImGui::TextDisabled("No findings.");
+          }
+          for (const modelio::Diagnostic& diagnostic : gltfImportReport.diagnostics()) {
+            const bool isError = diagnostic.severity == modelio::Severity::Error;
+            std::string line = std::string(isError ? "[error] " : "[warning] ") + diagnostic.code + ": " + diagnostic.message;
+            if (!diagnostic.mesh.empty()) line += " (mesh '" + diagnostic.mesh + "')";
+            if (!diagnostic.material.empty()) line += " (material '" + diagnostic.material + "')";
+            if (isError) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.35f, 0.35f, 1.0f));
+            ImGui::TextWrapped("%s", line.c_str());
+            if (isError) ImGui::PopStyleColor();
+          }
+        }
+        ImGui::EndChild();
+      }
+
+      ImGui::Separator();
+      const bool canImport = gltfPipeline.has_value() && gltfImportSucceeded && gltfImportMaterialIndex >= 0;
+      ImGui::BeginDisabled(!canImport);
+      if (ImGui::Button("Import")) {
+        const std::filesystem::path outputPath =
+            gltfImportSourcePath.parent_path() / (gltfImportSourcePath.stem().wstring() + L".mppmodel");
+        modelio::ConvertOptions options;
+        options.input = gltfImportSourcePath;
+        options.output = outputPath;
+        options.materialName = gltfPipelineMaterialNames[static_cast<std::size_t>(gltfImportMaterialIndex)];
+
+        modelio::Report writeReport;
+        bool wrote = false;
+        try {
+          wrote = modelio::convertGltf(*gltfPipeline, options, writeReport);
+        } catch (const std::exception& error) {
+          writeReport.error("import.exception", error.what());
+        }
+        if (wrote) {
+          lastGltfImportMaterial = options.materialName;
+          // Same embedModel path "Load Model..." uses for a raw .mppmodel: no XML metadata to
+          // attach, so every mesh gets the Physical/visible defaults.
+          const std::string modelFileReference = resolveModelFileReference(outputPath);
+          editorState.embedModel({}, modelFileReference);
+          showStatus("Imported " + modelFileReference + " -- right-click the canvas to place an instance");
+          ImGui::CloseCurrentPopup();
+        } else {
+          gltfImportReport = writeReport;
+          gltfImportSucceeded = false;
+          showStatus("Import glTF failed: " + std::to_string(writeReport.errorCount()) + " error(s)");
+        }
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
       ImGui::EndPopup();
     }
 

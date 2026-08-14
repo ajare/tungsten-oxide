@@ -64,9 +64,11 @@ set(IMGUI_SOURCES
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
 
-# --- Shared .mppmodel/vertex-layout layer (docs/GLTF_IMPORT_PLAN.md, M3) -------------------------
-# model_io_core, not model_io_gltf: the editor reads and writes .mppmodel files and shares the
-# vertex-layout contract, but does not import assets, so it has no reason to pull in AssImp.
+# --- Shared .mppmodel/vertex-layout layer (docs/GLTF_IMPORT_PLAN.md, M3) + glTF import (M5) ------
+# model_io_gltf (which links model_io_core PUBLIC): M3 only needed model_io_core, since the editor
+# read/wrote .mppmodel files but imported no assets. M5's "Import glTF..." changes that, so
+# track_editor now pulls in AssImp too -- the mpp_model_import_tests/editor_track_resource_tests
+# targets below stay on model_io_core alone, since neither imports glTF.
 if (NOT TARGET model_io_core)
   add_subdirectory(../model-io ${CMAKE_CURRENT_BINARY_DIR}/model-io)
 endif()
@@ -114,7 +116,7 @@ target_link_libraries(track_editor PRIVATE
   core
   Willpower::Common
   model_xml
-  model_io_core
+  model_io_gltf
   SDL3::SDL3)
 
 add_executable(editor_track_resource_tests
