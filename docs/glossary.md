@@ -61,7 +61,7 @@ try to re-document things that are self-evident from file/class names.
 ## Existing terms referenced by ADR 0001
 
 - **willpower.application Resource system** — the declarative,
-  `Resources.xml`-driven asset-graph layer (`Resource`/`ResourceManager`/
+  `Resources.yaml`-driven asset-graph layer (`Resource`/`ResourceManager`/
   `DependentResources`/`Definition` factories) `cpp/tungsten-monoxide` builds
   on. Distinct from bare `mpp::ResourceManager`, which just tracks/loads
   individual GPU-side resources with no declarative file format involved.

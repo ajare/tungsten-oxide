@@ -13,37 +13,31 @@
 #include "Entity.h"
 #include "EntityHandler.h"
 
-namespace applib
-{
+namespace applib {
 
-	class APPLIB_API ProtoEntity : public wp::application::resourcesystem::Resource
-	{
-		friend class ProtoEntityResourceDefinitionFactory;
+class APPLIB_API ProtoEntity : public wp::application::resourcesystem::Resource {
+  friend class ProtoEntityResourceDefinitionFactory;
 
-	private:
+private:
+  entt::entity mCompSysId;
 
-		entt::entity mCompSysId;
+protected:
+  std::shared_ptr<EntityHandler> mEntityHandler;
 
-	protected:
+private:
+  virtual void loadExtraDefinitions(wp::DataNode* node, entt::entity protoId);
 
-		std::shared_ptr<EntityHandler> mEntityHandler;
+public:
+  ProtoEntity(std::string const& name,
+              std::string const& namesp,
+              std::string const& source,
+              std::map<std::string, std::string> const& tags,
+              wp::application::resourcesystem::ResourceLocation* location,
+              std::shared_ptr<EntityHandler> entityHandler);
 
-	private:
+  void setComponentSystemId(entt::entity id);
 
-		virtual void loadExtraDefinitions(wp::XmlNode* node, entt::entity protoId);
+  entt::entity getComponentSystemId() const;
+};
 
-	public:
-
-		ProtoEntity(std::string const& name,
-                      std::string const& namesp,
-                      std::string const& source,
-                      std::map<std::string, std::string> const& tags,
-                      wp::application::resourcesystem::ResourceLocation* location,
-                      std::shared_ptr<EntityHandler> entityHandler);
-
-		void setComponentSystemId(entt::entity id);
-
-		entt::entity getComponentSystemId() const;
-	};
-
-} // applib
+}  // namespace applib

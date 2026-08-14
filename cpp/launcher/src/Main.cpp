@@ -344,7 +344,7 @@ void updateImGui(float frameTime) {
 // Entry point
 //
 int main(int argc, char** argv) {
-  string configFile = "Launcher.cfg";
+  string configFile = "Launcher.yaml";
   if (argc > 1) {
     configFile = string(argv[1]);
   }

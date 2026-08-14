@@ -43,7 +43,7 @@ std::filesystem::path fixtures() { return std::filesystem::path(MODEL_IO_FIXTURE
 std::filesystem::path fixture(const std::string& name) { return fixtures() / name; }
 
 mpp::PbrPipelineDocument loadPipeline() {
-  return mpp::resource_parsers::PbrPipelineDocumentLoader::fromFile(fixture("test.pipeline.xml").string());
+  return mpp::resource_parsers::PbrPipelineDocumentLoader::fromFile(fixture("test.pipeline.yaml").string());
 }
 
 // A scratch directory beside the fixtures would pollute a committed corpus, so outputs go to the

@@ -4,64 +4,53 @@
 #include <vector>
 #include <map>
 
-
 #include "willpower/application/Platform.h"
+#include "willpower/common/StructuredData.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			
-			class ResourceLocation;
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
 
-			struct ResourceRecordBaseData
-			{
-				std::string name;
-				bool nameFound{ false };
+class ResourceLocation;
 
-				std::string type;
-				bool typeFound{ false };
+struct ResourceRecordBaseData {
+  std::string name;
+  bool nameFound{false};
 
-				std::string location;
-				bool locationFound{ false };
+  std::string type;
+  bool typeFound{false};
 
-				std::map<std::string, std::string> tags;
-			};
+  std::string location;
+  bool locationFound{false};
 
-			struct DependentResourceRecord
-			{
-				std::string owner;
-				std::string id;
-				std::string ref;
-			};
+  std::map<std::string, std::string> tags;
+};
 
-			struct ResourceRecord
-			{
-				ResourceRecord() = default;
+struct DependentResourceRecord {
+  std::string owner;
+  std::string id;
+  std::string ref;
+};
 
-				ResourceRecord(std::string const& nmsp, ResourceLocation* location, bool composite)
-					: namesp(nmsp)
-					, resourceLocation(location)
-					, isComposite(composite)
-				{
-				}
+struct ResourceRecord {
+  ResourceRecord() = default;
 
-			public:
+  ResourceRecord(std::string const& nmsp, ResourceLocation* location, bool composite)
+      : namesp(nmsp), resourceLocation(location), isComposite(composite) {
+  }
 
-				ResourceRecordBaseData baseData;
-				ResourceLocation* resourceLocation;
+public:
+  ResourceRecordBaseData baseData;
+  ResourceLocation* resourceLocation;
 
-				std::string namesp;
-				bool isComposite;
+  std::string namesp;
+  bool isComposite;
 
-				std::vector<std::pair<std::string, std::string>> definitions;
+  std::vector<std::pair<std::string, StructuredData>> definitions;
 
-				std::vector<DependentResourceRecord> dependentResources;
-			};
+  std::vector<DependentResourceRecord> dependentResources;
+};
 
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
-
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

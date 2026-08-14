@@ -1,0 +1,127 @@
+PbrPipeline:
+  version: "1"
+  name: "ModelIo.Test"
+  LocalResources:
+    PbrMaterial:
+      - name: "Test.Indexed"
+        MeshSpecification:
+          primitive: "triangles"
+          indexed: "true"
+          storage: "static"
+          Buffer:
+            - data: "position3"
+              type: "float32"
+            - data: "normal3"
+              type: "float32"
+            - data: "texcoord2"
+              type: "float32"
+            - data: "colour4"
+              type: "uint8"
+              normalised: "true"
+            - data: "tangent4"
+              type: "float32"
+        Surface:
+          baseColourFactor: "1 1 1 1"
+          metallicFactor: "0.15"
+          roughnessFactor: "0.55"
+          emissiveFactor: "0 0 0"
+          normalScale: "1"
+          occlusionStrength: "1"
+          alphaMode: "OPAQUE"
+          alphaCutoff: "0.5"
+          doubleSided: "false"
+      - name: "Test.Flat"
+        MeshSpecification:
+          primitive: "triangles"
+          indexed: "false"
+          storage: "static"
+          Buffer:
+            - data: "position3"
+              type: "float32"
+            - data: "normal3"
+              type: "float32"
+            - data: "texcoord2"
+              type: "float32"
+            - data: "colour4"
+              type: "uint8"
+              normalised: "true"
+        Surface:
+          baseColourFactor: "1 1 1 1"
+          metallicFactor: "0"
+          roughnessFactor: "0.78"
+          emissiveFactor: "0 0 0"
+          normalScale: "1"
+          occlusionStrength: "1"
+          alphaMode: "OPAQUE"
+          alphaCutoff: "0.5"
+          doubleSided: "false"
+  Imports:
+    - id: "screen"
+      semantic: "presentation"
+      format: "RGBA8"
+      usage: "colourAttachment,presentation"
+      required: "true"
+  Outputs:
+    - name: "Main"
+      image: "Presentation"
+      taaDepth: "SceneDepth"
+      AntiAliasing:
+        msaa: "off"
+        ssaa: "off"
+        taa: "false"
+        fxaa: "false"
+  Environment:
+    binding: "Test.Environment"
+  Bloom:
+    enabled: "false"
+    blurPasses: "0"
+  RenderGraph:
+    Images:
+      - name: "SceneHdr"
+        format: "RGBA16F"
+        usage: "colourAttachment,sampled"
+        colourSpace: "LINEAR"
+        minFilter: "LINEAR"
+        magFilter: "LINEAR"
+        wrap: "CLAMP_TO_EDGE"
+      - name: "SceneDepth"
+        format: "DEPTH24"
+        usage: "depthAttachment,sampled"
+      - name: "Presentation"
+        format: "RGBA8"
+        usage: "sampled,colourAttachment,presentation"
+        import: "screen"
+        external: "true"
+        transient: "false"
+    Passes:
+      - name: "PbrScene"
+        type: "scene"
+        factory: "MPP.PbrScene"
+        Colours:
+          - image: "SceneHdr"
+            load: "clear"
+            store: "store"
+            clear: "0 0 0 1"
+        Depth:
+          image: "SceneDepth"
+          load: "clear"
+          store: "store"
+          clear: "1"
+      - name: "ToneMapPresentation"
+        type: "present"
+        factory: "MPP.ToneMapPresent"
+        Inputs:
+          - sampler: "TEX1"
+            image: "SceneHdr"
+        Parameters:
+          Float:
+            name: "EXPOSURE"
+            value: "1"
+          Int:
+            name: "TONE_MAP_OPERATOR"
+            value: "1"
+        Colours:
+          - image: "Presentation"
+            load: "clear"
+            store: "store"
+            clear: "0 0 0 1"

@@ -1,0 +1,28 @@
+Configuration:
+  Video:
+    Width: 1600
+    Height: 900
+    Fullscreen: false
+    VSync: true
+  Game:
+    DLL:
+      path: TungstenMonoxide.dll
+    GameResource: TungstenMonoxide
+    ResourceLocations:
+      ResourceLocation:
+        type: Directory
+        path: ../../../tungsten-monoxide/resources/
+        definition: Resources.yaml
+    Debug:
+      # Enable MPP's built-in FPS/memory overlay in debug builds.
+      InGame: enabled
+    Arguments:
+      Argument:
+        - name: ThreadedLoading
+          value: false
+        - name: PbrPackage
+          value: ../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage
+  Audio:
+    Enabled: true
+    Channels: 1024
+    Sync: true

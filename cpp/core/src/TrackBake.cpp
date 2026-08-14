@@ -169,7 +169,7 @@ public:
   // for a coloring overlay does not need to match the exact shifted curve pixel-for-pixel.
   double curvatureAt(double g) const {
     if (!closed && (g <= 0 || g >= n - 1)) return 0.0;  // baseEval's own clamped endpoints: no
-                                                         // real spline curvature there either.
+                                                        // real spline curvature there either.
     int seg = (int)std::floor(g);
     double u = g - seg, u2 = u * u;
     double b[4] = {(1 - 3 * u + 3 * u2 - u * u2) / 6, (4 - 6 * u2 + 3 * u * u2) / 6, (1 + 3 * u + 3 * u2 - 3 * u * u2) / 6, (u * u2) / 6};
@@ -791,7 +791,7 @@ struct Builder {
   // builder), whose callers pass surfaceNormal()'s continuous analytical value at each vertex so
   // two triangles meeting at a shared point agree on the normal there instead of faceting.
   void triSmooth(const Vec3& a, const Vec3& na, const Vec3& c, const Vec3& nc, const Vec3& d, const Vec3& nd, Vec2d ua = {},
-                Vec2d uc = {}, Vec2d ud = {}) {
+                 Vec2d uc = {}, Vec2d ud = {}) {
     for (auto& v : std::array<std::tuple<Vec3, Vec3, Vec2d>, 3>{{{a, na, ua}, {c, nc, uc}, {d, nd, ud}}}) {
       b.indices.push_back((uint32_t)b.vertices.size());
       b.vertices.push_back({std::get<0>(v), std::get<1>(v), std::get<2>(v), {}});
@@ -912,7 +912,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     sh.b.id = "path-" + std::to_string(pi) + "-shell";
     sh.b.kind = GeometryKind::PathShell;
     // Fixed material for every shell mesh, regardless of the path's own TrackMaterial -- must stay
-    // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+    // in sync with cpp/tungsten-monoxide/resources/Resources.yaml's Namespace="Tracks" Material
     // "DefaultShellMaterial", and with MaterialCatalog's startup existence check for it.
     sh.b.materialKey = "Tracks/DefaultShellMaterial";
     sh.b.hasUv = true;
@@ -1007,7 +1007,7 @@ void pathGeometry(Track& track, const PathDefinition& def, const Path& path, con
     r.b.id = "path-" + std::to_string(pi) + "-rail-" + side.first;
     r.b.kind = GeometryKind::PathRail;
     // Fixed material for every rail mesh, regardless of the path's own TrackMaterial -- must stay
-    // in sync with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+    // in sync with cpp/tungsten-monoxide/resources/Resources.yaml's Namespace="Tracks" Material
     // "DefaultRailMaterial", and with MaterialCatalog's startup existence check for it.
     r.b.materialKey = "Tracks/DefaultRailMaterial";
     r.b.hasUv = true;
@@ -1245,7 +1245,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         zone.b.id = "zone-" + z.id;
         zone.b.kind = GeometryKind::ZoneSurface;
         // Fixed material for every zone surface, regardless of effect -- must stay in sync with
-        // cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+        // cpp/tungsten-monoxide/resources/Resources.yaml's Namespace="Tracks" Material
         // "DefaultZoneMaterial", and with MaterialCatalog's startup existence check for it.
         zone.b.materialKey = "Tracks/DefaultZoneMaterial";
         zone.b.hasUv = true;
@@ -1394,7 +1394,7 @@ bool bakeTrack(Track& track, std::vector<TrackWarning>& warnings, std::string& e
         trig.b.id = "trigger-" + t.id;
         trig.b.kind = GeometryKind::TriggerSurface;
         // Fixed material for every trigger gate, regardless of trigger type -- must stay in sync
-        // with cpp/tungsten-monoxide/resources/Resources.xml's Namespace="Tracks" Material
+        // with cpp/tungsten-monoxide/resources/Resources.yaml's Namespace="Tracks" Material
         // "DefaultTriggerMaterial", and with MaterialCatalog's startup existence check for it.
         trig.b.materialKey = "Tracks/DefaultTriggerMaterial";
         trig.b.hasUv = true;

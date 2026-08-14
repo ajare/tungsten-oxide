@@ -3,237 +3,176 @@
 #include "willpower/application/resourcesystem/ResourceExceptions.h"
 #include "willpower/application/resourcesystem/Resource.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			using namespace std;
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
+using namespace std;
 
-			map<string, map<string, ResourceDefinitionFactory*>> Resource::msResourceDefinitionFactories;
+map<string, map<string, ResourceDefinitionFactory*>> Resource::msResourceDefinitionFactories;
 
-			Resource::Resource(string const& name, string const& namesp, string const& type, string const& source, std::map<string, string> const& tags, ResourceLocation* location)
-				: ResourceWrangler(name)
-				, mRefCount(0)
-				, mName(name)
-				, mNamespace(namesp)
-				, mType(type)
-				, mSource(source)
-				, mTags(tags)
-				, mwLocation(location)
-				, mCreated(false)
-				, mLoaded(false)
-			{
-			}
-			
-			void Resource::create(DataStreamPtr dataPtr, ResourceManager* resourceMgr)
-			{
-				parseData(dataPtr);
-				parseDefinition(resourceMgr);
-			}
+Resource::Resource(string const& name, string const& namesp, string const& type, string const& source, std::map<string, string> const& tags, ResourceLocation* location)
+    : ResourceWrangler(name), mRefCount(0), mName(name), mNamespace(namesp), mType(type), mSource(source), mTags(tags), mwLocation(location), mCreated(false), mLoaded(false) {
+}
 
-			void Resource::destroy()
-			{
-			}
+void Resource::create(DataStreamPtr dataPtr, ResourceManager* resourceMgr) {
+  parseData(dataPtr);
+  parseDefinition(resourceMgr);
+}
 
-			bool Resource::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
-			{
-				WP_UNUSED(renderSystem);
-				WP_UNUSED(resourceMgr);
+void Resource::destroy() {
+}
 
-				return true;
-			};
+bool Resource::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
+  WP_UNUSED(renderSystem);
+  WP_UNUSED(resourceMgr);
 
-			bool Resource::unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr)
-			{
-				WP_UNUSED(renderSystem);
-				WP_UNUSED(resourceMgr);
+  return true;
+};
 
-				return true;
-			};
+bool Resource::unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr) {
+  WP_UNUSED(renderSystem);
+  WP_UNUSED(resourceMgr);
 
-			void Resource::addTag(string const& name, string const& value)
-			{
-				mTags[name] = value;
-			}
+  return true;
+};
 
-			string const& Resource::getTag(string const& name) const
-			{
-				return mTags.at(name);
-			}
+void Resource::addTag(string const& name, string const& value) {
+  mTags[name] = value;
+}
 
-			map<string, string> const& Resource::getTags() const
-			{
-				return mTags;
-			}
+string const& Resource::getTag(string const& name) const {
+  return mTags.at(name);
+}
 
-			void Resource::addDependentResource(shared_ptr<Resource> resource)
-			{
-				mDependentResourceList.push_back(resource);
-			}
+map<string, string> const& Resource::getTags() const {
+  return mTags;
+}
 
-			void Resource::addDependentResource(string const& id, shared_ptr<Resource> resource)
-			{
-				mNamedDependentResources[id] = resource;
-				addDependentResource(resource);
-			}
+void Resource::addDependentResource(shared_ptr<Resource> resource) {
+  mDependentResourceList.push_back(resource);
+}
 
-			bool Resource::hasDependentResource(string const& id) const
-			{
-				return mNamedDependentResources.find(id) != mNamedDependentResources.end();
-			}
+void Resource::addDependentResource(string const& id, shared_ptr<Resource> resource) {
+  mNamedDependentResources[id] = resource;
+  addDependentResource(resource);
+}
 
-			ResourcePtr Resource::getDependentResource(string const& id)
-			{
-				auto it = mNamedDependentResources.find(id);
+bool Resource::hasDependentResource(string const& id) const {
+  return mNamedDependentResources.find(id) != mNamedDependentResources.end();
+}
 
-				if (it == mNamedDependentResources.end())
-				{
-					throw ResourceException(this, "could not get dependent resource '" + id + "'.");
-				}
+ResourcePtr Resource::getDependentResource(string const& id) {
+  auto it = mNamedDependentResources.find(id);
 
-				return it->second;
-			}
+  if (it == mNamedDependentResources.end()) {
+    throw ResourceException(this, "could not get dependent resource '" + id + "'.");
+  }
 
-			ResourceDefinitionFactory* Resource::getResourceDefinitionFactory(string const& resType, string const& facType, bool errorIfNotFound) const
-			{
-				auto it1 = msResourceDefinitionFactories.find(resType);
-				if (it1 == msResourceDefinitionFactories.end())
-				{
-					if (errorIfNotFound)
-					{
-						throw ResourceSystemException("DefinitionFactories for resource type '" + resType + "' not registered.");
-					}
-					else
-					{
-						return nullptr;
-					}
-				}
+  return it->second;
+}
 
-				auto innerMap = it1->second;
-				auto it2 = innerMap.find(facType);
-				if (it2 == innerMap.end())
-				{
-					if (errorIfNotFound)
-					{
-						throw ResourceSystemException("DefinitionFactory for resource type '" + resType + "', factory type '" + facType + "' not registered.");
-					}
-					else
-					{
-						return nullptr;
-					}
-				}
+ResourceDefinitionFactory* Resource::getResourceDefinitionFactory(string const& resType, string const& facType, bool errorIfNotFound) const {
+  auto it1 = msResourceDefinitionFactories.find(resType);
+  if (it1 == msResourceDefinitionFactories.end()) {
+    if (errorIfNotFound) {
+      throw ResourceSystemException("DefinitionFactories for resource type '" + resType + "' not registered.");
+    } else {
+      return nullptr;
+    }
+  }
 
-				return it2->second;
-			}
+  auto innerMap = it1->second;
+  auto it2 = innerMap.find(facType);
+  if (it2 == innerMap.end()) {
+    if (errorIfNotFound) {
+      throw ResourceSystemException("DefinitionFactory for resource type '" + resType + "', factory type '" + facType + "' not registered.");
+    } else {
+      return nullptr;
+    }
+  }
 
-			void Resource::parseDefinition(ResourceManager* resourceMgr)
-			{
-				for (auto const& def : mDefinitions)
-				{
-					auto const&[facType, defStr] = def;
+  return it2->second;
+}
 
-					auto fac = getResourceDefinitionFactory(getType(), facType, false);
-					if (fac)
-					{
-						auto reader = XmlReader::fromString(defStr);
-						fac->create(this, resourceMgr, reader->getNode("Definition"));
-						delete reader;
-						return;
-					}
-				}
+void Resource::parseDefinition(ResourceManager* resourceMgr) {
+  for (auto const& def : mDefinitions) {
+    auto const& [facType, definition] = def;
 
-				throw ResourceException(this, "could not find a definition factory.");
-			}
+    auto fac = getResourceDefinitionFactory(getType(), facType, false);
+    if (fac) {
+      DataNode node(definition);
+      fac->create(this, resourceMgr, &node);
+      return;
+    }
+  }
 
-			void Resource::parseData(DataStreamPtr dataPtr)
-			{
-			}
+  throw ResourceException(this, "could not find a definition factory.");
+}
 
-			void Resource::addDefinition(string const& factory, string const& definition)
-			{
-				mDefinitions.push_back(make_pair(factory, definition));
-			}
+void Resource::parseData(DataStreamPtr dataPtr) {
+}
 
-			string const& Resource::getName() const
-			{
-				return mName;
-			}
+void Resource::addDefinition(string const& factory, StructuredData const& definition) {
+  mDefinitions.push_back(make_pair(factory, definition));
+}
 
-			string const& Resource::getNamespace() const
-			{
-				return mNamespace;
-			}
+string const& Resource::getName() const {
+  return mName;
+}
 
-			string Resource::getQualifiedName() const
-			{
-				if (mNamespace == "")
-				{
-					return getName();
-				}
-				else
-				{
-					return getNamespace() + "/" + getName();
-				}
-			}
+string const& Resource::getNamespace() const {
+  return mNamespace;
+}
 
-			string const& Resource::getType() const
-			{
-				return mType;
-			}
+string Resource::getQualifiedName() const {
+  if (mNamespace == "") {
+    return getName();
+  } else {
+    return getNamespace() + "/" + getName();
+  }
+}
 
-			string const& Resource::getSource() const
-			{
-				return mSource;
-			}
+string const& Resource::getType() const {
+  return mType;
+}
 
-			string const& Resource::getDefinitionFile() const
-			{
-				return mwLocation->getDefinitionFile();
-			}
+string const& Resource::getSource() const {
+  return mSource;
+}
 
-			mpp::ResourcePtr Resource::getMppResource() const
-			{
-				return mMppResource;
-			}
+string const& Resource::getDefinitionFile() const {
+  return mwLocation->getDefinitionFile();
+}
 
-			void Resource::splitName(string const& qualifiedName, string const& currentNamesp, string* namesp, string* resource)
-			{
-				string delim = "/";
+mpp::ResourcePtr Resource::getMppResource() const {
+  return mMppResource;
+}
 
-				auto index = qualifiedName.find(delim);
-				if (index == qualifiedName.npos)
-				{
-					if (namesp)
-					{
-						*namesp = currentNamesp;
-					}
-					if (resource)
-					{
-						*resource = qualifiedName;
-					}
-				}
-				else
-				{
-					if (namesp)
-					{
-						if (index == 0)
-						{
-							*namesp = "";
-						}
-						else
-						{
-							*namesp = qualifiedName.substr(0, index);
-						}
-					}
-					if (resource)
-					{
-						*resource = qualifiedName.substr(index + delim.length());
-					}
-				}
-			}
+void Resource::splitName(string const& qualifiedName, string const& currentNamesp, string* namesp, string* resource) {
+  string delim = "/";
 
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
+  auto index = qualifiedName.find(delim);
+  if (index == qualifiedName.npos) {
+    if (namesp) {
+      *namesp = currentNamesp;
+    }
+    if (resource) {
+      *resource = qualifiedName;
+    }
+  } else {
+    if (namesp) {
+      if (index == 0) {
+        *namesp = "";
+      } else {
+        *namesp = qualifiedName.substr(0, index);
+      }
+    }
+    if (resource) {
+      *resource = qualifiedName.substr(index + delim.length());
+    }
+  }
+}
+
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

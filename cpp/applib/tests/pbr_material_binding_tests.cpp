@@ -5,7 +5,7 @@
 #include <string>
 
 #include <willpower/application/resourcesystem/ResourceExceptions.h>
-#include <willpower/common/XmlReader.h>
+#include <willpower/common/DataNode.h>
 
 #include <applib/PbrMaterialBinding.h>
 #include <applib/PbrMaterialBindingDefaultDefinitionFactory.h>
@@ -17,10 +17,12 @@ void require(bool condition, std::string const& message) {
   }
 }
 
-void parseBinding(applib::PbrMaterialBinding& binding, std::string const& xml) {
-  std::unique_ptr<wp::XmlReader> reader(wp::XmlReader::fromString(xml));
+void parseBinding(applib::PbrMaterialBinding& binding, std::string const& value) {
+  StructuredData definition("Definition");
+  definition.addEntry("Binding", value);
+  wp::DataNode node(definition);
   applib::PbrMaterialBindingDefaultDefinitionFactory factory;
-  factory.create(&binding, nullptr, reader->getNode("/Definition"));
+  factory.create(&binding, nullptr, &node);
 }
 }  // namespace
 
@@ -33,14 +35,14 @@ int main() {
     auto binding = dynamic_cast<applib::PbrMaterialBinding*>(created.get());
     require(binding != nullptr, "resource factory returned the wrong class");
 
-    parseBinding(*binding, "<Definition><Binding>Track.Asphalt</Binding></Definition>");
+    parseBinding(*binding, "Track.Asphalt");
     require(binding->getBinding() == "Track.Asphalt", "definition did not retain the logical binding");
     require(!binding->getMppResource(), "binding resources must not create an MPP resource");
 
     applib::PbrMaterialBinding empty("Empty", "", "", {}, nullptr);
     bool rejected = false;
     try {
-      parseBinding(empty, "<Definition><Binding></Binding></Definition>");
+      parseBinding(empty, "");
     } catch (wp::application::resourcesystem::ResourceException const&) {
       rejected = true;
     }

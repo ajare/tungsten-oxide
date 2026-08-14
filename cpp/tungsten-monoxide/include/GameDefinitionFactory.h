@@ -4,14 +4,9 @@
 
 #include "Platform.h"
 
-
-class GameDefinitionFactory : public applib::GameDefaultDefinitionFactory
-{
+class GameDefinitionFactory : public applib::GameDefaultDefinitionFactory {
 public:
+  GameDefinitionFactory();
 
-	GameDefinitionFactory();
-
-	void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
-
+  void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) override;
 };
-

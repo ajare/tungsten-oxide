@@ -25,7 +25,7 @@ Spec::PbrAlphaMode alphaModeOf(AlphaMode mode) {
   return Spec::PbrAlphaMode::Opaque;
 }
 
-// Trilinear + repeat + mipmaps, matching every <Resource> block in TungstenMonoxide.pipeline.xml.
+// Trilinear + repeat + mipmaps, matching every <Resource> block in TungstenMonoxide.pipeline.yaml.
 // TextureParams' own defaults are GL_NEAREST with no mipmaps, which would look nothing like the
 // rest of the game, so these are set explicitly rather than left alone.
 mpp::TextureParams defaultTextureParams(bool srgb) {
@@ -80,7 +80,7 @@ mpp::ResourceStreamPtr buildEmbeddedPbrMaterial(const MaterialData& material, co
   }
   // Otherwise resourceExists stays false, and PbrMaterial builds a default 3D program from the
   // built-in PBR shaders, this MeshSpecification and the features derived below -- which is what
-  // every material in TungstenMonoxide.pipeline.xml already does.
+  // every material in TungstenMonoxide.pipeline.yaml already does.
 
   specification.pbr.enabled = true;
   specification.pbr.baseColourFactor = {material.baseColourFactor[0], material.baseColourFactor[1],

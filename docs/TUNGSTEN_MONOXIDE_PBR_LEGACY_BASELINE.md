@@ -53,7 +53,7 @@ total                    36 bytes
 | `trigger-starter-cp2` | `Tracks/DefaultTriggerMaterial` | 2 | 6 | no |
 | `trigger-starter-cp3` | `Tracks/DefaultTriggerMaterial` | 2 | 6 | no |
 
-The maximum vertex count in one active track mesh is **13,410** (`path-0-shell`). The file has four unique material keys. `Tracks/NewTrack` in `Resources.xml` currently maps all four through `DependentResource` IDs with exactly matching strings.
+The maximum vertex count in one active track mesh is **13,410** (`path-0-shell`). The file has four unique material keys. `Tracks/NewTrack` in `Resources.yaml` currently maps all four through `DependentResource` IDs with exactly matching strings.
 
 ### `box.mppmodel`
 
@@ -82,7 +82,7 @@ These files are not selected by the current `Tracks/NewTrack` game flow, but are
 
 ## Automated baseline guard
 
-The original CTest `tungsten_monoxide_legacy_pbr_baseline` read the real bundled `NewTrack.mppmodel` MeshMetadata section and `Resources.xml`. Milestone 3 advanced it to `tungsten_monoxide_pbr_material_bindings`, which verifies:
+The original CTest `tungsten_monoxide_legacy_pbr_baseline` read the real bundled `NewTrack.mppmodel` MeshMetadata section and `Resources.yaml`. Milestone 3 advanced it to `tungsten_monoxide_pbr_material_bindings`, which verifies:
 
 1. `Tracks/NewTrack` preserves every embedded `DependentResource` ID;
 2. each authoritative reference resolves to `PbrMaterialBinding`;

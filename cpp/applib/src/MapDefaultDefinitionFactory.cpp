@@ -7,19 +7,16 @@
 #include "MapDefaultDefinitionFactory.h"
 #include "MapGeometryObjectAttributes.h"
 
-namespace applib
-{
-	using namespace std;
-	using namespace utils;
-	using namespace wp;
+namespace applib {
+using namespace std;
+using namespace utils;
+using namespace wp;
 
-	MapDefaultDefinitionFactory::MapDefaultDefinitionFactory()
-		: MapResourceDefinitionFactory("")
-	{
-	}
+MapDefaultDefinitionFactory::MapDefaultDefinitionFactory()
+    : MapResourceDefinitionFactory("") {
+}
 
-	void MapDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, XmlNode* node)
-	{
-	}
+void MapDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, DataNode* node) {
+}
 
-} // applib
+}  // namespace applib

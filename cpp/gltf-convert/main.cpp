@@ -4,9 +4,9 @@
 // of MassivePolyPusher's own ModelConvert. Import only: glTF export is explicitly out of scope
 // (docs/GLTF_IMPORT_PLAN.md).
 //
-//   gltf_convert --in model.gltf --pipeline X.pipeline.xml --material Ship.Surface --out model.mppmodel
-//   gltf_convert --pipeline X.pipeline.xml --list-materials
-//   gltf_convert --in model.gltf --pipeline X.pipeline.xml --material Ship.Surface --validate-only
+//   gltf_convert --in model.gltf --pipeline X.pipeline.yaml --material Ship.Surface --out model.mppmodel
+//   gltf_convert --pipeline X.pipeline.yaml --list-materials
+//   gltf_convert --in model.gltf --pipeline X.pipeline.yaml --material Ship.Surface --validate-only
 //
 // Exit status is 0 only when the conversion (or validation) succeeded with no errors.
 #include <exception>

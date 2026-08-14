@@ -157,11 +157,11 @@ add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests
 target_compile_features(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE cxx_std_20)
 target_include_directories(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include")
-target_link_libraries(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE Willpower.Common)
+target_link_libraries(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE Willpower.Common yaml-cpp::yaml-cpp)
 add_test(NAME tungsten_monoxide_pbr_material_bindings
   COMMAND tungsten_monoxide_pbr_material_binding_mapping_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/NewTrack.mppmodel"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/Resources.xml")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/Resources.yaml")
 
 add_executable(tungsten_monoxide_pbr_vertex_conversion_tests
   tests/pbr_vertex_conversion_tests.cpp

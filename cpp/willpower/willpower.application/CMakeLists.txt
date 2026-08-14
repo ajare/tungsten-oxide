@@ -177,3 +177,15 @@ if (WIN32)
   target_compile_definitions(Willpower.Application PRIVATE WIN32 _WINDOWS)
 endif()
 set_target_properties(Willpower.Application PROPERTIES DEBUG_POSTFIX d)
+
+add_executable(willpower_application_resource_yaml_tests tests/resource_yaml_tests.cpp)
+target_compile_features(willpower_application_resource_yaml_tests PRIVATE cxx_std_20)
+target_link_libraries(willpower_application_resource_yaml_tests PRIVATE Willpower.Application)
+add_test(NAME willpower_application_resource_yaml
+  COMMAND willpower_application_resource_yaml_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tungsten-monoxide/resources/Resources.yaml")
+set_property(TEST willpower_application_resource_yaml PROPERTY ENVIRONMENT_MODIFICATION
+  "PATH=path_list_prepend:$<TARGET_FILE_DIR:Willpower.Application>"
+  "PATH=path_list_prepend:$<TARGET_FILE_DIR:Willpower.Common>"
+  "PATH=path_list_prepend:${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>"
+  "PATH=path_list_prepend:${WILLPOWER_APPLICATION_THIRD_PARTY_DIR}/bin/vs2026/${WILLPOWER_LIB_ARCH}/$<CONFIG>")

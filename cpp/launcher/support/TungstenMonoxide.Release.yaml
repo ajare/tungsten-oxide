@@ -1,0 +1,25 @@
+Configuration:
+  Video:
+    Width: 1600
+    Height: 900
+    Fullscreen: false
+    VSync: true
+  Game:
+    DLL:
+      path: TungstenMonoxide.dll
+    GameResource: TungstenMonoxide
+    ResourceLocations:
+      ResourceLocation:
+        type: Directory
+        path: ../../../tungsten-monoxide/resources/
+        definition: Resources.yaml
+    Debug:
+      InGame: disabled
+    Arguments:
+      Argument:
+        name: PbrPackage
+        value: ../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage
+  Audio:
+    Enabled: true
+    Channels: 1024
+    Sync: false

@@ -20,7 +20,7 @@ mono::ModelMeshType parseMeshType(std::string const& value) {
 
 }  // namespace
 
-// Parses the <Models> list (TRACK_MODEL_LIST_PLAN.md Milestone 7) via wp::XmlNode -- an independent
+// Parses the Models list (TRACK_MODEL_LIST_PLAN.md Milestone 7) via wp::DataNode -- an independent
 // reimplementation of the same documented <Model> fragment shape cpp/model-xml parses via TinyXML2
 // for the editor/model-tool, per that plan's own architecture note on why this host doesn't link
 // cpp/model-xml. Exactly one <Model> must carry a Type=Track mesh (and therefore <TrackData>) --
@@ -30,7 +30,7 @@ mono::ModelMeshType parseMeshType(std::string const& value) {
 void MapTungstenMonoxideDefinitionFactory::create(
     wp::application::resourcesystem::Resource* resource,
     wp::application::resourcesystem::ResourceManager* resourceMgr,
-    wp::XmlNode* node) {
+    wp::DataNode* node) {
   VAR_UNUSED(resourceMgr);
   auto mapRes = static_cast<Map*>(resource);
 
@@ -41,7 +41,7 @@ void MapTungstenMonoxideDefinitionFactory::create(
   if (modelNode) {
     do {
       mono::EmbeddedModelRef model;
-      if (!modelNode->getOptionalAttribute("id", model.id) || model.id.empty())
+      if (!modelNode->getOptionalProperty("id", model.id) || model.id.empty())
         throw wp::application::resourcesystem::ResourceException(resource, "<Model> is missing a non-empty id attribute.");
       if (!seenIds.insert(model.id).second)
         throw wp::application::resourcesystem::ResourceException(resource, "<Models> contains duplicate Model id '" + model.id + "'.");

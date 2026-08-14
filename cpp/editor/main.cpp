@@ -1287,7 +1287,7 @@ ExportAllSmokeCheckResult runExportAllSmokeCheck() {
   if (!result.itemsCollected) return result;
 
   const std::vector<bool> allChecked(items.size(), true);
-  const editor::MaterialCatalog emptyCatalog;  // no Resources.xml here; materials fall back to raw keys
+  const editor::MaterialCatalog emptyCatalog;  // no Resources.yaml here; materials fall back to raw keys
   modelio::Report buildReport;
   const modelio::ModelData model =
       editor::buildExportModelData(state, *baked.track, items, allChecked, emptyCatalog, std::filesystem::path{}, buildReport);
@@ -1511,7 +1511,7 @@ std::filesystem::path findEditorResourceFile(const std::string& filename) {
 }
 
 // Structural resource-loading failures (missing/empty editor.ini, an unresolvable Resources
-// path, or a malformed Resources.xml) are treated as fatal -- the editor tears down whatever
+// path, or a malformed Resources.yaml) are treated as fatal -- the editor tears down whatever
 // SDL/ImGui state it already created and exits, rather than silently running with no material
 // catalog. A single TrackMaterial with a broken dependency chain is NOT structural (see
 // MaterialCatalog::load) and does not reach this path.
@@ -1557,7 +1557,7 @@ std::filesystem::path defaultGltfPipelinePath() {
   std::filesystem::path dir = std::filesystem::current_path();
   for (int depth = 0; depth < 8; ++depth) {
     std::error_code ec;
-    const std::filesystem::path candidate = dir / "cpp" / "tungsten-monoxide" / "pbr" / "TungstenMonoxide.pipeline.xml";
+    const std::filesystem::path candidate = dir / "cpp" / "tungsten-monoxide" / "pbr" / "TungstenMonoxide.pipeline.yaml";
     if (std::filesystem::exists(candidate, ec)) return candidate;
     if (!dir.has_parent_path() || dir.parent_path() == dir) break;
     dir = dir.parent_path();
@@ -1887,7 +1887,7 @@ int main(int, char**) {
   // "new track"/load UI yet (M4+), so the starter track is the only thing on screen.
   editor::EditorState editorState(buildStarterTrack());
   editor::TextureCache textureCache;
-  // Loaded once at startup (editor.ini -> Resources.xml -> editor-authored PBR material choices
+  // Loaded once at startup (editor.ini -> Resources.yaml -> editor-authored PBR material choices
   // and their preview textures, eager-loaded into textureCache above) and unloaded on exit when this local goes
   // out of scope at the end of main() -- same RAII lifetime as textureCache itself. Must happen
   // before the first bake below: setAvailableMaterials backfills the starter track's paths (still
@@ -2056,7 +2056,7 @@ int main(int, char**) {
   bool openTrackChooser = false;
 
   // "Import glTF..." (docs/GLTF_IMPORT_PLAN.md M5). The pipeline document and its material list
-  // are loaded lazily on first use, not at startup like MaterialCatalog -- unlike Resources.xml, a
+  // are loaded lazily on first use, not at startup like MaterialCatalog -- unlike Resources.yaml, a
   // missing/bad pipeline file isn't fatal to the rest of the editor (see configuredGltfPipelinePath
   // above); ensureGltfPipelineLoaded below sticks with whatever gltfPipelineError it first hit
   // rather than retrying every click, so a bad editor.ini entry doesn't stat the filesystem anew on

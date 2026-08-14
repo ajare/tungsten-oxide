@@ -3,17 +3,12 @@
 #include "Platform.h"
 #include "ProtoEntityResourceDefinitionFactory.h"
 
-namespace applib
-{
-	class APPLIB_API ProtoEntityDefaultDefinitionFactory : public ProtoEntityResourceDefinitionFactory
-	{
-		void createProtoEntity(ProtoEntity* entity, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
+namespace applib {
+class APPLIB_API ProtoEntityDefaultDefinitionFactory : public ProtoEntityResourceDefinitionFactory {
+  void createProtoEntity(ProtoEntity* entity, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) override;
 
-	public:
+public:
+  ProtoEntityDefaultDefinitionFactory();
+};
 
-		ProtoEntityDefaultDefinitionFactory();
-
-	};
-
-} // applib
-
+}  // namespace applib

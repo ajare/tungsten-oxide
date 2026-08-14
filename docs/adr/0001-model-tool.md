@@ -26,7 +26,7 @@ problems, and neither one fits whole:
   specifically to avoid linking `mpp::ModelSerializer` (and therefore GLEW,
   `mpp::RenderSystem`'s GL loader), because `cpp/editor` never needed to render
   anything through mpp — it only ever needed to *emit* the file format. It also
-  deliberately never embeds real materials (name-only references, `Resources.xml`
+  deliberately never embeds real materials (name-only references, `Resources.yaml`
   supplies the rest by hand) and always writes non-indexed triangle soups,
   because that's what baked track geometry always is.
 
@@ -57,8 +57,8 @@ loaded model as a willpower `Resource`/`Definition` the way
 `cpp/tungsten-monoxide`'s `Map` does.
 
 Why: `model-tool` has no declarative resource files to author (no
-`Resources.xml`-equivalent) — it loads whatever file the user picks at runtime.
-The willpower Resource/XML layer exists to let a *game* declare its asset
+`Resources.yaml`-equivalent) — it loads whatever file the user picks at runtime.
+The willpower resource-definition layer exists to let a *game* declare its asset
 graph ahead of time; a load-preview-save utility has no such graph to declare.
 
 ### D2 — SDL2 + Dear ImGui docking branch, GLEW as the GL loader
@@ -136,7 +136,7 @@ directly without linking `mpp::ModelSerializer` at all. That constraint doesn't
 apply here: `model-tool` links real mpp fully anyway (D2), so using the real
 serializer is strictly simpler than reimplementing it, and it can embed real
 materials (unlike the track exporter's name-only references, which rely on a
-hand-authored companion `Resources.xml`).
+hand-authored companion `Resources.yaml`).
 
 Meshes keep AssImp's real shared-vertex indexing (16-bit or 32-bit, chosen by
 vertex count — the same rule `ModelConvert` already uses), rather than being

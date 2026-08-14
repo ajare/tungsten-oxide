@@ -1,9 +1,9 @@
 // MaterialCatalog.hpp -- reads editor authoring metadata from PbrMaterialBinding resources in
-// cpp/tungsten-monoxide/resources/Resources.xml. Bindings that represent path-material choices
-// carry editorTrackMaterial, editorMaterialKey, and editorTexture attributes. The catalog exposes
+// cpp/tungsten-monoxide/resources/Resources.yaml. Bindings that represent path-material choices
+// carry editorTrackMaterial, editorMaterialKey, and editorTexture properties. The catalog exposes
 // those choices to the editor and eager-loads their preview textures through TextureCache.
 //
-// This is a standalone, editor-owned reader built on Willpower::Common's XmlReader -- it does
+// This is a standalone, editor-owned YAML reader -- it does
 // NOT use willpower.application::ResourceManager, which requires a full mpp::RenderSystem. The
 // editor-facing material name remains what TrackDefinition stores (for example
 // "Tracks/AsphaltTrack"), while materialQualifiedName is the stable key baked into the exported
@@ -33,7 +33,7 @@ struct MaterialEntry {
 
 class MaterialCatalog {
 public:
-  static MaterialCatalog load(const std::filesystem::path& resourcesXmlPath, TextureCache& textureCache);
+  static MaterialCatalog load(const std::filesystem::path& resourcesYamlPath, TextureCache& textureCache);
 
   const std::vector<MaterialEntry>& materials() const { return entries_; }
 

@@ -56,7 +56,7 @@ only, not re-litigated for the CLI tool.
   Helpers take a loaded `mpp::PbrPipelineDocument` plus one material name. That
   material's `MeshSpecification` is the target vertex layout and its program is
   the target program. A pipeline's materials do *not* share one layout — in
-  `TungstenMonoxide.pipeline.xml`, `Ship.Surface` is indexed and the seven
+  `TungstenMonoxide.pipeline.yaml`, `Ship.Surface` is indexed and the seven
   `Track.*` are not — so a single named material is the only unambiguous input.
 - **Material validation is feature-derived, not slot-whitelisted.** mpp derives
   `PbrMaterialFeatures` per material and injects shader specialisation defines
@@ -129,7 +129,7 @@ Each milestone is independently revertible.
 **Status: complete.** `model_io_core`, `model_io_gltf`, `gltf_convert` and
 `model_io_tests` are in and green, alongside the existing suite —
 `ctest --test-dir cpp/build -C Release` passes 12/12. Verified end-to-end against
-the real `TungstenMonoxide.pipeline.xml`: material listing, conversion against
+the real `TungstenMonoxide.pipeline.yaml`: material listing, conversion against
 `Ship.Surface`, and `--strict` correctly refusing a model that needs synthesis.
 
 Two defects were found by the fixtures and fixed: AssImp's glTF2 importer appends
@@ -145,7 +145,7 @@ Not verified here: DemoSuite's GPU material tests (see Risks).
 
 - `cpp/model-io/` with both targets and their public headers.
 - `cpp/gltf-convert/` — `gltf_convert`, import-only:
-  `--in model.gltf --pipeline X.pipeline.xml --material Ship.Surface
+  `--in model.gltf --pipeline X.pipeline.yaml --material Ship.Surface
   --out model.mppmodel`, plus `--strict` and `--validate-only`.
 - `model_io_tests`, a ctest target covering the validation matrix and a
   round-trip of the written `.mppmodel` back through `mpp::ModelSerializer`.
@@ -153,8 +153,8 @@ Not verified here: DemoSuite's GPU material tests (see Risks).
   texture; one lacking `COLOR_0` and `TANGENT`; one with no UVs at all; a
   multi-node hierarchy with non-identity transforms; one with an inlined image,
   asserted to be rejected; one using `KHR_materials_transmission`, likewise.
-  Plus a small dedicated `.pipeline.xml` so the tests do not couple to
-  `TungstenMonoxide.pipeline.xml`, and `legacy-rse3.mppmodel`, a frozen
+  Plus a small dedicated `.pipeline.yaml` so the tests do not couple to
+  `TungstenMonoxide.pipeline.yaml`, and `legacy-rse3.mppmodel`, a frozen
   pre-`RSE4` model guarding the stream-format compatibility path.
 - The `RSE4` stream-format change in `ext/massive-poly-pusher`
   (`mpp/src/ResourceStreamSerializer.cpp`), covered by a colour-space round-trip
@@ -348,13 +348,13 @@ present but untriggered (it's lazy — see below).
 - The pipeline XML path lives in `editor.ini`'s new `[GltfImport]
   PipelinePath` key (resolved relative to the executable's directory, like
   `[Resources] Path`), defaulting to
-  `cpp/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.xml` via a repo-root
+  `cpp/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.yaml` via a repo-root
   walk (`defaultGltfPipelinePath`, the same technique
   `findEditorResourceFile` already used) when the key is absent. The target
   material is remembered across imports for the running session
   (`lastGltfImportMaterial`, a local -- not persisted back to `editor.ini`,
   since `EditorIni` is read-only).
-- Verified end-to-end against the real `TungstenMonoxide.pipeline.xml` and a
+- Verified end-to-end against the real `TungstenMonoxide.pipeline.yaml` and a
   fixture from `cpp/test-data/fixtures/gltf/` via `gltf_convert` (the
   headless twin calling the identical `modelio::convertGltf`/
   `PbrPipelineDocumentLoader` API the modal now calls) — `--validate-only`

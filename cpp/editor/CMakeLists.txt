@@ -118,7 +118,8 @@ target_link_libraries(track_editor PRIVATE
   Willpower::Common
   model_xml
   model_io_gltf
-  SDL3::SDL3)
+  SDL3::SDL3
+  yaml-cpp::yaml-cpp)
 
 add_executable(editor_track_resource_tests
   tests/track_resource_tests.cpp

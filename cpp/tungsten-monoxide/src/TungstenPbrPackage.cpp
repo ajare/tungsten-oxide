@@ -146,6 +146,7 @@ void TungstenPbrPackage::initialize(mpp::RenderSystem* renderSystem, mpp::Resour
     options.mode = mpp::RenderPipelineMode::XmlGraphPbrForward;
     options.graphTemplate = mGraphResource;
     options.graphImports = mRuntime->getImports();
+    options.resourceRoot = mRuntime->getRootResource();
     options.outputs = mPipelineDocument->outputs;
     options.environment = mRuntime->getEnvironment();
     options.bloom.enabled = mPipelineDocument->bloom.enabled;

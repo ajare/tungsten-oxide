@@ -1,6 +1,6 @@
 # TungstenMonoxide PBR workspace
 
-This is the editable PipelineEditor source for TungstenMonoxide's PBR package. `TungstenMonoxide.pipeline.xml` starts from MassivePolyPusher's Shadows template and retains its directional shadow pass, RGBA16F scene target, and ACES tone-map presentation pass. `TungstenMonoxidePreview.scene.xml` provides one representative model for every stable game binding.
+This is the editable PipelineEditor source for TungstenMonoxide's PBR package. `TungstenMonoxide.pipeline.yaml` starts from MassivePolyPusher's Shadows template and retains its directional shadow pass, RGBA16F scene target, and ACES tone-map presentation pass. `TungstenMonoxidePreview.scene.yaml` provides one representative model for every stable game binding.
 
 The runtime artifact is `../resources/TungstenMonoxide.mpppackage`. Do not edit its ZIP contents by hand.
 
@@ -34,7 +34,7 @@ cmake --build ext\massive-poly-pusher\build\cmake --config Release --target Pipe
 Open the committed workspace:
 
 ```bat
-ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.xml
+ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.yaml
 ```
 
 Use **File > Export Package...** and select:
@@ -46,7 +46,7 @@ cpp/tungsten-monoxide/resources/TungstenMonoxide.mpppackage
 The equivalent PipelineEditor automation command uses exactly the same exporter and is suitable for reproducibility checks:
 
 ```bat
-ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe --export-package cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.xml cpp\tungsten-monoxide\resources\TungstenMonoxide.mpppackage
+ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe --export-package cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.yaml cpp\tungsten-monoxide\resources\TungstenMonoxide.mpppackage
 ```
 
 ## Validation
@@ -54,11 +54,11 @@ ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe --export-pack
 From the repository root:
 
 ```bat
-ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe --validate cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.xml
+ext\massive-poly-pusher\build\cmake\bin\Release\PipelineEditor.exe --validate cpp\tungsten-monoxide\pbr\TungstenMonoxide.pipeline.yaml
 python cpp\tungsten-monoxide\pbr\validate_package.py cpp\tungsten-monoxide\resources\TungstenMonoxide.mpppackage
 ext\massive-poly-pusher\build\cmake\bin\Release\DemoSuite.exe --package cpp\tungsten-monoxide\resources\TungstenMonoxide.mpppackage --package-smoke-test
 ```
 
 `validate_package.py` is intentionally independent of MPP DLLs. It checks the standard store-only ZIP, version-1 manifest, package-local references, complete binding set, representative scene coverage, and exact indexed/non-indexed 52-byte material contracts. DemoSuite performs the authoritative parser, GPU resource, material compatibility, shadow, HDR, and presentation validation.
 
-The `.obj`, `.mtl`, and `.modelspec.xml` files under `models/` document the preview-model sources. The checked-in `.mppmodel` files are the source workspace's actual preview dependencies and are included by PipelineEditor's normal transitive package export.
+The `.obj`, `.mtl`, and `.modelspec.yaml` files under `models/` document the preview-model sources. The checked-in `.mppmodel` files are the source workspace's actual preview dependencies and are included by PipelineEditor's normal transitive package export.

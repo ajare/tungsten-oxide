@@ -1,4 +1,4 @@
-	#pragma once
+#pragma once
 
 #include <string>
 #include <vector>
@@ -15,112 +15,100 @@
 #include "willpower/application/resourcesystem/ResourceDefinitionFactory.h"
 #include "willpower/application/resourcesystem/DataStream.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			class WP_APPLICATION_API Resource : public mpp::ResourceWrangler
-			{
-				friend class ResourceManager;
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
+class WP_APPLICATION_API Resource : public mpp::ResourceWrangler {
+  friend class ResourceManager;
 
-			private:
+private:
+  typedef std::pair<std::string, StructuredData> FactoryTypeDefinition;
 
-				typedef std::pair<std::string, std::string> FactoryTypeDefinition;
+private:
+  int mRefCount;
 
-			private:
+  std::string mName;
 
-				int mRefCount;
+  std::string mNamespace;
 
-				std::string mName;
+  std::string mType;
 
-				std::string mNamespace;
+  std::string mSource;
 
-				std::string mType;
+  std::vector<FactoryTypeDefinition> mDefinitions;
 
-				std::string mSource;
+  std::map<std::string, std::shared_ptr<Resource>> mNamedDependentResources;
 
-				std::vector<FactoryTypeDefinition> mDefinitions;
+  std::vector<std::shared_ptr<Resource>> mDependentResourceList;
 
-				std::map<std::string, std::shared_ptr<Resource>> mNamedDependentResources;
+  std::map<std::string, std::string> mTags;
 
-				std::vector<std::shared_ptr<Resource>> mDependentResourceList;
+  // Definition factories
+  static std::map<std::string, std::map<std::string, ResourceDefinitionFactory*>> msResourceDefinitionFactories;
 
-				std::map<std::string, std::string> mTags;
+protected:
+  bool mCreated, mLoaded;
 
-				// Definition factories
-				static std::map<std::string, std::map<std::string, ResourceDefinitionFactory*>> msResourceDefinitionFactories;
+  ResourceLocation* mwLocation;
 
-			protected:
+  mpp::ResourcePtr mMppResource;
 
-				bool mCreated, mLoaded;
+private:
+  ResourceDefinitionFactory* getResourceDefinitionFactory(std::string const& resType, std::string const& facType, bool errorIfNotFound = true) const;
 
-				ResourceLocation* mwLocation;
-				
-				mpp::ResourcePtr mMppResource;
+  void addDefinition(std::string const& factory, StructuredData const& definition);
 
-			private:
+  virtual void create(DataStreamPtr dataPtr, ResourceManager* resourceMgr);
 
-				ResourceDefinitionFactory* getResourceDefinitionFactory(std::string const& resType, std::string const& facType, bool errorIfNotFound = true) const;
+  virtual void destroy();
 
-				void addDefinition(std::string const& factory, std::string const& definition);
+  virtual bool load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr);
 
-				virtual void create(DataStreamPtr dataPtr, ResourceManager* resourceMgr);
+  virtual bool unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr);
 
-				virtual void destroy();
+protected:
+  void addDependentResource(std::shared_ptr<Resource> resource);
 
-				virtual bool load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr);
+  void addDependentResource(std::string const& id, std::shared_ptr<Resource> resource);
 
-				virtual bool unload(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMgr);
+  void parseDefinition(ResourceManager* resourceMgr);
 
-			protected:
+  virtual void parseData(DataStreamPtr dataPtr);
 
-				void addDependentResource(std::shared_ptr<Resource> resource);
+public:
+  Resource(std::string const& name, std::string const& namesp, std::string const& type, std::string const& source, std::map<std::string, std::string> const& tags, ResourceLocation* location);
 
-				void addDependentResource(std::string const& id, std::shared_ptr<Resource> resource);
+  virtual ~Resource() = default;
 
-				void parseDefinition(ResourceManager* resourceMgr);
+  void addTag(std::string const& name, std::string const& value);
 
-				virtual void parseData(DataStreamPtr dataPtr);
+  std::string const& getTag(std::string const& name) const;
 
-			public:
+  std::map<std::string, std::string> const& getTags() const;
 
-				Resource(std::string const& name, std::string const& namesp, std::string const& type, std::string const& source, std::map<std::string, std::string> const& tags, ResourceLocation* location);
+  std::string const& getName() const;
 
-				virtual ~Resource() = default;
+  std::string const& getNamespace() const;
 
-				void addTag(std::string const& name, std::string const& value);
+  std::string getQualifiedName() const;
 
-				std::string const& getTag(std::string const& name) const;
+  std::string const& getType() const;
 
-				std::map<std::string, std::string> const& getTags() const;
+  std::string const& getSource() const;
 
-				std::string const& getName() const;
+  std::string const& getDefinitionFile() const;
 
-				std::string const& getNamespace() const;
+  bool hasDependentResource(std::string const& id) const;
 
-				std::string getQualifiedName() const;
+  std::shared_ptr<Resource> getDependentResource(std::string const& id);
 
-				std::string const& getType() const;
+  virtual mpp::ResourcePtr getMppResource() const;
 
-				std::string const& getSource() const;
+  static void splitName(std::string const& qualifiedName, std::string const& currentNamesp, std::string* namesp = nullptr, std::string* resource = nullptr);
+};
 
-				std::string const& getDefinitionFile() const;
+typedef std::shared_ptr<Resource> ResourcePtr;
 
-				bool hasDependentResource(std::string const& id) const;
-				
-				std::shared_ptr<Resource> getDependentResource(std::string const& id);
-
-				virtual mpp::ResourcePtr getMppResource() const;
-
-				static void splitName(std::string const& qualifiedName, std::string const& currentNamesp, std::string* namesp = nullptr, std::string* resource = nullptr);
-
-			};
-
-			typedef std::shared_ptr<Resource> ResourcePtr;
-
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
-
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

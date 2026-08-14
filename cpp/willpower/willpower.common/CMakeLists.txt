@@ -22,6 +22,7 @@ set(WILLPOWER_COMMON_HEADERS
   include/willpower/common/CubicBSpline.h
   include/willpower/common/CubicBSplineLooping.h
   include/willpower/common/DateTime.h
+  include/willpower/common/DataNode.h
   include/willpower/common/DynamicAccelerationGrid.h
   include/willpower/common/Exceptions.h
   include/willpower/common/ExtendedAccelerationGrid.h
@@ -64,6 +65,7 @@ set(WILLPOWER_COMMON_SOURCES
   src/CubicBSpline.cpp
   src/CubicBSplineLooping.cpp
   src/DateTime.cpp
+  src/DataNode.cpp
   src/ExtentsCalculator.cpp
   src/FileSystem.cpp
   src/IndexedTriangleBatchRenderable.cpp

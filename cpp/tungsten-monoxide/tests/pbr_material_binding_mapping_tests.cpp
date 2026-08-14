@@ -1,4 +1,4 @@
-// Material-binding migration guard. This reads only .mppmodel metadata and Resources.xml; it does
+// Material-binding migration guard. This reads only .mppmodel metadata and Resources.yaml; it does
 // not create an MPP renderer or alter runtime resources. Embedded material keys must retain their
 // exact DependentResource IDs while resolving through stable logical PBR bindings.
 #include <cstdint>
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <willpower/common/XmlReader.h>
+#include <yaml-cpp/yaml.h>
 
 namespace {
 
@@ -104,47 +104,43 @@ std::string qualify(const std::string& namesp, const std::string& name) {
   return namesp.empty() ? name : namesp + "/" + name;
 }
 
-void scanResources(wp::XmlNode* parent, const std::string& namesp, ResourceDeclarations& declarations) {
-  wp::XmlNode* resource = parent->getOptionalChild("Resource");
-  if (resource == nullptr) return;
-  do {
-    std::string name;
-    std::string type;
-    resource->getOptionalAttribute("name", name);
-    resource->getOptionalAttribute("type", type);
+std::string scalar(const YAML::Node& node, const char* key) {
+  const YAML::Node value = node[key];
+  return value && value.IsScalar() ? value.as<std::string>() : std::string{};
+}
+
+YAML::Node sequence(const YAML::Node& node) {
+  if (!node || node.IsSequence()) return node;
+  YAML::Node result(YAML::NodeType::Sequence);
+  result.push_back(node);
+  return result;
+}
+
+void scanResources(const YAML::Node& parent, const std::string& namesp, ResourceDeclarations& declarations) {
+  for (const YAML::Node& resource : sequence(parent["Resource"])) {
+    const std::string name = scalar(resource, "name");
     if (name.empty()) continue;
 
     ResourceDeclaration declaration;
-    declaration.type = type;
-    if (wp::XmlNode* definitions = resource->getOptionalChild("Definitions"))
-      if (wp::XmlNode* definition = definitions->getOptionalChild("Definition"))
-        if (wp::XmlNode* binding = definition->getOptionalChild("Binding"))
-          declaration.binding = binding->getValue();
-    if (wp::XmlNode* dependencies = resource->getOptionalChild("DependentResources")) {
-      if (wp::XmlNode* dependent = dependencies->getOptionalChild("DependentResource")) {
-        do {
-          std::string id;
-          std::string reference;
-          dependent->getOptionalAttribute("id", id);
-          dependent->getOptionalAttribute("ref", reference);
-          if (!id.empty() && !reference.empty()) declaration.dependents[id] = reference;
-        } while (dependent->next());
-      }
+    declaration.type = scalar(resource, "type");
+    const YAML::Node definitions = resource["Definitions"];
+    if (definitions) declaration.binding = scalar(definitions["Definition"], "Binding");
+    const YAML::Node dependencies = resource["DependentResources"];
+    const YAML::Node dependentNodes = dependencies ? dependencies["DependentResource"] : YAML::Node{};
+    for (const YAML::Node& dependent : sequence(dependentNodes)) {
+      const std::string id = scalar(dependent, "id");
+      const std::string reference = scalar(dependent, "ref");
+      if (!id.empty() && !reference.empty()) declaration.dependents[id] = reference;
     }
     declarations[qualify(namesp, name)] = std::move(declaration);
-  } while (resource->next());
+  }
 }
 
 ResourceDeclarations readResourceDeclarations(const std::filesystem::path& resourcePath) {
-  std::unique_ptr<wp::XmlReader> reader(wp::XmlReader::fromFile(resourcePath.string()));
-  wp::XmlNode* root = reader->getNode("Resources");
+  const YAML::Node root = YAML::LoadFile(resourcePath.string())["Resources"];
   ResourceDeclarations declarations;
   scanResources(root, "", declarations);
-  if (wp::XmlNode* namesp = root->getOptionalChild("Namespace")) {
-    do {
-      scanResources(namesp, namesp->getAttribute("name"), declarations);
-    } while (namesp->next());
-  }
+  for (const YAML::Node& namesp : sequence(root["Namespace"])) scanResources(namesp, scalar(namesp, "name"), declarations);
   return declarations;
 }
 
@@ -158,7 +154,7 @@ std::string resolveReference(const std::string& owner, const std::string& refere
 
 int main(int argc, char** argv) {
   if (argc != 3) {
-    std::cerr << "Usage: legacy_pbr_baseline_tests <NewTrack.mppmodel> <Resources.xml>\n";
+    std::cerr << "Usage: legacy_pbr_baseline_tests <NewTrack.mppmodel> <Resources.yaml>\n";
     return 2;
   }
 
@@ -168,7 +164,7 @@ int main(int argc, char** argv) {
     constexpr const char* trackName = "Tracks/NewTrack";
     const auto track = declarations.find(trackName);
     if (track == declarations.end() || track->second.type != "Track")
-      throw std::runtime_error("Resources.xml does not declare Track resource 'Tracks/NewTrack'.");
+      throw std::runtime_error("Resources.yaml does not declare Track resource 'Tracks/NewTrack'.");
 
     const std::map<std::string, std::string> expectedBindings{
         {"Tracks/TrackAsphaltMaterial", "Track.Asphalt"},
@@ -183,7 +179,7 @@ int main(int argc, char** argv) {
     bool failed = false;
     const auto game = declarations.find("TungstenMonoxide");
     if (game == declarations.end() || game->second.type != "Game") {
-      std::cerr << "FAIL: Resources.xml does not declare Game resource 'TungstenMonoxide'.\n";
+      std::cerr << "FAIL: Resources.yaml does not declare Game resource 'TungstenMonoxide'.\n";
       failed = true;
     } else {
       const auto shipMapping = game->second.dependents.find("ShipMaterial");

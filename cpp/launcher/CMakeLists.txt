@@ -94,7 +94,7 @@ endif()
 # Generator expressions leave these settings blank for non-Debug configurations.
 set_target_properties(Launcher PROPERTIES
   VS_DEBUGGER_WORKING_DIRECTORY "$<$<CONFIG:Debug>:$(OutDir)>"
-  VS_DEBUGGER_COMMAND_ARGUMENTS "$<$<CONFIG:Debug>:TungstenMonoxide.cfg>")
+  VS_DEBUGGER_COMMAND_ARGUMENTS "$<$<CONFIG:Debug>:TungstenMonoxide.yaml>")
 source_group("Header Files" FILES ${LAUNCHER_HEADERS})
 
 target_include_directories(Launcher PRIVATE
@@ -168,10 +168,10 @@ endforeach()
 
 # One checked-in TungstenMonoxide launcher config per build type (support/), deployed under the
 # name Main.cpp actually looks for -- see CMakeLists.txt's VS_DEBUGGER_COMMAND_ARGUMENTS, which
-# passes "TungstenMonoxide.cfg" explicitly when debugging the Debug configuration.
+# passes "TungstenMonoxide.yaml" explicitly when debugging the Debug configuration.
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "@CMAKE_CURRENT_SOURCE_DIR@/support/TungstenMonoxide.${CONFIG}.cfg" "${OUTPUT_DIR}/TungstenMonoxide.cfg"
+    "@CMAKE_CURRENT_SOURCE_DIR@/support/TungstenMonoxide.${CONFIG}.yaml" "${OUTPUT_DIR}/TungstenMonoxide.yaml"
   COMMAND_ERROR_IS_FATAL ANY)
 ]=])
 file(CONFIGURE

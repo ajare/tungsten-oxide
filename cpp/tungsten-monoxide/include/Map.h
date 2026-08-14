@@ -51,7 +51,7 @@ private:
   // Materials section, which cpp/editor's MppModelExport.cpp deliberately leaves empty; see
   // Map.cpp's comment on resolveMaterialMppName). Instead this builds an
   // mpp::ProgrammaticModelStream mesh-by-mesh, resolving each mesh's material string against this
-  // resource's own already-loaded PbrMaterialBinding dependents (see Resources.xml's
+  // resource's own already-loaded PbrMaterialBinding dependents (see Resources.yaml's
   // DependentResources on the Track resource). A mesh whose material has no matching dependent
   // (e.g. PathShell's "shell", ZoneSurface's "zone-<effect>" -- auxiliary geometry
   // buildTrackResourceXml doesn't currently declare a material dependent for) is skipped with a

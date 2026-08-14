@@ -24,7 +24,7 @@ namespace mono {
 
 // A Track resource's <Models> list (TRACK_MODEL_LIST_PLAN.md), parsed independently of
 // cpp/model-xml (which this DLL deliberately doesn't link -- see that plan's architecture notes on
-// why the editor/model-tool's TinyXML2-based fragment schema and this host's own wp::XmlNode-based
+// why the editor/model-tool's TinyXML2-based fragment schema and this host's own wp::DataNode-based
 // parsing stay two separate implementations of the same documented format). `EmbeddedModelRef` is
 // the minimal slice this module needs: enough to resolve a placement's `modelId` (which now names
 // an embedded <Model id>, not a raw path) to the .mppmodel it references, and each of that model's
@@ -76,7 +76,7 @@ tox::Vec3 placementTransformNormal(tox::ModelPlacementDefinition const& placemen
 
 // Every GeometryBatch id in `track.geometry` that must appear in a <TrackMeshes> selection --
 // i.e. exactly the set buildCollisionTriangles below requires as `selectedNames`. Exposed so a
-// caller with no Resources.xml to read (cpp/app/tools/mesh_physics_diag.cpp) can derive the same
+// caller with no Resources.yaml to read (cpp/app/tools/mesh_physics_diag.cpp) can derive the same
 // "collidable" set Map::load() gets from the editor's <TrackMeshes> export, rather than needing it
 // supplied externally.
 std::vector<std::string> collidableGeometryBatchIds(tox::Track const& track);

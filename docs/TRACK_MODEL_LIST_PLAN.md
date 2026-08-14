@@ -472,7 +472,7 @@ the editor as opaque pass-through data it preserves but never edits.
   any of them up by id. The old `<TrackMeshes>` parsing loop is deleted
   outright — see 7.3's note on why.
 - Test: `TungstenMonoxide.dll` builds clean; no CTest coverage lives in this
-  module (pre-existing gap, not new). `cpp/tungsten-monoxide/resources/Resources.xml`
+  module (pre-existing gap, not new). `cpp/tungsten-monoxide/resources/Resources.yaml`
   (real bundled game content, not a test fixture) was updated to the new
   `<Models>` shape in the same commit — it would otherwise fail to load at
   all under this milestone's parser change. Commit.
@@ -520,7 +520,7 @@ the editor as opaque pass-through data it preserves but never edits.
   `TungstenMonoxide.dll`, `mesh_physics_diag`, `track_runner` all build
   clean, the latter two confirming `buildMeshObjectCollisionTriangles`'s new
   defaulted parameter doesn't break their existing 5-argument call site. A
-  real game launch loading the updated `Resources.xml` wasn't possible in
+  real game launch loading the updated `Resources.yaml` wasn't possible in
   this environment (no display/GPU) — flagged as the thing to actually run
   once available. Commit.
 
@@ -537,7 +537,7 @@ the editor as opaque pass-through data it preserves but never edits.
   `<Models>` list is outer-XML-only, per the plan's own architecture
   notes). `grep -rl "TrackMeshes\|<ModelFile>" --include=*.xml .` across
   the whole repo found exactly one hit outside `ext/`/`build/`:
-  `cpp/tungsten-monoxide/resources/Resources.xml` — real bundled game
+  `cpp/tungsten-monoxide/resources/Resources.yaml` — real bundled game
   content, not a fixture, already migrated to `<Models>` as part of
   Milestone 7's own commit (`5e43256`). No new fixture mirroring
   `example_track_def.xml` was added as a committed file — the shape is
@@ -580,7 +580,7 @@ the editor as opaque pass-through data it preserves but never edits.
   `mpp_model_import_tests`, `model_tool_tests`). A `track_editor.exe`
   smoke launch reported 22 `OK` self-checks and zero `MISMATCH`/`FAIL`.
   A real interactive session (Open/Save/Load Model/a live game launch
-  loading the updated `Resources.xml`) was not possible in this
+  loading the updated `Resources.yaml`) was not possible in this
   environment (no display/GPU) at any point across this whole plan —
   every milestone's own entry above already flags exactly where that
   matters most.

@@ -5,26 +5,20 @@
 #include "willpower/application/resourcesystem/ResourceExceptions.h"
 #include "willpower/common/Exceptions.h"
 
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
+using namespace std;
+using namespace wp;
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			using namespace std;
-			using namespace wp;
+AudioBankDefaultDefinitionFactory::AudioBankDefaultDefinitionFactory()
+    : AudioBankResourceDefinitionFactory("") {
+}
 
-			AudioBankDefaultDefinitionFactory::AudioBankDefaultDefinitionFactory()
-				: AudioBankResourceDefinitionFactory("")
-			{
-			}
+void AudioBankDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) {
+  auto bankRes = static_cast<AudioBankResource*>(resource);
+}
 
-			void AudioBankDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node)
-			{
-				auto bankRes = static_cast<AudioBankResource*>(resource);
-			}
-
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

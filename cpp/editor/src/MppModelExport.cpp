@@ -181,7 +181,7 @@ constexpr char kDefaultTriggerMaterial[] = "Tracks/DefaultTriggerMaterial";
 // assigned a real one there. Unlike the fixed materials above, its id (what Map.cpp's
 // resolveMaterialMppName() looks it up by, matched verbatim against the .mppmodel's own baked
 // string) is NOT the same as its qualified resource name -- it's declared under the Tracks
-// namespace in Resources.xml (alongside DefaultMeshMaterial et al.) but referenced bare, since
+// namespace in Resources.yaml (alongside DefaultMeshMaterial et al.) but referenced bare, since
 // that's the literal string model-tool writes, with no namespace prefix of its own. Included
 // unconditionally on every export, regardless of whether this track's own placements are known to
 // need it: core never loads a placement's .mppmodel (this editor can't introspect what material

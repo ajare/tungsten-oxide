@@ -8,19 +8,16 @@
 #include "ProtoEntity.h"
 #include "ProtoEntityDefaultDefinitionFactory.h"
 
-namespace applib
-{
-	using namespace std;
-	using namespace utils;
-	using namespace wp;
+namespace applib {
+using namespace std;
+using namespace utils;
+using namespace wp;
 
-	ProtoEntityDefaultDefinitionFactory::ProtoEntityDefaultDefinitionFactory()
-		: ProtoEntityResourceDefinitionFactory("")
-	{
-	}
+ProtoEntityDefaultDefinitionFactory::ProtoEntityDefaultDefinitionFactory()
+    : ProtoEntityResourceDefinitionFactory("") {
+}
 
-	void ProtoEntityDefaultDefinitionFactory::createProtoEntity(ProtoEntity* entity, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node)
-	{
-	}
+void ProtoEntityDefaultDefinitionFactory::createProtoEntity(ProtoEntity* entity, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) {
+}
 
-} // applib
+}  // namespace applib

@@ -3,16 +3,12 @@
 #include "Platform.h"
 #include "GameResourceDefinitionFactory.h"
 
-namespace applib
-{
-	class APPLIB_API GameDefaultDefinitionFactory : public GameResourceDefinitionFactory
-	{
-	public:
+namespace applib {
+class APPLIB_API GameDefaultDefinitionFactory : public GameResourceDefinitionFactory {
+public:
+  GameDefaultDefinitionFactory();
 
-		GameDefaultDefinitionFactory();
+  void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) override;
+};
 
-		void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
-	};
-
-} // applib
-
+}  // namespace applib

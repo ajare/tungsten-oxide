@@ -5,7 +5,7 @@
 // parsed with mpp's own MeshSpecificationParser -- the same parser FilePbrMaterialStream uses, so a
 // spec accepted here is a spec the runtime will accept.
 //
-// A pipeline's materials do NOT share one layout (in TungstenMonoxide.pipeline.xml Ship.Surface is
+// A pipeline's materials do NOT share one layout (in TungstenMonoxide.pipeline.yaml Ship.Surface is
 // indexed and the seven Track.* are not), which is why the caller names one rather than the
 // document implying it -- see docs/adr/0004-gltf-import.md, D3.
 #pragma once
@@ -26,7 +26,7 @@ struct TargetMaterial {
   mpp::mesh::MeshSpecification meshSpec;
   // Set when the pipeline material names an external program by <Ref>; empty means the material
   // uses mpp's built-in PBR shaders specialised from its own derived features, which is what every
-  // material in TungstenMonoxide.pipeline.xml does.
+  // material in TungstenMonoxide.pipeline.yaml does.
   std::string programRef;
 };
 

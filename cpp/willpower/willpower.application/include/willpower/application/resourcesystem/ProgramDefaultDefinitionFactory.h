@@ -3,22 +3,16 @@
 #include "willpower/application/Platform.h"
 #include "willpower/application/resourcesystem/ProgramResourceDefinitionFactory.h"
 
-namespace WP_NAMESPACE
-{
-	namespace application
-	{
-		namespace resourcesystem
-		{
-			class WP_APPLICATION_API ProgramDefaultDefinitionFactory : public ProgramResourceDefinitionFactory
-			{
-			public:
+namespace WP_NAMESPACE {
+namespace application {
+namespace resourcesystem {
+class WP_APPLICATION_API ProgramDefaultDefinitionFactory : public ProgramResourceDefinitionFactory {
+public:
+  ProgramDefaultDefinitionFactory();
 
-				ProgramDefaultDefinitionFactory();
+  void create(Resource* resource, ResourceManager* resourceMgr, wp::DataNode* node) override;
+};
 
-				void create(Resource* resource, ResourceManager* resourceMgr, wp::XmlNode* node) override;
-			};
-
-		} // resourcesystem
-	} // application
-} // WP_NAMESPACE
-
+}  // namespace resourcesystem
+}  // namespace application
+}  // namespace WP_NAMESPACE

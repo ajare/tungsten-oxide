@@ -12,7 +12,7 @@ GameDefinitionFactory::GameDefinitionFactory()
 void GameDefinitionFactory::create(
     wp::application::resourcesystem::Resource* resource,
     wp::application::resourcesystem::ResourceManager* resourceMgr,
-    wp::XmlNode* node) {
+    wp::DataNode* node) {
   VAR_UNUSED(resourceMgr);
   auto game = static_cast<Game*>(resource);
   auto ship = node->getChild("ShipModel");

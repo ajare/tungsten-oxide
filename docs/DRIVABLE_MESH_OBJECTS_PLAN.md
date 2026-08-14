@@ -882,7 +882,7 @@ after Milestone 4 lands.
   `mono::collidableGeometryBatchIds(track)` (new, also exposed from the same
   header) derives the `<TrackMeshes>` selection automatically from
   `track.geometry`'s own collidable kinds, since this tool has no
-  Resources.xml to read the real selection from.
+  Resources.yaml to read the real selection from.
   - **Deviation from "no window" (real finding, not a design choice):**
     `mpp::RenderSystem`'s constructor unconditionally calls `glewInit()` and
     issues a few GL calls (`setDefaultState`/`createLightsData`/

@@ -126,8 +126,8 @@ Keep editable source and the runtime export separate:
 
 ```text
 cpp/tungsten-monoxide/pbr/
-  TungstenMonoxide.pipeline.xml
-  TungstenMonoxidePreview.scene.xml
+  TungstenMonoxide.pipeline.yaml
+  TungstenMonoxidePreview.scene.yaml
   TungstenMonoxideMaterials.xml
   textures/...
   environment/...
@@ -136,7 +136,7 @@ cpp/tungsten-monoxide/resources/
   TungstenMonoxide.mpppackage
 ```
 
-Start from PipelineEditor's `Shadows.pipeline.xml` template (or `Full.pipeline.xml` only if bloom is required for the first release), retain an RGBA16F scene target, and retain an explicit tone-map presentation pass to RGBA8. Use an HDR equirectangular environment when a production environment is available; neutral documented IBL fallback is acceptable for the first functional milestone but must produce a visible warning.
+Start from PipelineEditor's `Shadows.pipeline.yaml` template (or `Full.pipeline.yaml` only if bloom is required for the first release), retain an RGBA16F scene target, and retain an explicit tone-map presentation pass to RGBA8. Use an HDR equirectangular environment when a production environment is available; neutral documented IBL fallback is acceptable for the first functional milestone but must produce a visible warning.
 
 Initial material conversion:
 
@@ -222,7 +222,7 @@ Modified files:
 
 - `cpp/applib/CMakeLists.txt`
 - `cpp/tungsten-monoxide/src/DLL.cpp`
-- `cpp/tungsten-monoxide/resources/Resources.xml`
+- `cpp/tungsten-monoxide/resources/Resources.yaml`
 - `cpp/tungsten-monoxide/src/Map.cpp`
 - `cpp/tungsten-monoxide/include/Game.h`
 - `cpp/tungsten-monoxide/src/GameDefinitionFactory.cpp`
@@ -307,7 +307,7 @@ Modified files:
 - `cpp/editor/src/MaterialCatalog.cpp`
 - `cpp/editor/src/MppModelExport.cpp`
 - `cpp/tungsten-monoxide/include/Map.h`
-- `cpp/tungsten-monoxide/resources/Resources.xml`
+- `cpp/tungsten-monoxide/resources/Resources.yaml`
 - `cpp/tungsten-monoxide/resources/images/**` (represented legacy images removed)
 - `cpp/tungsten-monoxide/resources/model.xml` (removed)
 - `cpp/tungsten-monoxide/resources/shaders/**` (removed)

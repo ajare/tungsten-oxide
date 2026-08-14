@@ -6,19 +6,16 @@
 #include "Game.h"
 #include "GameDefaultDefinitionFactory.h"
 
-namespace applib
-{
-	using namespace std;
-	using namespace utils;
-	using namespace wp;
+namespace applib {
+using namespace std;
+using namespace utils;
+using namespace wp;
 
-	GameDefaultDefinitionFactory::GameDefaultDefinitionFactory()
-		: GameResourceDefinitionFactory("")
-	{
-	}
+GameDefaultDefinitionFactory::GameDefaultDefinitionFactory()
+    : GameResourceDefinitionFactory("") {
+}
 
-	void GameDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, XmlNode* node)
-	{
-	}
+void GameDefaultDefinitionFactory::create(application::resourcesystem::Resource* resource, application::resourcesystem::ResourceManager* resourceMgr, DataNode* node) {
+}
 
-} // applib
+}  // namespace applib

@@ -71,7 +71,7 @@ now needs them to bake 52-byte tracks.
 
 Helpers take a loaded `mpp::PbrPipelineDocument` and one material name. That
 material supplies the target `MeshSpecification` and program. A pipeline's
-materials do not share a layout — in `TungstenMonoxide.pipeline.xml`
+materials do not share a layout — in `TungstenMonoxide.pipeline.yaml`
 `Ship.Surface` is indexed and the seven `Track.*` are not — so naming one is the
 only unambiguous input.
 

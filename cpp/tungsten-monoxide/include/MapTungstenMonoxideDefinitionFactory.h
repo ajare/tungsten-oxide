@@ -4,13 +4,9 @@
 
 #include "Platform.h"
 
-
-class MapTungstenMonoxideDefinitionFactory : public applib::MapResourceDefinitionFactory
-{
+class MapTungstenMonoxideDefinitionFactory : public applib::MapResourceDefinitionFactory {
 public:
+  MapTungstenMonoxideDefinitionFactory();
 
-	MapTungstenMonoxideDefinitionFactory();
-
-	void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::XmlNode* node) override;
+  void create(wp::application::resourcesystem::Resource* resource, wp::application::resourcesystem::ResourceManager* resourceMgr, wp::DataNode* node) override;
 };
-

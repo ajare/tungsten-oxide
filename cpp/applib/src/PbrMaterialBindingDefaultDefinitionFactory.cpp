@@ -11,7 +11,7 @@ PbrMaterialBindingDefaultDefinitionFactory::PbrMaterialBindingDefaultDefinitionF
 void PbrMaterialBindingDefaultDefinitionFactory::create(
     wp::application::resourcesystem::Resource* resource,
     wp::application::resourcesystem::ResourceManager* resourceMgr,
-    wp::XmlNode* node) {
+    wp::DataNode* node) {
   (void)resourceMgr;
   auto binding = static_cast<PbrMaterialBinding*>(resource);
   binding->mBinding = node->getChild("Binding")->getValue();

@@ -1,0 +1,117 @@
+Resources:
+  Resource:
+    - type: "Game"
+      name: "TungstenMonoxide"
+      DependentResources:
+        DependentResource:
+          id: "ShipMaterial"
+          ref: "ShipPbrMaterial"
+      Definitions:
+        Definition:
+          ShipModel:
+            ModelFile: "box.mppmodel"
+            Material: "Ship.Surface"
+    - type: "PbrMaterialBinding"
+      name: "ShipPbrMaterial"
+      Definitions:
+        Definition:
+          Binding: "Ship.Surface"
+  Namespace:
+    name: "Tracks"
+    Resource:
+      - type: "PbrMaterialBinding"
+        name: "TrackAsphaltMaterial"
+        editorTrackMaterial: "AsphaltTrack"
+        editorMaterialKey: "Tracks/TrackAsphaltMaterial"
+        editorTexture: "../pbr/textures/asphalt.png"
+        Definitions:
+          Definition:
+            Binding: "Track.Asphalt"
+      - type: "PbrMaterialBinding"
+        name: "DefaultTrackChoice"
+        editorTrackMaterial: "DefaultTrack"
+        editorMaterialKey: "Tracks/TrackAsphaltMaterial"
+        editorTexture: "../pbr/textures/asphalt.png"
+        Definitions:
+          Definition:
+            Binding: "Track.Asphalt"
+      - type: "PbrMaterialBinding"
+        name: "DefaultRailMaterial"
+        editorMaterialKey: "Tracks/DefaultRailMaterial"
+        Definitions:
+          Definition:
+            Binding: "Track.Rail"
+      - type: "PbrMaterialBinding"
+        name: "DefaultMeshMaterial"
+        editorMaterialKey: "Tracks/DefaultMeshMaterial"
+        Definitions:
+          Definition:
+            Binding: "Track.Mesh"
+      - type: "PbrMaterialBinding"
+        name: "DefaultShellMaterial"
+        editorMaterialKey: "Tracks/DefaultShellMaterial"
+        Definitions:
+          Definition:
+            Binding: "Track.Shell"
+      - type: "PbrMaterialBinding"
+        name: "DefaultZoneMaterial"
+        editorMaterialKey: "Tracks/DefaultZoneMaterial"
+        Definitions:
+          Definition:
+            Binding: "Track.Zone"
+      - type: "PbrMaterialBinding"
+        name: "DefaultTriggerMaterial"
+        editorMaterialKey: "Tracks/DefaultTriggerMaterial"
+        Definitions:
+          Definition:
+            Binding: "Track.Trigger"
+      - type: "PbrMaterialBinding"
+        name: "ModelTool.DefaultFallbackMaterial3D"
+        editorMaterialKey: "ModelTool.DefaultFallbackMaterial3D"
+        Definitions:
+          Definition:
+            Binding: "Track.Fallback"
+      - type: "Track"
+        name: "NewTrack"
+        DependentResources:
+          DependentResource:
+            - id: "Tracks/TrackAsphaltMaterial"
+              ref: "Tracks/TrackAsphaltMaterial"
+            - id: "Tracks/DefaultRailMaterial"
+              ref: "Tracks/DefaultRailMaterial"
+            - id: "Tracks/DefaultMeshMaterial"
+              ref: "Tracks/DefaultMeshMaterial"
+            - id: "Tracks/DefaultShellMaterial"
+              ref: "Tracks/DefaultShellMaterial"
+            - id: "Tracks/DefaultZoneMaterial"
+              ref: "Tracks/DefaultZoneMaterial"
+            - id: "Tracks/DefaultTriggerMaterial"
+              ref: "Tracks/DefaultTriggerMaterial"
+            - id: "ModelTool.DefaultFallbackMaterial3D"
+              ref: "Tracks/ModelTool.DefaultFallbackMaterial3D"
+        Definitions:
+          Definition:
+            factory: "Track"
+            Models:
+              Model:
+                - id: "NewTrack"
+                  ModelFile: "NewTrack.mppmodel"
+                  TrackData: "NewTrack.json"
+                  Meshes:
+                    Mesh:
+                      - Name: "path-0-surface"
+                        Type: "Track"
+                        Visible: "true"
+                      - Name: "path-0-rail-left"
+                        Type: "Track"
+                        Visible: "true"
+                      - Name: "path-0-rail-right"
+                        Type: "Track"
+                        Visible: "true"
+                - id: "model1"
+                  ModelFile: "box.mppmodel"
+                  Meshes:
+                    Mesh:
+                      Name: "Mesh"
+                      Type: "Physical"
+                      Visible: "true"

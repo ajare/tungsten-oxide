@@ -9,6 +9,6 @@ public:
 
   void create(wp::application::resourcesystem::Resource* resource,
               wp::application::resourcesystem::ResourceManager* resourceMgr,
-              wp::XmlNode* node) override;
+              wp::DataNode* node) override;
 };
 }  // namespace applib

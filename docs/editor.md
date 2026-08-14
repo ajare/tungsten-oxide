@@ -36,7 +36,7 @@ Zones (`velocityChange`/boost, `jump`, `startGrid`) and triggers (dummy/checkpoi
 
 ### Texture assets and materials
 
-The texture-*asset* authoring UI (add/browse/tile-size) has been removed; `EditorState`'s texture-asset methods survive with no UI driving them. What remains is `src/MaterialsPanel.cpp` — a read-only list of `TrackMaterial`s loaded from the Resources XML named in `editor.ini`, each shown with its first texture's thumbnail; clicking one assigns it to the current path. `cpp/editor/src/TextureCache.cpp` resolves a relative texture path against the repo root (found by walking up from the working directory for `assets/track/manifest.json`), so the exe can be launched from anywhere and still find the same on-disk texture.
+The texture-*asset* authoring UI (add/browse/tile-size) has been removed; `EditorState`'s texture-asset methods survive with no UI driving them. What remains is `src/MaterialsPanel.cpp` — a read-only list of `TrackMaterial`s loaded from the Resources YAML named in `editor.ini`, each shown with its first texture's thumbnail; clicking one assigns it to the current path. `cpp/editor/src/TextureCache.cpp` resolves a relative texture path against the repo root (found by walking up from the working directory for `assets/track/manifest.json`), so the exe can be launched from anywhere and still find the same on-disk texture.
 
 ### Self-intersection detection
 
@@ -79,6 +79,6 @@ Design of record: `docs/adr/0002-track-resource-save-load.md` ("Accepted and imp
 - **Undo is coarse**: whole-track snapshots capped at 30 steps; view state (zoom, pan, grid, render mode, point filters) is deliberately outside history and not undoable.
 - **No layout persistence** — the dock layout rebuilds identically every launch.
 - **Save is blocked**, not degraded, when the track fails to bake or any path references an unresolvable material.
-- **Startup exits** on structural resource failures (missing/malformed `editor.ini` or Resources.xml) rather than continuing with an empty catalog.
+- **Startup exits** on structural resource failures (missing/malformed `editor.ini` or Resources.yaml) rather than continuing with an empty catalog.
 - **Windows-only in practice** — native file dialogs and clipboard access are Win32-specific.
 - Central-reservation editor-side testing is documented as partial (`CENTRAL_RESERVATION_PLAN.md`: "M5 partial — core tests done, editor tests deferred").
