@@ -3,7 +3,7 @@
 Branch: `gltf-import`. The matching MassivePolyPusher submodule change (the `RSE4`
 stream format, see M1) is on `rse4-texture-colour-space` in that repository.
 
-Overall status: **M1–M3 complete; M4–M5 not started.**
+Overall status: **M1–M4 complete; M5 not started.**
 
 ## Goal
 
@@ -255,22 +255,61 @@ script globs the directory rather than resolving per-target dependencies.
 
 ### M4 — editor `.mppmodel` I/O, 52-byte track export, `Map.cpp`
 
-**Status: not started.**
+**Status: complete.** `MppModelImport.cpp`/`MppModelExport.cpp` are now thin
+wrappers over `model_io_core`'s `mpp::ModelSerializer`-backed reader/writer;
+`buildTrackResourceXmlForName`/`buildModelsXml` were untouched, as planned.
+`ctest --test-dir cpp/build -C Release` passes 12/12, and `track_editor.exe`
+was launched directly to confirm its startup smoke checks (including the
+`.mppmodel` structural self-check) still pass against the new writer's real
+output.
 
-- Replace `MppModelImport.cpp` and `MppModelExport.cpp`'s byte writer with
-  `model_io_core`. `buildTrackResourceXmlForName`/`buildModelsXml` are pure XML
-  and survive unchanged.
-- Rework `mpp_model_import_tests` and `editor_track_resource_tests`; the
-  former's explicit "no Willpower/SDL/mpp dependency" premise is retired.
-- Editor track export writes `gameMeshSpecification(false, true)` — 52 bytes,
-  tangents baked at save time.
-- `Map.cpp` accepts stride 36 (synthesise tangents, as today) *or* 52 (pass
-  through) and rejects anything else, replacing the hard `stride != 36`
-  rejections at `Map.cpp:120` and `Map.cpp:297`. Committed 36-byte models under
-  `cpp/tungsten-monoxide/resources/` must keep loading — that is what the dual
-  acceptance is for.
-- `Map.cpp` prefers an embedded material when a mesh has one, falling back to
-  the existing `PbrMaterialBinding` by-name lookup otherwise.
+- The editor's track export builds a `modelio::ModelData` from
+  `tox::GeometryBatch` (identity-indexed triangle soup, matching the batches'
+  own unshared-vertex convention), calls `modelio::generateTangents` per mesh,
+  and writes it with `modelio::writeMppModelWithNamedMaterials` against
+  `gameMeshSpecification(false, true)` — 52 bytes, non-indexed, tangents baked
+  at save time. Because `model_io`'s writer only writes to a filesystem path
+  and `TrackResourceSave.cpp`'s Save/Save As flow builds every output file in
+  memory before installing all three atomically, `exportTrackToMppModel`
+  writes to a scratch temp file, reads the bytes back, and discards it —
+  preserving that transactional contract without threading model_io's file
+  I/O through it.
+  `MppModelImport.cpp`'s reader is a thin wrapper over `modelio::readMppModel`
+  that first peeks the file's own on-disk IndexData directory entry to decide
+  indexed-vs-non-indexed, because neither `mpp::ModelSerializer` nor
+  `modelio::readMppModel` can answer that on their own — a non-indexed
+  `model_io`-written file still leaves every mesh's internal index-stream id
+  at 0, not a sentinel (`modelio/MppModelIo.hpp`'s "known limitation"), and
+  `ModelSerializer::getIndexData()`/`getIndexWidth()` are unchecked array
+  indexing, unsafe to call speculatively. It decodes position3/normal3/
+  texcoord2, which sit at the same offsets in both the 36-byte legacy and
+  52-byte PBR layouts, so no separate code path is needed for either.
+- `mpp_model_import_tests` gained a 52-byte hand-built indexed fixture
+  alongside the existing 36-byte one (both now pass through the same reader
+  path) and a PBR-layout companion to the existing legacy-layout
+  model_io-contract assertion. `editor_track_resource_tests` now also links
+  `model_io_core`, since `MppModelExport.cpp` — one of its own sources — is no
+  longer mpp-free. `main.cpp`'s own `.mppmodel` structural self-check
+  (`runMppModelSmokeCheck`) was updated to match the real `ModelSerializer`'s
+  actual on-disk conventions rather than the old from-scratch writer's, which
+  it had been silently diverging from until this milestone (unconditional
+  `FLAG_INDEXED_VERTICES` in the header regardless of indexed-ness, and the
+  index-stream-id-0-not-a-sentinel convention noted above).
+- `Map.cpp` accepts stride 36 (synthesise tangents, as before) *or* 52 (pass
+  the already-baked tangent through, rotating it by a placement's transform
+  the same way position/normal are) for both the primary track mesh loop and
+  drivable mesh object placements, replacing the hard `stride != 36`
+  rejections. Committed 36-byte models under
+  `cpp/tungsten-monoxide/resources/` keep loading unchanged.
+- `Map.cpp` prefers an embedded material when a mesh's material name matches
+  one of the model's own embedded materials (`ModelSerializer::getMaterialNames()`),
+  declaring it into the `ResourceManager` once per model file (and rebasing
+  its child `TextureStream`s to the model's own directory, since
+  `ModelSerializer::readMaterial()` — unlike `MppModelStream` — never does
+  that itself), falling back to the existing by-name `PbrMaterialBinding`
+  lookup otherwise. `TrackCollisionBuild.h`'s `MeshObjectModel` gained a
+  `path` field so this resolution has the model's directory to rebase against
+  even on a placement cache hit.
 
 ### M5 — editor import UI
 

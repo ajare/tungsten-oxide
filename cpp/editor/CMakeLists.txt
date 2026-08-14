@@ -127,14 +127,20 @@ add_executable(editor_track_resource_tests
 target_include_directories(editor_track_resource_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
-target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common model_xml)
+# model_io_core, not just core/Willpower::Common/model_xml: MppModelExport.cpp's export now goes
+# through modelio::writeMppModelWithNamedMaterials (docs/GLTF_IMPORT_PLAN.md M4), so this target is
+# no longer mpp-free either -- see mpp_model_import_tests's own target comment below, which lost
+# the same property one milestone earlier.
+target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common model_xml model_io_core)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
+model_io_deploy_runtime(editor_track_resource_tests)
 
-# Headless test for the from-scratch .mppmodel geometry reader (TRACK_MODEL_LIST_PLAN.md Milestone
-# 4). It links model_io_core since docs/GLTF_IMPORT_PLAN.md M3, for the bridge assertion that pins
-# the editor's hard-coded 36-byte layout against model_io's definition of it before M4 replaces
-# both -- so the "deliberately no mpp dependency" property this target used to have is gone.
+# Headless test for the editor's .mppmodel geometry reader/writer (TRACK_MODEL_LIST_PLAN.md
+# Milestone 4). Both MppModelImport.cpp and MppModelExport.cpp are backed by cpp/model-io
+# (docs/GLTF_IMPORT_PLAN.md M4, replacing M3's from-scratch byte reader/writer and the bridge
+# assertion that used to pin them against model_io's contract separately) -- so this target's
+# original "no Willpower/SDL/mpp dependency" premise, already weakened in M3.3, is fully retired.
 add_executable(mpp_model_import_tests
   tests/mpp_model_import_tests.cpp
   src/MppModelImport.cpp

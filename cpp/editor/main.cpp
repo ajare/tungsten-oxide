@@ -1061,17 +1061,31 @@ Gap8SmokeCheckResult runGap8SmokeCheck() {
   return result;
 }
 
-// MppModel smoke check: since MppModelExport.cpp deliberately doesn't link mpp::ModelSerializer
-// (see MppModelExport.hpp), there's no real mpp::ModelSerializer::load() available here to
-// round-trip through. Instead this parses the emitted bytes with a small structural reader
-// written directly against MPPMODEL_EXPORT_SPEC.md's documented layout (independently of
-// MppModelExport.cpp's own writer code) and cross-checks every field against the source
-// tox::Track -- header magic/version/flags, all six directory entries, and every mesh's
-// name/primitive-type/primitive-count/material/vertex-count/stride/non-indexed sentinel/data-size.
+// MppModel smoke check: parses exportTrackToMppModel's emitted bytes with a small structural
+// reader written directly against the documented on-disk layout (independently of
+// MppModelExport.cpp/model_io's own writer code -- see mpp::ModelSerializer::writeHeader() for the
+// ground truth) and cross-checks every field against the source tox::Track -- header magic/
+// version/flags, all six directory entries, and every mesh's name/primitive-type/primitive-count/
+// material/vertex-count/stride/non-indexed marker/data-size.
+//
+// docs/GLTF_IMPORT_PLAN.md M4 moved the writer from a from-scratch byte emitter to
+// modelio::writeMppModelWithNamedMaterials (the real mpp::ModelSerializer), which changed two
+// things this check must follow rather than the writer's own prior, simpler conventions: (1)
+// ModelSerializer::writeHeader() sets FLAG_INDEXED_VERTICES (0x0001) unconditionally, even for a
+// non-indexed model -- nothing on the read side consults it, so this is an upstream quirk, not a
+// contract; (2) ModelSerializer::setMeshCount() value-initialises every mesh's index-stream id to 0
+// rather than a "no index stream" sentinel, so a non-indexed mesh's own indexStreamId field now
+// reads back as 0 (indistinguishable, on that field alone, from "this mesh's index stream is
+// number 0") -- the real signal that the model has no index streams at all is the IndexData
+// directory entry's own `count` being zero (see modelio/MppModelIo.hpp's header comment).
 struct MppModelReadResult {
   bool ok = false;
   std::string error;
   std::uint32_t versionMajor = 0, versionMinor = 0, flags = 0;
+  // The IndexData directory entry's own stream count -- the file-level "does this model have any
+  // index streams at all" signal (see readMppModelStructurally's caller for why a mesh's own
+  // indexStreamId field alone can no longer answer that).
+  std::uint32_t indexStreamCount = 0;
   struct Mesh {
     std::string name, material;
     std::uint32_t primitiveType = 0, primitiveCount = 0;
@@ -1120,6 +1134,7 @@ MppModelReadResult readMppModelStructurally(const std::string& bytes) {
   const Entry& vertexDir = entries[3];
   const Entry& indexDir = entries[4];
   const Entry& meshDir = entries[5];
+  result.indexStreamCount = indexDir.count;
 
   pos = meshDir.start;
   std::vector<std::pair<std::uint32_t, std::uint32_t>> streamIds;  // (vertexStreamId, indexStreamId) per mesh
@@ -1196,20 +1211,27 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   const MppModelReadResult read = readMppModelStructurally(exported.bytes);
   if (!read.ok) return result;
 
-  result.headerOk = read.versionMajor == 1 && read.versionMinor == 1 && read.flags == 0x0000;
+  // ModelSerializer::writeHeader() always sets FLAG_INDEXED_VERTICES -- see this function's header
+  // comment -- so 0x0001 is the only value a real writer ever produces, indexed or not.
+  result.headerOk = read.versionMajor == 1 && read.versionMinor == 1 && read.flags == 0x0001;
   result.meshCountMatches = read.meshes.size() == baked.track->geometry.size() && read.meshes.size() == exported.meshCount;
 
-  bool fieldsMatch = result.meshCountMatches;
+  bool fieldsMatch = result.meshCountMatches && read.indexStreamCount == 0;
   bool byteSizesMatch = true;
   for (std::size_t i = 0; i < read.meshes.size() && fieldsMatch; ++i) {
     const tox::GeometryBatch& batch = baked.track->geometry[i];
     const auto& mesh = read.meshes[i];
     if (mesh.name != batch.id || mesh.material != batch.materialKey) fieldsMatch = false;
     if (mesh.primitiveType != 2 /* Triangles */ || mesh.primitiveCount != batch.indices.size() / 3) fieldsMatch = false;
-    if (mesh.vertexCount != batch.vertices.size() || mesh.vertexStride != 36) fieldsMatch = false;
-    if (mesh.vertexDataSize != mesh.vertexCount * 36) byteSizesMatch = false;
-    if (mesh.indexStreamId != 0xFFFFFFFFu || mesh.indexWidth != 0 || mesh.indexDataSize != 0)
-      fieldsMatch = false;
+    // 52 bytes: modelio::gameMeshSpecification(false, true) -- position3/normal3/texcoord2/
+    // colour4/tangent4 (docs/GLTF_IMPORT_PLAN.md M4).
+    if (mesh.vertexCount != batch.vertices.size() || mesh.vertexStride != 52) fieldsMatch = false;
+    if (mesh.vertexDataSize != mesh.vertexCount * 52) byteSizesMatch = false;
+    // No index streams exist in the file at all (read.indexStreamCount == 0, checked once above),
+    // so indexWidth/indexDataSize are never populated for any mesh regardless of its own
+    // indexStreamId field -- see this function's header comment on why that field alone can't be
+    // trusted to mean "no index stream" any more.
+    if (mesh.indexWidth != 0 || mesh.indexDataSize != 0) fieldsMatch = false;
   }
   result.fieldsMatch = fieldsMatch;
   result.byteSizesMatch = byteSizesMatch;
@@ -1225,9 +1247,8 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   wideTrack.geometry.push_back(wideBatch);
   const editor::MppModelExportResult wideExported = editor::exportTrackToMppModel(wideTrack);
   const MppModelReadResult wideRead = readMppModelStructurally(wideExported.bytes);
-  result.nonIndexedTriangleSoup = wideRead.ok && !wideRead.meshes.empty() &&
-                                  wideRead.meshes[0].indexStreamId == 0xFFFFFFFFu &&
-                                  wideRead.meshes[0].indexWidth == 0;
+  result.nonIndexedTriangleSoup =
+      wideRead.ok && wideRead.indexStreamCount == 0 && !wideRead.meshes.empty() && wideRead.meshes[0].indexWidth == 0;
 
   return result;
 }

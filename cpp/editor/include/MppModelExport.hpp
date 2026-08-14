@@ -1,32 +1,18 @@
-// MppModelExport.hpp — .mppmodel binary export (MPPMODEL_EXPORT_SPEC.md), a from-scratch native
-// writer of MassivePolyPusher's model format, targeting byte-for-byte compatibility with what
-// mpp::ModelSerializer::load() (ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp) reads back.
+// MppModelExport.hpp — the editor's own Track -> .mppmodel export.
 //
-// SUPERSEDED, pending removal in docs/GLTF_IMPORT_PLAN.md M4. This writer exists because the
-// editor used to refuse to link mpp: mpp/include/mpp/ModelSerializer.h unconditionally includes
+// docs/GLTF_IMPORT_PLAN.md M4 replaced this file's original from-scratch byte writer with
+// cpp/model-io's modelio::writeMppModelWithNamedMaterials, itself backed by the real
+// mpp::ModelSerializer, now that the editor links mpp (M3). This writer's own posture used to be
+// "the editor refuses to link mpp": mpp/include/mpp/ModelSerializer.h unconditionally includes
 // <GL/glew.h> and transitively drags in mpp/ResourceManager.h -> mpp/RenderSystem.h just to
 // compile the header, which would have meant adding GLEW as a second GL loader alongside the
-// editor's vendored gl3w (a real duplicate-symbol risk). Both halves of that reasoning are now
-// gone: the editor moved to GLEW in M3 and links model_io_core, so mpp::ModelSerializer is
-// available and this from-scratch writer is redundant. M4 replaces it, and the note below on
-// ModelSerializer::save()'s directory backpatch stays relevant to whoever does that.
+// editor's vendored gl3w (a real duplicate-symbol risk). Both halves of that reasoning are gone.
 //
-// Until then this writer emits the documented binary layout directly (see MPPMODEL_EXPORT_SPEC.md
-// 2.1) using only tox::GeometryBatch, verified field-for-field against ModelSerializer.cpp's
-// write*/read* pairs.
-//
-// One correction versus what ModelSerializer::save() actually does on disk: its
-// updateDirectoryEntry() seeks to `sizeof(Header) + type * sizeof(Directory::Entry)` to backpatch
-// each directory entry after writing that section, but writeDirectoryEntry() only ever writes 16
-// bytes (4x uint32_t) per entry -- while sizeof(Directory::Entry) is 32 (size_t-sized
-// start/end/count fields, confirmed by compiling a standalone probe against the same struct
-// layout: sizeof(Header)==12, sizeof(Directory::Entry)==32). That backpatch therefore seeks to the
-// wrong byte offset for every entry after the first (Unused, type 0, where 0*anything==0 hides the
-// bug), corrupting the file it just wrote. The *read* path (readDirectory/readDirectoryEntry) has
-// no such bug -- it just reads six 16-byte entries sequentially, no seeking -- so a file whose
-// directory is simply computed and written correctly up front (this writer builds each section
-// into memory first, so every offset/count is known before anything is written, with no
-// backpatching needed at all) loads back correctly despite that latent upstream bug.
+// The output layout also changed: tracks now export through modelio::gameMeshSpecification(false,
+// true) -- 52 bytes/vertex (the old 36-byte legacy layout plus a baked tangent4), still
+// non-indexed. `cpp/tungsten-monoxide`'s Map.cpp accepts both strides (docs/GLTF_IMPORT_PLAN.md
+// M4), so already-committed 36-byte track resources keep loading; only newly (re-)saved tracks
+// pick up the wider layout.
 #pragma once
 
 #include <map>
