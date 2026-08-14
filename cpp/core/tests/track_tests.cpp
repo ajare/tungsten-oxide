@@ -883,6 +883,40 @@ int main(int argc, char** argv) {
     check(glm::dot(banked.axes[2], physics.forward) > 0.99,
           "a banked hull still points where the ship is heading");
 
+    // Lean: bank rolls the hull about its own forward axis and pitch tips it about its own right
+    // axis, matching the composition the render transform applies to the model. A hull that stayed
+    // level while the ship rolled would be wrong exactly where contact is likeliest.
+    physics.forward = Vec3(0, 0, 1);
+    physics.visualBank = 0.3;
+    physics.visualPitch = 0.0;
+    const Obb banked45 = hullObb(physics, groundPos, UP);
+    check(glm::distance(banked45.axes[0], Vec3(std::cos(0.3), std::sin(0.3), 0)) < 1e-12 &&
+              glm::distance(banked45.axes[2], Vec3(0, 0, 1)) < 1e-12,
+          "bank rolls the hull about its forward axis, dropping one flank and lifting the other");
+
+    physics.visualBank = 0.0;
+    physics.visualPitch = 0.2;
+    const Obb pitched = hullObb(physics, groundPos, UP);
+    check(glm::distance(pitched.axes[2], Vec3(0, -std::sin(0.2), std::cos(0.2))) < 1e-12 &&
+              glm::distance(pitched.axes[0], Vec3(1, 0, 0)) < 1e-12,
+          "pitch tips the hull about its right axis");
+    check(glm::distance(pitched.center, flat.center) < 1e-12,
+          "leaning rolls the hull about its centre -- it does not change how high the ship floats");
+    physics.visualPitch = 0.0;
+
+    // tickLean itself: steer and speed set the target attitude, and the ship eases into it.
+    Ship leaning;
+    leaning.physics.speed = leaning.physics.maxSpeed;
+    for (int i = 0; i < 600; ++i) tickLean(leaning, 1.0 / 120.0, 1.0);
+    check(std::fabs(leaning.physics.visualBank + SHIP_BANK_PER_STEER) < 1e-6,
+          "a sustained full-lock turn at full speed settles at full bank, away from the turn");
+    check(std::fabs(leaning.physics.visualPitch - leaning.physics.maxSpeed * SHIP_PITCH_PER_SPEED) < 1e-6,
+          "pitch settles proportional to speed");
+    const double midTurn = leaning.physics.visualBank;
+    tickLean(leaning, 1.0 / 120.0, -1.0);
+    check(leaning.physics.visualBank > midTurn && leaning.physics.visualBank < 0.0,
+          "reversing the steer eases the bank back rather than snapping it");
+
     // Degenerate input: forward straight up leaves no lateral direction to cross out. Physics never
     // produces this, but the fallback must still be a finite orthonormal basis rather than NaN.
     physics.forward = UP;
@@ -933,32 +967,43 @@ int main(int argc, char** argv) {
       ship.physics.airborne = launchVerticalVel != 0.0;
       ship.physics.verticalVel = launchVerticalVel;
       ship.prevTriggerPos = ship.physics.groundPos;
+      // Measured on the hull's own corners, via the same hullObb physics collides with, rather than
+      // on groundPos plus a half extent: the hull leans (bank/pitch), so its reach along any world
+      // axis is a function of its attitude, and a hand-derived proxy would quietly stop matching.
       Vec3 furthest = ship.physics.groundPos;
-      double furthestRight = -std::numeric_limits<double>::infinity();
-      double furthestRightAirborne = -std::numeric_limits<double>::infinity();
+      double deepestHullZ = -std::numeric_limits<double>::infinity();
+      double furthestHullRight = -std::numeric_limits<double>::infinity();
+      double furthestHullRightAirborne = -std::numeric_limits<double>::infinity();
       for (int i = 0; i < steps; ++i) {
         ship.step(sim, 1.0 / 120.0, 1, 0, 0);
         if (ship.physics.groundPos.z > furthest.z) furthest = ship.physics.groundPos;
-        // Only sampled once the ship is fully alongside scenario 2's wall (which starts at z = 0):
-        // before that it is legitimately out in open road where any x is fine.
-        if (ship.physics.groundPos.z <= 2.0) continue;
-        furthestRight = std::max(furthestRight, ship.physics.groundPos.x);
-        if (ship.physics.airborne) furthestRightAirborne = std::max(furthestRightAirborne, ship.physics.groundPos.x);
+        const Obb hull = hullObb(ship.physics, ship.physics.groundPos, UP);
+        for (int corner = 0; corner < 8; ++corner) {
+          const Vec3 at = hull.corner(corner);
+          deepestHullZ = std::max(deepestHullZ, at.z);
+          // Only sampled once the ship is fully alongside scenario 2's wall (which starts at z = 0):
+          // before that it is legitimately out in open road where any x is fine.
+          if (ship.physics.groundPos.z <= 2.0) continue;
+          furthestHullRight = std::max(furthestHullRight, at.x);
+          if (ship.physics.airborne) furthestHullRightAirborne = std::max(furthestHullRightAirborne, at.x);
+        }
       }
       struct Result {
         Vec3 furthest;
-        double furthestRight;
-        double furthestRightAirborne;
+        double deepestHullZ;
+        double furthestHullRight;
+        double furthestHullRightAirborne;
         Ship ship;
       };
-      return Result{furthest, furthestRight, furthestRightAirborne, ship};
+      return Result{furthest, deepestHullZ, furthestHullRight, furthestHullRightAirborne, ship};
     };
 
     const auto obbHeadOn = driveStraight(headOn, true, 240);
-    check(obbHeadOn.furthest.z <= 30.0 - obbHeadOn.ship.physics.hullHalfLength + 1e-6,
-          "OBB wall collision stops the hull's nose at the wall, not its centre point");
-    check(obbHeadOn.furthest.z > 20.0 && !obbHeadOn.ship.physics.airborne,
-          "the ship reached the wall and stayed on the road rather than tunneling or falling through");
+    check(obbHeadOn.deepestHullZ <= 30.0 + 1e-6,
+          "OBB wall collision never lets any part of the hull into the wall");
+    check(obbHeadOn.deepestHullZ > 29.5 && obbHeadOn.furthest.z > 20.0 && !obbHeadOn.ship.physics.airborne,
+          "the hull's nose reached the wall and the ship stayed on the road, rather than tunneling, "
+          "stopping short, or falling through");
 
     // Scenario 2: the bug a point probe structurally cannot catch. This wall runs alongside the
     // ship's path, one metre to its right -- clear of the centreline the old probe sweeps, but well
@@ -969,12 +1014,11 @@ int main(int argc, char** argv) {
       flank.push_back(triangle);
 
     const auto pointProbeFlank = driveStraight(flank, false, 120);
-    check(std::fabs(pointProbeFlank.ship.physics.groundPos.x) < 0.01 &&
-              pointProbeFlank.furthestRight + pointProbeFlank.ship.physics.hullHalfWidth > 1.0,
+    check(std::fabs(pointProbeFlank.ship.physics.groundPos.x) < 0.01 && pointProbeFlank.furthestHullRight > 1.0,
           "the point probe drives the ship's whole flank through a wall its centreline passes beside");
 
     const auto obbFlank = driveStraight(flank, true, 120);
-    check(obbFlank.furthestRight + obbFlank.ship.physics.hullHalfWidth <= 1.0 + 1e-6,
+    check(obbFlank.furthestHullRight <= 1.0 + 1e-6,
           "OBB wall collision keeps the hull's flank out of that wall for the whole run");
     check(obbFlank.ship.physics.groundPos.z > pointProbeFlank.ship.physics.groundPos.z * 0.5 &&
               !obbFlank.ship.physics.airborne,
@@ -988,15 +1032,14 @@ int main(int argc, char** argv) {
     // road within 15 m of travel, well short of it).
     const double flightY = roadY + 2.0;
     const auto pointProbeFlight = driveStraight(flank, false, 60, flightY, 12.0, 60.0);
-    check(std::isfinite(pointProbeFlight.furthestRightAirborne),
+    check(std::isfinite(pointProbeFlight.furthestHullRightAirborne),
           "the flight scenario really does pass the wall while still airborne");
-    check(std::fabs(pointProbeFlight.furthestRightAirborne) < 0.01 &&
-              pointProbeFlight.furthestRightAirborne + pointProbeFlight.ship.physics.hullHalfWidth > 1.0,
+    check(pointProbeFlight.furthestHullRightAirborne > 1.0,
           "the airborne point probe flies the ship's flank through that wall too");
 
     const auto obbFlight = driveStraight(flank, true, 60, flightY, 12.0, 60.0);
-    check(std::isfinite(obbFlight.furthestRightAirborne) &&
-              obbFlight.furthestRightAirborne + obbFlight.ship.physics.hullHalfWidth <= 1.0 + 1e-6,
+    check(std::isfinite(obbFlight.furthestHullRightAirborne) &&
+              obbFlight.furthestHullRightAirborne <= 1.0 + 1e-6,
           "OBB wall collision keeps the hull out of the wall in flight as well as on the ground");
     check(obbFlight.ship.physics.groundPos.z > 0.0,
           "the deflected ship keeps flying down the course rather than being stopped dead in mid-air");

@@ -397,7 +397,6 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
 
   vector<tox::ControlIntent> intents(mGameSession->ships().size());
   if (!intents.empty()) intents[0] = player;
-  if (!mShipVisualStates.empty()) mShipVisualStates[0].steer = player.steer;
   mGameSession->step(intents, frameTime);
   if (mShowPhysicsGhost) mGameSession->stepGhost(mGhostShip, player, frameTime);
   for (auto const& event : mGameSession->events())
@@ -419,27 +418,26 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     else
       visual.groundPos = physics.groundPos;
     visual.up = tox::normalizeSafe(glm::mix(visual.up, ship.renderNormal, min(1.0, frameTime * 18.0)));
-    // Everything that moves the ship off its contact point -- ride height, bob, landing/impact
-    // bounce -- comes from core, which owns all of it because the collision hull is built on it
-    // (tox::hullHoverOffset). This renderer contributes only lag: the groundPos/up smoothing above,
-    // and the bank/pitch lean below.
+    // Everything that moves or turns the ship relative to its contact point -- ride height, bob,
+    // landing/impact bounce, bank and pitch -- comes from core, which owns all of it because the
+    // collision hull is built on it (tox::hullHoverOffset, tox::hullObb). This renderer contributes
+    // only lag: the groundPos/up smoothing above.
     bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
     double hover = idle ? physics.hullHoverHeight : tox::hullHoverOffset(physics);
-    double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
-    double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
-    visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);
-    visual.pitch += (physics.speed * 0.004 - visual.pitch) * min(1.0, frameTime * 6.0);
     tox::Vec3 position = visual.groundPos + visual.up * hover;
-    applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, visual.pitch, visual.bank);
+    applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, physics.visualPitch,
+                       physics.visualBank);
   }
 
-  // Ghost: raw physics position, no smoothing/bob/bank -- it's meant to show exactly what the
-  // other method computed, not a pleasant-looking approximation of it.
+  // Ghost: raw physics pose, with none of the smoothing above -- it's meant to show exactly what the
+  // other method computed, not a pleasant-looking approximation of it. Its hover/lean are physics
+  // now, so they come along for the same reason: they are what that method computed.
   if (mShowPhysicsGhost && mGhostShipSceneModel) {
     auto const& ghostPhysics = mGhostShip.physics;
     applyShipTransform(mGhostShipSceneModel,
                        ghostPhysics.groundPos + mGhostShip.renderNormal * tox::hullHoverOffset(ghostPhysics),
-                       mGhostShip.renderNormal, ghostPhysics.forward, 0, 0);
+                       mGhostShip.renderNormal, ghostPhysics.forward, ghostPhysics.visualPitch,
+                       ghostPhysics.visualBank);
   }
 }
 

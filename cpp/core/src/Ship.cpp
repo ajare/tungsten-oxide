@@ -477,6 +477,7 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
   tickBoost(ship, dt);
   tickBob(ship, dt);
   tickHoverBounce(ship, dt, startedAirborne && !p.airborne);
+  tickLean(ship, dt, steer);
   const Sample zoneSample = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
   if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample);
 
@@ -509,6 +510,16 @@ void tickHoverBounce(Ship& ship, double dt, bool landedThisStep) {
   p.hoverBounce += p.hoverBounceVel * dt;
 }
 
+void tickLean(Ship& ship, double dt, double steer) {
+  Physics& p = ship.physics;
+  const double speedRatio = std::min(1.0, std::fabs(p.speed) / p.maxSpeed);
+  const double targetBank =
+      TrackCore::clamp(-steer * speedRatio * SHIP_BANK_PER_STEER, -SHIP_MAX_BANK, SHIP_MAX_BANK);
+  const double response = std::min(1.0, dt * SHIP_LEAN_RESPONSE_RATE);
+  p.visualBank += (targetBank - p.visualBank) * response;
+  p.visualPitch += (p.speed * SHIP_PITCH_PER_SPEED - p.visualPitch) * response;
+}
+
 void applyLandingImpact(Ship& ship, double impactSpeed) {
   Physics& p = ship.physics;
   // The spring is *set*, not added to: an impact starts a fresh bounce from the surface, and the
@@ -531,10 +542,23 @@ Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up) {
   if (glm::dot(right, right) < 1e-12)
     right = glm::cross(hullUp, std::fabs(hullUp.y) < 0.9 ? UP : Vec3(1, 0, 0));
   right = normalizeSafe(right);
-  hull.axes[0] = right;
-  hull.axes[1] = hullUp;
-  hull.axes[2] = normalizeSafe(glm::cross(right, hullUp));
+  const Vec3 forward = normalizeSafe(glm::cross(right, hullUp));
+
+  // Lean the box the same way the model is leaned when it is drawn: pitch about its own right axis,
+  // bank about its own forward axis, composed in the ship's local frame. Built as the identical
+  // Euler quaternion the render transform uses, applied to the same (right, up, forward) basis, so
+  // hull and model can't come apart on the composition order.
+  const glm::dquat lean(Vec3(physics.visualPitch, 0.0, physics.visualBank));
+  const auto toWorld = [&](const Vec3& local) {
+    const Vec3 leaned = lean * local;
+    return right * leaned.x + hullUp * leaned.y + forward * leaned.z;
+  };
+  hull.axes[0] = toWorld(Vec3(1, 0, 0));
+  hull.axes[1] = toWorld(Vec3(0, 1, 0));
+  hull.axes[2] = toWorld(Vec3(0, 0, 1));
   hull.halfExtents = Vec3(physics.hullHalfWidth, physics.hullHalfHeight, physics.hullHalfLength);
+  // The hover lift itself follows the *surface* normal, not the leaned-up axis: leaning is the ship
+  // rolling about its own centre, which doesn't change how high above the road that centre floats.
   hull.center = groundPos + hullUp * hullHoverOffset(physics);
   return hull;
 }
@@ -719,6 +743,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   tickBoost(ship, dt);
   tickBob(ship, dt);
   tickHoverBounce(ship, dt, startedAirborne && !p.airborne);
+  tickLean(ship, dt, steer);
   if (!p.airborne) simulation.detectZoneTriggers(ship, c);
 
   simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);

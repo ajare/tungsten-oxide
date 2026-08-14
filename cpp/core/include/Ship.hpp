@@ -29,6 +29,10 @@ struct Physics {
   double wallRestitution{0.75};
   double weight{1000.0};
   double bobTime{0.0};
+  // Lean: how far the ship rolls into a turn and pitches under acceleration, in radians, about its
+  // own forward and right axes. The "visual" in the names is historical -- these are the ship's
+  // actual attitude now, so the collision hull is oriented by them (hullObb) exactly as the drawn
+  // model is. Advanced by tickLean.
   double visualBank{0.0};
   double visualPitch{0.0};
   bool airborne{false};
@@ -105,6 +109,14 @@ constexpr double HOVER_BOUNCE_MAX_LANDING_VEL = 16.0;
 constexpr double HOVER_BOUNCE_JOLT_GAIN = 0.05;
 constexpr double HOVER_BOUNCE_MAX_JOLT_VEL = 10.0;
 
+// Lean: how sharply the ship rolls into a turn (radians of bank per unit of steer at full speed,
+// and the hard limit on it), how far it pitches per unit of speed, and how fast both chase their
+// target. Carried over unchanged from the renderer that used to own them.
+constexpr double SHIP_BANK_PER_STEER = 0.5;
+constexpr double SHIP_MAX_BANK = 0.5;
+constexpr double SHIP_PITCH_PER_SPEED = 0.004;
+constexpr double SHIP_LEAN_RESPONSE_RATE = 6.0;
+
 // How far above its ground contact point the ship actually is right now: its ride height, plus the
 // current bob, plus the current bounce. Everything that moves the ship vertically relative to the
 // surface it is riding is in here, which is what makes it safe for both the renderer and the
@@ -123,6 +135,10 @@ void tickBob(Ship& ship, double dt);
 // something already half-decayed.
 void tickHoverBounce(Ship& ship, double dt, bool landedThisStep);
 
+// Advances the ship's bank/pitch lean by one step, chasing the attitude this step's `steer` input
+// and current speed call for.
+void tickLean(Ship& ship, double dt, double steer);
+
 // Registers a landing at `impactSpeed` (the downward speed the ship arrived with, in m/s): kicks
 // the hover-bounce spring and feeds the legacy accumulators. Called right after landOnSurface,
 // which has already zeroed the vertical velocity this is derived from.
@@ -138,8 +154,10 @@ void applyLandingImpact(Ship& ship, double impactSpeed);
 // probing with (ship.renderNormal, or the contact normal they just resolved).
 //
 // `groundPos` is a contact point on the surface, not the ship: the hull is centred where the ship
-// actually is, hullHoverOffset above it, bob included. Anything lower would be colliding with a
-// pose the ship is never in.
+// actually is, hullHoverOffset above it, bob and bounce included. Anything lower would be colliding
+// with a pose the ship is never in. The box is then leaned by visualBank/visualPitch about that
+// basis, the same way the drawn model is -- a ship rolled into a corner drops one flank and lifts
+// the other, and its hull has to do the same or the two disagree exactly when contact is likeliest.
 Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up);
 
 struct TriggerState {
