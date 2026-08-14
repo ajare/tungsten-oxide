@@ -66,6 +66,12 @@ using namespace tox;
 
 namespace {
 
+// Set by the `--obb-walls` option (accepted before any other argument, in every mode): drives with
+// mesh-mode wall collision testing the ship's whole hull as an oriented box instead of sweeping a
+// point along its centreline (docs/OBB_SHIP_COLLISION_PLAN.md). Off, matching the engine default,
+// so existing invocations of this tool are unchanged.
+bool gObbWallCollision = false;
+
 #ifdef _WIN32
 // mpp::RenderSystem's constructor unconditionally calls glewInit() and issues a handful of GL
 // calls (setDefaultState/createLightsData/glGenBuffers) even though this tool never renders
@@ -284,6 +290,7 @@ int runCapture(const std::filesystem::path& outputPath, const std::string& trace
 
   Simulation simulation(track);
   simulation.setMeshPhysicsEnabled(true);
+  simulation.setObbWallCollisionEnabled(gObbWallCollision);
   const std::vector<Pose> gridPoses = StartGrid::startingGridPoses(simulation, track, 1);
   if (gridPoses.empty()) {
     std::cerr << "could not compute a starting-grid pose\n";
@@ -405,6 +412,7 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
 
   GameSession session(track);
   session.setMeshPhysicsEnabled(true);
+  session.setObbWallCollisionEnabled(gObbWallCollision);
   std::cout << "# loaded '" << track->definition.name << "': " << track->paths.size() << " path(s), "
             << session.ships().size() << " ship(s), " << track->collisionSurface->triangles().size() << " collision triangle(s)\n";
   std::cout << "# frame t pos.x pos.y pos.z speed normal.x normal.y normal.z airborne\n";
@@ -437,6 +445,19 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
 }  // namespace
 
 int main(int argc, char** argv) {
+  // `--obb-walls` is a mode-independent switch, so it is consumed here and the remaining arguments
+  // are re-packed as if it had never been passed -- every mode below keeps its own positional
+  // argument layout unchanged.
+  std::vector<char*> args(argv, argv + argc);
+  for (auto it = args.begin() + (args.empty() ? 0 : 1); it != args.end(); ++it) {
+    if (std::string(*it) != "--obb-walls") continue;
+    gObbWallCollision = true;
+    args.erase(it);
+    break;
+  }
+  argv = args.data();
+  argc = static_cast<int>(args.size());
+
   if (argc >= 2 && std::string(argv[1]) == "--capture-trace") {
     if (argc < 6) {
       std::cerr << "usage: mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
@@ -469,6 +490,7 @@ int main(int argc, char** argv) {
     std::cerr << "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n";
     std::cerr << "       mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
     std::cerr << "       mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]\n";
+    std::cerr << "       any mode also accepts --obb-walls (hull-OBB mesh-mode wall collision)\n";
     return 2;
   }
   const std::filesystem::path trackPath(argv[1]);
