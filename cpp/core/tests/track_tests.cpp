@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -876,6 +877,87 @@ int main(int argc, char** argv) {
     check(std::isfinite(degenerate.axes[0].x) && std::isfinite(degenerate.axes[2].z) &&
               std::fabs(glm::dot(degenerate.axes[0], degenerate.axes[2])) < 1e-12,
           "hullObb falls back to a finite basis when forward is parallel to up");
+  }
+
+  if (pathLoaded) {
+    // Mesh-mode OBB wall collision, driven end to end (docs/OBB_SHIP_COLLISION_PLAN.md Milestone
+    // 4.2). Both scenarios below run the same ship, from the same pose, with the same inputs, and
+    // differ only in Simulation::obbWallCollisionEnabled -- so any difference is the wall path.
+    auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
+      CollisionTriangle first, second;
+      first.positions[0] = a;
+      first.positions[1] = b;
+      first.positions[2] = c;
+      second.positions[0] = a;
+      second.positions[1] = c;
+      second.positions[2] = d;
+      for (int corner = 0; corner < 3; ++corner) first.normals[corner] = second.normals[corner] = normal;
+      first.surfaceId = second.surfaceId = surfaceId;
+      return std::vector<CollisionTriangle>{first, second};
+    };
+    const double roadY = 4.0;
+    std::vector<CollisionTriangle> ground =
+        quad({-200, roadY, -200}, {200, roadY, -200}, {200, roadY, 200}, {-200, roadY, 200}, UP, 1);
+
+    // Scenario 1: a wall straight across the road. Nothing subtle here -- it exists to show the
+    // hull is stopped by its own front face (a hull half length short of the wall) and, at the
+    // 140 m/s top speed, that discrete overlap tests plus substepping don't tunnel.
+    auto headOn = ground;
+    for (const auto& triangle :
+         quad({-200, roadY, 30}, {-200, roadY + 6, 30}, {200, roadY + 6, 30}, {200, roadY, 30}, {0, 0, -1}, 2))
+      headOn.push_back(triangle);
+
+    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, bool obb, int steps) {
+      auto driveTrack = std::make_shared<Track>(*pathLoaded.track);
+      driveTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
+      Simulation sim(*driveTrack);
+      sim.setMeshPhysicsEnabled(true);
+      sim.setObbWallCollisionEnabled(obb);
+      Ship ship = shipAt(sim, *driveTrack, {0, roadY, -20}, {0, 0, 1});
+      ship.physics.speed = ship.physics.maxSpeed;
+      ship.prevTriggerPos = ship.physics.groundPos;
+      Vec3 furthest = ship.physics.groundPos;
+      double furthestRight = -std::numeric_limits<double>::infinity();
+      for (int i = 0; i < steps; ++i) {
+        ship.step(sim, 1.0 / 120.0, 1, 0, 0);
+        if (ship.physics.groundPos.z > furthest.z) furthest = ship.physics.groundPos;
+        // Only sampled once the ship is fully alongside scenario 2's wall (which starts at z = 0):
+        // before that it is legitimately out in open road where any x is fine.
+        if (ship.physics.groundPos.z > 2.0) furthestRight = std::max(furthestRight, ship.physics.groundPos.x);
+      }
+      struct Result {
+        Vec3 furthest;
+        double furthestRight;
+        Ship ship;
+      };
+      return Result{furthest, furthestRight, ship};
+    };
+
+    const auto obbHeadOn = driveStraight(headOn, true, 240);
+    check(obbHeadOn.furthest.z <= 30.0 - obbHeadOn.ship.physics.hullHalfLength + 1e-6,
+          "OBB wall collision stops the hull's nose at the wall, not its centre point");
+    check(obbHeadOn.furthest.z > 20.0 && !obbHeadOn.ship.physics.airborne,
+          "the ship reached the wall and stayed on the road rather than tunneling or falling through");
+
+    // Scenario 2: the bug a point probe structurally cannot catch. This wall runs alongside the
+    // ship's path, one metre to its right -- clear of the centreline the old probe sweeps, but well
+    // inside the hull's 1.2 m half width, so the ship's flank is what hits it.
+    auto flank = ground;
+    for (const auto& triangle :
+         quad({1, roadY, 0}, {1, roadY + 6, 0}, {1, roadY + 6, 120}, {1, roadY, 120}, {-1, 0, 0}, 3))
+      flank.push_back(triangle);
+
+    const auto pointProbeFlank = driveStraight(flank, false, 120);
+    check(std::fabs(pointProbeFlank.ship.physics.groundPos.x) < 0.01 &&
+              pointProbeFlank.furthestRight + pointProbeFlank.ship.physics.hullHalfWidth > 1.0,
+          "the point probe drives the ship's whole flank through a wall its centreline passes beside");
+
+    const auto obbFlank = driveStraight(flank, true, 120);
+    check(obbFlank.furthestRight + obbFlank.ship.physics.hullHalfWidth <= 1.0 + 1e-6,
+          "OBB wall collision keeps the hull's flank out of that wall for the whole run");
+    check(obbFlank.ship.physics.groundPos.z > pointProbeFlank.ship.physics.groundPos.z * 0.5 &&
+              !obbFlank.ship.physics.airborne,
+          "the deflected ship carries on down the road rather than being pinned or thrown off it");
   }
 
   {

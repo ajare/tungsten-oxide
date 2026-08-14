@@ -33,6 +33,97 @@ constexpr double MESH_WALL_CLEARANCE = TrackCore::COLLISION_WALL_MARGIN;
 // (~4 degree) ramp imparts at typical driving speed. See its one call site's comment for why this
 // distinguishes a ramp-crest launch from an ordinary flat-road-edge scrape.
 constexpr double MESH_RAMP_LAUNCH_VERTICAL_SPEED = 0.05;
+// --- OBB wall collision (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 4) ------------------------
+// Same floor/ceiling cutoff sweepWall applies to its own hits, for the same reason: a mostly
+// horizontal surface is road, not barrier, and resolving the hull "out of" the road it is driving
+// on pushes it sideways off the track. Kept here rather than shared with TrackCollision.cpp's copy
+// because the two make the decision about different things (an interpolated hit normal there, a
+// triangle's own plane here) and neither should silently drag the other along if it is retuned.
+constexpr double MESH_OBB_WALL_MAX_UP_DOT = 0.5;
+// How many push-out/reflect passes one substep gets. A single pass resolves a flat wall; a corner
+// needs one per surface, and the second push can reintroduce a shallow overlap with the first. Four
+// is the plan's starting guess and is generous for the 2-3 distinct planes a hull can realistically
+// touch at once -- passes stop early the moment nothing is penetrating.
+constexpr int MESH_OBB_SOLVER_PASSES = 4;
+// Discrete overlap tests see only the poses they are actually evaluated at, so the hull's motion is
+// diced until each piece is short enough that it cannot straddle a wall without some pose reporting
+// an overlap. Half the smallest half-extent is the plan's bound; at the 140 m/s top speed and a
+// 1/120 s physics step that works out to 6 pieces, so the cap only ever binds if a ship somehow
+// exceeds its own top speed by a wide margin.
+constexpr double MESH_OBB_SUBSTEP_HALF_EXTENT_FRACTION = 0.5;
+constexpr int MESH_OBB_MAX_SUBSTEPS = 8;
+// Standoff left between hull and wall after a push-out, purely so the next frame's test doesn't
+// re-report the same contact through floating-point noise. Deliberately NOT the point probe's
+// MESH_WALL_CLEARANCE: that margin exists to drag a *centreline probe point* back from the road's
+// outer boundary onto real road, and the hull's centre is already a half-width inside the wall by
+// construction, so repeating the margin here would hold the ship a metre and a half off every
+// barrier.
+constexpr double MESH_OBB_WALL_SKIN = 0.01;
+
+// Mesh-mode wall collision with the ship's whole hull, as an alternative to the centreline point
+// sweep below (Simulation::obbWallCollisionEnabled). Advances this step's horizontal motion in
+// short pieces; after each, resolves whatever the hull's oriented box now overlaps by pushing back
+// out along the contacted surface's own plane and reflecting the into-wall velocity component, then
+// carries the corrected velocity into the next piece. Returns the resolved ground-plane position
+// and leaves p.speed/p.moveDir describing the post-bounce travel.
+//
+// This is what catches the two things a point probe structurally cannot: a corner or flank clipping
+// geometry the centreline passes beside, and a yaw that carries a corner through a wall the
+// centreline path avoids.
+Vec3 resolveObbWalls(Ship& ship, const TrackCollisionSurface& bvh, const Vec3& initialVelocity,
+                     double dt, const Vec3& up) {
+  Physics& p = ship.physics;
+  Vec3 velocity = initialVelocity;
+  Vec3 position = p.groundPos;
+
+  const double travel = std::hypot(velocity.x, velocity.z) * dt;
+  const double smallestHalfExtent =
+      std::min({p.hullHalfLength, p.hullHalfWidth, p.hullHalfHeight});
+  const double maxAdvance = std::max(MESH_OBB_SUBSTEP_HALF_EXTENT_FRACTION * smallestHalfExtent, 1e-6);
+  const int substeps = std::clamp(static_cast<int>(std::ceil(travel / maxAdvance)), 1, MESH_OBB_MAX_SUBSTEPS);
+  const double substepDt = dt / substeps;
+
+  std::vector<ObbContact> contacts;
+  bool struck = false;
+  for (int substep = 0; substep < substeps; ++substep) {
+    position += Vec3(velocity.x, 0.0, velocity.z) * substepDt;
+    for (int pass = 0; pass < MESH_OBB_SOLVER_PASSES; ++pass) {
+      bvh.queryObb(hullObb(p, position, up), contacts);
+      // Resolve the deepest wall first and re-test: pushing out of it usually clears the shallower
+      // contacts outright (adjacent triangles of the same wall), and where it doesn't -- a real
+      // corner -- the next pass sees the remaining overlap at its corrected pose rather than
+      // stacking two pushes computed against a pose that no longer exists.
+      const ObbContact* deepest = nullptr;
+      for (const ObbContact& contact : contacts) {
+        if (std::fabs(glm::dot(contact.planeNormal, UP)) > MESH_OBB_WALL_MAX_UP_DOT) continue;
+        if (!deepest || contact.planeDepth > deepest->planeDepth) deepest = &contact;
+      }
+      if (!deepest) break;
+
+      position += deepest->planeNormal * (deepest->planeDepth + MESH_OBB_WALL_SKIN);
+      const double into = glm::dot(velocity, deepest->planeNormal);
+      // Only velocity actually heading into the surface earns an impulse -- a hull resting against
+      // a wall while steering away is still overlapping it every frame, and reflecting there would
+      // fire an impact jolt per frame for as long as it scraped along.
+      if (into < 0.0) {
+        velocity += deepest->planeNormal * (-into * (1 + weightRestitution(p)));
+        addImpactJolt(p, -into);
+        struck = true;
+      }
+    }
+  }
+
+  if (struck) {
+    // Gear-preserving, exactly as the point-probe path and every other wall bounce in this file: a
+    // plain length/normalize decomposition is always non-negative and would force a reversing car
+    // into forward gear on contact.
+    const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+    const double magnitude = glm::length(velocity);
+    p.speed = gear * magnitude * weightSpeedRetain(p);
+    if (magnitude > 1e-6) p.moveDir = normalizeSafe(velocity * gear);
+  }
+  return position;
+}
 
 void integrateSpeed(Physics& p, double dt, double throttle, double brake) {
   if (throttle) {
@@ -146,54 +237,62 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
     }
   } else if (hasTranslation) {
     Vec3 intended = p.groundPos + Vec3(vel.x, 0, vel.z) * dt;
-    // Lateral/wall probe, run horizontally across this step's motion.
-    //
-    // It starts a COLLISION_WALL_MARGIN behind groundPos (along the direction of travel) rather
-    // than at groundPos itself: once the ship is already resting against a wall, a segment starting
-    // exactly at the contact point barely crosses the surface at all, so contact stops being
-    // reported and nothing keeps the ship from creeping through frame after frame. Starting the
-    // probe slightly behind keeps resting contact detected every frame -- the same purpose
-    // COLLISION_WALL_MARGIN already serves for the analytic corridor/rail wall checks.
-    //
-    // It is also lifted MESH_WALL_PROBE_HEIGHT off the surface: see that constant -- at ground
-    // level the probe grazes the rails' own bottom edge and slides underneath them.
-    const Vec3 horizontalVel(vel.x, 0.0, vel.z);
-    const double horizontalSpeed = std::hypot(horizontalVel.x, horizontalVel.z);
-    const Vec3 sweepFrom = horizontalSpeed > 1e-6
-                               ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
-                               : p.groundPos;
-    const Vec3 probeLift = probeAxis * MESH_WALL_PROBE_HEIGHT;
-    // sweepWall(), not sweep(): wall contact must be two-sided and floor-filtered. A one-sided
-    // sweep passes straight through whichever of the track's two edge rails happens to be baked
-    // facing away from the ship, and it also reports the drivable road surface itself as a "wall"
-    // wherever a fixed-height horizontal probe clips through a banked/graded section. sweepWall
-    // handles both, and hands back a contact normal already oriented against travel.
-    if (const auto wall = bvh.sweepWall(sweepFrom + probeLift, intended + probeLift)) {
-      const Vec3 wallN = wall->normal;
-      const double into = glm::dot(vel, wallN);
-      if (into < 0) {
-        Vec3 bounced = vel + wallN * (-into * (1 + weightRestitution(p)));
-        addImpactJolt(p, -into);
-        // Gear-preserving, as every other wall bounce in this file: a plain length/normalize
-        // decomposition is always non-negative and forces the car into forward gear on contact.
-        const double gear = p.speed < 0.0 ? -1.0 : 1.0;
-        const double mag = glm::length(bounced);
-        p.speed = gear * mag * weightSpeedRetain(p);
-        if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
-        // Slide along the wall using this frame's corrected (into-wall component removed)
-        // velocity, rather than snapping to the exact contact point. A snap left position pinned
-        // to the same spot every frame while grip kept re-aiming moveDir at `forward` (never
-        // corrected here) back into the wall, so the ship re-hit and re-snapped to that same point
-        // indefinitely instead of sliding along the wall like the analytic corridor/rail code does.
-        intended = p.groundPos + Vec3(bounced.x, 0, bounced.z) * dt;
+    if (simulation.obbWallCollisionEnabled()) {
+      // Hull-as-oriented-box wall collision, in place of the point sweep below (see resolveObbWalls
+      // and docs/OBB_SHIP_COLLISION_PLAN.md). Ground contact below is untouched by this: it stays a
+      // vertical point probe either way, and the airborne branch above still uses the point sweep
+      // for the walls it meets mid-flight.
+      intended = resolveObbWalls(ship, bvh, vel, dt, probeAxis);
+    } else {
+      // Lateral/wall probe, run horizontally across this step's motion.
+      //
+      // It starts a COLLISION_WALL_MARGIN behind groundPos (along the direction of travel) rather
+      // than at groundPos itself: once the ship is already resting against a wall, a segment starting
+      // exactly at the contact point barely crosses the surface at all, so contact stops being
+      // reported and nothing keeps the ship from creeping through frame after frame. Starting the
+      // probe slightly behind keeps resting contact detected every frame -- the same purpose
+      // COLLISION_WALL_MARGIN already serves for the analytic corridor/rail wall checks.
+      //
+      // It is also lifted MESH_WALL_PROBE_HEIGHT off the surface: see that constant -- at ground
+      // level the probe grazes the rails' own bottom edge and slides underneath them.
+      const Vec3 horizontalVel(vel.x, 0.0, vel.z);
+      const double horizontalSpeed = std::hypot(horizontalVel.x, horizontalVel.z);
+      const Vec3 sweepFrom = horizontalSpeed > 1e-6
+                                 ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
+                                 : p.groundPos;
+      const Vec3 probeLift = probeAxis * MESH_WALL_PROBE_HEIGHT;
+      // sweepWall(), not sweep(): wall contact must be two-sided and floor-filtered. A one-sided
+      // sweep passes straight through whichever of the track's two edge rails happens to be baked
+      // facing away from the ship, and it also reports the drivable road surface itself as a "wall"
+      // wherever a fixed-height horizontal probe clips through a banked/graded section. sweepWall
+      // handles both, and hands back a contact normal already oriented against travel.
+      if (const auto wall = bvh.sweepWall(sweepFrom + probeLift, intended + probeLift)) {
+        const Vec3 wallN = wall->normal;
+        const double into = glm::dot(vel, wallN);
+        if (into < 0) {
+          Vec3 bounced = vel + wallN * (-into * (1 + weightRestitution(p)));
+          addImpactJolt(p, -into);
+          // Gear-preserving, as every other wall bounce in this file: a plain length/normalize
+          // decomposition is always non-negative and forces the car into forward gear on contact.
+          const double gear = p.speed < 0.0 ? -1.0 : 1.0;
+          const double mag = glm::length(bounced);
+          p.speed = gear * mag * weightSpeedRetain(p);
+          if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
+          // Slide along the wall using this frame's corrected (into-wall component removed)
+          // velocity, rather than snapping to the exact contact point. A snap left position pinned
+          // to the same spot every frame while grip kept re-aiming moveDir at `forward` (never
+          // corrected here) back into the wall, so the ship re-hit and re-snapped to that same point
+          // indefinitely instead of sliding along the wall like the analytic corridor/rail code does.
+          intended = p.groundPos + Vec3(bounced.x, 0, bounced.z) * dt;
+        }
+        // Keep the ship on the inside of the wall regardless of which branch ran. The velocity
+        // correction alone doesn't stop it creeping past the plane over repeated frames at a shallow
+        // approach angle (each frame's `forward` still points partly into the wall, so grip
+        // re-introduces a small into-wall component before the next contact is detected) -- same
+        // idea as the corridor's finalS lateral clamp.
+        const double penetration = glm::dot((intended + probeLift) - wall->position, wallN);
+        if (penetration < MESH_WALL_CLEARANCE) intended += wallN * (MESH_WALL_CLEARANCE - penetration);
       }
-      // Keep the ship on the inside of the wall regardless of which branch ran. The velocity
-      // correction alone doesn't stop it creeping past the plane over repeated frames at a shallow
-      // approach angle (each frame's `forward` still points partly into the wall, so grip
-      // re-introduces a small into-wall component before the next contact is detected) -- same
-      // idea as the corridor's finalS lateral clamp.
-      const double penetration = glm::dot((intended + probeLift) - wall->position, wallN);
-      if (penetration < MESH_WALL_CLEARANCE) intended += wallN * (MESH_WALL_CLEARANCE - penetration);
     }
     auto groundAt = [&](const Vec3& at) {
       return bvh.nearestAlongAxis(Vec3(at.x, p.groundPos.y, at.z), probeAxis, 4.0);
