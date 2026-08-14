@@ -1,5 +1,7 @@
 #include "TrackCollision.hpp"
 
+#include "Obb.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -176,6 +178,51 @@ void TrackCollisionSurface::queryNearestSegment(int nodeIndex, const Vec3& from,
     if (!best || distSq(hit->position) < distSq(best->position))
       best = std::move(hit);
   }
+}
+
+void TrackCollisionSurface::queryObbNode(int nodeIndex, const Obb& obb,
+                                         std::vector<ObbContact>& out) const {
+  const Node& node = nodes_[nodeIndex];
+  if (!overlapsAabb(obb, node.bounds)) return;
+  if (node.left >= 0) {
+    queryObbNode(node.left, obb, out);
+    queryObbNode(node.right, obb, out);
+    return;
+  }
+  for (std::size_t i = node.begin; i < node.begin + node.count; ++i) {
+    const int triangleIndex = static_cast<int>(order_[i]);
+    const CollisionTriangle& triangle = triangles_[triangleIndex];
+    Vec3 normal(0.0);
+    double depth = 0.0;
+    if (!overlapsTriangle(obb, triangle, &normal, &depth)) continue;
+    // A zero-depth contact is exact touching, not penetration (overlapsTriangle reports it as an
+    // overlap deliberately). It carries no resolution work and its MTV axis is whichever one
+    // happened to tie at zero, so drop it rather than hand a caller a push of length nothing.
+    if (depth <= 0.0) continue;
+
+    Vec3 planeNormal = glm::cross(triangle.positions[1] - triangle.positions[0],
+                                  triangle.positions[2] - triangle.positions[0]);
+    if (glm::dot(planeNormal, planeNormal) < EPSILON) continue;  // degenerate sliver: no plane to push along
+    planeNormal = normalizeSafe(planeNormal);
+    double centerSide = glm::dot(obb.center - triangle.positions[0], planeNormal);
+    if (centerSide < 0.0) {
+      planeNormal = -planeNormal;
+      centerSide = -centerSide;
+    }
+    // The plane is one of the SAT axes the overlap above already cleared, so the box's reach along
+    // it necessarily exceeds how far its centre sits from the plane -- this is never negative.
+    const double planeDepth = std::fabs(glm::dot(obb.axes[0], planeNormal)) * obb.halfExtents[0] +
+                              std::fabs(glm::dot(obb.axes[1], planeNormal)) * obb.halfExtents[1] +
+                              std::fabs(glm::dot(obb.axes[2], planeNormal)) * obb.halfExtents[2] - centerSide;
+
+    out.push_back(ObbContact{normal, depth, planeNormal, planeDepth, triangleIndex, triangle.surfaceId});
+  }
+}
+
+void TrackCollisionSurface::queryObb(const Obb& obb, std::vector<ObbContact>& out) const {
+  out.clear();
+  if (nodes_.empty()) return;
+  queryObbNode(0, obb, out);
 }
 
 std::optional<CollisionHit> TrackCollisionSurface::sweep(const Vec3& from, const Vec3& to) const {

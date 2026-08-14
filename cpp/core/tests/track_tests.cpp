@@ -737,6 +737,101 @@ int main(int argc, char** argv) {
   }
 
   {
+    // TrackCollisionSurface::queryObb through the BVH (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 2).
+    // The corner below is deliberately built from ten triangles rather than the four it needs
+    // geometrically: the BVH only splits above eight triangles per leaf, so a minimal corner would
+    // test one leaf and never the interior-node pruning this query is mostly made of.
+    auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
+      CollisionTriangle first, second;
+      first.positions[0] = a;
+      first.positions[1] = b;
+      first.positions[2] = c;
+      second.positions[0] = a;
+      second.positions[1] = c;
+      second.positions[2] = d;
+      for (int corner = 0; corner < 3; ++corner) first.normals[corner] = second.normals[corner] = normal;
+      first.surfaceId = second.surfaceId = surfaceId;
+      return std::vector<CollisionTriangle>{first, second};
+    };
+    std::vector<CollisionTriangle> corner;
+    auto append = [&](std::vector<CollisionTriangle> quadTris) {
+      corner.insert(corner.end(), quadTris.begin(), quadTris.end());
+    };
+    append(quad({-20, 0, 0}, {4, 0, 0}, {4, 0, 20}, {-20, 0, 20}, {0, 1, 0}, 1));    // floor
+    append(quad({4, 0, 0}, {4, 6, 0}, {4, 6, 10}, {4, 0, 10}, {-1, 0, 0}, 3));       // +x wall, near half
+    append(quad({4, 0, 10}, {4, 6, 10}, {4, 6, 20}, {4, 0, 20}, {-1, 0, 0}, 3));     // +x wall, far half
+    append(quad({-20, 0, 20}, {-20, 6, 20}, {-8, 6, 20}, {-8, 0, 20}, {0, 0, -1}, 4));  // +z wall, far half
+    append(quad({-8, 0, 20}, {-8, 6, 20}, {4, 6, 20}, {4, 0, 20}, {0, 0, -1}, 4));      // +z wall, near half
+    TrackCollisionSurface cornerSurface(corner);
+
+    auto surfaceIdsHit = [&](const Obb& obb) {
+      std::vector<ObbContact> contacts;
+      cornerSurface.queryObb(obb, contacts);
+      std::set<int> ids;
+      for (const auto& contact : contacts) ids.insert(contact.surfaceId);
+      return ids;
+    };
+
+    Obb hull;
+    hull.halfExtents = Vec3(1.2, 0.4, 2.0);
+    hull.center = Vec3(0, 1.5, 10);
+    check(surfaceIdsHit(hull).empty(), "queryObb reports nothing for a box clear of every triangle");
+
+    hull.center = Vec3(3.5, 1.5, 5);
+    check(surfaceIdsHit(hull) == std::set<int>{3}, "queryObb finds the one wall a box has driven into");
+
+    hull.center = Vec3(3.5, 1.5, 18.5);
+    check(surfaceIdsHit(hull) == std::set<int>{3, 4},
+          "queryObb finds both walls at once in a corner -- the case a single probe point cannot");
+
+    hull.center = Vec3(0, 0.2, 10);
+    check(surfaceIdsHit(hull) == std::set<int>{1}, "queryObb finds the floor a box has sunk into");
+
+    // Contact content, on the single-wall case. Every contact's plane push is the same one the
+    // whole wall agrees on -- straight back out along -x by (3.5 + 1.2) - 4.0 -- regardless of
+    // which of the wall's triangles produced it.
+    hull.center = Vec3(3.5, 1.5, 5);
+    std::vector<ObbContact> contacts;
+    cornerSurface.queryObb(hull, contacts);
+    check(!contacts.empty(), "the single-wall case produces at least one contact");
+    bool everyPlanePushAgrees = !contacts.empty();
+    bool everyMtvIsShortest = !contacts.empty();
+    for (const auto& contact : contacts) {
+      everyPlanePushAgrees = everyPlanePushAgrees && glm::distance(contact.planeNormal, Vec3(-1, 0, 0)) < 1e-9 &&
+                             std::fabs(contact.planeDepth - (3.5 + 1.2 - 4.0)) < 1e-9;
+      everyMtvIsShortest = everyMtvIsShortest && contact.depth > 0.0 && contact.depth <= contact.planeDepth + 1e-12;
+    }
+    check(everyPlanePushAgrees,
+          "queryObb contacts agree on one out-of-wall plane push, whichever triangle produced them");
+    check(everyMtvIsShortest, "each contact's MTV is a real, no-longer-than-the-plane-push separation");
+
+    // The internal-edge artifact planeNormal exists to sidestep: a box overlapping a wall triangle
+    // near the seam it shares with its neighbour has a genuinely shorter way out sideways across
+    // that seam than back out of the wall, so at least one contact's MTV here is NOT the plane push
+    // -- which is exactly why the wall resolver uses planeNormal instead.
+    hull.center = Vec3(3.5, 1.5, 10);
+    cornerSurface.queryObb(hull, contacts);
+    bool sawEdgeMtv = false;
+    for (const auto& contact : contacts)
+      if (glm::distance(contact.normal, contact.planeNormal) > 1e-6) sawEdgeMtv = true;
+    check(sawEdgeMtv, "a box straddling a wall's internal seam sees an MTV that leaves the wall plane");
+
+    // A pose that only a yawed box reaches: square-on the box's +x face stops 0.05 short of the
+    // wall, but yawed 45 degrees its corner reaches 1.2*cos45 + 2.0*cos45 = 2.263 along x instead.
+    Obb square;
+    square.halfExtents = Vec3(1.2, 0.4, 2.0);
+    square.center = Vec3(4.0 - 1.25, 1.5, 5);
+    check(surfaceIdsHit(square).empty(), "a square-on hull stopping short of the wall reports no contact");
+    const double c45 = std::cos(0.25 * 3.14159265358979323846);
+    Obb yawed = square;
+    yawed.axes[0] = Vec3(c45, 0, -c45);
+    yawed.axes[2] = Vec3(c45, 0, c45);
+    check(surfaceIdsHit(yawed) == std::set<int>{3},
+          "the same hull yawed 45 degrees has a corner through the wall -- the rotation-dependent "
+          "clip a centreline probe structurally cannot see");
+  }
+
+  {
     auto loaded = Track::fromJson(base.dump());
     check(static_cast<bool>(loaded), "external-contact ship fixture loads");
     if (loaded) {
