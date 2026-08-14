@@ -3,7 +3,7 @@
 Branch: `gltf-import`. The matching MassivePolyPusher submodule change (the `RSE4`
 stream format, see M1) is on `rse4-texture-colour-space` in that repository.
 
-Overall status: **M1–M5 complete.**
+Overall status: **M1–M6 complete.**
 
 ## Goal
 
@@ -30,10 +30,15 @@ the console tool; the editor's import UI; the consequential changes to
 `cpp/editor`, `cpp/model-tool` and `cpp/tungsten-monoxide` that fall out of
 those decisions.
 
-**Explicitly out of scope.** The reverse operation. There is no
-`mpp::Model` → glTF export, no `track_editor` export option, and no Blender
-round-trip. The console tool is import-only. This was considered and dropped
-during the grilling pass; do not reintroduce it as a "while we're here".
+**Explicitly out of scope, at the time this plan was written.** The reverse
+operation. There was no `mpp::Model`/track content → glTF export, no
+`track_editor` export option, and no Blender round-trip. The console tool
+stayed import-only. This was considered and dropped during the grilling pass.
+
+That decision was later reversed by explicit user request: `track_editor`
+gained an "Export All…" action (see "Export All…" below). The console tool
+(`gltf_convert`) remains import-only — the reversal was scoped to the editor
+only, not re-litigated for the CLI tool.
 
 ## Decisions locked in
 
@@ -354,6 +359,67 @@ present but untriggered (it's lazy — see below).
   headless twin calling the identical `modelio::convertGltf`/
   `PbrPipelineDocumentLoader` API the modal now calls) — `--validate-only`
   and a real write both succeed, confirming the plumbing the modal drives.
+
+### M6 — editor "Export All…" (reversal of the no-export decision)
+
+**Status: complete.** Reverses this plan's own "explicitly out of scope"
+decision above, by explicit user request: `track_editor` gained an
+"Export All…" action exporting baked track meshes and placed "other 3D
+objects" to glTF text (`.gltf`) or binary (`.glb`), each with a real
+per-mesh material. Triggers and path splines (curve/control-point data) are
+excluded — they have no renderable mesh of their own to export.
+
+- **No Draco.** The vendored AssImp can decode `KHR_draco_mesh_compression`
+  on import but has no write support for it at all in its glTF2 exporter —
+  neither upstream nor this vendored commit implements it. Explicitly
+  dropped rather than patching vendored AssImp source for this feature.
+- `cpp/model-io/gltf` gained `AssetExport.hpp`/`.cpp` — the inverse of
+  `AssetImport.hpp`: builds an `aiScene` from a `modelio::ModelData` and
+  writes it with `Assimp::Exporter::Export(..., "gltf2"|"glb2", ...)`,
+  already registered and compiled into the vendored AssImp with zero build
+  changes. Material factors/textures are written through the same
+  `AI_MATKEY_*` keys `AssetImport.cpp` reads on the way in. Textures are
+  external files copied beside the output for `.gltf`, embedded via
+  `aiScene::mTextures` for `.glb`.
+- `cpp/model-io/core` gained `PbrMaterialRead.hpp`/`.cpp` — the inverse of
+  `PbrMaterialBuild.hpp`: `mpp::PbrMaterialStream::getPbrSurface()` is a
+  field-for-field match with `modelio::MaterialData`, so an embedded
+  `PbrMaterial` (the M4 gltf-import path already produces exactly these)
+  reads back with full fidelity.
+- **Material fidelity is intentionally uneven, not an oversight.** Full
+  round-trip (base colour/metallic/roughness/emissive/alpha/textures) only
+  for placement meshes whose `.mppmodel` carries an *embedded* `PbrMaterial`.
+  Track path materials (`MaterialCatalog` is an editor-authoring/preview
+  reader with texture paths but no PBR scalar factors) and placements bound
+  to a material *by name* get a name plus whatever texture is locally known,
+  since neither is resolvable to real PBR values without the game's runtime
+  package, which `track_editor` does not and should not link.
+- `cpp/editor/src/ExportAll.cpp` (new) walks the user's checklist selection
+  — baked `tox::GeometryBatch` entries of kind `PathSurface`/`PathShell`/
+  `PathRail` (the only kinds `TrackBake.cpp` actually emits real triangle
+  data for), plus `TrackDefinition::meshObjects` placements, each read
+  directly via `mpp::ModelSerializer` (through `modelio::readMppModel`) —
+  into one `modelio::ModelData`, transforming a placement's vertices by its
+  position/rotation/scale (a third local copy of the same small transform
+  helper `mono::placementTransformPosition`/`TrackCollisionBuild.cpp`/
+  `TopDownCanvas.cpp` already each carry independently).
+- The "Export All…" modal follows the "Import glTF" modal's exact shape
+  (state block, `openXModal` bool + per-frame `OpenPopup`, `BeginPopupModal`
+  body), with a checkbox-per-row table (grouped "Track Meshes"/"Placed
+  Objects") in place of the import modal's single-select list, and a plain
+  glTF/GLB radio button — the save dialog itself cannot report which filter
+  the user picked, so the format choice can't be delegated to it.
+- Verified via `model_io_tests` (export → re-import round trip for both
+  formats; a `PbrMaterialRead` round trip against `buildEmbeddedPbrMaterial`)
+  and a new `track_editor.exe` startup smoke check (`runExportAllSmokeCheck`)
+  that exercises the real end-to-end path — a starter track's baked
+  geometry, through `collectExportableItems`/`buildExportModelData`, through
+  `modelio::exportAsset` to a real file on disk, and back through
+  `modelio::importAsset` — for both `.gltf` and `.glb`, every time the
+  editor starts. The placement-reading path is covered at the `model_io`
+  layer (`readMppModel`/`readEmbeddedPbrMaterial` round trips) but not by
+  this particular smoke check, since it has no real placed `.mppmodel`
+  fixture to reference.
 
 ## Conventions
 

@@ -18,10 +18,13 @@
 #include <mpp/TextureStream.h>
 #include <mpp/resource-parsers/PbrPipelineDocumentLoader.h>
 
+#include "modelio/AssetExport.hpp"
 #include "modelio/GltfConvert.hpp"
 #include "modelio/AssetImport.hpp"
 #include "modelio/MeshLayout.hpp"
 #include "modelio/MppModelIo.hpp"
+#include "modelio/PbrMaterialBuild.hpp"
+#include "modelio/PbrMaterialRead.hpp"
 #include "modelio/PipelineMaterial.hpp"
 
 using namespace modelio;
@@ -428,6 +431,122 @@ void testValidateOnlyWritesNothing() {
   check(!std::filesystem::exists(out), "validate-only writes no file");
 }
 
+// docs/GLTF_IMPORT_PLAN.md "Export All..." feature: AssetExport.cpp's ModelData -> aiScene -> AssImp
+// Exporter path, round-tripped back through the existing AssetImport.cpp for verification (there is
+// no independent glTF parser in this test binary to check against).
+void testExportRoundTrip(bool binary) {
+  const std::string label = binary ? " (glb)" : " (gltf)";
+
+  ModelData model;
+  MaterialData material;
+  material.name = "Test/ExportMaterial";
+  material.baseColourFactor[0] = 0.2f;
+  material.baseColourFactor[1] = 0.4f;
+  material.baseColourFactor[2] = 0.6f;
+  material.baseColourFactor[3] = 1.0f;
+  material.metallicFactor = 0.35f;
+  material.roughnessFactor = 0.65f;
+  model.materials.push_back(material);
+
+  MeshData mesh;
+  mesh.name = "Triangle";
+  mesh.materialIndex = 0;
+  Vertex v0, v1, v2;
+  v0.position[0] = 0.0f;
+  v0.position[1] = 0.0f;
+  v0.position[2] = 0.0f;
+  v1.position[0] = 1.0f;
+  v1.position[1] = 0.0f;
+  v1.position[2] = 0.0f;
+  v2.position[0] = 0.0f;
+  v2.position[1] = 1.0f;
+  v2.position[2] = 0.0f;
+  v0.normal[2] = v1.normal[2] = v2.normal[2] = 1.0f;
+  v0.normal[0] = v0.normal[1] = v1.normal[0] = v1.normal[1] = v2.normal[0] = v2.normal[1] = 0.0f;
+  mesh.vertices = {v0, v1, v2};
+  mesh.indices = {0, 1, 2};
+  model.meshes.push_back(mesh);
+
+  const std::filesystem::path out = scratch() / (std::string("export-test") + (binary ? ".glb" : ".gltf"));
+  std::filesystem::remove(out);
+
+  ExportOptions exportOptions;
+  exportOptions.binary = binary;
+  Report exportReport;
+  check(exportAsset(model, out, exportOptions, exportReport), "exportAsset succeeds" + label);
+  if (exportReport.hasErrors()) std::cerr << exportReport.format() << '\n';
+  check(std::filesystem::exists(out), "export writes a file" + label);
+  if (!std::filesystem::exists(out)) return;
+
+  ImportOptions importOptions;
+  Report importReport;
+  const std::optional<ModelData> reimported = importAsset(out, importOptions, importReport);
+  check(reimported.has_value(), "the exported file re-imports" + label);
+  if (importReport.hasErrors()) std::cerr << importReport.format() << '\n';
+  if (!reimported) return;
+
+  check(reimported->meshes.size() == 1, "one mesh survives re-import" + label);
+  if (!reimported->meshes.empty())
+    check(reimported->meshes.front().vertices.size() == 3, "vertex count survives" + label);
+  check(!reimported->materials.empty(), "at least one material survives" + label);
+  if (!reimported->materials.empty()) {
+    const MaterialData& readMaterial = reimported->materials.front();
+    check(std::fabs(readMaterial.metallicFactor - 0.35f) < 1e-4, "metallic factor survives" + label);
+    check(std::fabs(readMaterial.roughnessFactor - 0.65f) < 1e-4, "roughness factor survives" + label);
+  }
+}
+
+// PbrMaterialRead.cpp is the direct inverse of PbrMaterialBuild.cpp: build an embedded material in
+// memory, read it straight back (no serialization round trip needed here -- RSE4's own on-disk
+// round trip is already covered by testTextureRoundTripPreservesColourSpace above), and check every
+// PbrSurface field plus the one texture binding survive.
+void testPbrMaterialReadRoundTrip() {
+  const mpp::PbrPipelineDocument pipeline = loadPipeline();
+  Report targetReport;
+  const std::optional<TargetMaterial> target = findPipelineMaterial(pipeline, "Test.Indexed", targetReport);
+  check(target.has_value(), "target material resolves for the PbrMaterialRead test");
+  if (!target) return;
+
+  MaterialData material;
+  material.name = "Test/ReadMaterial";
+  material.baseColourFactor[0] = 0.25f;
+  material.baseColourFactor[1] = 0.5f;
+  material.baseColourFactor[2] = 0.75f;
+  material.baseColourFactor[3] = 0.9f;
+  material.metallicFactor = 0.3f;
+  material.roughnessFactor = 0.6f;
+  material.emissiveFactor[0] = 0.1f;
+  material.emissiveFactor[1] = 0.2f;
+  material.emissiveFactor[2] = 0.3f;
+  material.alphaMode = AlphaMode::Mask;
+  material.alphaCutoff = 0.4f;
+  material.doubleSided = true;
+  material.textures.push_back({"PBR_BASE_COLOUR_MAP", (fixtures() / "fixture-texture.png").string()});
+
+  Report buildReport;
+  const mpp::ResourceStreamPtr stream = buildEmbeddedPbrMaterial(material, *target, fixtures(), buildReport);
+  check(stream != nullptr, "buildEmbeddedPbrMaterial succeeds for the read-back test");
+  if (!stream) return;
+
+  MaterialData readBack;
+  check(readEmbeddedPbrMaterial(stream, fixtures(), readBack), "readEmbeddedPbrMaterial recognises a PbrMaterialStream");
+  check(std::fabs(readBack.baseColourFactor[0] - 0.25f) < 1e-4, "base colour r round-trips");
+  check(std::fabs(readBack.baseColourFactor[3] - 0.9f) < 1e-4, "base colour a round-trips");
+  check(std::fabs(readBack.metallicFactor - 0.3f) < 1e-4, "metallic factor round-trips");
+  check(std::fabs(readBack.roughnessFactor - 0.6f) < 1e-4, "roughness factor round-trips");
+  check(std::fabs(readBack.emissiveFactor[1] - 0.2f) < 1e-4, "emissive factor round-trips");
+  check(readBack.alphaMode == AlphaMode::Mask, "alpha mode round-trips");
+  check(std::fabs(readBack.alphaCutoff - 0.4f) < 1e-4, "alpha cutoff round-trips");
+  check(readBack.doubleSided, "double-sided round-trips");
+
+  check(readBack.textures.size() == 1, "one texture round-trips");
+  if (!readBack.textures.empty()) {
+    check(readBack.textures.front().sampler == "PBR_BASE_COLOUR_MAP", "texture sampler round-trips");
+    const std::string expectedPath = (fixtures() / "fixture-texture.png").lexically_normal().string();
+    check(readBack.textures.front().path == expectedPath, "texture path round-trips to an absolute path");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -449,6 +568,9 @@ int main() {
     testTextureRoundTripPreservesColourSpace();
     testLegacyRse3StreamStillReads();
     testValidateOnlyWritesNothing();
+    testExportRoundTrip(/*binary=*/false);
+    testExportRoundTrip(/*binary=*/true);
+    testPbrMaterialReadRoundTrip();
   } catch (const std::exception& error) {
     std::cerr << "FAIL: unexpected exception: " << error.what() << '\n';
     ++failures;

@@ -39,6 +39,7 @@ add_library(model_io_core STATIC
   core/include/modelio/ModelData.hpp
   core/include/modelio/MppModelIo.hpp
   core/include/modelio/PbrMaterialBuild.hpp
+  core/include/modelio/PbrMaterialRead.hpp
   core/include/modelio/PipelineMaterial.hpp
   core/include/modelio/Tangents.hpp
   core/include/modelio/VertexPacking.hpp
@@ -46,6 +47,7 @@ add_library(model_io_core STATIC
   core/src/MeshLayout.cpp
   core/src/MppModelIo.cpp
   core/src/PbrMaterialBuild.cpp
+  core/src/PbrMaterialRead.cpp
   core/src/PipelineMaterial.cpp
   core/src/Tangents.cpp
   core/src/VertexPacking.cpp)
@@ -95,8 +97,10 @@ endif()
 add_library(model_io_gltf STATIC
   gltf/include/modelio/GltfConvert.hpp
   gltf/include/modelio/AssetImport.hpp
+  gltf/include/modelio/AssetExport.hpp
   gltf/src/GltfConvert.cpp
-  gltf/src/AssetImport.cpp)
+  gltf/src/AssetImport.cpp
+  gltf/src/AssetExport.cpp)
 
 target_compile_features(model_io_gltf PUBLIC cxx_std_20)
 target_include_directories(model_io_gltf PUBLIC

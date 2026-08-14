@@ -47,6 +47,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -64,6 +65,8 @@
 
 #include <mpp/resource-parsers/PbrPipelineDocumentLoader.h>
 
+#include "modelio/AssetExport.hpp"
+#include "modelio/AssetImport.hpp"
 #include "modelio/Diagnostics.hpp"
 #include "modelio/GltfConvert.hpp"
 #include "modelio/PipelineMaterial.hpp"
@@ -98,6 +101,7 @@
 #include "TrackResourceSave.hpp"
 #include "USDExport.hpp"
 #include "MppModelExport.hpp"
+#include "ExportAll.hpp"
 
 namespace {
 
@@ -1259,6 +1263,59 @@ MppModelSmokeCheckResult runMppModelSmokeCheck() {
   return result;
 }
 
+// Export All smoke check (docs/GLTF_IMPORT_PLAN.md's "no export" scope decision, reversed for this
+// feature): exercises the real end-to-end path -- a starter track's baked geometry, through
+// collectExportableItems/buildExportModelData, through modelio::exportAsset to a real glTF/GLB
+// file on disk, and back through modelio::importAsset -- so a break anywhere in that chain (not
+// just within one function in isolation, which model_io_tests already covers) fails loudly at
+// every startup rather than only when someone happens to click "Export All...".
+struct ExportAllSmokeCheckResult {
+  bool itemsCollected = false;
+  bool gltfExported = false, gltfReimported = false;
+  bool glbExported = false, glbReimported = false;
+};
+
+ExportAllSmokeCheckResult runExportAllSmokeCheck() {
+  ExportAllSmokeCheckResult result;
+
+  editor::EditorState state(buildStarterTrack());
+  const tox::TrackLoadResult baked = tox::Track::fromJson(editor::toJson(state.track()));
+  if (!baked) return result;
+
+  const std::vector<editor::ExportableItem> items = editor::collectExportableItems(state.track(), *baked.track);
+  result.itemsCollected = !items.empty();
+  if (!result.itemsCollected) return result;
+
+  const std::vector<bool> allChecked(items.size(), true);
+  const editor::MaterialCatalog emptyCatalog;  // no Resources.xml here; materials fall back to raw keys
+  modelio::Report buildReport;
+  const modelio::ModelData model =
+      editor::buildExportModelData(state, *baked.track, items, allChecked, emptyCatalog, std::filesystem::path{}, buildReport);
+
+  auto exportAndReimport = [&](bool binary, bool& exported, bool& reimported) {
+    const std::filesystem::path out =
+        std::filesystem::temp_directory_path() / (std::string("track_editor_export_all_smoke") + (binary ? ".glb" : ".gltf"));
+    std::error_code ec;
+    std::filesystem::remove(out, ec);
+
+    modelio::ExportOptions exportOptions;
+    exportOptions.binary = binary;
+    modelio::Report exportReport;
+    exported = modelio::exportAsset(model, out, exportOptions, exportReport) && std::filesystem::exists(out);
+
+    if (exported) {
+      modelio::Report importReport;
+      const std::optional<modelio::ModelData> reimportedModel = modelio::importAsset(out, modelio::ImportOptions{}, importReport);
+      reimported = reimportedModel.has_value() && !reimportedModel->meshes.empty();
+    }
+    std::filesystem::remove(out, ec);
+  };
+
+  exportAndReimport(false, result.gltfExported, result.gltfReimported);
+  exportAndReimport(true, result.glbExported, result.glbReimported);
+  return result;
+}
+
 // LoadModel smoke check (TRACK_MODEL_LIST_PLAN.md Milestone 6): loading the same Model twice
 // reuses the embedded entry (dedup by ModelFile, per the locked-in decision) and only adds a new
 // placement; loading a different Model embeds a second entry; editing an embedded Model's mesh
@@ -1677,6 +1734,13 @@ int main(int, char**) {
                loadModelSmoke.editEmbeddedModelAffectsSharedMetadata ? "OK" : "MISMATCH");
   std::fflush(stdout);
 
+  const ExportAllSmokeCheckResult exportAllSmoke = runExportAllSmokeCheck();
+  std::fprintf(stdout, "ExportAll smoke check: items=%s gltf=%s/%s glb=%s/%s\n",
+               exportAllSmoke.itemsCollected ? "OK" : "MISMATCH", exportAllSmoke.gltfExported ? "OK" : "MISMATCH",
+               exportAllSmoke.gltfReimported ? "OK" : "MISMATCH", exportAllSmoke.glbExported ? "OK" : "MISMATCH",
+               exportAllSmoke.glbReimported ? "OK" : "MISMATCH");
+  std::fflush(stdout);
+
   const M7bSmokeCheckResult m7bSmoke = runM7bSmokeCheck();
   std::fprintf(stdout, "M7b smoke check: imageSize=%s add=%s assign=%s tileResize=%s invalidClear=%s delete=%s\n",
                m7bSmoke.imageSizeReadOk ? "OK" : "MISMATCH", m7bSmoke.assetAdded ? "OK" : "MISMATCH", m7bSmoke.assigned ? "OK" : "MISMATCH",
@@ -2039,6 +2103,15 @@ int main(int, char**) {
       gltfImportReport.error("import.exception", error.what());
     }
   };
+
+  // "Export All..." (docs/GLTF_IMPORT_PLAN.md's "no export" scope decision, reversed for this
+  // feature): a checklist of baked track meshes + placed objects, exported as one glTF/GLB via
+  // modelio::exportAsset/ExportAll.hpp. Rebuilt fresh every time the modal opens rather than kept
+  // live across frames, since track content can change between opens.
+  std::vector<editor::ExportableItem> exportAllItems;
+  std::vector<bool> exportAllChecked;
+  bool exportAllBinary = false;  // false = .gltf text, true = .glb
+  bool openExportAllModal = false;
   std::optional<editor::TrackSavePlan> pendingSavePlan;
   bool openOverwriteConfirmation = false;
   bool openSaveConflict = false;
@@ -2277,6 +2350,20 @@ int main(int, char**) {
             showStatus("Nothing to export -- current track failed to bake");
           }
         }
+        // "Export All..." lists every baked track mesh (surface/shell/rail -- MeshSurface/MeshRail/
+        // ReservationWall are never emitted, and ZoneSurface/TriggerSurface are excluded along with
+        // triggers themselves) and every placed object, for the user to check off before writing a
+        // single glTF/GLB. No Draco option: this vendored AssImp can decode it on import but has no
+        // write support for it at all.
+        if (ImGui::MenuItem("Export All...")) {
+          if (bakedTrack != nullptr) {
+            exportAllItems = editor::collectExportableItems(editorState.track(), *bakedTrack);
+            exportAllChecked.assign(exportAllItems.size(), true);
+            openExportAllModal = true;
+          } else {
+            showStatus("Nothing to export -- current track failed to bake");
+          }
+        }
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("Edit")) {
@@ -2374,6 +2461,10 @@ int main(int, char**) {
     if (openGltfImportModal) {
       ImGui::OpenPopup("Import glTF");
       openGltfImportModal = false;
+    }
+    if (openExportAllModal) {
+      ImGui::OpenPopup("Export All");
+      openExportAllModal = false;
     }
 
     if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -2631,6 +2722,77 @@ int main(int, char**) {
           gltfImportReport = writeReport;
           gltfImportSucceeded = false;
           showStatus("Import glTF failed: " + std::to_string(writeReport.errorCount()) + " error(s)");
+        }
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 520.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Export All")) {
+      ImGui::TextDisabled("%zu item%s", exportAllItems.size(), exportAllItems.size() == 1 ? "" : "s");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Select All")) exportAllChecked.assign(exportAllItems.size(), true);
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Select None")) exportAllChecked.assign(exportAllItems.size(), false);
+      ImGui::Separator();
+
+      if (ImGui::BeginChild("exportAllItems", ImVec2(0.0f, 340.0f), true)) {
+        bool sectionOpen = false;
+        editor::ExportableItem::Kind currentKind = editor::ExportableItem::Kind::TrackMesh;
+        for (std::size_t i = 0; i < exportAllItems.size(); ++i) {
+          const editor::ExportableItem& item = exportAllItems[i];
+          if (!sectionOpen || item.kind != currentKind) {
+            if (sectionOpen) ImGui::Spacing();
+            currentKind = item.kind;
+            ImGui::TextDisabled("%s", currentKind == editor::ExportableItem::Kind::TrackMesh ? "Track Meshes" : "Placed Objects");
+            sectionOpen = true;
+          }
+          bool checked = i < exportAllChecked.size() && exportAllChecked[i];
+          ImGui::PushID(static_cast<int>(i));
+          if (ImGui::Checkbox(item.label.c_str(), &checked)) exportAllChecked[i] = checked;
+          ImGui::PopID();
+        }
+        if (exportAllItems.empty()) ImGui::TextDisabled("Nothing to export -- add a path or place a model first.");
+      }
+      ImGui::EndChild();
+
+      ImGui::Separator();
+      ImGui::TextDisabled("Format");
+      ImGui::SameLine();
+      bool exportAllText = !exportAllBinary;
+      if (ImGui::RadioButton("glTF (.gltf)", exportAllText)) exportAllBinary = false;
+      ImGui::SameLine();
+      if (ImGui::RadioButton("GLB (.glb)", exportAllBinary)) exportAllBinary = true;
+
+      ImGui::Separator();
+      const bool anyChecked = std::any_of(exportAllChecked.begin(), exportAllChecked.end(), [](bool checked) { return checked; });
+      ImGui::BeginDisabled(!anyChecked);
+      if (ImGui::Button("Export")) {
+        const char* extensionNarrow = exportAllBinary ? "glb" : "gltf";
+        const wchar_t* extensionWide = exportAllBinary ? L"glb" : L"gltf";
+        const editor::FileDialogResult picked = editor::showSaveFileDialog(
+            L"Export All",
+            {{exportAllBinary ? L"glTF Binary (*.glb)" : L"glTF (*.gltf)", exportAllBinary ? L"*.glb" : L"*.gltf"}},
+            toWide(sanitizeFilenameStem(editorState.track().name) + "." + extensionNarrow), extensionWide);
+        if (picked.ok) {
+          const std::filesystem::path modelBaseDir = saveBinding.has_value() ? saveBinding->xmlPath.parent_path() : std::filesystem::path{};
+          modelio::Report exportReport;
+          const modelio::ModelData model = editor::buildExportModelData(editorState, *bakedTrack, exportAllItems, exportAllChecked,
+                                                                        materialCatalog, modelBaseDir, exportReport);
+          modelio::ExportOptions exportOptions;
+          exportOptions.binary = exportAllBinary;
+          const bool wrote = modelio::exportAsset(model, picked.path, exportOptions, exportReport);
+          if (exportReport.hasErrors()) std::cerr << exportReport.format() << '\n';
+          if (wrote) {
+            showStatus("Exported " + editor::pathToUtf8(picked.path) + " (" + std::to_string(model.meshes.size()) + " mesh(es), " +
+                       std::to_string(exportReport.warningCount()) + " warning(s))");
+            ImGui::CloseCurrentPopup();
+          } else {
+            showStatus("Export failed: " + std::to_string(exportReport.errorCount()) + " error(s)");
+          }
         }
       }
       ImGui::EndDisabled();

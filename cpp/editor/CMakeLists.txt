@@ -81,6 +81,7 @@ set(EDITOR_SOURCES
   src/USDExport.cpp
   src/MppModelExport.cpp
   src/MppModelImport.cpp
+  src/ExportAll.cpp
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/RandomTrack.cpp
