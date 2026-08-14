@@ -100,6 +100,11 @@ constexpr std::uint32_t kMeshObjectNoIndexStream = 0xFFFFFFFFu;
 struct MeshObjectModel {
   mpp::ModelSerializer serializer;
   std::vector<uint32_t> indexStreamIds;
+  // The resolved file this was loaded from -- Map.cpp's render-mesh-append pass needs it again
+  // (to declare/rebase an embedded material, docs/GLTF_IMPORT_PLAN.md M4), and re-deriving it from
+  // `placement.modelId` a second time there would require re-running resolveModelFileReference/
+  // safeRelativePath against a cache keyed by modelId, not by the resolved path.
+  std::filesystem::path path;
 };
 
 std::shared_ptr<MeshObjectModel> loadMeshObjectModel(mpp::ResourceManager* resourceMgr, std::filesystem::path const& path);

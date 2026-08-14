@@ -8,6 +8,8 @@
 #include <mpp/ResourceWrangler.h>
 #include <mpp/mesh/MeshSpecification.h>
 
+#include "modelio/MeshLayout.hpp"
+
 namespace modeltool {
 namespace {
 
@@ -18,15 +20,11 @@ std::atomic<int> gModelGeneration{0};
 }  // namespace
 
 mpp::mesh::MeshSpecification fixedMeshSpecification() {
-  mpp::mesh::MeshSpecification spec(mpp::mesh::Primitive::Type::Triangles);
-  mpp::mesh::VertexBufferAttributeLayout* layout = spec.createVertexBufferAttributeLayout(false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Position3, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Normal3, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::TexCoord2, mpp::mesh::Vertex::DataType::Float, false);
-  layout->createAttribute(mpp::mesh::Vertex::Component::Colour4, mpp::mesh::Vertex::DataType::UnsignedByte, true);
-  spec.setStorageType(mpp::mesh::VertexBufferStorageType::Static);
-  spec.setIndexedVertices(true);
-  return spec;
+  // Identical, channel for channel, to cpp/model-io's legacy layout -- position3/normal3/
+  // texcoord2/colour4-unorm8, 36 bytes, indexed -- so it is taken from there rather than declared
+  // twice (docs/GLTF_IMPORT_PLAN.md, M2). gameMeshSpecification() self-checks the stride, so a
+  // drift between the two would fail loudly instead of producing a subtly wrong vertex buffer.
+  return modelio::gameMeshSpecification(/*indexed=*/true, /*pbr=*/false);
 }
 
 // Packs ImportedVertex into the fixed 36-byte layout (see AssImpImport.hpp), shared by the live
@@ -52,7 +50,7 @@ std::vector<std::uint8_t> packVertices(const std::vector<ImportedVertex>& vertic
 }
 
 mpp::ResourcePtr rebuildModelResource(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, const ImportedModel& imported,
-                                       const std::string& defaultFallbackMaterialName) {
+                                      const std::string& defaultFallbackMaterialName) {
   const int generation = gModelGeneration.fetch_add(1);
   const mpp::mesh::MeshSpecification meshSpec = fixedMeshSpecification();
 
@@ -81,7 +79,7 @@ mpp::ResourcePtr rebuildModelResource(mpp::ResourceManager& resourceMgr, mpp::Re
 }
 
 BuiltModel buildModel(mpp::ResourceManager& resourceMgr, mpp::ResourceWrangler& wrangler, ImportedModel imported,
-                       std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName) {
+                      std::vector<std::optional<MaterialReference>> materialRefs, const std::string& defaultFallbackMaterialName) {
   BuiltModel built;
   built.modelResource = rebuildModelResource(resourceMgr, wrangler, imported, defaultFallbackMaterialName);
   built.materialRefs = std::move(materialRefs);

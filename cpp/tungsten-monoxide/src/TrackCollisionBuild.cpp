@@ -45,8 +45,8 @@ vector<uint32_t> readMeshObjectIndexStreamIds(string const& utf8Path, size_t mes
   for (int entryIndex = 0; entryIndex < 6; ++entryIndex) {
     uint32_t const type = readRawU32(fp, utf8Path);
     uint32_t const startOffset = readRawU32(fp, utf8Path);
-    readRawU32(fp, utf8Path);  // endOffset, unused
-    readRawU32(fp, utf8Path);  // count, unused
+    readRawU32(fp, utf8Path);                        // endOffset, unused
+    readRawU32(fp, utf8Path);                        // count, unused
     if (type == 5) meshMetadataStart = startOffset;  // Directory::Entry::Type::MeshMetadata
   }
 
@@ -55,12 +55,12 @@ vector<uint32_t> readMeshObjectIndexStreamIds(string const& utf8Path, size_t mes
   indexStreamIds.reserve(meshCount);
   for (size_t i = 0; i < meshCount; ++i) {
     skipRawString(fp, utf8Path);  // name
-    readRawU32(fp, utf8Path);      // primitiveType
-    readRawU32(fp, utf8Path);      // primitiveCount
+    readRawU32(fp, utf8Path);     // primitiveType
+    readRawU32(fp, utf8Path);     // primitiveCount
     skipRawString(fp, utf8Path);  // material
     uint32_t const numVertexBuffers = readRawU32(fp, utf8Path);
     for (uint32_t v = 0; v < numVertexBuffers; ++v) readRawU32(fp, utf8Path);  // vertex buffer ids
-    indexStreamIds.push_back(readRawU32(fp, utf8Path));                       // indexStream
+    indexStreamIds.push_back(readRawU32(fp, utf8Path));                        // indexStream
   }
   return indexStreamIds;
 }
@@ -142,8 +142,9 @@ vector<tox::CollisionTriangle> buildCollisionTriangles(
     expectedByName.emplace(batch.id, &batch);
   }
   if (selected != expectedNames) {
-    string detail = "TrackMeshes must contain exactly every collidable geometry batch "
-                     "(PathSurface, MeshSurface, ReservationWall, PathRail, MeshRail)";
+    string detail =
+        "TrackMeshes must contain exactly every collidable geometry batch "
+        "(PathSurface, MeshSurface, ReservationWall, PathRail, MeshRail)";
     for (auto const& name : expectedNames)
       if (!selected.count(name)) detail += "; missing '" + name + "'";
     for (auto const& name : selected)
@@ -225,6 +226,7 @@ shared_ptr<MeshObjectModel> loadMeshObjectModel(mpp::ResourceManager* resourceMg
     throw runtime_error("failed to load drivable mesh object model '" + path.string() + "': " + error.what());
   }
   model->indexStreamIds = readMeshObjectIndexStreamIds(path.string(), model->serializer.getMeshCount());
+  model->path = path;
   return model;
 }
 

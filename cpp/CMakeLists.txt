@@ -20,6 +20,13 @@
 #   model-xml/  the shared <Model> XML fragment schema (id/ModelFile/TrackData/per-mesh Type+
 #               Visible), linked by both editor/ and model-tool/ — see model-xml/CMakeLists.txt,
 #               ../docs/adr/0003-model-xml-layer.md, and ../docs/TRACK_MODEL_LIST_PLAN.md.
+#   model-io/   the shared asset/.mppmodel conversion layer: model_io_core (vertex-layout contract,
+#               tangent derivation, MeshSpecification-driven packing, embedded PbrMaterial
+#               construction — mpp but no AssImp) and model_io_gltf (AssImp import + validation).
+#               See model-io/CMakeLists.txt, ../docs/adr/0004-gltf-import.md and
+#               ../docs/GLTF_IMPORT_PLAN.md.
+#   gltf-convert/ gltf_convert, the headless glTF -> .mppmodel converter — see
+#               gltf-convert/CMakeLists.txt.
 #
 # core links Willpower.Geometry for current-schema mesh topology validation and
 # triangulation. The target link establishes build order; explicit dependencies
@@ -91,8 +98,10 @@ add_subdirectory(applib)
 add_subdirectory(launcher)
 add_subdirectory(tungsten-monoxide)
 add_subdirectory(model-xml)
+add_subdirectory(model-io)
 add_subdirectory(editor)
 add_subdirectory(model-tool)
+add_subdirectory(gltf-convert)
 
 # The launcher dynamically loads the application DLL rather than linking it,
 # so express the build/deployment relationship explicitly. TungstenMonoxide's

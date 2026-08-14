@@ -1,9 +1,13 @@
-// mpp_model_import_tests.cpp — headless tests for MppModelImport.cpp (TRACK_MODEL_LIST_PLAN.md
-// Milestone 4): round-trips MppModelExport.cpp's own non-indexed output, and hand-writes a minimal
-// real INDEXED .mppmodel file byte-for-byte per ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp's
-// actual write*() functions (the verified ground truth this reader targets -- see
-// MppModelImport.hpp's header comment) to prove the reader also handles what model-tool's real
-// mpp::ModelSerializer::save() produces, not just the editor's own writer's output.
+// mpp_model_import_tests.cpp — headless tests for MppModelImport.cpp/MppModelExport.cpp
+// (TRACK_MODEL_LIST_PLAN.md Milestone 4, docs/GLTF_IMPORT_PLAN.md M4): round-trips
+// MppModelExport.cpp's own non-indexed, 52-byte PBR output through the real
+// modelio::writeMppModelWithNamedMaterials/mpp::ModelSerializer pair; hand-writes minimal real
+// INDEXED .mppmodel files byte-for-byte per ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp's
+// actual write*() functions, in both the 36-byte legacy and 52-byte PBR layouts, to prove
+// readMppModelGeometry's indexed/non-indexed detection (MppModelImport.cpp's mppModelIsIndexed) is
+// correct for both -- the one piece of this reader that isn't just "call
+// mpp::ModelSerializer/modelio::readMppModel and trust it", since neither of those knows a file's
+// indexedness on their own (see modelio/MppModelIo.hpp's header comment).
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -15,6 +19,7 @@
 #include "MppModelExport.hpp"
 #include "MppModelImport.hpp"
 #include "Track.hpp"
+#include "modelio/MeshLayout.hpp"
 
 namespace {
 
@@ -46,7 +51,10 @@ void appendString(std::string& out, const std::string& s) {
   out += s;
 }
 
-std::string buildIndexedSquareMppModel() {
+// `pbr` selects between the 36-byte legacy layout and the 52-byte PBR layout (+tangent4, an
+// arbitrary-but-finite placeholder here since these tests only assert position/normal round-trip)
+// -- docs/GLTF_IMPORT_PLAN.md M4's dual-stride acceptance.
+std::string buildIndexedSquareMppModel(bool pbr) {
   // One "square" mesh: 4 vertices (a unit quad in the XY plane), 6 indices (two triangles), 16-bit
   // index width -- exercises both the real IndexData section and 16-bit index unpacking.
   std::string vertexData;
@@ -62,12 +70,18 @@ std::string buildIndexedSquareMppModel() {
     appendF32(vertexData, 0.0f);  // uv
     const std::uint8_t rgba[4] = {255, 255, 255, 255};
     vertexData.append(reinterpret_cast<const char*>(rgba), 4);
+    if (pbr) {
+      appendF32(vertexData, 1.0f);
+      appendF32(vertexData, 0.0f);
+      appendF32(vertexData, 0.0f);
+      appendF32(vertexData, 1.0f);  // tangent4 (xyz + handedness)
+    }
   }
 
   std::string vertexDataSection;
   appendU32(vertexDataSection, static_cast<std::uint32_t>(vertexData.size()));
-  appendU32(vertexDataSection, 4);   // vertexCount
-  appendU32(vertexDataSection, 36);  // vertexStride
+  appendU32(vertexDataSection, 4);                // vertexCount
+  appendU32(vertexDataSection, pbr ? 52u : 36u);  // vertexStride
   vertexDataSection += vertexData;
 
   const std::uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
@@ -165,22 +179,24 @@ void testRoundTripEditorWrittenFile() {
   std::remove(path.string().c_str());
 }
 
-void testRoundTripRealIndexedFile() {
-  const std::filesystem::path path = std::filesystem::temp_directory_path() / "mpp_model_import_tests_indexed_square.mppmodel";
-  writeFile(path, buildIndexedSquareMppModel());
+void testRoundTripRealIndexedFile(bool pbr) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     (pbr ? "mpp_model_import_tests_indexed_square_pbr.mppmodel" : "mpp_model_import_tests_indexed_square.mppmodel");
+  writeFile(path, buildIndexedSquareMppModel(pbr));
 
+  const std::string label = pbr ? " (52-byte PBR layout)" : " (36-byte legacy layout)";
   const editor::ImportedMppModel imported = editor::readMppModelGeometry(path);
-  check(imported.meshes.size() == 1, "readMppModelGeometry reads back one mesh from a real-format indexed file");
+  check(imported.meshes.size() == 1, "readMppModelGeometry reads back one mesh from a real-format indexed file" + label);
   if (imported.meshes.size() == 1) {
     const editor::ImportedMppMesh& mesh = imported.meshes.front();
-    check(mesh.name == "square", "mesh name round-trips");
-    check(mesh.material == "Tracks/DefaultMeshMaterial", "mesh material name round-trips");
-    check(mesh.vertices.size() == 4, "vertex count round-trips");
+    check(mesh.name == "square", "mesh name round-trips" + label);
+    check(mesh.material == "Tracks/DefaultMeshMaterial", "mesh material name round-trips" + label);
+    check(mesh.vertices.size() == 4, "vertex count round-trips" + label);
     const std::vector<std::uint32_t> expectedIndices = {0, 1, 2, 0, 2, 3};
-    check(mesh.indices == expectedIndices, "16-bit index stream unpacks to the expected triangle list");
+    check(mesh.indices == expectedIndices, "16-bit index stream unpacks to the expected triangle list" + label);
     if (mesh.vertices.size() == 4) {
-      checkClose(mesh.vertices[2].position.x, 1.0, "vertex 2 position.x round-trips");
-      checkClose(mesh.vertices[3].position.y, 1.0, "vertex 3 position.y round-trips");
+      checkClose(mesh.vertices[2].position.x, 1.0, "vertex 2 position.x round-trips" + label);
+      checkClose(mesh.vertices[3].position.y, 1.0, "vertex 3 position.y round-trips" + label);
     }
   }
   std::remove(path.string().c_str());
@@ -199,17 +215,55 @@ void testBadMagicThrows() {
   std::remove(path.string().c_str());
 }
 
+// Pins the two layouts this reader/writer pair depends on against cpp/model-io's own definition of
+// them (docs/GLTF_IMPORT_PLAN.md M4): position3/normal3/texcoord2/colour4 must sit at the fixed
+// offsets both MppModelImport.cpp's unpackVertices and MppModelExport.cpp's tox::GeometryBatch
+// packing assume, in both the 36-byte legacy layout (still read for already-committed track
+// resources) and the 52-byte PBR layout (what the editor's track export now writes).
+void testStrideMatchesModelIoContract() {
+  const mpp::mesh::MeshSpecification legacy = modelio::gameMeshSpecification(/*indexed=*/false, /*pbr=*/false);
+  check(legacy.getVertexStrideInBytes() == 36, "model_io's legacy layout is 36 bytes");
+  check(modelio::LegacyPbrVertexStride == 36, "the published legacy stride constant agrees");
+
+  const auto legacyPosition = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Position3);
+  const auto legacyNormal = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Normal3);
+  const auto legacyUv = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::TexCoord2);
+  const auto legacyColour = modelio::findAttribute(legacy, mpp::mesh::Vertex::Component::Colour4);
+  check(legacyPosition && legacyPosition->offsetInBytes == 0, "legacy position3 sits at offset 0");
+  check(legacyNormal && legacyNormal->offsetInBytes == 12, "legacy normal3 sits at offset 12");
+  check(legacyUv && legacyUv->offsetInBytes == 24, "legacy texcoord2 sits at offset 24");
+  check(legacyColour && legacyColour->offsetInBytes == 32, "legacy colour4 sits at offset 32");
+  check(legacyColour && legacyColour->normalised, "legacy colour4 is normalised unsigned bytes");
+
+  const mpp::mesh::MeshSpecification pbr = modelio::gameMeshSpecification(/*indexed=*/false, /*pbr=*/true);
+  check(pbr.getVertexStrideInBytes() == 52, "model_io's PBR layout is 52 bytes");
+  check(modelio::PbrVertexStride == 52, "the published PBR stride constant agrees");
+
+  const auto pbrPosition = modelio::findAttribute(pbr, mpp::mesh::Vertex::Component::Position3);
+  const auto pbrNormal = modelio::findAttribute(pbr, mpp::mesh::Vertex::Component::Normal3);
+  const auto pbrUv = modelio::findAttribute(pbr, mpp::mesh::Vertex::Component::TexCoord2);
+  const auto pbrColour = modelio::findAttribute(pbr, mpp::mesh::Vertex::Component::Colour4);
+  const auto pbrTangent = modelio::findAttribute(pbr, mpp::mesh::Vertex::Component::Tangent4);
+  check(pbrPosition && pbrPosition->offsetInBytes == 0, "PBR position3 sits at offset 0");
+  check(pbrNormal && pbrNormal->offsetInBytes == 12, "PBR normal3 sits at offset 12");
+  check(pbrUv && pbrUv->offsetInBytes == 24, "PBR texcoord2 sits at offset 24");
+  check(pbrColour && pbrColour->offsetInBytes == 32, "PBR colour4 sits at offset 32");
+  check(pbrTangent && pbrTangent->offsetInBytes == 36, "PBR tangent4 sits at offset 36");
+}
+
 }  // namespace
 
 int main() {
   testRoundTripEditorWrittenFile();
-  testRoundTripRealIndexedFile();
+  testRoundTripRealIndexedFile(/*pbr=*/false);
+  testRoundTripRealIndexedFile(/*pbr=*/true);
   testBadMagicThrows();
+  testStrideMatchesModelIoContract();
 
   if (failures) {
     std::cerr << failures << " mpp_model_import test(s) failed\n";
     return 1;
   }
-  std::cout << "PASS: editor .mppmodel geometry reader (non-indexed + real indexed round trip)\n";
+  std::cout << "PASS: editor .mppmodel geometry reader (legacy + PBR, non-indexed + indexed round trip)\n";
   return 0;
 }

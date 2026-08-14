@@ -2,7 +2,7 @@
 
 Single-header image decoder (`stb_image.h`), copied per the project convention
 of embedding third-party sources directly (see `cpp/third_party/include/nlohmann`,
-`cpp/editor/include/gl3w`).
+`cpp/editor/include/imgui`).
 
 Source: https://raw.githubusercontent.com/nothings/stb/master/stb_image.h
 (public domain / MIT-0, per the license block at the end of the file).

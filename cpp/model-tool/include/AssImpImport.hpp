@@ -1,9 +1,18 @@
 // AssImpImport.hpp — AssImp (OBJ/FBX/USD/glTF) -> ImportedModel, model-tool's own fixed-layout
-// in-memory representation. Bespoke, AssImp-inspired conversion code (NOT a reuse of
-// ext/massive-poly-pusher/model-convert's AssImpModelLoader, which is built around an externally
-// specified, arbitrary vertex layout via ModelspecStream/MeshSpecification -- model-tool only ever
-// targets one fixed layout, so that indirection buys nothing here). See
-// docs/adr/0001-model-tool.md, decisions D3/D4.
+// in-memory representation. See docs/adr/0001-model-tool.md, decisions D3/D4.
+//
+// The AssImp walk itself now lives in cpp/model-io (modelio::importAsset); this is an adapter from
+// modelio::ModelData onto the type model-tool's UI, MaterialLibrary bookkeeping and viewport are
+// built around (docs/GLTF_IMPORT_PLAN.md, M2). ImportedModel is deliberately kept rather than
+// replaced by ModelData: it carries model-tool-specific concerns -- MaterialOrigin, the single
+// diffuse texture path, per-mesh model_xml Type/Visible metadata -- that do not belong in a shared
+// conversion library.
+//
+// One behaviour change came with the move. Node-hierarchy transforms were previously baked with
+// aiProcess_PreTransformVertices, which also merges meshes by material; modelio walks the node
+// graph itself, so a multi-object source now keeps one mesh per node, named after it, instead of
+// collapsing into one mesh per material. That fixes per-mesh names (which the associated <Model>
+// XML's Type/Visible metadata is keyed on) at the cost of more, smaller meshes.
 #pragma once
 
 #include <cstdint>
@@ -38,7 +47,9 @@ struct ImportedVertex {
 //   - DefaultFallback: the mesh names a material that's neither embedded nor currently loaded --
 //     rendered with model-tool's single shared default-white 3D material instead, with a warning
 //     surfaced to the user (see MppModelImport.hpp).
-enum class MaterialOrigin { Embedded, ExternalReference, DefaultFallback };
+enum class MaterialOrigin { Embedded,
+                            ExternalReference,
+                            DefaultFallback };
 
 // A material's only extracted metadata is its diffuse/base-color texture path (see ADR 0001 D4) --
 // nullopt when the source material has no usable (non-embedded) diffuse/base-color texture, in
@@ -61,7 +72,7 @@ struct ImportedMesh {
   std::string name;
   std::vector<ImportedVertex> vertices;
   std::vector<std::uint32_t> indices;  // triangle list, real shared-vertex indices from AssImp
-  int materialIndex{0};                 // index into ImportedModel::materials (always valid -- see below)
+  int materialIndex{0};                // index into ImportedModel::materials (always valid -- see below)
   // Per-mesh Type/Visible metadata (TRACK_MODEL_LIST_PLAN.md Milestone 3.2, superseding the old
   // CollidableFlag.hpp name-suffix encoding entirely): lives only in the associated <Model> XML
   // (standalone or embedded in a Track resource), never in the .mppmodel's own mesh name, which is
@@ -83,10 +94,13 @@ struct ImportedModel {
 };
 
 // Loads `path` (OBJ/FBX/USD/glTF, dispatched by AssImp on content/extension) and converts it into
-// the fixed layout above. Node-hierarchy transforms are baked into vertex data at import time
-// (aiProcess_PreTransformVertices) since .mppmodel has no node concept to preserve them in (ADR
-// 0001 D3). Returns nullopt and fills `outError` on failure (unreadable/unsupported file, or a
-// scene with no mesh data).
+// the fixed layout above. Node-hierarchy transforms are baked into vertex data at import time --
+// by modelio's own node walk rather than aiProcess_PreTransformVertices (see the header comment
+// above) -- since .mppmodel has no node concept to preserve them in (ADR 0001 D3). Normals are then
+// always recomputed from winding order (NormalSmoothing.hpp), never taken from the source.
+//
+// Returns nullopt and fills `outError` with the formatted diagnostic report on failure
+// (unreadable/unsupported file, or a scene with no triangle mesh data).
 std::optional<ImportedModel> importModel(const std::string& utf8Path, std::string* outError);
 
 }  // namespace modeltool

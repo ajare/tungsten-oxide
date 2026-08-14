@@ -1,8 +1,12 @@
-// model_tool_tests.cpp — headless tests for NormalSmoothing.cpp/ObjSmoothingGroups.cpp
-// (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2), the pieces of model_tool that need neither
-// AssImp nor a live GPU/window to exercise. ObjSmoothingGroups.cpp in particular is deliberately
-// AssImp-free too (it re-parses the raw .obj text itself -- see its own header comment on why), so
-// even the smoothing-group extraction is testable here without a real AssImp import. The old
+// model_tool_tests.cpp — headless tests for the pieces of model_tool that need no live GPU/window:
+// NormalSmoothing.cpp/ObjSmoothingGroups.cpp (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 4.1/4.2),
+// OpenTarget.cpp, and importModel() itself.
+//
+// importModel() coverage arrived with the model-io refactor (docs/GLTF_IMPORT_PLAN.md, M2), which
+// is also why this target is no longer AssImp-free: the import is now an adapter over
+// modelio::importAsset, and the behaviour that changed there -- one mesh per node instead of one
+// per material -- is otherwise only reachable through the GUI. ObjSmoothingGroups.cpp remains
+// deliberately AssImp-free itself (it re-parses the raw .obj text -- see its header comment). The old
 // CollidableFlag.cpp round-trip coverage that used to live here was removed along with
 // CollidableFlag.hpp itself (TRACK_MODEL_LIST_PLAN.md Milestone 3.2) -- see model_xml_tests.cpp for
 // the Type/Visible metadata this replaced it with.
@@ -11,8 +15,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <set>
 #include <string>
 
+#include "AssImpImport.hpp"
 #include "NormalSmoothing.hpp"
 #include "ObjSmoothingGroups.hpp"
 #include "OpenTarget.hpp"
@@ -203,9 +210,10 @@ void testClassifyOpenTarget() {
         ".mppmodel classifies by extension alone, no content read");
 
   const std::filesystem::path standalonePath = dir / "open_target_standalone.xml";
-  writeFile(standalonePath, "<Model><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
-                            "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
-                            "</Meshes></Model>");
+  writeFile(standalonePath,
+            "<Model><ModelFile>Cube.mppmodel</ModelFile><Meshes>"
+            "<Mesh><Name>main</Name><Type>Physical</Type><Visible>true</Visible></Mesh>"
+            "</Meshes></Model>");
   check(modeltool::classifyOpenTarget(standalonePath) == modeltool::OpenTargetKind::StandaloneModelXml,
         "a bare <Model> root classifies as StandaloneModelXml");
 
@@ -296,6 +304,71 @@ void testScanAndRewriteTrackResourceModels() {
   std::remove(path.string().c_str());
 }
 
+// --- importModel over cpp/model-io (docs/GLTF_IMPORT_PLAN.md, M2) -------------------------------
+// These use the committed glTF fixtures in cpp/test-data/fixtures/gltf rather than fixtures of
+// their own: the point is that model-tool's importer is now the shared AssImp walk, so exercising
+// it against the same inputs model_io_tests uses is exactly right.
+
+std::filesystem::path sharedFixture(const std::string& name) {
+  return std::filesystem::path(MODEL_TOOL_GLTF_FIXTURE_DIR) / name;
+}
+
+// The M2 behaviour change, pinned. Before the move, aiProcess_PreTransformVertices baked node
+// transforms but merged meshes by material, so this three-instance scene arrived as a single mesh
+// with a generated name. It must now arrive as three, each named after its node.
+void testImportModelKeepsPerNodeMeshes() {
+  std::string error;
+  const std::optional<modeltool::ImportedModel> model =
+      modeltool::importModel(sharedFixture("hierarchy.gltf").string(), &error);
+  check(model.has_value(), "importModel reads a multi-node glTF (" + error + ")");
+  if (!model) return;
+
+  check(model->meshes.size() == 3, "each node x mesh instance stays its own mesh");
+  std::set<std::string> names;
+  for (const modeltool::ImportedMesh& mesh : model->meshes) names.insert(mesh.name);
+  check(names.count("Left") == 1 && names.count("Right") == 1 && names.count("Child") == 1,
+        "meshes are named from their nodes, not merged by material");
+
+  // Node transforms must still be baked, which PreTransformVertices used to do.
+  for (const modeltool::ImportedMesh& mesh : model->meshes) {
+    if (mesh.name != "Right") continue;
+    checkClose(mesh.vertices.front().px, 10.0f, "Right's node translation is baked into its vertices");
+  }
+
+  // model-tool always recomputes normals from winding order, whatever the source supplied.
+  for (const modeltool::ImportedMesh& mesh : model->meshes)
+    for (const modeltool::ImportedVertex& v : mesh.vertices)
+      checkClose(std::sqrt(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz), 1.0f, "recomputed normals are unit length");
+}
+
+// model-tool imports under EmbeddedTexturePolicy::Skip, so an image packed in the container costs
+// it a placeholder texture rather than the whole import (ADR 0001 D4).
+void testImportModelSkipsEmbeddedTexture() {
+  std::string error;
+  const std::optional<modeltool::ImportedModel> model =
+      modeltool::importModel(sharedFixture("textured-embedded.gltf").string(), &error);
+  check(model.has_value(), "importModel tolerates a container-packed image (" + error + ")");
+  if (!model) return;
+  check(!model->materials.empty(), "the material survives");
+  if (model->materials.empty()) return;
+  check(model->materials.front().skippedEmbeddedTexture, "the material reports its dropped texture");
+  check(!model->materials.front().diffuseTexturePath.has_value(), "no unusable path is presented as usable");
+}
+
+void testImportModelResolvesExternalTexture() {
+  std::string error;
+  const std::optional<modeltool::ImportedModel> model =
+      modeltool::importModel(sharedFixture("textured-external.gltf").string(), &error);
+  check(model.has_value(), "importModel reads a model with an external texture (" + error + ")");
+  if (!model || model->materials.empty()) return;
+  const auto& path = model->materials.front().diffuseTexturePath;
+  check(path.has_value(), "the base-colour texture becomes the diffuse path");
+  if (path) check(std::filesystem::exists(*path), "the resolved diffuse path points at a real file");
+  // Names are qualified into MaterialLibrary keys so two models can't collide on a generic name.
+  check(model->materials.front().name.rfind("textured-external/", 0) == 0,
+        "material names are qualified by the model's own stem");
+}
+
 }  // namespace
 
 int main() {
@@ -305,11 +378,14 @@ int main() {
   testExtractObjSmoothingGroups();
   testClassifyOpenTarget();
   testScanAndRewriteTrackResourceModels();
+  testImportModelKeepsPerNodeMeshes();
+  testImportModelSkipsEmbeddedTexture();
+  testImportModelResolvesExternalTexture();
 
   if (failures) {
     std::cerr << failures << " model_tool test(s) failed\n";
     return 1;
   }
-  std::cout << "PASS: model_tool NormalSmoothing/ObjSmoothingGroups\n";
+  std::cout << "PASS: model_tool NormalSmoothing/ObjSmoothingGroups/OpenTarget/importModel\n";
   return 0;
 }

@@ -51,6 +51,47 @@ string resolveMaterialMppName(Map* map, string const& materialKey) {
   }
 }
 
+// Prefers an embedded PbrMaterial when `serializer`'s mesh `meshIndex` references one of the
+// model's own embedded materials by name (docs/GLTF_IMPORT_PLAN.md M4 -- gltf_convert and
+// track_editor's glTF import can now embed a material rather than referencing one by name, so a
+// drivable mesh object or the track's own primary model may carry one). Declares it into
+// `resourceMgr` under a name unique to this model file the first time it's seen, so every mesh or
+// placement sharing the model reuses one declaration rather than throwing ResourceManager's
+// "already exists". Falls back to the existing by-name PbrMaterialBinding lookup otherwise.
+string resolveMeshMaterialName(Map* map, mpp::ResourceManager* resourceMgr, mpp::ModelSerializer& serializer,
+                               filesystem::path const& modelPath, size_t meshIndex) {
+  string const& materialName = serializer.getMaterial(meshIndex);
+  auto const& materialNames = serializer.getMaterialNames();
+  auto const found = find(materialNames.begin(), materialNames.end(), materialName);
+  if (found == materialNames.end()) return resolveMaterialMppName(map, materialName);
+
+  string const declaredName = "EmbeddedMaterial:" + modelPath.string() + "#" + materialName;
+  if (resourceMgr->getResource(declaredName, /*nullIfNotFound=*/true) == nullptr) {
+    size_t const materialIndex = static_cast<size_t>(found - materialNames.begin());
+    auto const& material = serializer.getMaterials()[materialIndex];
+    // mpp::ModelSerializer::readMaterial() never calls setFileBasePaths() on an embedded material
+    // the way mpp::MppModelStream does for its own children (modelio/MppModelIo.hpp's header
+    // comment), so an embedded material's own child TextureStreams would otherwise resolve
+    // relative to the process's CWD rather than this model's directory.
+    material->setFileBasePaths(modelPath.parent_path().string());
+    resourceMgr->declareResource(declaredName, material);
+  }
+  return declaredName;
+}
+
+// A tangent4's xyz is a surface-tangent direction, so it transforms the same way a position does
+// (scale, then rotate -- see placementTransformPosition) minus the translation; its w (handedness)
+// is unaffected by rotation, and this codebase's placement transform has no mirroring term, so it
+// passes through unchanged at the call site.
+tox::Vec3 placementTransformTangentDirection(tox::ModelPlacementDefinition const& placement, tox::Vec3 const& localTangent) {
+  tox::Vec3 scaled(localTangent.x * placement.scale.x, localTangent.y * placement.scale.y, localTangent.z * placement.scale.z);
+  constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+  tox::Vec3 rotated = tox::applyAxisAngle(scaled, tox::Vec3(0.0, 1.0, 0.0), placement.rotation.x * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(1.0, 0.0, 0.0), placement.rotation.y * kDegToRad);
+  rotated = tox::applyAxisAngle(rotated, tox::Vec3(0.0, 0.0, 1.0), placement.rotation.z * kDegToRad);
+  return tox::normalizeSafe(rotated);
+}
+
 // --- Drivable mesh object placements (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 3) ---------------
 //
 // core never loads or compiles a placement's referenced .mppmodel -- Track::definition.meshObjects
@@ -107,7 +148,7 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
 
       string materialMppName;
       try {
-        materialMppName = resolveMaterialMppName(map, model.serializer.getMaterial(meshIndex));
+        materialMppName = resolveMeshMaterialName(map, resourceMgr, model.serializer, model.path, meshIndex);
       } catch (exception const& error) {
         map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
                   "'): " + error.what());
@@ -117,7 +158,7 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
       size_t vertexCount, stride;
       shared_ptr<const int8_t> data;
       model.serializer.getVertexStream(meshIndex, 0, &vertexCount, &stride, &data);
-      if (stride != 36) {
+      if (stride != mono::LegacyPbrVertexStride && stride != mono::PbrVertexStride) {
         map->warn("Map '" + map->getQualifiedName() + "': skipping drivable mesh object sub-mesh '" + rawName + "' (placement '" + placement.id +
                   "'): unsupported vertex stride.");
         continue;
@@ -138,6 +179,16 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
         memcpy(dst, posF, 12);
         memcpy(dst + 12, normalF, 12);
         memcpy(dst + 24, src + 24, 12);  // uv (8 bytes) + colour (4 bytes), unchanged
+        if (stride == mono::PbrVertexStride) {
+          // Already-baked tangent4 (docs/GLTF_IMPORT_PLAN.md M4) -- rotate the direction by the
+          // placement rather than re-deriving it; see placementTransformTangentDirection's comment
+          // on why w passes through unchanged.
+          tox::Vec3 const worldTangent = placementTransformTangentDirection(
+              placement, tox::Vec3(mono::readFloat(src, 36), mono::readFloat(src, 40), mono::readFloat(src, 44)));
+          float const tangentF[4] = {static_cast<float>(worldTangent.x), static_cast<float>(worldTangent.y),
+                                     static_cast<float>(worldTangent.z), mono::readFloat(src, 48)};
+          memcpy(dst + 36, tangentF, 16);
+        }
       }
 
       vector<uint32_t> indices;
@@ -164,12 +215,16 @@ void appendMeshObjectRenderMeshes(Map* map, tox::Track const& track, filesystem:
       vector<int8_t> flat(indices.size() * stride);
       for (size_t k = 0; k < indices.size(); ++k) memcpy(flat.data() + k * stride, transformed.data() + static_cast<size_t>(indices[k]) * stride, stride);
       vector<int8_t> outputVertices = std::move(flat);
-      try {
-        outputVertices = mono::addPbrTangentsToFlatTriangles(outputVertices, indices.size());
-      } catch (exception const& error) {
-        throw application::resourcesystem::ResourceException(
-            map, "drivable mesh object sub-mesh '" + rawName + "' could not generate PBR tangents: " + error.what());
+      if (stride == mono::LegacyPbrVertexStride) {
+        try {
+          outputVertices = mono::addPbrTangentsToFlatTriangles(outputVertices, indices.size());
+        } catch (exception const& error) {
+          throw application::resourcesystem::ResourceException(
+              map, "drivable mesh object sub-mesh '" + rawName + "' could not generate PBR tangents: " + error.what());
+        }
       }
+      // stride == mono::PbrVertexStride: outputVertices already carries the transformed tangent4
+      // baked into the per-vertex expansion above -- no synthesis needed.
 
       string const meshName = "meshobject-" + placement.id + "-" + rawName;
       auto meshId = modelStream->createMesh(meshName, meshSpec, materialMppName, 16);
@@ -281,7 +336,7 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
     for (size_t i = 0; i < serializer.getMeshCount(); ++i) {
       string materialMppName;
       try {
-        materialMppName = resolveMaterialMppName(this, serializer.getMaterial(i));
+        materialMppName = resolveMeshMaterialName(this, resourceMgr, serializer, modelPath, i);
       } catch (exception const& error) {
         if (find(selectedNames.begin(), selectedNames.end(), serializer.getName(i)) != selectedNames.end())
           throw application::resourcesystem::ResourceException(
@@ -294,14 +349,20 @@ bool Map::load(mpp::RenderSystem* renderSystem, mpp::ResourceManager* resourceMg
       size_t vertexCount, vertexStride;
       shared_ptr<const int8_t> vertexData;
       serializer.getVertexStream(i, 0, &vertexCount, &vertexStride, &vertexData);
-      if (vertexStride != mono::LegacyPbrVertexStride)
-        throw application::resourcesystem::ResourceException(this, "mesh '" + serializer.getName(i) + "' has an unsupported vertex stride.");
       vector<int8_t> bytes(vertexData.get(), vertexData.get() + vertexCount * vertexStride);
-      try {
-        bytes = mono::addPbrTangentsToFlatTriangles(bytes, vertexCount);
-      } catch (exception const& error) {
-        throw application::resourcesystem::ResourceException(
-            this, "mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
+      // docs/GLTF_IMPORT_PLAN.md M4: accept either the 36-byte legacy layout (synthesise tangents,
+      // as always) or the 52-byte PBR layout the editor's track export now writes directly
+      // (tangents already baked -- pass through unchanged). Committed 36-byte track resources must
+      // keep loading, which is exactly what this dual acceptance is for.
+      if (vertexStride == mono::LegacyPbrVertexStride) {
+        try {
+          bytes = mono::addPbrTangentsToFlatTriangles(bytes, vertexCount);
+        } catch (exception const& error) {
+          throw application::resourcesystem::ResourceException(
+              this, "mesh '" + serializer.getName(i) + "' could not generate PBR tangents: " + error.what());
+        }
+      } else if (vertexStride != mono::PbrVertexStride) {
+        throw application::resourcesystem::ResourceException(this, "mesh '" + serializer.getName(i) + "' has an unsupported vertex stride.");
       }
       modelStream->addVertexData(meshId, bytes);
     }
