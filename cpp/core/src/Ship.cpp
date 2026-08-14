@@ -1,5 +1,6 @@
 #include "Ship.hpp"
 
+#include "Obb.hpp"
 #include "Simulation.hpp"
 
 #include <algorithm>
@@ -307,6 +308,25 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 }
 
 }  // namespace
+
+Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up) {
+  Obb hull;
+  Vec3 hullUp = normalizeSafe(up);
+  if (glm::dot(hullUp, hullUp) < 0.5) hullUp = UP;
+  Vec3 right = glm::cross(hullUp, physics.forward);
+  // forward parallel to up leaves no lateral direction to derive. Physics never actually produces
+  // that (forward is tangentized against the surface every step), but a caller assembling a pose by
+  // hand can, and a NaN basis here would silently poison every contact.
+  if (glm::dot(right, right) < 1e-12)
+    right = glm::cross(hullUp, std::fabs(hullUp.y) < 0.9 ? UP : Vec3(1, 0, 0));
+  right = normalizeSafe(right);
+  hull.axes[0] = right;
+  hull.axes[1] = hullUp;
+  hull.axes[2] = normalizeSafe(glm::cross(right, hullUp));
+  hull.halfExtents = Vec3(physics.hullHalfWidth, physics.hullHalfHeight, physics.hullHalfLength);
+  hull.center = groundPos + hullUp * physics.hullHalfHeight;
+  return hull;
+}
 
 StepResult Ship::step(const Simulation& simulation, double dt, double throttle, double brake, double steer,
                       std::optional<bool> meshModeOverride) {

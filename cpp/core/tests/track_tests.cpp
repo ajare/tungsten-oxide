@@ -757,9 +757,9 @@ int main(int argc, char** argv) {
     auto append = [&](std::vector<CollisionTriangle> quadTris) {
       corner.insert(corner.end(), quadTris.begin(), quadTris.end());
     };
-    append(quad({-20, 0, 0}, {4, 0, 0}, {4, 0, 20}, {-20, 0, 20}, {0, 1, 0}, 1));    // floor
-    append(quad({4, 0, 0}, {4, 6, 0}, {4, 6, 10}, {4, 0, 10}, {-1, 0, 0}, 3));       // +x wall, near half
-    append(quad({4, 0, 10}, {4, 6, 10}, {4, 6, 20}, {4, 0, 20}, {-1, 0, 0}, 3));     // +x wall, far half
+    append(quad({-20, 0, 0}, {4, 0, 0}, {4, 0, 20}, {-20, 0, 20}, {0, 1, 0}, 1));       // floor
+    append(quad({4, 0, 0}, {4, 6, 0}, {4, 6, 10}, {4, 0, 10}, {-1, 0, 0}, 3));          // +x wall, near half
+    append(quad({4, 0, 10}, {4, 6, 10}, {4, 6, 20}, {4, 0, 20}, {-1, 0, 0}, 3));        // +x wall, far half
     append(quad({-20, 0, 20}, {-20, 6, 20}, {-8, 6, 20}, {-8, 0, 20}, {0, 0, -1}, 4));  // +z wall, far half
     append(quad({-8, 0, 20}, {-8, 6, 20}, {4, 6, 20}, {4, 0, 20}, {0, 0, -1}, 4));      // +z wall, near half
     TrackCollisionSurface cornerSurface(corner);
@@ -829,6 +829,53 @@ int main(int argc, char** argv) {
     check(surfaceIdsHit(yawed) == std::set<int>{3},
           "the same hull yawed 45 degrees has a corner through the wall -- the rotation-dependent "
           "clip a centreline probe structurally cannot see");
+  }
+
+  {
+    // hullObb (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2): the ship's own hull box.
+    Physics physics;
+    check(physics.hullHalfWidth == StartGrid::SHIP_HALF_WIDTH,
+          "the hull's half width is the same figure the starting grid spaces ships by");
+
+    physics.forward = Vec3(0, 0, 1);
+    const Vec3 groundPos(10, 2, -3);
+    const Obb flat = hullObb(physics, groundPos, UP);
+    // Sitting ON the ground: the box's underside is at the contact point, not its centre.
+    check(glm::distance(flat.center, Vec3(10, 2 + physics.hullHalfHeight, -3)) < 1e-12,
+          "hullObb lifts the hull centre half its height off the contact point");
+    check(glm::distance(flat.corner(0), Vec3(10 - 1.2, 2, -3 - 2.0)) < 1e-12 &&
+              glm::distance(flat.corner(7), Vec3(10 + 1.2, 2 + 0.8, -3 + 2.0)) < 1e-12,
+          "hullObb's corners span the ship's rendered dimensions around its contact point");
+
+    // Frozen Physics::right/up must not leak in: a ship on a banked surface reports the same stale
+    // spawn-time basis those two fields always hold, so a hull built from them would stay level
+    // while the ship rolled. Here the pose says 30 degrees of bank and the hull has to follow.
+    const double bank = 30.0 * 3.14159265358979323846 / 180.0;
+    const Vec3 bankedUp(std::sin(bank), std::cos(bank), 0);
+    physics.forward = Vec3(0, 0, 1);
+    physics.up = UP;  // deliberately stale, as a real run's would be
+    physics.right = Vec3(1, 0, 0);
+    const Obb banked = hullObb(physics, groundPos, bankedUp);
+    check(glm::distance(banked.axes[1], bankedUp) < 1e-12, "hullObb takes its up from the live surface normal");
+    check(glm::distance(banked.center, groundPos + bankedUp * physics.hullHalfHeight) < 1e-12,
+          "a banked hull is lifted along the banked normal, not straight up");
+    bool orthonormal = true;
+    for (int i = 0; i < 3; ++i) {
+      orthonormal = orthonormal && std::fabs(glm::length(banked.axes[i]) - 1.0) < 1e-12;
+      for (int j = i + 1; j < 3; ++j)
+        orthonormal = orthonormal && std::fabs(glm::dot(banked.axes[i], banked.axes[j])) < 1e-12;
+    }
+    check(orthonormal, "hullObb's basis is orthonormal (the SAT tests assume it)");
+    check(glm::dot(banked.axes[2], physics.forward) > 0.99,
+          "a banked hull still points where the ship is heading");
+
+    // Degenerate input: forward straight up leaves no lateral direction to cross out. Physics never
+    // produces this, but the fallback must still be a finite orthonormal basis rather than NaN.
+    physics.forward = UP;
+    const Obb degenerate = hullObb(physics, groundPos, UP);
+    check(std::isfinite(degenerate.axes[0].x) && std::isfinite(degenerate.axes[2].z) &&
+              std::fabs(glm::dot(degenerate.axes[0], degenerate.axes[2])) < 1e-12,
+          "hullObb falls back to a finite basis when forward is parallel to up");
   }
 
   {

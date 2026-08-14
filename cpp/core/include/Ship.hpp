@@ -13,6 +13,7 @@ namespace tox {
 
 class Simulation;
 struct StepResult;
+struct Obb;
 
 struct Physics {
   double heading{0.0};
@@ -41,6 +42,24 @@ struct Physics {
   double boostCap{0.0};
   double boostEffCap{0.0};
 
+  // Collision hull half-extents, along right/up/forward respectively (docs/
+  // OBB_SHIP_COLLISION_PLAN.md Milestone 3). Used only by mesh-mode OBB wall collision; ground
+  // contact remains a point probe at groundPos, and analytic corridor mode ignores these entirely.
+  //
+  // The defaults are the rendered ship's actual dimensions, not a guess: box.mppmodel is a unit
+  // cube and StatePlayTungstenMonoxide::applyShipTransform scales it by (2.4, 0.8, 4.0) in
+  // (right, up, forward) -- so half of each. The width half independently agrees with
+  // StartGrid::SHIP_HALF_WIDTH = 1.2, which the starting grid has always used as "half the ship's
+  // collision footprint". Worth a sanity check with whoever owns ship art if the model changes;
+  // they are per-ship fields precisely so a future ship class can differ.
+  //
+  // Additive to the golden-trace serialized state in the same way Race's session-time fields are:
+  // the trace readers name every physics field they load (parity_main.cpp's loadShip), so a trace
+  // recorded before these existed simply leaves them at these defaults.
+  double hullHalfLength{2.0};
+  double hullHalfWidth{1.2};
+  double hullHalfHeight{0.4};
+
   Vec3 up{0, 1, 0};
   Vec3 forward{0, 0, 1};
   Vec3 right{1, 0, 0};
@@ -49,6 +68,22 @@ struct Physics {
   Vec3 visualUp{0, 1, 0};
   Vec3 moveDir{0, 0, 1};
 };
+
+// The ship's collision hull as an oriented box, for a ship standing at `groundPos` on a surface
+// whose normal is `up` (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2).
+//
+// The basis is rebuilt here from `up` and physics.forward rather than read off Physics::right/up:
+// those two are written once at spawn/respawn and then stay frozen for the whole run (see
+// renderNormal's comment below), so on any banked or rolled section they no longer describe how
+// the ship is actually sitting. Callers in mesh mode pass the live surface normal they are already
+// probing with (ship.renderNormal, or the contact normal they just resolved).
+//
+// `groundPos` is a contact point ON the surface, not the hull's centre, so the box is lifted half
+// its height along `up` -- i.e. the hull rests on the ground rather than being buried to its
+// waist. (The renderer separately floats the ship's *model* a unit above groundPos as hover; that
+// is a visual flourish, and hanging collision off it would let the hull sail over anything shorter
+// than a metre.)
+Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up);
 
 struct TriggerState {
   bool armed{true};
