@@ -232,15 +232,26 @@ next step.
     half-extents are `(1.2, 0.4, 2.0)` — and the width half independently
     matches the long-standing `StartGrid::SHIP_HALF_WIDTH`.
   - The `groundPos`-to-hull-centre offset (open question 2) is the ship's real
-    hovering position, not a hull resting on the road: `Physics::hullHoverHeight`
-    (1 m) plus the live bob, via `hullHoverOffset`. Core now owns hover and bob
-    — `Ship::step` advances `Physics::bobTime` while grounded and
-    `landOnSurface` resets its phase — because collision is built on them and a
-    renderer-side copy can't drive physics; the renderer reads core's value
-    instead of integrating its own, so the drawn ship and the collided hull
-    can't drift apart. The renderer's landing-bounce spring stays visual-only:
-    `Physics::landingBounce` is an accumulator nothing decays, so feeding it to
-    the hull would ratchet it upward over a run.
+    position, not a hull resting on the road. Everything that displaces the ship
+    from its contact point is core-owned physics and feeds `hullHoverOffset`,
+    which both the collision hull and the renderer are built on:
+    `Physics::hullHoverHeight` (1 m ride height), the bob (`Physics::bobTime`,
+    advanced by `Ship::step` while grounded, phase reset by `landOnSurface`), and
+    the landing/impact bounce spring (`Physics::hoverBounce`/`hoverBounceVel`,
+    seeded by `applyLandingImpact` and `addImpactJolt`, integrated by
+    `tickHoverBounce`). The renderer holds no hover state of its own; what
+    remains renderer-side is presentation lag only — smoothed `groundPos`/`up`,
+    and the bank/pitch lean.
+  - `Physics::landingBounce`/`landingBounceVel` could NOT become that spring:
+    they are accumulators nothing decays, and `boost-circuit` and
+    `raw-mesh-tunnel-ramp` pin their growing values step by step with no
+    regeneration tool. They keep their exact write pattern alongside the new
+    fields; fold them together when the corpus is next re-baked.
+  - Consequence worth knowing: the hull now spans roughly 0.6–1.4 m above the
+    road at rest, so obstacles shorter than ~0.6 m pass under it, and a hard
+    landing or wall bang lifts it further while the bounce plays out. That is
+    the ship genuinely being up there rather than a collision approximation,
+    but it means barrier heights and hull ride height are now coupled.
 - **Milestone 5: blocked, substitute validation done.** The `raw/*-rail`
   fixtures can't be replayed at all — every one references `meshAssets`/`meshes`
   and hard-fails to load under schema 12 (verified: `parity` on
@@ -256,12 +267,17 @@ next step.
 - **Milestone 6: deliberately not done.** "Decisions locked in" gates the
   default flip on rail-fixture validation, which is blocked above. The flag
   stays off until that coverage exists.
-- **Not covered by Milestone 4.2's scope:** the airborne branch's mid-flight
-  wall contact (`Ship.cpp`'s `sweepWall` inside the `p.airborne` block) is still
-  the point sweep. 4.2 scopes itself to the grounded wall block, and converting
-  the airborne branch means interleaving the OBB test with its landing sweep —
-  a follow-up, and one the rail fixtures above (`raw-airborne-*-rail`) are the
-  natural coverage for.
+- **Airborne wall contact now uses the hull too**, beyond 4.2's original scope
+  (which stopped at the grounded block): `flyWithObbWalls` flies the box along
+  the step's arc in the same short pieces, carrying the corrected velocity —
+  vertical included — into the next piece, with landing left as the one-sided
+  road sweep the plan scopes out. Scenario coverage mirrors the grounded flank
+  clip, in flight.
+- **Still renderer-owned, and arguably shouldn't be:** `visualBank`/
+  `visualPitch`. They lean the drawn ship, which rotates the hull it is drawn
+  as, so by the same argument as bob and bounce they belong in core and in the
+  OBB's basis. Unlike `landingBounce` the golden traces only carry them, never
+  compare them, so moving them is trace-safe whenever it's wanted.
 
 ## Open questions to resolve before/while executing
 
