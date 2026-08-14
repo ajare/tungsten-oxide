@@ -134,6 +134,11 @@ double weightSpeedRetain(const Physics& p) {
 void addImpactJolt(Physics& p, double normalImpactSpeed) {
   const double m = (p.weight != 0.0 ? p.weight : Consts::HANDLING_BASE_WEIGHT) / Consts::HANDLING_BASE_WEIGHT;
   const double momentum = m * std::max(0.0, normalImpactSpeed);
+  // Kicks the same hover-bounce spring a landing does, so a wall bang visibly (and physically)
+  // jolts the ship. Added rather than set: unlike a landing, glancing off a barrier doesn't reset
+  // whatever bounce the ship already had.
+  p.hoverBounceVel += std::min(HOVER_BOUNCE_MAX_JOLT_VEL, momentum * HOVER_BOUNCE_JOLT_GAIN);
+  // Legacy accumulators, written exactly as they always were -- see Physics (Ship.hpp).
   p.landingBounce += std::min(2.0, momentum * 0.012);
   p.landingBounceVel += std::min(10.0, momentum * 0.05);
 }
@@ -389,6 +394,8 @@ void Simulation::placeShipAtPose(Ship& ship, const Pose& pose, const std::string
   p.visualPitch = 0;
   p.landingBounce = 0;
   p.landingBounceVel = 0;
+  p.hoverBounce = 0;
+  p.hoverBounceVel = 0;
   // Rendered group placement is the host's concern; headless ships skip it.
   clearBoost(ship);
   resetTriggers(ship, disarmedId);

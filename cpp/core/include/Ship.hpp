@@ -34,8 +34,20 @@ struct Physics {
   bool airborne{false};
   double verticalVel{0.0};
   double gravity{60.0};
+  // Legacy impact accumulators. Despite the names these are NOT the ship's bounce displacement:
+  // nothing decays them, so they only ever grow across a run (landings and wall jolts add, a
+  // respawn clears). Nothing reads them either -- hoverBounce below is the real thing. They are
+  // kept, written exactly as before, solely because the golden trace corpus pins their values
+  // step by step (boost-circuit and raw-mesh-tunnel-ramp both record nonzero accumulations), and
+  // that corpus has no regeneration tool. Fold them into hoverBounce whenever it is re-baked.
   double landingBounce{0.0};
   double landingBounceVel{0.0};
+  // The ship's live vertical bounce about its hover height, in metres, and its spring velocity: a
+  // damped spring kicked by landings and wall impacts. Real ship motion, so it lives here and the
+  // collision hull rides it (hullHoverOffset) -- it used to be integrated by the renderer, which
+  // meant the ship visibly hopping over a rail that physics never saw it clear.
+  double hoverBounce{0.0};
+  double hoverBounceVel{0.0};
   bool boostActive{false};
   bool boostReleasing{false};
   double boostHold{0.0};
@@ -81,21 +93,40 @@ struct Physics {
 constexpr double SHIP_BOB_RATE = 6.0;
 constexpr double SHIP_BOB_AMPLITUDE = 0.06;
 
-// How far above its ground contact point the ship actually is right now: its ride height plus the
-// current bob. Bob is suppressed in flight, where hovering over nothing means nothing (and where
-// Ship::step stops advancing bobTime for the same reason).
-//
-// The renderer's landing-bounce spring is deliberately NOT part of this. That spring is the
-// renderer's own visual state; Physics::landingBounce is a different thing despite the name -- an
-// accumulator that only ever grows (landings and impact jolts add to it, nothing decays it, only a
-// respawn clears it), so feeding it in here would ratchet the collision hull steadily upward over a
-// run.
+// The hover-bounce spring: stiffness and damping of the oscillation a landing or a wall bang kicks
+// the ship into, and the gains/caps converting an impact speed into that kick. These are the values
+// the renderer's own copy of this spring used, carried over unchanged so the ship bounces exactly as
+// it always looked like it did -- the difference is that physics now owns it, integrates it per
+// physics step rather than per rendered frame, and collides with the result.
+constexpr double HOVER_BOUNCE_STIFFNESS = 55.0;
+constexpr double HOVER_BOUNCE_DAMPING = 7.0;
+constexpr double HOVER_BOUNCE_LANDING_GAIN = 0.35;
+constexpr double HOVER_BOUNCE_MAX_LANDING_VEL = 16.0;
+constexpr double HOVER_BOUNCE_JOLT_GAIN = 0.05;
+constexpr double HOVER_BOUNCE_MAX_JOLT_VEL = 10.0;
+
+// How far above its ground contact point the ship actually is right now: its ride height, plus the
+// current bob, plus the current bounce. Everything that moves the ship vertically relative to the
+// surface it is riding is in here, which is what makes it safe for both the renderer and the
+// collision hull to be built on it. Bob is suppressed in flight, where hovering over nothing means
+// nothing (and where Ship::step stops advancing bobTime for the same reason); bounce is not, since
+// a ship kicked into the air by a landing is genuinely still moving through that arc.
 double hullHoverOffset(const Physics& physics);
 
 // Advances the bob phase by one step. Runs while the ship is in contact with a surface and stops in
 // flight; landOnSurface resets the phase to zero so reattaching to a surface can never jump the
 // ship by an arbitrary slice of the sine.
 void tickBob(Ship& ship, double dt);
+
+// Integrates the hover-bounce spring by one step. `landedThisStep` suppresses it for exactly the
+// step a landing seeded the spring on, so the seed is what the next step starts from rather than
+// something already half-decayed.
+void tickHoverBounce(Ship& ship, double dt, bool landedThisStep);
+
+// Registers a landing at `impactSpeed` (the downward speed the ship arrived with, in m/s): kicks
+// the hover-bounce spring and feeds the legacy accumulators. Called right after landOnSurface,
+// which has already zeroed the vertical velocity this is derived from.
+void applyLandingImpact(Ship& ship, double impactSpeed);
 
 // The ship's collision hull as an oriented box, for a ship whose ground contact point is
 // `groundPos` on a surface whose normal is `up` (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2).

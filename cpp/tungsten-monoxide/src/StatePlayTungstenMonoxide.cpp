@@ -286,7 +286,6 @@ void StatePlayTungstenMonoxide::createGameObjects(
     auto const& physics = ship.physics;
     mShipVisualStates[i].groundPos = physics.groundPos;
     mShipVisualStates[i].up = ship.renderNormal;
-    mShipVisualStates[i].airborne = physics.airborne;
     applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * tox::hullHoverOffset(physics),
                        ship.renderNormal, physics.forward, 0, 0);
   }
@@ -413,19 +412,6 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     auto const& ship = mGameSession->ships()[i];
     auto const& physics = ship.physics;
     auto& visual = mShipVisualStates[i];
-    const bool landed = visual.airborne && !physics.airborne;
-    if (landed) {
-      // The bob's own "resume from neutral phase on landing" rule now lives with the bob itself, in
-      // core's landOnSurface -- see ShipVisualState.
-      visual.landingBounce = 0.0;
-      double impact = max(0.0, -visual.lastVerticalVelocity);
-      // Apply the impact as spring velocity, not an immediate position offset.
-      // The old displacement impulse could move the model several metres on
-      // the exact frame that physics attached it to the surface.
-      visual.landingBounceVel = min(16.0, impact * 0.35);
-    }
-    visual.airborne = physics.airborne;
-    visual.lastVerticalVelocity = physics.verticalVel;
 
     double expectedStep = abs(physics.speed) * frameTime * 1.5 + 0.16;
     if (glm::distance(visual.groundPos, physics.groundPos) > expectedStep)
@@ -433,16 +419,12 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     else
       visual.groundPos = physics.groundPos;
     visual.up = tox::normalizeSafe(glm::mix(visual.up, ship.renderNormal, min(1.0, frameTime * 18.0)));
-    if (!landed) {
-      visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
-      visual.landingBounceVel *= exp(-7.0 * frameTime);
-      visual.landingBounce += visual.landingBounceVel * frameTime;
-    }
-    // Hover height and bob come straight from core, which owns them because the collision hull is
-    // built on them (tox::hullHoverOffset). Only the landing-bounce spring below is this
-    // renderer's own: it is a decayed visual overshoot with no counterpart in physics.
+    // Everything that moves the ship off its contact point -- ride height, bob, landing/impact
+    // bounce -- comes from core, which owns all of it because the collision hull is built on it
+    // (tox::hullHoverOffset). This renderer contributes only lag: the groundPos/up smoothing above,
+    // and the bank/pitch lean below.
     bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
-    double hover = idle ? physics.hullHoverHeight : tox::hullHoverOffset(physics) + visual.landingBounce;
+    double hover = idle ? physics.hullHoverHeight : tox::hullHoverOffset(physics);
     double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
     double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
     visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);

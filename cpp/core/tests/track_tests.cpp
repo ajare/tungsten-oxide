@@ -920,30 +920,38 @@ int main(int argc, char** argv) {
          quad({-200, roadY, 30}, {-200, roadY + 6, 30}, {200, roadY + 6, 30}, {200, roadY, 30}, {0, 0, -1}, 2))
       headOn.push_back(triangle);
 
-    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, bool obb, int steps) {
+    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, bool obb, int steps,
+                             double startY = -1.0, double launchVerticalVel = 0.0, double speed = -1.0) {
+      if (startY < 0.0) startY = roadY;
       auto driveTrack = std::make_shared<Track>(*pathLoaded.track);
       driveTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
       Simulation sim(*driveTrack);
       sim.setMeshPhysicsEnabled(true);
       sim.setObbWallCollisionEnabled(obb);
-      Ship ship = shipAt(sim, *driveTrack, {0, roadY, -20}, {0, 0, 1});
-      ship.physics.speed = ship.physics.maxSpeed;
+      Ship ship = shipAt(sim, *driveTrack, {0, startY, -20}, {0, 0, 1});
+      ship.physics.speed = speed >= 0 ? speed : ship.physics.maxSpeed;
+      ship.physics.airborne = launchVerticalVel != 0.0;
+      ship.physics.verticalVel = launchVerticalVel;
       ship.prevTriggerPos = ship.physics.groundPos;
       Vec3 furthest = ship.physics.groundPos;
       double furthestRight = -std::numeric_limits<double>::infinity();
+      double furthestRightAirborne = -std::numeric_limits<double>::infinity();
       for (int i = 0; i < steps; ++i) {
         ship.step(sim, 1.0 / 120.0, 1, 0, 0);
         if (ship.physics.groundPos.z > furthest.z) furthest = ship.physics.groundPos;
         // Only sampled once the ship is fully alongside scenario 2's wall (which starts at z = 0):
         // before that it is legitimately out in open road where any x is fine.
-        if (ship.physics.groundPos.z > 2.0) furthestRight = std::max(furthestRight, ship.physics.groundPos.x);
+        if (ship.physics.groundPos.z <= 2.0) continue;
+        furthestRight = std::max(furthestRight, ship.physics.groundPos.x);
+        if (ship.physics.airborne) furthestRightAirborne = std::max(furthestRightAirborne, ship.physics.groundPos.x);
       }
       struct Result {
         Vec3 furthest;
         double furthestRight;
+        double furthestRightAirborne;
         Ship ship;
       };
-      return Result{furthest, furthestRight, ship};
+      return Result{furthest, furthestRight, furthestRightAirborne, ship};
     };
 
     const auto obbHeadOn = driveStraight(headOn, true, 240);
@@ -971,6 +979,72 @@ int main(int argc, char** argv) {
     check(obbFlank.ship.physics.groundPos.z > pointProbeFlank.ship.physics.groundPos.z * 0.5 &&
               !obbFlank.ship.physics.airborne,
           "the deflected ship carries on down the road rather than being pinned or thrown off it");
+
+    // Scenario 3: the same flank clip, in flight. The airborne path had its own lifted point probe
+    // with the same blind spot, and it matters more there -- a ship in the air is exactly where
+    // clipping a barrier's top edge or corner happens.
+    // Launched upward so the ship is genuinely still in the air by the time it draws level with the
+    // wall (gravity here is 60 m/s^2 -- a ship simply dropped from a couple of metres is back on the
+    // road within 15 m of travel, well short of it).
+    const double flightY = roadY + 2.0;
+    const auto pointProbeFlight = driveStraight(flank, false, 60, flightY, 12.0, 60.0);
+    check(std::isfinite(pointProbeFlight.furthestRightAirborne),
+          "the flight scenario really does pass the wall while still airborne");
+    check(std::fabs(pointProbeFlight.furthestRightAirborne) < 0.01 &&
+              pointProbeFlight.furthestRightAirborne + pointProbeFlight.ship.physics.hullHalfWidth > 1.0,
+          "the airborne point probe flies the ship's flank through that wall too");
+
+    const auto obbFlight = driveStraight(flank, true, 60, flightY, 12.0, 60.0);
+    check(std::isfinite(obbFlight.furthestRightAirborne) &&
+              obbFlight.furthestRightAirborne + obbFlight.ship.physics.hullHalfWidth <= 1.0 + 1e-6,
+          "OBB wall collision keeps the hull out of the wall in flight as well as on the ground");
+    check(obbFlight.ship.physics.groundPos.z > 0.0,
+          "the deflected ship keeps flying down the course rather than being stopped dead in mid-air");
+  }
+
+  {
+    // The hover-bounce spring (core-owned, collision-visible). A landing kicks it, it decays back
+    // to rest, and the collision hull rides it the whole way -- the point of moving it out of the
+    // renderer is that the ship can no longer visibly hop over something physics never saw it clear.
+    Ship ship;
+    ship.physics.airborne = true;
+    const double restingCentre = hullObb(ship.physics, Vec3(0, 0, 0), UP).center.y;
+
+    applyLandingImpact(ship, 20.0);
+    ship.physics.airborne = false;
+    check(ship.physics.hoverBounce == 0.0 &&
+              std::fabs(ship.physics.hoverBounceVel - 20.0 * HOVER_BOUNCE_LANDING_GAIN) < 1e-12,
+          "a landing seeds the bounce spring with velocity, not an instant displacement");
+    check(ship.physics.landingBounceVel > 0.0,
+          "the legacy accumulators the golden traces pin are still written alongside it");
+
+    double peak = 0.0;
+    for (int i = 0; i < 30; ++i) {
+      tickHoverBounce(ship, 1.0 / 120.0, false);
+      peak = std::max(peak, ship.physics.hoverBounce);
+    }
+    check(peak > 0.2, "the spring actually lifts the ship after a hard landing");
+    check(std::fabs(hullObb(ship.physics, Vec3(0, 0, 0), UP).center.y - restingCentre -
+                    ship.physics.hoverBounce) < 1e-9,
+          "the collision hull rides the bounce exactly");
+
+    for (int i = 0; i < 600; ++i) tickHoverBounce(ship, 1.0 / 120.0, false);
+    check(std::fabs(ship.physics.hoverBounce) < 0.01 && std::fabs(ship.physics.hoverBounceVel) < 0.01,
+          "the spring is damped -- it settles back to the ship's resting ride height");
+
+    // Landing seeds again from scratch rather than stacking, and the tick is suppressed on the
+    // landing step itself so the seed is what the next step starts from.
+    applyLandingImpact(ship, 4.0);
+    const double seeded = ship.physics.hoverBounceVel;
+    tickHoverBounce(ship, 1.0 / 120.0, true);
+    check(ship.physics.hoverBounceVel == seeded && ship.physics.hoverBounce == 0.0,
+          "the landing step itself doesn't advance the spring it just seeded");
+
+    // A wall bang jolts the same spring, added to whatever bounce is already in flight.
+    Physics jolted;
+    addImpactJolt(jolted, 30.0);
+    check(jolted.hoverBounceVel > 0.0 && jolted.landingBounceVel > 0.0,
+          "an impact jolt kicks the hover spring as well as the legacy accumulators");
   }
 
   {

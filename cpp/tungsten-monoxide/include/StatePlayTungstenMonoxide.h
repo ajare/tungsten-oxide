@@ -58,17 +58,15 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   struct ShipVisualState {
     tox::Vec3 groundPos;
     tox::Vec3 up{0, 1, 0};
-    // No bob phase of its own: the hover bob is the ship's actual motion, owned and advanced by
-    // core (tox::hullHoverOffset / Physics::bobTime) because the collision hull rides it. A second
-    // copy integrated per rendered frame would drift out of phase with the one physics collides
-    // with the moment a frame is long enough for GameSession to clamp it.
-    double landingBounce{0};
-    double landingBounceVel{0};
+    // No hover state of its own -- no bob phase, no bounce spring. Everything that displaces the
+    // ship from its contact point is the ship's actual motion, owned and advanced by core
+    // (tox::hullHoverOffset) because the collision hull rides it. A second copy integrated per
+    // rendered frame would drift out of what physics collides with the moment a frame is long
+    // enough for GameSession to clamp it, and would put the drawn ship somewhere the hull is not.
+    // What remains here is presentation lag only: smoothed position/up above, lean below.
     double bank{0};
     double pitch{0};
     double steer{0};
-    bool airborne{false};
-    double lastVerticalVelocity{0};
   };
   std::vector<ShipVisualState> mShipVisualStates;
   double mCameraZoom{1.0};
