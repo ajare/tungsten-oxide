@@ -45,7 +45,6 @@ constexpr double LOOK_AT_FORWARD = 12.0;
 constexpr double LOOK_AT_UP_MIN = -6.0;
 constexpr double LOOK_AT_UP_MAX = 12.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
-constexpr double SHIP_BOB_AMPLITUDE = 0.06;
 
 glm::vec3 toGlm(tox::Vec3 const& value) {
   return {static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
@@ -288,14 +287,15 @@ void StatePlayTungstenMonoxide::createGameObjects(
     mShipVisualStates[i].groundPos = physics.groundPos;
     mShipVisualStates[i].up = ship.renderNormal;
     mShipVisualStates[i].airborne = physics.airborne;
-    applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * 1.0,
+    applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * tox::hullHoverOffset(physics),
                        ship.renderNormal, physics.forward, 0, 0);
   }
   applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
 
   mGhostShipSceneModel = mScene->add3dModel(mShipModel);
   mGhostShip = mGameSession->ships()[0];
-  applyShipTransform(mGhostShipSceneModel, mGhostShip.physics.groundPos + mGhostShip.renderNormal * 1.0,
+  applyShipTransform(mGhostShipSceneModel,
+                     mGhostShip.physics.groundPos + mGhostShip.renderNormal * tox::hullHoverOffset(mGhostShip.physics),
                      mGhostShip.renderNormal, mGhostShip.physics.forward, 0, 0);
   applyGhostVisibility();  // mShowPhysicsGhost defaults to false: ghost starts hidden.
 }
@@ -415,10 +415,8 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     auto& visual = mShipVisualStates[i];
     const bool landed = visual.airborne && !physics.airborne;
     if (landed) {
-      // Bob is not applied in flight. Resume it from its neutral phase only
-      // after landing so reattaching to a track or mesh cannot add an
-      // unrelated sinusoidal position jump to the contact frame.
-      visual.bobTime = 0.0;
+      // The bob's own "resume from neutral phase on landing" rule now lives with the bob itself, in
+      // core's landOnSurface -- see ShipVisualState.
       visual.landingBounce = 0.0;
       double impact = max(0.0, -visual.lastVerticalVelocity);
       // Apply the impact as spring velocity, not an immediate position offset.
@@ -440,12 +438,11 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
       visual.landingBounceVel *= exp(-7.0 * frameTime);
       visual.landingBounce += visual.landingBounceVel * frameTime;
     }
-    if (!physics.airborne && !landed) visual.bobTime += frameTime;
+    // Hover height and bob come straight from core, which owns them because the collision hull is
+    // built on them (tox::hullHoverOffset). Only the landing-bounce spring below is this
+    // renderer's own: it is a decayed visual overshoot with no counterpart in physics.
     bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
-    const double bob = physics.airborne || idle
-                           ? 0.0
-                           : sin(visual.bobTime * 6.0) * SHIP_BOB_AMPLITUDE;
-    double hover = idle ? 1.0 : 1.0 + bob + visual.landingBounce;
+    double hover = idle ? physics.hullHoverHeight : tox::hullHoverOffset(physics) + visual.landingBounce;
     double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
     double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
     visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);
@@ -458,7 +455,8 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
   // other method computed, not a pleasant-looking approximation of it.
   if (mShowPhysicsGhost && mGhostShipSceneModel) {
     auto const& ghostPhysics = mGhostShip.physics;
-    applyShipTransform(mGhostShipSceneModel, ghostPhysics.groundPos + mGhostShip.renderNormal * 1.0,
+    applyShipTransform(mGhostShipSceneModel,
+                       ghostPhysics.groundPos + mGhostShip.renderNormal * tox::hullHoverOffset(ghostPhysics),
                        mGhostShip.renderNormal, ghostPhysics.forward, 0, 0);
   }
 }

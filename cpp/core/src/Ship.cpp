@@ -393,6 +393,7 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
   }
 
   tickBoost(ship, dt);
+  tickBob(ship, dt);
   const Sample zoneSample = simulation.sampleTrack(p.groundPos.x, p.groundPos.y, p.groundPos.z);
   if (!p.airborne) simulation.detectZoneTriggers(ship, zoneSample);
 
@@ -407,6 +408,15 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 }
 
 }  // namespace
+
+double hullHoverOffset(const Physics& physics) {
+  const double bob = physics.airborne ? 0.0 : std::sin(physics.bobTime * SHIP_BOB_RATE) * SHIP_BOB_AMPLITUDE;
+  return physics.hullHoverHeight + bob;
+}
+
+void tickBob(Ship& ship, double dt) {
+  if (!ship.physics.airborne) ship.physics.bobTime += dt;
+}
 
 Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up) {
   Obb hull;
@@ -423,7 +433,7 @@ Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up) {
   hull.axes[1] = hullUp;
   hull.axes[2] = normalizeSafe(glm::cross(right, hullUp));
   hull.halfExtents = Vec3(physics.hullHalfWidth, physics.hullHalfHeight, physics.hullHalfLength);
-  hull.center = groundPos + hullUp * physics.hullHalfHeight;
+  hull.center = groundPos + hullUp * hullHoverOffset(physics);
   return hull;
 }
 
@@ -607,6 +617,7 @@ StepResult Ship::step(const Simulation& simulation, double dt, double throttle, 
   }
 
   tickBoost(ship, dt);
+  tickBob(ship, dt);
   if (!p.airborne) simulation.detectZoneTriggers(ship, c);
 
   simulation.detectTriggers(ship, ship.prevTriggerPos, p.groundPos);

@@ -115,6 +115,10 @@ void landOnSurface(Ship& ship, const Vec3& normal) {
   Physics& p = ship.physics;
   p.airborne = false;
   p.verticalVel = 0;
+  // Resume the hover bob from its neutral phase rather than wherever the sine happened to be when
+  // the ship took off, so reattaching to a surface can't jump the ship (and its collision hull) by
+  // an arbitrary slice of the oscillation on the contact frame itself.
+  p.bobTime = 0;
   tangentize(p.moveDir, normal, p.forward);
   tangentize(p.forward, normal, p.moveDir);
 }

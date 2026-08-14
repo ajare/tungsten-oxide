@@ -841,12 +841,25 @@ int main(int argc, char** argv) {
     physics.forward = Vec3(0, 0, 1);
     const Vec3 groundPos(10, 2, -3);
     const Obb flat = hullObb(physics, groundPos, UP);
-    // Sitting ON the ground: the box's underside is at the contact point, not its centre.
-    check(glm::distance(flat.center, Vec3(10, 2 + physics.hullHalfHeight, -3)) < 1e-12,
-          "hullObb lifts the hull centre half its height off the contact point");
-    check(glm::distance(flat.corner(0), Vec3(10 - 1.2, 2, -3 - 2.0)) < 1e-12 &&
-              glm::distance(flat.corner(7), Vec3(10 + 1.2, 2 + 0.8, -3 + 2.0)) < 1e-12,
-          "hullObb's corners span the ship's rendered dimensions around its contact point");
+    // Hovering, not resting: the hull is centred where the ship actually is, a full ride height
+    // above its ground contact point.
+    check(glm::distance(flat.center, Vec3(10, 2 + physics.hullHoverHeight, -3)) < 1e-12,
+          "hullObb centres the hull at the ship's hover height above the contact point");
+    check(glm::distance(flat.corner(0), Vec3(10 - 1.2, 2 + 1.0 - 0.4, -3 - 2.0)) < 1e-12 &&
+              glm::distance(flat.corner(7), Vec3(10 + 1.2, 2 + 1.0 + 0.4, -3 + 2.0)) < 1e-12,
+          "hullObb's corners span the ship's rendered dimensions about its hovering centre");
+
+    // Bob: the hull rides the same oscillation the ship is drawn with, so it tracks the ship's real
+    // position rather than an idealized resting one.
+    physics.bobTime = 0.25 * 3.14159265358979323846 / SHIP_BOB_RATE;  // quarter turn -> peak of the sine
+    const double bobbed = hullObb(physics, groundPos, UP).center.y - flat.center.y;
+    check(std::fabs(bobbed - std::sin(0.25 * 3.14159265358979323846) * SHIP_BOB_AMPLITUDE) < 1e-12,
+          "hullObb includes the ship's current bob in its centre");
+    physics.airborne = true;
+    check(std::fabs(hullObb(physics, groundPos, UP).center.y - flat.center.y) < 1e-12,
+          "an airborne ship has no bob to include -- hovering over nothing means nothing");
+    physics.airborne = false;
+    physics.bobTime = 0.0;
 
     // Frozen Physics::right/up must not leak in: a ship on a banked surface reports the same stale
     // spawn-time basis those two fields always hold, so a hull built from them would stay level
@@ -858,8 +871,8 @@ int main(int argc, char** argv) {
     physics.right = Vec3(1, 0, 0);
     const Obb banked = hullObb(physics, groundPos, bankedUp);
     check(glm::distance(banked.axes[1], bankedUp) < 1e-12, "hullObb takes its up from the live surface normal");
-    check(glm::distance(banked.center, groundPos + bankedUp * physics.hullHalfHeight) < 1e-12,
-          "a banked hull is lifted along the banked normal, not straight up");
+    check(glm::distance(banked.center, groundPos + bankedUp * hullHoverOffset(physics)) < 1e-12,
+          "a banked hull hovers along the banked normal, not straight up");
     bool orthonormal = true;
     for (int i = 0; i < 3; ++i) {
       orthonormal = orthonormal && std::fabs(glm::length(banked.axes[i]) - 1.0) < 1e-12;

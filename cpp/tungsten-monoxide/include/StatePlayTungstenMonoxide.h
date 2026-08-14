@@ -58,7 +58,10 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   struct ShipVisualState {
     tox::Vec3 groundPos;
     tox::Vec3 up{0, 1, 0};
-    double bobTime{0};
+    // No bob phase of its own: the hover bob is the ship's actual motion, owned and advanced by
+    // core (tox::hullHoverOffset / Physics::bobTime) because the collision hull rides it. A second
+    // copy integrated per rendered frame would drift out of phase with the one physics collides
+    // with the moment a frame is long enough for GameSession to clamp it.
     double landingBounce{0};
     double landingBounceVel{0};
     double bank{0};

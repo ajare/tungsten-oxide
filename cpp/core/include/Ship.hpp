@@ -14,6 +14,7 @@ namespace tox {
 class Simulation;
 struct StepResult;
 struct Obb;
+struct Ship;  // defined below; the hull/bob helpers between here and there take one
 
 struct Physics {
   double heading{0.0};
@@ -59,6 +60,11 @@ struct Physics {
   double hullHalfLength{2.0};
   double hullHalfWidth{1.2};
   double hullHalfHeight{0.4};
+  // Ride height: how far the hull's centre floats above its ground contact point at rest. The ship
+  // is a hovercraft, not a car -- it never sits on the road -- so this is the same one metre the
+  // renderer raises the model by, and collision uses the ship's real position rather than a hull
+  // pretending to rest on the surface. Bob rides on top of this; see hullHoverOffset.
+  double hullHoverHeight{1.0};
 
   Vec3 up{0, 1, 0};
   Vec3 forward{0, 0, 1};
@@ -69,8 +75,30 @@ struct Physics {
   Vec3 moveDir{0, 0, 1};
 };
 
-// The ship's collision hull as an oriented box, for a ship standing at `groundPos` on a surface
-// whose normal is `up` (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2).
+// The ship's idle bob: a gentle sinusoidal hover oscillation, in metres about hullHoverHeight, at
+// radians per second. These are the ship's own motion, not a rendering flourish -- the collision
+// hull rides the bob with the model -- so they live here rather than in the renderer that draws it.
+constexpr double SHIP_BOB_RATE = 6.0;
+constexpr double SHIP_BOB_AMPLITUDE = 0.06;
+
+// How far above its ground contact point the ship actually is right now: its ride height plus the
+// current bob. Bob is suppressed in flight, where hovering over nothing means nothing (and where
+// Ship::step stops advancing bobTime for the same reason).
+//
+// The renderer's landing-bounce spring is deliberately NOT part of this. That spring is the
+// renderer's own visual state; Physics::landingBounce is a different thing despite the name -- an
+// accumulator that only ever grows (landings and impact jolts add to it, nothing decays it, only a
+// respawn clears it), so feeding it in here would ratchet the collision hull steadily upward over a
+// run.
+double hullHoverOffset(const Physics& physics);
+
+// Advances the bob phase by one step. Runs while the ship is in contact with a surface and stops in
+// flight; landOnSurface resets the phase to zero so reattaching to a surface can never jump the
+// ship by an arbitrary slice of the sine.
+void tickBob(Ship& ship, double dt);
+
+// The ship's collision hull as an oriented box, for a ship whose ground contact point is
+// `groundPos` on a surface whose normal is `up` (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2).
 //
 // The basis is rebuilt here from `up` and physics.forward rather than read off Physics::right/up:
 // those two are written once at spawn/respawn and then stay frozen for the whole run (see
@@ -78,11 +106,9 @@ struct Physics {
 // the ship is actually sitting. Callers in mesh mode pass the live surface normal they are already
 // probing with (ship.renderNormal, or the contact normal they just resolved).
 //
-// `groundPos` is a contact point ON the surface, not the hull's centre, so the box is lifted half
-// its height along `up` -- i.e. the hull rests on the ground rather than being buried to its
-// waist. (The renderer separately floats the ship's *model* a unit above groundPos as hover; that
-// is a visual flourish, and hanging collision off it would let the hull sail over anything shorter
-// than a metre.)
+// `groundPos` is a contact point on the surface, not the ship: the hull is centred where the ship
+// actually is, hullHoverOffset above it, bob included. Anything lower would be colliding with a
+// pose the ship is never in.
 Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up);
 
 struct TriggerState {
