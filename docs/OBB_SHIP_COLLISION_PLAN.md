@@ -230,10 +230,17 @@ next step.
     `box.mppmodel` is a unit cube scaled by `(2.4, 0.8, 4.0)` in
     right/up/forward (`StatePlayTungstenMonoxide::applyShipTransform`), so
     half-extents are `(1.2, 0.4, 2.0)` — and the width half independently
-    matches the long-standing `StartGrid::SHIP_HALF_WIDTH`. The hull rests on
-    `groundPos` (centre lifted by `hullHalfHeight`); the renderer's separate
-    one-metre visual hover is deliberately not used, since hanging collision
-    off it would let the hull sail over anything shorter than a metre.
+    matches the long-standing `StartGrid::SHIP_HALF_WIDTH`.
+  - The `groundPos`-to-hull-centre offset (open question 2) is the ship's real
+    hovering position, not a hull resting on the road: `Physics::hullHoverHeight`
+    (1 m) plus the live bob, via `hullHoverOffset`. Core now owns hover and bob
+    — `Ship::step` advances `Physics::bobTime` while grounded and
+    `landOnSurface` resets its phase — because collision is built on them and a
+    renderer-side copy can't drive physics; the renderer reads core's value
+    instead of integrating its own, so the drawn ship and the collided hull
+    can't drift apart. The renderer's landing-bounce spring stays visual-only:
+    `Physics::landingBounce` is an accumulator nothing decays, so feeding it to
+    the hull would ratchet it upward over a run.
 - **Milestone 5: blocked, substitute validation done.** The `raw/*-rail`
   fixtures can't be replayed at all — every one references `meshAssets`/`meshes`
   and hard-fails to load under schema 12 (verified: `parity` on
