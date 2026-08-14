@@ -273,11 +273,16 @@ next step.
   vertical included — into the next piece, with landing left as the one-sided
   road sweep the plan scopes out. Scenario coverage mirrors the grounded flank
   clip, in flight.
-- **Still renderer-owned, and arguably shouldn't be:** `visualBank`/
-  `visualPitch`. They lean the drawn ship, which rotates the hull it is drawn
-  as, so by the same argument as bob and bounce they belong in core and in the
-  OBB's basis. Unlike `landingBounce` the golden traces only carry them, never
-  compare them, so moving them is trace-safe whenever it's wanted.
+- **Bank and pitch are core-owned too** (`tickLean`), and `hullObb` leans the
+  box by them using the identical Euler quaternion the render transform
+  composes, applied to the same basis. The hover lift still follows the surface
+  normal — leaning rolls the ship about its own centre. The renderer now derives
+  the entire ship pose from physics and keeps only presentation lag (smoothed
+  `groundPos`/`up`). Note the consequence for hull reach: at the 140 m/s top
+  speed the pitch term is ~0.56 rad, so the hull's horizontal reach along its
+  length shrinks by ~0.1 m and one end dips below the road (harmless — the wall
+  resolver filters floor-facing triangles, and ground contact is a separate
+  point probe).
 
 ## Open questions to resolve before/while executing
 
