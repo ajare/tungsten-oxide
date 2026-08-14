@@ -12,6 +12,7 @@
 #include <string>
 
 #include "GameSession.hpp"
+#include "Obb.hpp"
 #include "ShipFactory.hpp"
 #include "Simulation.hpp"
 #include "StartGrid.hpp"
@@ -380,7 +381,7 @@ int main(int argc, char** argv) {
                       {"rotation", 0},
                       {"direction", "forward"}};
   json base = {{"version", TrackCore::TRACK_SCHEMA_VERSION},
-              {"name", "Fixture - base"},
+               {"name", "Fixture - base"},
               {"start", {{"path", 0}, {"point", 0}, {"reverse", false}}},
               {"handling", {{"maxSpeed", 140}, {"accel", 71}, {"turnSpeed", 137.5}, {"weight", 1000}}},
               {"zones", json::array()},
@@ -629,6 +630,110 @@ int main(int argc, char** argv) {
     auto crossingHit = tunnelSurface.sweepWall({-10, 1, 10}, {10, 1, 10});
     check(crossingHit && crossingHit->surfaceId == 3 && std::fabs(crossingHit->position.x + 4) < 1e-9,
           "sweepWall picks the nearer of two walls a segment crosses (left, not right)");
+  }
+
+  {
+    // OBB SAT primitive (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 1). The depths below are all
+    // hand-computed from the geometry rather than recorded from a run, so a regression in the
+    // minimum-translation-vector selection shows up as a wrong number, not just a wrong flag.
+    // Deliberately not checkClose(): these are exact hand-computed geometry, not oracle-fixture
+    // comparisons, and shouldn't feed the geometry-oracle worst-delta report at the end of main().
+    auto checkDepth = [](double got, double want, const std::string& message) {
+      check(std::fabs(got - want) < 1e-12,
+            message + ": got " + std::to_string(got) + ", want " + std::to_string(want));
+    };
+    auto triangleAt = [](Vec3 a, Vec3 b, Vec3 c, Vec3 normal) {
+      CollisionTriangle triangle;
+      triangle.positions[0] = a;
+      triangle.positions[1] = b;
+      triangle.positions[2] = c;
+      triangle.normals[0] = triangle.normals[1] = triangle.normals[2] = normal;
+      return triangle;
+    };
+
+    Obb unitBox;
+    unitBox.halfExtents = Vec3(1, 1, 1);
+
+    // A big wall standing in the plane x = 0.5, i.e. half a unit inside the box's +x face. The
+    // shortest way out is straight back along -x by (1 - 0.5).
+    const CollisionTriangle nearWall =
+        triangleAt({0.5, -50, -50}, {0.5, 50, -50}, {0.5, 0, 50}, {1, 0, 0});
+    Vec3 normal(0.0);
+    double depth = 0.0;
+    check(overlapsTriangle(unitBox, nearWall, &normal, &depth), "OBB overlaps a wall crossing it");
+    checkDepth(depth, 0.5, "OBB/triangle MTV depth");
+    check(glm::distance(normal, Vec3(-1, 0, 0)) < 1e-12, "OBB/triangle MTV normal points out of the wall");
+
+    const CollisionTriangle farWall =
+        triangleAt({1.5, -50, -50}, {1.5, 50, -50}, {1.5, 0, 50}, {1, 0, 0});
+    check(!overlapsTriangle(unitBox, farWall, nullptr, nullptr), "OBB misses a wall beyond its half extent");
+
+    // Corner-only contact: yaw the box 45 degrees so a corner, not a face, is what reaches the
+    // wall. Its reach along world x is then |cos45| + |sin45| = sqrt(2), so a wall at x = 1.3 is
+    // penetrated by exactly sqrt(2) - 1.3.
+    Obb yawed;
+    const double c45 = std::cos(0.25 * 3.14159265358979323846);
+    yawed.axes[0] = Vec3(c45, 0, -c45);
+    yawed.axes[1] = Vec3(0, 1, 0);
+    yawed.axes[2] = Vec3(c45, 0, c45);
+    yawed.halfExtents = Vec3(1, 1, 1);
+    const CollisionTriangle cornerWall =
+        triangleAt({1.3, -50, -50}, {1.3, 50, -50}, {1.3, 0, 50}, {-1, 0, 0});
+    check(overlapsTriangle(yawed, cornerWall, &normal, &depth), "a yawed OBB's corner reaches a wall its faces do not");
+    checkDepth(depth, std::sqrt(2.0) - 1.3, "corner-only contact depth");
+    check(glm::distance(normal, Vec3(-1, 0, 0)) < 1e-12, "corner-only contact normal points out of the wall");
+
+    // Edge-vs-edge: the case a face-normals-only SAT gets wrong. This triangle straddles the box on
+    // every box face axis AND on its own plane (which passes through the box centre), so only one of
+    // the nine edge cross-product axes -- here cross(boxY, edgeAB), which comes out along
+    // (1,0,-1)/sqrt(2) -- can separate them. The box's reach along that axis is exactly sqrt(2), so
+    // an edge held at 1.45 clears it and one at 1.35 does not.
+    auto edgeOnTriangle = [&](double offset) {
+      const Vec3 axis = normalizeSafe(Vec3(1, 0, -1));
+      const Vec3 along = normalizeSafe(Vec3(1, 0, 1));
+      return triangleAt(axis * offset - along * 3.0 + Vec3(0, -2, 0),
+                        axis * offset + along * 3.0 + Vec3(0, 2, 0), axis * 3.0, Vec3(0, 1, 0));
+    };
+    const CollisionTriangle clearing = edgeOnTriangle(1.45);
+    check(std::fabs(glm::dot(glm::cross(clearing.positions[1] - clearing.positions[0],
+                                        clearing.positions[2] - clearing.positions[0]),
+                             Vec3(0, 0, 0) - clearing.positions[0])) < 1e-9,
+          "the edge-on triangle's own plane passes through the box centre (so no face normal separates)");
+    check(!overlapsTriangle(unitBox, clearing, nullptr, nullptr),
+          "full SAT separates an edge-on triangle that only an edge cross-product axis rejects");
+    check(overlapsTriangle(unitBox, edgeOnTriangle(1.35), &normal, &depth),
+          "the same triangle moved inside the box's reach along that axis does overlap");
+    checkDepth(depth, std::sqrt(2.0) - 1.35, "edge-vs-edge contact depth");
+    check(glm::distance(normal, normalizeSafe(Vec3(-1, 0, 1))) < 1e-9,
+          "edge-vs-edge contact normal lies along the separating edge-cross axis");
+
+    // Vertex order and authored render normals are irrelevant to the test -- it is pure geometry.
+    const CollisionTriangle reversed =
+        triangleAt(nearWall.positions[2], nearWall.positions[1], nearWall.positions[0], {-1, 0, 0});
+    Vec3 reversedNormal(0.0);
+    double reversedDepth = 0.0;
+    check(overlapsTriangle(unitBox, reversed, &reversedNormal, &reversedDepth) &&
+              std::fabs(reversedDepth - 0.5) < 1e-12 && glm::distance(reversedNormal, Vec3(-1, 0, 0)) < 1e-12,
+          "OBB/triangle overlap ignores winding and authored normals");
+
+    // overlapsAabb: the conservative BVH-pruning test.
+    const TrackCollisionSurface::Bounds unitBounds{{-1, -1, -1}, {1, 1, 1}};
+    Obb probe;
+    probe.halfExtents = Vec3(0.5, 0.5, 0.5);
+    probe.center = Vec3(1.4, 0, 0);
+    check(overlapsAabb(probe, unitBounds), "OBB/AABB overlap along a world axis");
+    probe.center = Vec3(1.6, 0, 0);
+    check(!overlapsAabb(probe, unitBounds), "OBB/AABB separation along a world axis");
+    probe.center = Vec3(0, 0, 3);
+    check(!overlapsAabb(probe, unitBounds), "OBB/AABB separation along another world axis");
+    // A yawed box's diagonal reach is what matters here, and it must be measured on the box's own
+    // axes: an axis-aligned bounds test of the OBB's world extent alone would call this a hit.
+    probe.axes[0] = Vec3(c45, 0, -c45);
+    probe.axes[2] = Vec3(c45, 0, c45);
+    probe.center = Vec3(1.0 + 0.5 * std::sqrt(2.0) - 0.05, 0, 0);
+    check(overlapsAabb(probe, unitBounds), "a yawed OBB's corner still registers against an AABB");
+    probe.center = Vec3(1.0 + 0.5 * std::sqrt(2.0) + 0.05, 0, 0);
+    check(!overlapsAabb(probe, unitBounds), "a yawed OBB just clear of an AABB is rejected");
   }
 
   {
