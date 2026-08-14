@@ -6,12 +6,14 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <string>
 
 #include "GameSession.hpp"
+#include "Obb.hpp"
 #include "ShipFactory.hpp"
 #include "Simulation.hpp"
 #include "StartGrid.hpp"
@@ -380,7 +382,7 @@ int main(int argc, char** argv) {
                       {"rotation", 0},
                       {"direction", "forward"}};
   json base = {{"version", TrackCore::TRACK_SCHEMA_VERSION},
-              {"name", "Fixture - base"},
+               {"name", "Fixture - base"},
               {"start", {{"path", 0}, {"point", 0}, {"reverse", false}}},
               {"handling", {{"maxSpeed", 140}, {"accel", 71}, {"turnSpeed", 137.5}, {"weight", 1000}}},
               {"zones", json::array()},
@@ -588,12 +590,114 @@ int main(int argc, char** argv) {
   }
 
   {
-    // sweepWall() had no dedicated coverage at all before DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
-    // 6.2 -- every existing BVH test above exercises nearestAlongAxis/nearestAcrossAxis/sweep, not
-    // the TwoSidedWall filter stepMeshPhysics's lateral wall-bounce logic actually depends on. A
-    // tunnel cross-section (floor + ceiling, both excluded by the |dot(normal,UP)|>0.5 floor/
-    // ceiling filter, plus two opposing walls) is exactly the genuinely-3D, multiple-BVH-leaf
-    // shape Milestone 6.1's own validation asset uses, so this mirrors that asset in miniature.
+    // OBB SAT primitive (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 1). The depths below are all
+    // hand-computed from the geometry rather than recorded from a run, so a regression in the
+    // minimum-translation-vector selection shows up as a wrong number, not just a wrong flag.
+    // Deliberately not checkClose(): these are exact hand-computed geometry, not oracle-fixture
+    // comparisons, and shouldn't feed the geometry-oracle worst-delta report at the end of main().
+    auto checkDepth = [](double got, double want, const std::string& message) {
+      check(std::fabs(got - want) < 1e-12,
+            message + ": got " + std::to_string(got) + ", want " + std::to_string(want));
+    };
+    auto triangleAt = [](Vec3 a, Vec3 b, Vec3 c, Vec3 normal) {
+      CollisionTriangle triangle;
+      triangle.positions[0] = a;
+      triangle.positions[1] = b;
+      triangle.positions[2] = c;
+      triangle.normals[0] = triangle.normals[1] = triangle.normals[2] = normal;
+      return triangle;
+    };
+
+    Obb unitBox;
+    unitBox.halfExtents = Vec3(1, 1, 1);
+
+    // A big wall standing in the plane x = 0.5, i.e. half a unit inside the box's +x face. The
+    // shortest way out is straight back along -x by (1 - 0.5).
+    const CollisionTriangle nearWall =
+        triangleAt({0.5, -50, -50}, {0.5, 50, -50}, {0.5, 0, 50}, {1, 0, 0});
+    Vec3 normal(0.0);
+    double depth = 0.0;
+    check(overlapsTriangle(unitBox, nearWall, &normal, &depth), "OBB overlaps a wall crossing it");
+    checkDepth(depth, 0.5, "OBB/triangle MTV depth");
+    check(glm::distance(normal, Vec3(-1, 0, 0)) < 1e-12, "OBB/triangle MTV normal points out of the wall");
+
+    const CollisionTriangle farWall =
+        triangleAt({1.5, -50, -50}, {1.5, 50, -50}, {1.5, 0, 50}, {1, 0, 0});
+    check(!overlapsTriangle(unitBox, farWall, nullptr, nullptr), "OBB misses a wall beyond its half extent");
+
+    // Corner-only contact: yaw the box 45 degrees so a corner, not a face, is what reaches the
+    // wall. Its reach along world x is then |cos45| + |sin45| = sqrt(2), so a wall at x = 1.3 is
+    // penetrated by exactly sqrt(2) - 1.3.
+    Obb yawed;
+    const double c45 = std::cos(0.25 * 3.14159265358979323846);
+    yawed.axes[0] = Vec3(c45, 0, -c45);
+    yawed.axes[1] = Vec3(0, 1, 0);
+    yawed.axes[2] = Vec3(c45, 0, c45);
+    yawed.halfExtents = Vec3(1, 1, 1);
+    const CollisionTriangle cornerWall =
+        triangleAt({1.3, -50, -50}, {1.3, 50, -50}, {1.3, 0, 50}, {-1, 0, 0});
+    check(overlapsTriangle(yawed, cornerWall, &normal, &depth), "a yawed OBB's corner reaches a wall its faces do not");
+    checkDepth(depth, std::sqrt(2.0) - 1.3, "corner-only contact depth");
+    check(glm::distance(normal, Vec3(-1, 0, 0)) < 1e-12, "corner-only contact normal points out of the wall");
+
+    // Edge-vs-edge: the case a face-normals-only SAT gets wrong. This triangle straddles the box on
+    // every box face axis AND on its own plane (which passes through the box centre), so only one of
+    // the nine edge cross-product axes -- here cross(boxY, edgeAB), which comes out along
+    // (1,0,-1)/sqrt(2) -- can separate them. The box's reach along that axis is exactly sqrt(2), so
+    // an edge held at 1.45 clears it and one at 1.35 does not.
+    auto edgeOnTriangle = [&](double offset) {
+      const Vec3 axis = normalizeSafe(Vec3(1, 0, -1));
+      const Vec3 along = normalizeSafe(Vec3(1, 0, 1));
+      return triangleAt(axis * offset - along * 3.0 + Vec3(0, -2, 0),
+                        axis * offset + along * 3.0 + Vec3(0, 2, 0), axis * 3.0, Vec3(0, 1, 0));
+    };
+    const CollisionTriangle clearing = edgeOnTriangle(1.45);
+    check(std::fabs(glm::dot(glm::cross(clearing.positions[1] - clearing.positions[0],
+                                        clearing.positions[2] - clearing.positions[0]),
+                             Vec3(0, 0, 0) - clearing.positions[0])) < 1e-9,
+          "the edge-on triangle's own plane passes through the box centre (so no face normal separates)");
+    check(!overlapsTriangle(unitBox, clearing, nullptr, nullptr),
+          "full SAT separates an edge-on triangle that only an edge cross-product axis rejects");
+    check(overlapsTriangle(unitBox, edgeOnTriangle(1.35), &normal, &depth),
+          "the same triangle moved inside the box's reach along that axis does overlap");
+    checkDepth(depth, std::sqrt(2.0) - 1.35, "edge-vs-edge contact depth");
+    check(glm::distance(normal, normalizeSafe(Vec3(-1, 0, 1))) < 1e-9,
+          "edge-vs-edge contact normal lies along the separating edge-cross axis");
+
+    // Vertex order and authored render normals are irrelevant to the test -- it is pure geometry.
+    const CollisionTriangle reversed =
+        triangleAt(nearWall.positions[2], nearWall.positions[1], nearWall.positions[0], {-1, 0, 0});
+    Vec3 reversedNormal(0.0);
+    double reversedDepth = 0.0;
+    check(overlapsTriangle(unitBox, reversed, &reversedNormal, &reversedDepth) &&
+              std::fabs(reversedDepth - 0.5) < 1e-12 && glm::distance(reversedNormal, Vec3(-1, 0, 0)) < 1e-12,
+          "OBB/triangle overlap ignores winding and authored normals");
+
+    // overlapsAabb: the conservative BVH-pruning test.
+    const TrackCollisionSurface::Bounds unitBounds{{-1, -1, -1}, {1, 1, 1}};
+    Obb probe;
+    probe.halfExtents = Vec3(0.5, 0.5, 0.5);
+    probe.center = Vec3(1.4, 0, 0);
+    check(overlapsAabb(probe, unitBounds), "OBB/AABB overlap along a world axis");
+    probe.center = Vec3(1.6, 0, 0);
+    check(!overlapsAabb(probe, unitBounds), "OBB/AABB separation along a world axis");
+    probe.center = Vec3(0, 0, 3);
+    check(!overlapsAabb(probe, unitBounds), "OBB/AABB separation along another world axis");
+    // A yawed box's diagonal reach is what matters here, and it must be measured on the box's own
+    // axes: an axis-aligned bounds test of the OBB's world extent alone would call this a hit.
+    probe.axes[0] = Vec3(c45, 0, -c45);
+    probe.axes[2] = Vec3(c45, 0, c45);
+    probe.center = Vec3(1.0 + 0.5 * std::sqrt(2.0) - 0.05, 0, 0);
+    check(overlapsAabb(probe, unitBounds), "a yawed OBB's corner still registers against an AABB");
+    probe.center = Vec3(1.0 + 0.5 * std::sqrt(2.0) + 0.05, 0, 0);
+    check(!overlapsAabb(probe, unitBounds), "a yawed OBB just clear of an AABB is rejected");
+  }
+
+  {
+    // TrackCollisionSurface::queryObb through the BVH (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 2).
+    // The corner below is deliberately built from ten triangles rather than the four it needs
+    // geometrically: the BVH only splits above eight triangles per leaf, so a minimal corner would
+    // test one leaf and never the interior-node pruning this query is mostly made of.
     auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
       CollisionTriangle first, second;
       first.positions[0] = a;
@@ -606,29 +710,329 @@ int main(int argc, char** argv) {
       first.surfaceId = second.surfaceId = surfaceId;
       return std::vector<CollisionTriangle>{first, second};
     };
-    std::vector<CollisionTriangle> tunnel;
+    std::vector<CollisionTriangle> corner;
     auto append = [&](std::vector<CollisionTriangle> quadTris) {
-      tunnel.insert(tunnel.end(), quadTris.begin(), quadTris.end());
+      corner.insert(corner.end(), quadTris.begin(), quadTris.end());
     };
-    append(quad({-5, 0, 5}, {5, 0, 5}, {5, 0, 15}, {-5, 0, 15}, {0, 1, 0}, 1));     // floor
-    append(quad({-5, 6, 5}, {5, 6, 5}, {5, 6, 15}, {-5, 6, 15}, {0, -1, 0}, 2));    // ceiling
-    append(quad({-4, 0, 5}, {-4, 6, 5}, {-4, 6, 15}, {-4, 0, 15}, {1, 0, 0}, 3));   // left wall
-    append(quad({4, 0, 5}, {4, 6, 5}, {4, 6, 15}, {4, 0, 15}, {-1, 0, 0}, 4));      // right wall
-    TrackCollisionSurface tunnelSurface(tunnel);
+    append(quad({-20, 0, 0}, {4, 0, 0}, {4, 0, 20}, {-20, 0, 20}, {0, 1, 0}, 1));       // floor
+    append(quad({4, 0, 0}, {4, 6, 0}, {4, 6, 10}, {4, 0, 10}, {-1, 0, 0}, 3));          // +x wall, near half
+    append(quad({4, 0, 10}, {4, 6, 10}, {4, 6, 20}, {4, 0, 20}, {-1, 0, 0}, 3));        // +x wall, far half
+    append(quad({-20, 0, 20}, {-20, 6, 20}, {-8, 6, 20}, {-8, 0, 20}, {0, 0, -1}, 4));  // +z wall, far half
+    append(quad({-8, 0, 20}, {-8, 6, 20}, {4, 6, 20}, {4, 0, 20}, {0, 0, -1}, 4));      // +z wall, near half
+    TrackCollisionSurface cornerSurface(corner);
 
-    auto leftHit = tunnelSurface.sweepWall({0, 1, 10}, {-10, 1, 10});
-    check(leftHit && leftHit->surfaceId == 3 && std::fabs(leftHit->position.x + 4) < 1e-9,
-          "sweepWall finds the left wall of a tunnel cross-section");
-    check(leftHit && glm::dot(leftHit->normal, Vec3(1, 0, 10) - leftHit->position) > 0,
-          "sweepWall orients the contact normal back toward the side the sweep started from");
+    auto surfaceIdsHit = [&](const Obb& obb) {
+      std::vector<ObbContact> contacts;
+      cornerSurface.queryObb(obb, contacts);
+      std::set<int> ids;
+      for (const auto& contact : contacts) ids.insert(contact.surfaceId);
+      return ids;
+    };
 
-    check(!tunnelSurface.sweepWall({0, 1, 10}, {0, 10, 10}).has_value(),
-          "sweepWall never reports the floor/ceiling of a tunnel as a wall, even when a segment "
-          "would otherwise cross it");
+    Obb hull;
+    hull.halfExtents = Vec3(1.2, 0.4, 2.0);
+    hull.center = Vec3(0, 1.5, 10);
+    check(surfaceIdsHit(hull).empty(), "queryObb reports nothing for a box clear of every triangle");
 
-    auto crossingHit = tunnelSurface.sweepWall({-10, 1, 10}, {10, 1, 10});
-    check(crossingHit && crossingHit->surfaceId == 3 && std::fabs(crossingHit->position.x + 4) < 1e-9,
-          "sweepWall picks the nearer of two walls a segment crosses (left, not right)");
+    hull.center = Vec3(3.5, 1.5, 5);
+    check(surfaceIdsHit(hull) == std::set<int>{3}, "queryObb finds the one wall a box has driven into");
+
+    hull.center = Vec3(3.5, 1.5, 18.5);
+    check(surfaceIdsHit(hull) == std::set<int>{3, 4},
+          "queryObb finds both walls at once in a corner -- the case a single probe point cannot");
+
+    hull.center = Vec3(0, 0.2, 10);
+    check(surfaceIdsHit(hull) == std::set<int>{1}, "queryObb finds the floor a box has sunk into");
+
+    // Contact content, on the single-wall case. Every contact's plane push is the same one the
+    // whole wall agrees on -- straight back out along -x by (3.5 + 1.2) - 4.0 -- regardless of
+    // which of the wall's triangles produced it.
+    hull.center = Vec3(3.5, 1.5, 5);
+    std::vector<ObbContact> contacts;
+    cornerSurface.queryObb(hull, contacts);
+    check(!contacts.empty(), "the single-wall case produces at least one contact");
+    bool everyPlanePushAgrees = !contacts.empty();
+    bool everyMtvIsShortest = !contacts.empty();
+    for (const auto& contact : contacts) {
+      everyPlanePushAgrees = everyPlanePushAgrees && glm::distance(contact.planeNormal, Vec3(-1, 0, 0)) < 1e-9 &&
+                             std::fabs(contact.planeDepth - (3.5 + 1.2 - 4.0)) < 1e-9;
+      everyMtvIsShortest = everyMtvIsShortest && contact.depth > 0.0 && contact.depth <= contact.planeDepth + 1e-12;
+    }
+    check(everyPlanePushAgrees,
+          "queryObb contacts agree on one out-of-wall plane push, whichever triangle produced them");
+    check(everyMtvIsShortest, "each contact's MTV is a real, no-longer-than-the-plane-push separation");
+
+    // The internal-edge artifact planeNormal exists to sidestep: a box overlapping a wall triangle
+    // near the seam it shares with its neighbour has a genuinely shorter way out sideways across
+    // that seam than back out of the wall, so at least one contact's MTV here is NOT the plane push
+    // -- which is exactly why the wall resolver uses planeNormal instead.
+    hull.center = Vec3(3.5, 1.5, 10);
+    cornerSurface.queryObb(hull, contacts);
+    bool sawEdgeMtv = false;
+    for (const auto& contact : contacts)
+      if (glm::distance(contact.normal, contact.planeNormal) > 1e-6) sawEdgeMtv = true;
+    check(sawEdgeMtv, "a box straddling a wall's internal seam sees an MTV that leaves the wall plane");
+
+    // A pose that only a yawed box reaches: square-on the box's +x face stops 0.05 short of the
+    // wall, but yawed 45 degrees its corner reaches 1.2*cos45 + 2.0*cos45 = 2.263 along x instead.
+    Obb square;
+    square.halfExtents = Vec3(1.2, 0.4, 2.0);
+    square.center = Vec3(4.0 - 1.25, 1.5, 5);
+    check(surfaceIdsHit(square).empty(), "a square-on hull stopping short of the wall reports no contact");
+    const double c45 = std::cos(0.25 * 3.14159265358979323846);
+    Obb yawed = square;
+    yawed.axes[0] = Vec3(c45, 0, -c45);
+    yawed.axes[2] = Vec3(c45, 0, c45);
+    check(surfaceIdsHit(yawed) == std::set<int>{3},
+          "the same hull yawed 45 degrees has a corner through the wall -- the rotation-dependent "
+          "clip a centreline probe structurally cannot see");
+  }
+
+  {
+    // hullObb (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2): the ship's own hull box.
+    Physics physics;
+    check(physics.hullHalfWidth == StartGrid::SHIP_HALF_WIDTH,
+          "the hull's half width is the same figure the starting grid spaces ships by");
+
+    physics.forward = Vec3(0, 0, 1);
+    const Vec3 groundPos(10, 2, -3);
+    const Obb flat = hullObb(physics, groundPos, UP);
+    // Hovering, not resting: the hull is centred where the ship actually is, a full ride height
+    // above its ground contact point.
+    check(glm::distance(flat.center, Vec3(10, 2 + physics.hullHoverHeight, -3)) < 1e-12,
+          "hullObb centres the hull at the ship's hover height above the contact point");
+    check(glm::distance(flat.corner(0), Vec3(10 - 1.2, 2 + 1.0 - 0.4, -3 - 2.0)) < 1e-12 &&
+              glm::distance(flat.corner(7), Vec3(10 + 1.2, 2 + 1.0 + 0.4, -3 + 2.0)) < 1e-12,
+          "hullObb's corners span the ship's rendered dimensions about its hovering centre");
+
+    // Bob: the hull rides the same oscillation the ship is drawn with, so it tracks the ship's real
+    // position rather than an idealized resting one.
+    physics.bobTime = 0.25 * 3.14159265358979323846 / SHIP_BOB_RATE;  // quarter turn -> peak of the sine
+    const double bobbed = hullObb(physics, groundPos, UP).center.y - flat.center.y;
+    check(std::fabs(bobbed - std::sin(0.25 * 3.14159265358979323846) * SHIP_BOB_AMPLITUDE) < 1e-12,
+          "hullObb includes the ship's current bob in its centre");
+    physics.airborne = true;
+    check(std::fabs(hullObb(physics, groundPos, UP).center.y - flat.center.y) < 1e-12,
+          "an airborne ship has no bob to include -- hovering over nothing means nothing");
+    physics.airborne = false;
+    physics.bobTime = 0.0;
+
+    // Frozen Physics::right/up must not leak in: a ship on a banked surface reports the same stale
+    // spawn-time basis those two fields always hold, so a hull built from them would stay level
+    // while the ship rolled. Here the pose says 30 degrees of bank and the hull has to follow.
+    const double bank = 30.0 * 3.14159265358979323846 / 180.0;
+    const Vec3 bankedUp(std::sin(bank), std::cos(bank), 0);
+    physics.forward = Vec3(0, 0, 1);
+    physics.up = UP;  // deliberately stale, as a real run's would be
+    physics.right = Vec3(1, 0, 0);
+    const Obb banked = hullObb(physics, groundPos, bankedUp);
+    check(glm::distance(banked.axes[1], bankedUp) < 1e-12, "hullObb takes its up from the live surface normal");
+    check(glm::distance(banked.center, groundPos + bankedUp * hullHoverOffset(physics)) < 1e-12,
+          "a banked hull hovers along the banked normal, not straight up");
+    bool orthonormal = true;
+    for (int i = 0; i < 3; ++i) {
+      orthonormal = orthonormal && std::fabs(glm::length(banked.axes[i]) - 1.0) < 1e-12;
+      for (int j = i + 1; j < 3; ++j)
+        orthonormal = orthonormal && std::fabs(glm::dot(banked.axes[i], banked.axes[j])) < 1e-12;
+    }
+    check(orthonormal, "hullObb's basis is orthonormal (the SAT tests assume it)");
+    check(glm::dot(banked.axes[2], physics.forward) > 0.99,
+          "a banked hull still points where the ship is heading");
+
+    // Lean: bank rolls the hull about its own forward axis and pitch tips it about its own right
+    // axis, matching the composition the render transform applies to the model. A hull that stayed
+    // level while the ship rolled would be wrong exactly where contact is likeliest.
+    physics.forward = Vec3(0, 0, 1);
+    physics.visualBank = 0.3;
+    physics.visualPitch = 0.0;
+    const Obb banked45 = hullObb(physics, groundPos, UP);
+    check(glm::distance(banked45.axes[0], Vec3(std::cos(0.3), std::sin(0.3), 0)) < 1e-12 &&
+              glm::distance(banked45.axes[2], Vec3(0, 0, 1)) < 1e-12,
+          "bank rolls the hull about its forward axis, dropping one flank and lifting the other");
+
+    physics.visualBank = 0.0;
+    physics.visualPitch = 0.2;
+    const Obb pitched = hullObb(physics, groundPos, UP);
+    check(glm::distance(pitched.axes[2], Vec3(0, -std::sin(0.2), std::cos(0.2))) < 1e-12 &&
+              glm::distance(pitched.axes[0], Vec3(1, 0, 0)) < 1e-12,
+          "pitch tips the hull about its right axis");
+    check(glm::distance(pitched.center, flat.center) < 1e-12,
+          "leaning rolls the hull about its centre -- it does not change how high the ship floats");
+    physics.visualPitch = 0.0;
+
+    // tickLean itself: steer and speed set the target attitude, and the ship eases into it.
+    Ship leaning;
+    leaning.physics.speed = leaning.physics.maxSpeed;
+    for (int i = 0; i < 600; ++i) tickLean(leaning, 1.0 / 120.0, 1.0);
+    check(std::fabs(leaning.physics.visualBank + SHIP_BANK_PER_STEER) < 1e-6,
+          "a sustained full-lock turn at full speed settles at full bank, away from the turn");
+    check(std::fabs(leaning.physics.visualPitch - leaning.physics.maxSpeed * SHIP_PITCH_PER_SPEED) < 1e-6,
+          "pitch settles proportional to speed");
+    const double midTurn = leaning.physics.visualBank;
+    tickLean(leaning, 1.0 / 120.0, -1.0);
+    check(leaning.physics.visualBank > midTurn && leaning.physics.visualBank < 0.0,
+          "reversing the steer eases the bank back rather than snapping it");
+
+    // Degenerate input: forward straight up leaves no lateral direction to cross out. Physics never
+    // produces this, but the fallback must still be a finite orthonormal basis rather than NaN.
+    physics.forward = UP;
+    const Obb degenerate = hullObb(physics, groundPos, UP);
+    check(std::isfinite(degenerate.axes[0].x) && std::isfinite(degenerate.axes[2].z) &&
+              std::fabs(glm::dot(degenerate.axes[0], degenerate.axes[2])) < 1e-12,
+          "hullObb falls back to a finite basis when forward is parallel to up");
+  }
+
+  if (pathLoaded) {
+    // Mesh-mode wall collision driven end to end (docs/OBB_SHIP_COLLISION_PLAN.md): the ship's hull
+    // is an oriented box, and these scenarios cover the cases the centreline point sweep it replaced
+    // structurally could not see.
+    auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
+      CollisionTriangle first, second;
+      first.positions[0] = a;
+      first.positions[1] = b;
+      first.positions[2] = c;
+      second.positions[0] = a;
+      second.positions[1] = c;
+      second.positions[2] = d;
+      for (int corner = 0; corner < 3; ++corner) first.normals[corner] = second.normals[corner] = normal;
+      first.surfaceId = second.surfaceId = surfaceId;
+      return std::vector<CollisionTriangle>{first, second};
+    };
+    const double roadY = 4.0;
+    std::vector<CollisionTriangle> ground =
+        quad({-200, roadY, -200}, {200, roadY, -200}, {200, roadY, 200}, {-200, roadY, 200}, UP, 1);
+
+    // Scenario 1: a wall straight across the road. Nothing subtle here -- it exists to show the
+    // hull is stopped by its own front face (a hull half length short of the wall) and, at the
+    // 140 m/s top speed, that discrete overlap tests plus substepping don't tunnel.
+    auto headOn = ground;
+    for (const auto& triangle :
+         quad({-200, roadY, 30}, {-200, roadY + 6, 30}, {200, roadY + 6, 30}, {200, roadY, 30}, {0, 0, -1}, 2))
+      headOn.push_back(triangle);
+
+    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, int steps, double startY = -1.0,
+                             double launchVerticalVel = 0.0, double speed = -1.0) {
+      if (startY < 0.0) startY = roadY;
+      auto driveTrack = std::make_shared<Track>(*pathLoaded.track);
+      driveTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
+      Simulation sim(*driveTrack);
+      sim.setMeshPhysicsEnabled(true);
+      Ship ship = shipAt(sim, *driveTrack, {0, startY, -20}, {0, 0, 1});
+      ship.physics.speed = speed >= 0 ? speed : ship.physics.maxSpeed;
+      ship.physics.airborne = launchVerticalVel != 0.0;
+      ship.physics.verticalVel = launchVerticalVel;
+      ship.prevTriggerPos = ship.physics.groundPos;
+      // Measured on the hull's own corners, via the same hullObb physics collides with, rather than
+      // on groundPos plus a half extent: the hull leans (bank/pitch), so its reach along any world
+      // axis is a function of its attitude, and a hand-derived proxy would quietly stop matching.
+      Vec3 furthest = ship.physics.groundPos;
+      double deepestHullZ = -std::numeric_limits<double>::infinity();
+      double furthestHullRight = -std::numeric_limits<double>::infinity();
+      double furthestHullRightAirborne = -std::numeric_limits<double>::infinity();
+      for (int i = 0; i < steps; ++i) {
+        ship.step(sim, 1.0 / 120.0, 1, 0, 0);
+        if (ship.physics.groundPos.z > furthest.z) furthest = ship.physics.groundPos;
+        const Obb hull = hullObb(ship.physics, ship.physics.groundPos, UP);
+        for (int corner = 0; corner < 8; ++corner) {
+          const Vec3 at = hull.corner(corner);
+          deepestHullZ = std::max(deepestHullZ, at.z);
+          // Only sampled once the ship is fully alongside scenario 2's wall (which starts at z = 0):
+          // before that it is legitimately out in open road where any x is fine.
+          if (ship.physics.groundPos.z <= 2.0) continue;
+          furthestHullRight = std::max(furthestHullRight, at.x);
+          if (ship.physics.airborne) furthestHullRightAirborne = std::max(furthestHullRightAirborne, at.x);
+        }
+      }
+      struct Result {
+        Vec3 furthest;
+        double deepestHullZ;
+        double furthestHullRight;
+        double furthestHullRightAirborne;
+        Ship ship;
+      };
+      return Result{furthest, deepestHullZ, furthestHullRight, furthestHullRightAirborne, ship};
+    };
+
+    const auto obbHeadOn = driveStraight(headOn, 240);
+    check(obbHeadOn.deepestHullZ <= 30.0 + 1e-6,
+          "OBB wall collision never lets any part of the hull into the wall");
+    check(obbHeadOn.deepestHullZ > 29.5 && obbHeadOn.furthest.z > 20.0 && !obbHeadOn.ship.physics.airborne,
+          "the hull's nose reached the wall and the ship stayed on the road, rather than tunneling, "
+          "stopping short, or falling through");
+
+    // Scenario 2: the bug that motivated all of this. This wall runs alongside the ship's path, one
+    // metre to its right -- clear of the centreline the old point sweep probed, but well inside the
+    // hull's 1.2 m half width, so the ship's flank is what hits it.
+    auto flank = ground;
+    for (const auto& triangle :
+         quad({1, roadY, 0}, {1, roadY + 6, 0}, {1, roadY + 6, 120}, {1, roadY, 120}, {-1, 0, 0}, 3))
+      flank.push_back(triangle);
+
+    const auto obbFlank = driveStraight(flank, 120);
+    check(obbFlank.furthestHullRight <= 1.0 + 1e-6,
+          "the hull's flank is kept out of a wall the ship's centreline passes clean beside");
+    check(obbFlank.ship.physics.groundPos.z > 20.0 && !obbFlank.ship.physics.airborne,
+          "the deflected ship carries on down the road rather than being pinned or thrown off it");
+
+    // Scenario 3: the same flank clip, in flight. The airborne path had its own lifted point probe
+    // with the same blind spot, and it mattered more there -- a ship in the air is exactly where
+    // clipping a barrier's top edge or corner happens.
+    // Launched upward so the ship is genuinely still in the air by the time it draws level with the
+    // wall (gravity here is 60 m/s^2 -- a ship simply dropped from a couple of metres is back on the
+    // road within 15 m of travel, well short of it).
+    const double flightY = roadY + 2.0;
+    const auto obbFlight = driveStraight(flank, 60, flightY, 12.0, 60.0);
+    check(std::isfinite(obbFlight.furthestHullRightAirborne),
+          "the flight scenario really does pass the wall while still airborne");
+    check(obbFlight.furthestHullRightAirborne <= 1.0 + 1e-6,
+          "the hull is kept out of that wall in flight as well as on the ground");
+    check(obbFlight.ship.physics.groundPos.z > 0.0,
+          "the deflected ship keeps flying down the course rather than being stopped dead in mid-air");
+  }
+
+  {
+    // The hover-bounce spring (core-owned, collision-visible). A landing kicks it, it decays back
+    // to rest, and the collision hull rides it the whole way -- the point of moving it out of the
+    // renderer is that the ship can no longer visibly hop over something physics never saw it clear.
+    Ship ship;
+    ship.physics.airborne = true;
+    const double restingCentre = hullObb(ship.physics, Vec3(0, 0, 0), UP).center.y;
+
+    applyLandingImpact(ship, 20.0);
+    ship.physics.airborne = false;
+    check(ship.physics.hoverBounce == 0.0 &&
+              std::fabs(ship.physics.hoverBounceVel - 20.0 * HOVER_BOUNCE_LANDING_GAIN) < 1e-12,
+          "a landing seeds the bounce spring with velocity, not an instant displacement");
+    check(ship.physics.landingBounceVel > 0.0,
+          "the legacy accumulators the golden traces pin are still written alongside it");
+
+    double peak = 0.0;
+    for (int i = 0; i < 30; ++i) {
+      tickHoverBounce(ship, 1.0 / 120.0, false);
+      peak = std::max(peak, ship.physics.hoverBounce);
+    }
+    check(peak > 0.2, "the spring actually lifts the ship after a hard landing");
+    check(std::fabs(hullObb(ship.physics, Vec3(0, 0, 0), UP).center.y - restingCentre -
+                    ship.physics.hoverBounce) < 1e-9,
+          "the collision hull rides the bounce exactly");
+
+    for (int i = 0; i < 600; ++i) tickHoverBounce(ship, 1.0 / 120.0, false);
+    check(std::fabs(ship.physics.hoverBounce) < 0.01 && std::fabs(ship.physics.hoverBounceVel) < 0.01,
+          "the spring is damped -- it settles back to the ship's resting ride height");
+
+    // Landing seeds again from scratch rather than stacking, and the tick is suppressed on the
+    // landing step itself so the seed is what the next step starts from.
+    applyLandingImpact(ship, 4.0);
+    const double seeded = ship.physics.hoverBounceVel;
+    tickHoverBounce(ship, 1.0 / 120.0, true);
+    check(ship.physics.hoverBounceVel == seeded && ship.physics.hoverBounce == 0.0,
+          "the landing step itself doesn't advance the spring it just seeded");
+
+    // A wall bang jolts the same spring, added to whatever bounce is already in flight.
+    Physics jolted;
+    addImpactJolt(jolted, 30.0);
+    check(jolted.hoverBounceVel > 0.0 && jolted.landingBounceVel > 0.0,
+          "an impact jolt kicks the hover spring as well as the legacy accumulators");
   }
 
   {

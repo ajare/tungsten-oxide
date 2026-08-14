@@ -115,6 +115,10 @@ void landOnSurface(Ship& ship, const Vec3& normal) {
   Physics& p = ship.physics;
   p.airborne = false;
   p.verticalVel = 0;
+  // Resume the hover bob from its neutral phase rather than wherever the sine happened to be when
+  // the ship took off, so reattaching to a surface can't jump the ship (and its collision hull) by
+  // an arbitrary slice of the oscillation on the contact frame itself.
+  p.bobTime = 0;
   tangentize(p.moveDir, normal, p.forward);
   tangentize(p.forward, normal, p.moveDir);
 }
@@ -130,6 +134,11 @@ double weightSpeedRetain(const Physics& p) {
 void addImpactJolt(Physics& p, double normalImpactSpeed) {
   const double m = (p.weight != 0.0 ? p.weight : Consts::HANDLING_BASE_WEIGHT) / Consts::HANDLING_BASE_WEIGHT;
   const double momentum = m * std::max(0.0, normalImpactSpeed);
+  // Kicks the same hover-bounce spring a landing does, so a wall bang visibly (and physically)
+  // jolts the ship. Added rather than set: unlike a landing, glancing off a barrier doesn't reset
+  // whatever bounce the ship already had.
+  p.hoverBounceVel += std::min(HOVER_BOUNCE_MAX_JOLT_VEL, momentum * HOVER_BOUNCE_JOLT_GAIN);
+  // Legacy accumulators, written exactly as they always were -- see Physics (Ship.hpp).
   p.landingBounce += std::min(2.0, momentum * 0.012);
   p.landingBounceVel += std::min(10.0, momentum * 0.05);
 }
@@ -385,6 +394,8 @@ void Simulation::placeShipAtPose(Ship& ship, const Pose& pose, const std::string
   p.visualPitch = 0;
   p.landingBounce = 0;
   p.landingBounceVel = 0;
+  p.hoverBounce = 0;
+  p.hoverBounceVel = 0;
   // Rendered group placement is the host's concern; headless ships skip it.
   clearBoost(ship);
   resetTriggers(ship, disarmedId);

@@ -45,7 +45,6 @@ constexpr double LOOK_AT_FORWARD = 12.0;
 constexpr double LOOK_AT_UP_MIN = -6.0;
 constexpr double LOOK_AT_UP_MAX = 12.0;
 constexpr double SHIP_CENTER_HEIGHT = 0.3;
-constexpr double SHIP_BOB_AMPLITUDE = 0.06;
 
 glm::vec3 toGlm(tox::Vec3 const& value) {
   return {static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
@@ -287,15 +286,15 @@ void StatePlayTungstenMonoxide::createGameObjects(
     auto const& physics = ship.physics;
     mShipVisualStates[i].groundPos = physics.groundPos;
     mShipVisualStates[i].up = ship.renderNormal;
-    mShipVisualStates[i].airborne = physics.airborne;
-    applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * 1.0,
+    applyShipTransform(mShipSceneModels[i], physics.groundPos + ship.renderNormal * tox::hullHoverOffset(physics),
                        ship.renderNormal, physics.forward, 0, 0);
   }
   applyWireframeDebug();  // mShowWireframeDebug defaults to false: everything starts shaded.
 
   mGhostShipSceneModel = mScene->add3dModel(mShipModel);
   mGhostShip = mGameSession->ships()[0];
-  applyShipTransform(mGhostShipSceneModel, mGhostShip.physics.groundPos + mGhostShip.renderNormal * 1.0,
+  applyShipTransform(mGhostShipSceneModel,
+                     mGhostShip.physics.groundPos + mGhostShip.renderNormal * tox::hullHoverOffset(mGhostShip.physics),
                      mGhostShip.renderNormal, mGhostShip.physics.forward, 0, 0);
   applyGhostVisibility();  // mShowPhysicsGhost defaults to false: ghost starts hidden.
 }
@@ -398,7 +397,6 @@ void StatePlayTungstenMonoxide::updateActions(vector<string> const& activeStates
 
   vector<tox::ControlIntent> intents(mGameSession->ships().size());
   if (!intents.empty()) intents[0] = player;
-  if (!mShipVisualStates.empty()) mShipVisualStates[0].steer = player.steer;
   mGameSession->step(intents, frameTime);
   if (mShowPhysicsGhost) mGameSession->stepGhost(mGhostShip, player, frameTime);
   for (auto const& event : mGameSession->events())
@@ -413,21 +411,6 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     auto const& ship = mGameSession->ships()[i];
     auto const& physics = ship.physics;
     auto& visual = mShipVisualStates[i];
-    const bool landed = visual.airborne && !physics.airborne;
-    if (landed) {
-      // Bob is not applied in flight. Resume it from its neutral phase only
-      // after landing so reattaching to a track or mesh cannot add an
-      // unrelated sinusoidal position jump to the contact frame.
-      visual.bobTime = 0.0;
-      visual.landingBounce = 0.0;
-      double impact = max(0.0, -visual.lastVerticalVelocity);
-      // Apply the impact as spring velocity, not an immediate position offset.
-      // The old displacement impulse could move the model several metres on
-      // the exact frame that physics attached it to the surface.
-      visual.landingBounceVel = min(16.0, impact * 0.35);
-    }
-    visual.airborne = physics.airborne;
-    visual.lastVerticalVelocity = physics.verticalVel;
 
     double expectedStep = abs(physics.speed) * frameTime * 1.5 + 0.16;
     if (glm::distance(visual.groundPos, physics.groundPos) > expectedStep)
@@ -435,31 +418,26 @@ void StatePlayTungstenMonoxide::updateShips(float frameTime) {
     else
       visual.groundPos = physics.groundPos;
     visual.up = tox::normalizeSafe(glm::mix(visual.up, ship.renderNormal, min(1.0, frameTime * 18.0)));
-    if (!landed) {
-      visual.landingBounceVel += -55.0 * visual.landingBounce * frameTime;
-      visual.landingBounceVel *= exp(-7.0 * frameTime);
-      visual.landingBounce += visual.landingBounceVel * frameTime;
-    }
-    if (!physics.airborne && !landed) visual.bobTime += frameTime;
+    // Everything that moves or turns the ship relative to its contact point -- ride height, bob,
+    // landing/impact bounce, bank and pitch -- comes from core, which owns all of it because the
+    // collision hull is built on it (tox::hullHoverOffset, tox::hullObb). This renderer contributes
+    // only lag: the groundPos/up smoothing above.
     bool idle = i > 0 && !physics.airborne && abs(physics.speed) <= 0.001;
-    const double bob = physics.airborne || idle
-                           ? 0.0
-                           : sin(visual.bobTime * 6.0) * SHIP_BOB_AMPLITUDE;
-    double hover = idle ? 1.0 : 1.0 + bob + visual.landingBounce;
-    double speedRatio = min(1.0, abs(physics.speed) / physics.maxSpeed);
-    double targetBank = max(-0.5, min(0.5, -visual.steer * speedRatio * 0.5));
-    visual.bank += (targetBank - visual.bank) * min(1.0, frameTime * 6.0);
-    visual.pitch += (physics.speed * 0.004 - visual.pitch) * min(1.0, frameTime * 6.0);
+    double hover = idle ? physics.hullHoverHeight : tox::hullHoverOffset(physics);
     tox::Vec3 position = visual.groundPos + visual.up * hover;
-    applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, visual.pitch, visual.bank);
+    applyShipTransform(mShipSceneModels[i], position, visual.up, physics.forward, physics.visualPitch,
+                       physics.visualBank);
   }
 
-  // Ghost: raw physics position, no smoothing/bob/bank -- it's meant to show exactly what the
-  // other method computed, not a pleasant-looking approximation of it.
+  // Ghost: raw physics pose, with none of the smoothing above -- it's meant to show exactly what the
+  // other method computed, not a pleasant-looking approximation of it. Its hover/lean are physics
+  // now, so they come along for the same reason: they are what that method computed.
   if (mShowPhysicsGhost && mGhostShipSceneModel) {
     auto const& ghostPhysics = mGhostShip.physics;
-    applyShipTransform(mGhostShipSceneModel, ghostPhysics.groundPos + mGhostShip.renderNormal * 1.0,
-                       mGhostShip.renderNormal, ghostPhysics.forward, 0, 0);
+    applyShipTransform(mGhostShipSceneModel,
+                       ghostPhysics.groundPos + mGhostShip.renderNormal * tox::hullHoverOffset(ghostPhysics),
+                       mGhostShip.renderNormal, ghostPhysics.forward, ghostPhysics.visualPitch,
+                       ghostPhysics.visualBank);
   }
 }
 

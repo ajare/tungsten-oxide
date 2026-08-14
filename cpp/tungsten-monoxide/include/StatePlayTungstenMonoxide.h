@@ -58,14 +58,12 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   struct ShipVisualState {
     tox::Vec3 groundPos;
     tox::Vec3 up{0, 1, 0};
-    double bobTime{0};
-    double landingBounce{0};
-    double landingBounceVel{0};
-    double bank{0};
-    double pitch{0};
-    double steer{0};
-    bool airborne{false};
-    double lastVerticalVelocity{0};
+    // Nothing else: no hover height, bob, bounce spring, bank or pitch. Every one of those is the
+    // ship's actual pose, owned and advanced by core (tox::hullHoverOffset, tox::hullObb) because
+    // the collision hull is built from them. A second copy integrated per rendered frame would
+    // drift out of what physics collides with the moment a frame is long enough for GameSession to
+    // clamp it, and would draw the ship somewhere its hull is not. What remains here is the
+    // smoothed position/up above -- presentation lag, which deliberately does not affect physics.
   };
   std::vector<ShipVisualState> mShipVisualStates;
   double mCameraZoom{1.0};

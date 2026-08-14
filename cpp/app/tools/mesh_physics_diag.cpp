@@ -126,8 +126,8 @@ ControlIntent scriptedInput(int frame, double dt) {
 // Straight down the center line is what Milestone 6.3's own verification used and is what's kept
 // here: a clean drive through the tunnel, a clean ramp launch/arc/landing on the platform beyond the
 // gap. The in-tunnel wall bounce already has its own dedicated regression coverage
-// (cpp/core/tests/track_tests.cpp's sweepWall test, added in Milestone 6.2) and doesn't need to be
-// reproduced here too.
+// (cpp/core/tests/track_tests.cpp's hull-vs-wall scenarios) and doesn't need to be reproduced here
+// too.
 ControlIntent captureScriptedInput(int frame, double dt) {
   ControlIntent intent;
   intent.throttle = 1.0;

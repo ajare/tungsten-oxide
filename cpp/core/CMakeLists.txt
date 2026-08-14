@@ -69,6 +69,7 @@ set(CORE_HEADERS
   include/TrackDefinition.hpp
   include/TrackGeometry.hpp
   include/TrackCollision.hpp
+  include/Obb.hpp
   include/Track.hpp
   include/Ship.hpp
   include/Simulation.hpp
@@ -81,6 +82,7 @@ add_library(core STATIC
   src/Track.cpp
   src/TrackBake.cpp
   src/TrackCollision.cpp
+  src/Obb.cpp
   src/TrackLoader.cpp
   src/Simulation.cpp
   src/Ship.cpp

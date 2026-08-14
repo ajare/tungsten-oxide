@@ -13,6 +13,8 @@ namespace tox {
 
 class Simulation;
 struct StepResult;
+struct Obb;
+struct Ship;  // defined below; the hull/bob helpers between here and there take one
 
 struct Physics {
   double heading{0.0};
@@ -27,19 +29,58 @@ struct Physics {
   double wallRestitution{0.75};
   double weight{1000.0};
   double bobTime{0.0};
+  // Lean: how far the ship rolls into a turn and pitches under acceleration, in radians, about its
+  // own forward and right axes. The "visual" in the names is historical -- these are the ship's
+  // actual attitude now, so the collision hull is oriented by them (hullObb) exactly as the drawn
+  // model is. Advanced by tickLean.
   double visualBank{0.0};
   double visualPitch{0.0};
   bool airborne{false};
   double verticalVel{0.0};
   double gravity{60.0};
+  // Legacy impact accumulators. Despite the names these are NOT the ship's bounce displacement:
+  // nothing decays them, so they only ever grow across a run (landings and wall jolts add, a
+  // respawn clears). Nothing reads them either -- hoverBounce below is the real thing. They are
+  // kept, written exactly as before, solely because the golden trace corpus pins their values
+  // step by step (boost-circuit and raw-mesh-tunnel-ramp both record nonzero accumulations), and
+  // that corpus has no regeneration tool. Fold them into hoverBounce whenever it is re-baked.
   double landingBounce{0.0};
   double landingBounceVel{0.0};
+  // The ship's live vertical bounce about its hover height, in metres, and its spring velocity: a
+  // damped spring kicked by landings and wall impacts. Real ship motion, so it lives here and the
+  // collision hull rides it (hullHoverOffset) -- it used to be integrated by the renderer, which
+  // meant the ship visibly hopping over a rail that physics never saw it clear.
+  double hoverBounce{0.0};
+  double hoverBounceVel{0.0};
   bool boostActive{false};
   bool boostReleasing{false};
   double boostHold{0.0};
   double boostReleaseT{0.0};
   double boostCap{0.0};
   double boostEffCap{0.0};
+
+  // Collision hull half-extents, along right/up/forward respectively (docs/
+  // OBB_SHIP_COLLISION_PLAN.md Milestone 3). Used only by mesh-mode OBB wall collision; ground
+  // contact remains a point probe at groundPos, and analytic corridor mode ignores these entirely.
+  //
+  // The defaults are the rendered ship's actual dimensions, not a guess: box.mppmodel is a unit
+  // cube and StatePlayTungstenMonoxide::applyShipTransform scales it by (2.4, 0.8, 4.0) in
+  // (right, up, forward) -- so half of each. The width half independently agrees with
+  // StartGrid::SHIP_HALF_WIDTH = 1.2, which the starting grid has always used as "half the ship's
+  // collision footprint". Worth a sanity check with whoever owns ship art if the model changes;
+  // they are per-ship fields precisely so a future ship class can differ.
+  //
+  // Additive to the golden-trace serialized state in the same way Race's session-time fields are:
+  // the trace readers name every physics field they load (parity_main.cpp's loadShip), so a trace
+  // recorded before these existed simply leaves them at these defaults.
+  double hullHalfLength{2.0};
+  double hullHalfWidth{1.2};
+  double hullHalfHeight{0.4};
+  // Ride height: how far the hull's centre floats above its ground contact point at rest. The ship
+  // is a hovercraft, not a car -- it never sits on the road -- so this is the same one metre the
+  // renderer raises the model by, and collision uses the ship's real position rather than a hull
+  // pretending to rest on the surface. Bob rides on top of this; see hullHoverOffset.
+  double hullHoverHeight{1.0};
 
   Vec3 up{0, 1, 0};
   Vec3 forward{0, 0, 1};
@@ -49,6 +90,75 @@ struct Physics {
   Vec3 visualUp{0, 1, 0};
   Vec3 moveDir{0, 0, 1};
 };
+
+// The ship's idle bob: a gentle sinusoidal hover oscillation, in metres about hullHoverHeight, at
+// radians per second. These are the ship's own motion, not a rendering flourish -- the collision
+// hull rides the bob with the model -- so they live here rather than in the renderer that draws it.
+constexpr double SHIP_BOB_RATE = 6.0;
+constexpr double SHIP_BOB_AMPLITUDE = 0.06;
+
+// The hover-bounce spring: stiffness and damping of the oscillation a landing or a wall bang kicks
+// the ship into, and the gains/caps converting an impact speed into that kick. These are the values
+// the renderer's own copy of this spring used, carried over unchanged so the ship bounces exactly as
+// it always looked like it did -- the difference is that physics now owns it, integrates it per
+// physics step rather than per rendered frame, and collides with the result.
+constexpr double HOVER_BOUNCE_STIFFNESS = 55.0;
+constexpr double HOVER_BOUNCE_DAMPING = 7.0;
+constexpr double HOVER_BOUNCE_LANDING_GAIN = 0.35;
+constexpr double HOVER_BOUNCE_MAX_LANDING_VEL = 16.0;
+constexpr double HOVER_BOUNCE_JOLT_GAIN = 0.05;
+constexpr double HOVER_BOUNCE_MAX_JOLT_VEL = 10.0;
+
+// Lean: how sharply the ship rolls into a turn (radians of bank per unit of steer at full speed,
+// and the hard limit on it), how far it pitches per unit of speed, and how fast both chase their
+// target. Carried over unchanged from the renderer that used to own them.
+constexpr double SHIP_BANK_PER_STEER = 0.5;
+constexpr double SHIP_MAX_BANK = 0.5;
+constexpr double SHIP_PITCH_PER_SPEED = 0.004;
+constexpr double SHIP_LEAN_RESPONSE_RATE = 6.0;
+
+// How far above its ground contact point the ship actually is right now: its ride height, plus the
+// current bob, plus the current bounce. Everything that moves the ship vertically relative to the
+// surface it is riding is in here, which is what makes it safe for both the renderer and the
+// collision hull to be built on it. Bob is suppressed in flight, where hovering over nothing means
+// nothing (and where Ship::step stops advancing bobTime for the same reason); bounce is not, since
+// a ship kicked into the air by a landing is genuinely still moving through that arc.
+double hullHoverOffset(const Physics& physics);
+
+// Advances the bob phase by one step. Runs while the ship is in contact with a surface and stops in
+// flight; landOnSurface resets the phase to zero so reattaching to a surface can never jump the
+// ship by an arbitrary slice of the sine.
+void tickBob(Ship& ship, double dt);
+
+// Integrates the hover-bounce spring by one step. `landedThisStep` suppresses it for exactly the
+// step a landing seeded the spring on, so the seed is what the next step starts from rather than
+// something already half-decayed.
+void tickHoverBounce(Ship& ship, double dt, bool landedThisStep);
+
+// Advances the ship's bank/pitch lean by one step, chasing the attitude this step's `steer` input
+// and current speed call for.
+void tickLean(Ship& ship, double dt, double steer);
+
+// Registers a landing at `impactSpeed` (the downward speed the ship arrived with, in m/s): kicks
+// the hover-bounce spring and feeds the legacy accumulators. Called right after landOnSurface,
+// which has already zeroed the vertical velocity this is derived from.
+void applyLandingImpact(Ship& ship, double impactSpeed);
+
+// The ship's collision hull as an oriented box, for a ship whose ground contact point is
+// `groundPos` on a surface whose normal is `up` (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 3.2).
+//
+// The basis is rebuilt here from `up` and physics.forward rather than read off Physics::right/up:
+// those two are written once at spawn/respawn and then stay frozen for the whole run (see
+// renderNormal's comment below), so on any banked or rolled section they no longer describe how
+// the ship is actually sitting. Callers in mesh mode pass the live surface normal they are already
+// probing with (ship.renderNormal, or the contact normal they just resolved).
+//
+// `groundPos` is a contact point on the surface, not the ship: the hull is centred where the ship
+// actually is, hullHoverOffset above it, bob and bounce included. Anything lower would be colliding
+// with a pose the ship is never in. The box is then leaned by visualBank/visualPitch about that
+// basis, the same way the drawn model is -- a ship rolled into a corner drops one flank and lifts
+// the other, and its hull has to do the same or the two disagree exactly when contact is likeliest.
+Obb hullObb(const Physics& physics, const Vec3& groundPos, const Vec3& up);
 
 struct TriggerState {
   bool armed{true};
