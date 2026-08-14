@@ -120,7 +120,6 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
   "${APPLIB_MPP_DIR}/mpp-program/include"
   "${APPLIB_MPP_DIR}/vendor/include"
-  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${APPLIB_MPP_DIR}/ext/utils/include"
   "${APPLIB_THIRD_PARTY_DIR}/include")
 
@@ -148,8 +147,7 @@ target_include_directories(applib_pbr_material_binding_tests PRIVATE
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
   "${APPLIB_MPP_DIR}/mpp-program/include"
   "${APPLIB_MPP_DIR}/vendor/include"
-  "${APPLIB_MPP_DIR}/ext/utils/include"
-  "${TOX_MPP_GLEW_INCLUDE_DIR}")
+  "${APPLIB_MPP_DIR}/ext/utils/include")
 target_link_libraries(applib_pbr_material_binding_tests PRIVATE
   AppLib
   Willpower.Application

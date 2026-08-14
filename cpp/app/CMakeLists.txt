@@ -46,7 +46,6 @@ target_include_directories(mesh_physics_diag PRIVATE
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-program/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/include"
-  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include")
 target_link_directories(mesh_physics_diag PRIVATE
   "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")

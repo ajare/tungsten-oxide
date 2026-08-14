@@ -123,7 +123,6 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-mesh/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-program/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/vendor/include"
-  "${TOX_MPP_GLEW_INCLUDE_DIR}"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/ext/utils/include"
   "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include")
 

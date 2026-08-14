@@ -64,8 +64,11 @@ target_include_directories(model_io_core PUBLIC
   "${MODEL_IO_MPP_DIR}/mpp-program/include"
   "${MODEL_IO_MPP_DIR}/vendor/include"
   "${MODEL_IO_MPP_DIR}/ext/utils/include"
-  # cpp/editor now links model_io_gltf (docs/GLTF_IMPORT_PLAN.md M5) and needs GLEW's headers for
-  # its own OpenGL bootstrap regardless of what mpp itself includes.
+  # PbrMaterialBuild.cpp sets TextureParams' filter/wrap defaults with raw GL_LINEAR_MIPMAP_LINEAR/
+  # GL_REPEAT constants, so this is a real dependency, not just a leftover from the days
+  # mpp/ModelSerializer.h used to include <GL/glew.h> itself (MassivePolyPusher's "Decouple public
+  # headers from implementation dependencies" migration removed that; every mpp public header this
+  # target compiles against is GL-free now).
   "${TOX_MPP_GLEW_INCLUDE_DIR}")
 
 target_link_directories(model_io_core PUBLIC "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
