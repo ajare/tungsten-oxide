@@ -98,6 +98,11 @@ class APPLICATION_API StatePlayTungstenMonoxide : public applib::StatePlay {
   // Mesh physics is now the shipped default (Simulation::meshPhysicsEnabled_ defaults true), so
   // this starts checked to match the GameSession it mirrors; unchecking falls back to analytic.
   bool mMeshPhysicsDebug{true};
+  // Live toggle for Simulation::obbWallCollisionEnabled (docs/OBB_SHIP_COLLISION_PLAN.md): when
+  // set, mesh-mode wall collision tests the ship's whole hull as an oriented box instead of
+  // sweeping one probe point along its centreline. Starts unchecked to match the GameSession it
+  // mirrors, and is only meaningful while mesh physics is the active mode.
+  bool mObbWallCollisionDebug{false};
   // "Show Physics Ghost": renders mGhostShip -- ship 0 stepped every frame with the same input but
   // forced onto whichever physics mode isn't currently active (via GameSession::stepGhost) -- as a
   // wireframe overlay, so the two methods' predicted positions can be compared live. Resynced to
