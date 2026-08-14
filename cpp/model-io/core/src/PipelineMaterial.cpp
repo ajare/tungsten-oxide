@@ -17,7 +17,7 @@ const mpp::PbrPipelineResourceDocument* findMaterialResource(const mpp::PbrPipel
   return nullptr;
 }
 
-std::string programRefOf(const utils::StructuredData& definition) {
+std::string programRefOf(const mpp::data::StructuredData& definition) {
   if (!definition.hasEntry("Program")) return {};
   const auto& program = definition.getEntry("Program");
   return program.hasEntry("Ref") ? program.getEntry("Ref").getValue() : std::string{};

@@ -74,6 +74,11 @@ if (WIN32)
   add_custom_command(TARGET mesh_physics_diag POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
+      # MassivePolyPusher.dll now depends on MppData.dll (MassivePolyPusher's own
+      # "Decouple public headers from implementation dependencies" migration); nothing here calls
+      # MppData symbols directly, so it's not in target_link_libraries above, but the Windows
+      # loader still needs it resolvable when MassivePolyPusher.dll loads.
+      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppDatad.dll,MppData.dll>"
       "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
       "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
       "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"

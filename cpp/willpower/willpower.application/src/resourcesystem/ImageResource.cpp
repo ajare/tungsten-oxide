@@ -1,6 +1,11 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+// GL_UNSIGNED_BYTE/GL_RGB/GL_RGBA below used to arrive transitively through an mpp header; that
+// stopped once MassivePolyPusher decoupled its public headers from GL, so this now includes GLEW
+// directly, matching every other GL-constant user in this codebase.
+#include <GL/glew.h>
+
 #include <mpp/ProgrammaticTextureStream.h>
 
 #include <limits>

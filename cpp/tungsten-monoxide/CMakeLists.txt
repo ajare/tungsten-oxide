@@ -116,6 +116,7 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.geometry/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp/include"
+  "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-data/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-helper/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-app-support/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-resource-parsers/include"
@@ -138,6 +139,11 @@ target_link_libraries(TungstenMonoxide PRIVATE
   Willpower.Common
   Willpower.Geometry
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
+  # TungstenPbrPackage holds an mpp::PbrPipelineDocument, whose PbrPipelineResourceDocument::
+  # definition is now an mpp::data::StructuredData (MassivePolyPusher's "Decouple public headers
+  # from implementation dependencies" migration) -- constructing/copying/destroying one needs this
+  # library's exported special members.
+  $<IF:$<CONFIG:Debug>,MppDatad,MppData>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
   $<IF:$<CONFIG:Debug>,MppResourceParsersd,MppResourceParsers>

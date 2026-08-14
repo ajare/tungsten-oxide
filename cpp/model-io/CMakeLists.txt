@@ -54,6 +54,7 @@ target_compile_features(model_io_core PUBLIC cxx_std_20)
 target_include_directories(model_io_core PUBLIC
   core/include
   "${MODEL_IO_MPP_DIR}/mpp/include"
+  "${MODEL_IO_MPP_DIR}/mpp-data/include"
   "${MODEL_IO_MPP_DIR}/mpp-mesh/include"
   "${MODEL_IO_MPP_DIR}/mpp-resource-parsers/include"
   # mpp-program is not linked (it is an internal dependency of MassivePolyPusher.dll itself), but
@@ -63,20 +64,27 @@ target_include_directories(model_io_core PUBLIC
   "${MODEL_IO_MPP_DIR}/mpp-program/include"
   "${MODEL_IO_MPP_DIR}/vendor/include"
   "${MODEL_IO_MPP_DIR}/ext/utils/include"
-  # mpp/ModelSerializer.h is the one mpp header that includes <GL/glew.h>. Nothing here calls GL --
-  # the header is needed only to compile against the serializer.
+  # cpp/editor now links model_io_gltf (docs/GLTF_IMPORT_PLAN.md M5) and needs GLEW's headers for
+  # its own OpenGL bootstrap regardless of what mpp itself includes.
   "${TOX_MPP_GLEW_INCLUDE_DIR}")
 
 target_link_directories(model_io_core PUBLIC "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
 target_link_libraries(model_io_core PUBLIC
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
+  # mpp::PbrPipelineDocument's PbrPipelineResourceDocument::definition is an mpp::data::
+  # StructuredData (constructing/copying/destroying one -- e.g. every mpp::PbrPipelineDocument
+  # PipelineMaterial.cpp/GltfConvert.cpp/the editor/gltf_convert hold by value -- needs this
+  # library's exported special members), not the ext/utils one, since MassivePolyPusher's own
+  # "Decouple public headers from implementation dependencies" migration.
+  $<IF:$<CONFIG:Debug>,MppDatad,MppData>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
   $<IF:$<CONFIG:Debug>,MppResourceParsersd,MppResourceParsers>
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
 if (WIN32)
-  # NOMINMAX only: mpp/Config.h already defines WIN32_LEAN_AND_MEAN itself, and defining it here
-  # too is a C4005 macro-redefinition warning in every translation unit.
+  # NOMINMAX only. mpp/Config.h used to define WIN32_LEAN_AND_MEAN itself (a C4005
+  # macro-redefinition warning if this target defined it too); it no longer includes <Windows.h>
+  # at all, but nothing here needs WIN32_LEAN_AND_MEAN's narrower <windows.h> either way.
   target_compile_definitions(model_io_core PUBLIC NOMINMAX)
 endif()
 

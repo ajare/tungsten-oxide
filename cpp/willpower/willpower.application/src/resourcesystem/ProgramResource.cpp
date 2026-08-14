@@ -14,7 +14,6 @@ namespace WP_NAMESPACE
 		namespace resourcesystem
 		{
 			using namespace std;
-			using namespace utils;
 
 			ProgramResource::ProgramResource(string const& name, string const& namesp, string const& source, map<string, string> const& tags, ResourceLocation* location)
 				: Resource(name, namesp, "Program", source, tags, location)

@@ -1,6 +1,6 @@
 // PipelineMaterial.hpp — resolving "the material the caller named" out of a PBR pipeline document.
 //
-// A PbrPipelineDocument holds each local resource as a raw utils::StructuredData payload whose root
+// A PbrPipelineDocument holds each local resource as a raw mpp::data::StructuredData payload whose root
 // matches its kind, so the MeshSpecification lives in the document exactly as authored and is
 // parsed with mpp's own MeshSpecificationParser -- the same parser FilePbrMaterialStream uses, so a
 // spec accepted here is a spec the runtime will accept.
