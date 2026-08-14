@@ -91,18 +91,6 @@ public:
     meshPhysicsEnabled_ = enabled;
   }
 
-  // When true, mesh-mode wall/obstacle collision tests the ship's whole hull as an oriented box
-  // against the collision BVH instead of sweeping a single probe point along its centreline
-  // (docs/OBB_SHIP_COLLISION_PLAN.md). Off by default while it is validated against the rail
-  // fixtures; the point-probe path stays in place unchanged underneath, exactly as mesh physics
-  // itself shipped alongside analytic mode before becoming the default. Ground contact is
-  // unaffected either way -- it stays a vertical point probe.
-  //
-  // Read only by mesh physics: with meshPhysicsEnabled() false (or a track with no collision
-  // surface) this does nothing at all.
-  bool obbWallCollisionEnabled() const { return obbWallCollisionEnabled_; }
-  void setObbWallCollisionEnabled(bool enabled) { obbWallCollisionEnabled_ = enabled; }
-
   // True when `track_` has at least one drivable mesh object placement -- such a track has no
   // analytic-mode collision for that geometry, so mesh physics is mandatory, not just the default.
   // The in-game debug UI hides/disables its mesh-physics toggle when this is true (see
@@ -145,7 +133,6 @@ public:
 private:
   const Track& track_;
   bool meshPhysicsEnabled_{true};
-  bool obbWallCollisionEnabled_{false};
 };
 
 }  // namespace tox

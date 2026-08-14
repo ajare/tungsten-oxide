@@ -212,12 +212,24 @@ next step.
 
 ## Status
 
-- **Milestones 1-4: landed.** `Obb.hpp`/`.cpp` (13-axis SAT + conservative
+- **Milestones 1-4 and 6: landed.** `Obb.hpp`/`.cpp` (13-axis SAT + conservative
   OBB/AABB), `TrackCollisionSurface::queryObb`, `Physics::hullHalf*` +
-  `hullObb`, and the flagged wall-resolution path in `stepMeshPhysics`, each
-  with unit/scenario coverage in `cpp/core/tests/track_tests.cpp`.
-  `Simulation::obbWallCollisionEnabled_` defaults **off**, with a debug-overlay
-  checkbox beside "Mesh Physics" and a `mesh_physics_diag --obb-walls` switch.
+  `hullObb`, and the wall-resolution path in `stepMeshPhysics`, each with
+  unit/scenario coverage in `cpp/core/tests/track_tests.cpp`.
+- **The hull OBB is now the only mesh-mode wall collision there is.** The
+  feature flag (`Simulation::obbWallCollisionEnabled_`), its `GameSession`
+  forwarder, its debug-overlay checkbox and `mesh_physics_diag --obb-walls`
+  are all gone, along with the point-probe paths themselves (grounded and
+  airborne) and `TrackCollisionSurface::sweepWall` -- the two-sided segment
+  query that existed solely to serve them -- plus its `SegmentFilter` machinery
+  and unit tests. `MESH_WALL_PROBE_HEIGHT`/`MESH_WALL_CLEARANCE` went with
+  them. Ground contact is untouched and still a point probe, and analytic
+  corridor mode is untouched entirely.
+  - The golden corpus needed no re-bake, which was not a given: `parity`
+    replays `raw-mesh-tunnel-ramp` in mesh mode, and its capture drives
+    straight down the tunnel's centreline without ever touching a wall, so the
+    hull path and the point path agree there to 0.0009x of the gate. Verified,
+    not assumed.
 - Two implementation notes worth carrying forward:
   - `ObbContact` reports *both* the true MTV and a push along the contacted
     triangle's own plane, and the wall resolver uses the latter. A hull
@@ -240,8 +252,7 @@ next step.
     the landing/impact bounce spring (`Physics::hoverBounce`/`hoverBounceVel`,
     seeded by `applyLandingImpact` and `addImpactJolt`, integrated by
     `tickHoverBounce`). The renderer holds no hover state of its own; what
-    remains renderer-side is presentation lag only — smoothed `groundPos`/`up`,
-    and the bank/pitch lean.
+    remains renderer-side is presentation lag only: smoothed `groundPos`/`up`.
   - `Physics::landingBounce`/`landingBounceVel` could NOT become that spring:
     they are accumulators nothing decays, and `boost-circuit` and
     `raw-mesh-tunnel-ramp` pin their growing values step by step with no
@@ -264,9 +275,12 @@ next step.
   respawn, no tunneling, no NaN, byte-identical reruns, and the ship holding
   station about a hull half-width further from the tunnel wall than the
   centreline probe did.
-- **Milestone 6: deliberately not done.** "Decisions locked in" gates the
-  default flip on rail-fixture validation, which is blocked above. The flag
-  stays off until that coverage exists.
+- **Milestone 6: done, ahead of its stated gate.** The plan gated the default
+  flip on rail-fixture validation, which is blocked above; making the hull path
+  unconditional was called for directly instead. What stands in for that gate:
+  the `track_tests` hull-vs-wall scenarios (head-on, flank clip, flank clip in
+  flight), the tunnel/ramp headless drive, and the unchanged mesh-mode golden
+  trace.
 - **Airborne wall contact now uses the hull too**, beyond 4.2's original scope
   (which stopped at the grounded block): `flyWithObbWalls` flies the box along
   the step's arc in the same short pieces, carrying the corrected velocity —

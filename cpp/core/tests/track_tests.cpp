@@ -590,50 +590,6 @@ int main(int argc, char** argv) {
   }
 
   {
-    // sweepWall() had no dedicated coverage at all before DRIVABLE_MESH_OBJECTS_PLAN.md Milestone
-    // 6.2 -- every existing BVH test above exercises nearestAlongAxis/nearestAcrossAxis/sweep, not
-    // the TwoSidedWall filter stepMeshPhysics's lateral wall-bounce logic actually depends on. A
-    // tunnel cross-section (floor + ceiling, both excluded by the |dot(normal,UP)|>0.5 floor/
-    // ceiling filter, plus two opposing walls) is exactly the genuinely-3D, multiple-BVH-leaf
-    // shape Milestone 6.1's own validation asset uses, so this mirrors that asset in miniature.
-    auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
-      CollisionTriangle first, second;
-      first.positions[0] = a;
-      first.positions[1] = b;
-      first.positions[2] = c;
-      second.positions[0] = a;
-      second.positions[1] = c;
-      second.positions[2] = d;
-      for (int corner = 0; corner < 3; ++corner) first.normals[corner] = second.normals[corner] = normal;
-      first.surfaceId = second.surfaceId = surfaceId;
-      return std::vector<CollisionTriangle>{first, second};
-    };
-    std::vector<CollisionTriangle> tunnel;
-    auto append = [&](std::vector<CollisionTriangle> quadTris) {
-      tunnel.insert(tunnel.end(), quadTris.begin(), quadTris.end());
-    };
-    append(quad({-5, 0, 5}, {5, 0, 5}, {5, 0, 15}, {-5, 0, 15}, {0, 1, 0}, 1));     // floor
-    append(quad({-5, 6, 5}, {5, 6, 5}, {5, 6, 15}, {-5, 6, 15}, {0, -1, 0}, 2));    // ceiling
-    append(quad({-4, 0, 5}, {-4, 6, 5}, {-4, 6, 15}, {-4, 0, 15}, {1, 0, 0}, 3));   // left wall
-    append(quad({4, 0, 5}, {4, 6, 5}, {4, 6, 15}, {4, 0, 15}, {-1, 0, 0}, 4));      // right wall
-    TrackCollisionSurface tunnelSurface(tunnel);
-
-    auto leftHit = tunnelSurface.sweepWall({0, 1, 10}, {-10, 1, 10});
-    check(leftHit && leftHit->surfaceId == 3 && std::fabs(leftHit->position.x + 4) < 1e-9,
-          "sweepWall finds the left wall of a tunnel cross-section");
-    check(leftHit && glm::dot(leftHit->normal, Vec3(1, 0, 10) - leftHit->position) > 0,
-          "sweepWall orients the contact normal back toward the side the sweep started from");
-
-    check(!tunnelSurface.sweepWall({0, 1, 10}, {0, 10, 10}).has_value(),
-          "sweepWall never reports the floor/ceiling of a tunnel as a wall, even when a segment "
-          "would otherwise cross it");
-
-    auto crossingHit = tunnelSurface.sweepWall({-10, 1, 10}, {10, 1, 10});
-    check(crossingHit && crossingHit->surfaceId == 3 && std::fabs(crossingHit->position.x + 4) < 1e-9,
-          "sweepWall picks the nearer of two walls a segment crosses (left, not right)");
-  }
-
-  {
     // OBB SAT primitive (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 1). The depths below are all
     // hand-computed from the geometry rather than recorded from a run, so a regression in the
     // minimum-translation-vector selection shows up as a wrong number, not just a wrong flag.
@@ -927,9 +883,9 @@ int main(int argc, char** argv) {
   }
 
   if (pathLoaded) {
-    // Mesh-mode OBB wall collision, driven end to end (docs/OBB_SHIP_COLLISION_PLAN.md Milestone
-    // 4.2). Both scenarios below run the same ship, from the same pose, with the same inputs, and
-    // differ only in Simulation::obbWallCollisionEnabled -- so any difference is the wall path.
+    // Mesh-mode wall collision driven end to end (docs/OBB_SHIP_COLLISION_PLAN.md): the ship's hull
+    // is an oriented box, and these scenarios cover the cases the centreline point sweep it replaced
+    // structurally could not see.
     auto quad = [](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Vec3 normal, int surfaceId) {
       CollisionTriangle first, second;
       first.positions[0] = a;
@@ -954,14 +910,13 @@ int main(int argc, char** argv) {
          quad({-200, roadY, 30}, {-200, roadY + 6, 30}, {200, roadY + 6, 30}, {200, roadY, 30}, {0, 0, -1}, 2))
       headOn.push_back(triangle);
 
-    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, bool obb, int steps,
-                             double startY = -1.0, double launchVerticalVel = 0.0, double speed = -1.0) {
+    auto driveStraight = [&](std::vector<CollisionTriangle> triangles, int steps, double startY = -1.0,
+                             double launchVerticalVel = 0.0, double speed = -1.0) {
       if (startY < 0.0) startY = roadY;
       auto driveTrack = std::make_shared<Track>(*pathLoaded.track);
       driveTrack->collisionSurface = std::make_shared<TrackCollisionSurface>(std::move(triangles));
       Simulation sim(*driveTrack);
       sim.setMeshPhysicsEnabled(true);
-      sim.setObbWallCollisionEnabled(obb);
       Ship ship = shipAt(sim, *driveTrack, {0, startY, -20}, {0, 0, 1});
       ship.physics.speed = speed >= 0 ? speed : ship.physics.maxSpeed;
       ship.physics.airborne = launchVerticalVel != 0.0;
@@ -998,49 +953,39 @@ int main(int argc, char** argv) {
       return Result{furthest, deepestHullZ, furthestHullRight, furthestHullRightAirborne, ship};
     };
 
-    const auto obbHeadOn = driveStraight(headOn, true, 240);
+    const auto obbHeadOn = driveStraight(headOn, 240);
     check(obbHeadOn.deepestHullZ <= 30.0 + 1e-6,
           "OBB wall collision never lets any part of the hull into the wall");
     check(obbHeadOn.deepestHullZ > 29.5 && obbHeadOn.furthest.z > 20.0 && !obbHeadOn.ship.physics.airborne,
           "the hull's nose reached the wall and the ship stayed on the road, rather than tunneling, "
           "stopping short, or falling through");
 
-    // Scenario 2: the bug a point probe structurally cannot catch. This wall runs alongside the
-    // ship's path, one metre to its right -- clear of the centreline the old probe sweeps, but well
-    // inside the hull's 1.2 m half width, so the ship's flank is what hits it.
+    // Scenario 2: the bug that motivated all of this. This wall runs alongside the ship's path, one
+    // metre to its right -- clear of the centreline the old point sweep probed, but well inside the
+    // hull's 1.2 m half width, so the ship's flank is what hits it.
     auto flank = ground;
     for (const auto& triangle :
          quad({1, roadY, 0}, {1, roadY + 6, 0}, {1, roadY + 6, 120}, {1, roadY, 120}, {-1, 0, 0}, 3))
       flank.push_back(triangle);
 
-    const auto pointProbeFlank = driveStraight(flank, false, 120);
-    check(std::fabs(pointProbeFlank.ship.physics.groundPos.x) < 0.01 && pointProbeFlank.furthestHullRight > 1.0,
-          "the point probe drives the ship's whole flank through a wall its centreline passes beside");
-
-    const auto obbFlank = driveStraight(flank, true, 120);
+    const auto obbFlank = driveStraight(flank, 120);
     check(obbFlank.furthestHullRight <= 1.0 + 1e-6,
-          "OBB wall collision keeps the hull's flank out of that wall for the whole run");
-    check(obbFlank.ship.physics.groundPos.z > pointProbeFlank.ship.physics.groundPos.z * 0.5 &&
-              !obbFlank.ship.physics.airborne,
+          "the hull's flank is kept out of a wall the ship's centreline passes clean beside");
+    check(obbFlank.ship.physics.groundPos.z > 20.0 && !obbFlank.ship.physics.airborne,
           "the deflected ship carries on down the road rather than being pinned or thrown off it");
 
     // Scenario 3: the same flank clip, in flight. The airborne path had its own lifted point probe
-    // with the same blind spot, and it matters more there -- a ship in the air is exactly where
+    // with the same blind spot, and it mattered more there -- a ship in the air is exactly where
     // clipping a barrier's top edge or corner happens.
     // Launched upward so the ship is genuinely still in the air by the time it draws level with the
     // wall (gravity here is 60 m/s^2 -- a ship simply dropped from a couple of metres is back on the
     // road within 15 m of travel, well short of it).
     const double flightY = roadY + 2.0;
-    const auto pointProbeFlight = driveStraight(flank, false, 60, flightY, 12.0, 60.0);
-    check(std::isfinite(pointProbeFlight.furthestHullRightAirborne),
+    const auto obbFlight = driveStraight(flank, 60, flightY, 12.0, 60.0);
+    check(std::isfinite(obbFlight.furthestHullRightAirborne),
           "the flight scenario really does pass the wall while still airborne");
-    check(pointProbeFlight.furthestHullRightAirborne > 1.0,
-          "the airborne point probe flies the ship's flank through that wall too");
-
-    const auto obbFlight = driveStraight(flank, true, 60, flightY, 12.0, 60.0);
-    check(std::isfinite(obbFlight.furthestHullRightAirborne) &&
-              obbFlight.furthestHullRightAirborne <= 1.0 + 1e-6,
-          "OBB wall collision keeps the hull out of the wall in flight as well as on the ground");
+    check(obbFlight.furthestHullRightAirborne <= 1.0 + 1e-6,
+          "the hull is kept out of that wall in flight as well as on the ground");
     check(obbFlight.ship.physics.groundPos.z > 0.0,
           "the deflected ship keeps flying down the course rather than being stopped dead in mid-air");
   }

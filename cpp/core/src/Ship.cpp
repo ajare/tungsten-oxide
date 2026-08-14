@@ -10,22 +10,6 @@
 namespace tox {
 namespace {
 
-// The lateral wall probe runs this far above the ship's contact point rather than at its feet. A
-// ship's groundPos sits exactly ON the road surface -- which is also exactly where the edge rails'
-// bottom edge sits, since rails are extruded upward from the road boundary. A probe at ground level
-// therefore grazes that shared edge and slips underneath the rail entirely (verified headlessly:
-// the ship drove clean through the track's edge rail, while an otherwise identical probe half a
-// unit higher hit it every time). Half a unit sits comfortably inside a rail's ~1.6-unit vertical
-// span.
-constexpr double MESH_WALL_PROBE_HEIGHT = 0.5;
-// Leave the ship this far inside a wall after a bounce. It is deliberately the same
-// COLLISION_WALL_MARGIN the analytic corridor keeps from its own sLeft/sRight limits, and it needs
-// to be a real distance rather than a token epsilon: the edge rails stand exactly at the road's
-// outer boundary, so clamping a ship merely "just inside the wall" leaves it in the sliver where
-// the drivable surface has already ended -- it then finds no ground and falsely goes airborne
-// (verified headlessly: road ends at x~1312.3 with the rail at x~1312.36). A full margin puts the
-// ship back on actual road, and keeps mesh mode's wall standoff consistent with analytic mode's.
-constexpr double MESH_WALL_CLEARANCE = TrackCore::COLLISION_WALL_MARGIN;
 // A flat road keeps a ship's moveDir tangent to (0,1,0) exactly, so vel.y is exactly 0 there every
 // frame; a genuinely sloped surface (a ramp) produces a real, nonzero vel.y proportional to its
 // grade. This threshold only needs to clear ordinary floating-point noise on an ostensibly-flat
@@ -33,12 +17,11 @@ constexpr double MESH_WALL_CLEARANCE = TrackCore::COLLISION_WALL_MARGIN;
 // (~4 degree) ramp imparts at typical driving speed. See its one call site's comment for why this
 // distinguishes a ramp-crest launch from an ordinary flat-road-edge scrape.
 constexpr double MESH_RAMP_LAUNCH_VERTICAL_SPEED = 0.05;
-// --- OBB wall collision (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 4) ------------------------
-// Same floor/ceiling cutoff sweepWall applies to its own hits, for the same reason: a mostly
-// horizontal surface is road, not barrier, and resolving the hull "out of" the road it is driving
-// on pushes it sideways off the track. Kept here rather than shared with TrackCollision.cpp's copy
-// because the two make the decision about different things (an interpolated hit normal there, a
-// triangle's own plane here) and neither should silently drag the other along if it is retuned.
+// --- OBB wall collision (docs/OBB_SHIP_COLLISION_PLAN.md) ------------------------------------
+// Above this |dot(planeNormal, UP)| a contacted surface counts as road/floor rather than wall, and
+// the wall resolver leaves it to the ground probe. Resolving the hull "out of" the road it is
+// driving on would shove it sideways off the track; a barrier sits near 0 and a road near 1, so the
+// cutoff is nowhere near either.
 constexpr double MESH_OBB_WALL_MAX_UP_DOT = 0.5;
 // How many push-out/reflect passes one substep gets. A single pass resolves a flat wall; a corner
 // needs one per surface, and the second push can reintroduce a shallow overlap with the first. Four
@@ -53,11 +36,9 @@ constexpr int MESH_OBB_SOLVER_PASSES = 4;
 constexpr double MESH_OBB_SUBSTEP_HALF_EXTENT_FRACTION = 0.5;
 constexpr int MESH_OBB_MAX_SUBSTEPS = 8;
 // Standoff left between hull and wall after a push-out, purely so the next frame's test doesn't
-// re-report the same contact through floating-point noise. Deliberately NOT the point probe's
-// MESH_WALL_CLEARANCE: that margin exists to drag a *centreline probe point* back from the road's
-// outer boundary onto real road, and the hull's centre is already a half-width inside the wall by
-// construction, so repeating the margin here would hold the ship a metre and a half off every
-// barrier.
+// re-report the same contact through floating-point noise. Deliberately small: the hull's centre is
+// already a half-width clear of any wall its flank rests against, so there is nothing here for a
+// full TrackCore::COLLISION_WALL_MARGIN-sized standoff to buy.
 constexpr double MESH_OBB_WALL_SKIN = 0.01;
 
 // Resolves whatever walls the ship's hull currently overlaps at `position`, pushing the hull back
@@ -102,15 +83,14 @@ int obbSubstepCount(const Physics& p, double travel) {
   return std::clamp(static_cast<int>(std::ceil(travel / maxAdvance)), 1, MESH_OBB_MAX_SUBSTEPS);
 }
 
-// Mesh-mode wall collision with the ship's whole hull, as an alternative to the centreline point
-// sweep below (Simulation::obbWallCollisionEnabled). Advances this step's horizontal motion in
+// Mesh-mode wall collision with the ship's whole hull. Advances this step's horizontal motion in
 // short pieces, resolving contacts after each and carrying the corrected velocity into the next.
 // Returns the resolved ground-plane position and leaves p.speed/p.moveDir describing the
 // post-bounce travel.
 //
-// This is what catches the two things a point probe structurally cannot: a corner or flank clipping
-// geometry the centreline passes beside, and a yaw that carries a corner through a wall the
-// centreline path avoids.
+// This replaced a centreline point sweep, which structurally could not catch two things: a corner or
+// flank clipping geometry the centreline passes beside, and a yaw carrying a corner through a wall
+// the centreline path avoids.
 Vec3 resolveObbWalls(Ship& ship, const TrackCollisionSurface& bvh, const Vec3& initialVelocity,
                      double dt, const Vec3& up) {
   Physics& p = ship.physics;
@@ -146,10 +126,10 @@ struct ObbFlightStep {
 };
 
 // The airborne counterpart of resolveObbWalls: flies the hull along this step's ballistic arc in
-// the same short pieces, hitting walls with the whole box rather than a lifted probe point, and
-// carrying the corrected velocity (vertical included) into the next piece. A mid-air wall bounce
-// leaves the ship airborne, exactly as the point-probe path does -- landing sideways on a barrier's
-// horizontal normal would be an obviously wrong grounded state.
+// the same short pieces, hitting walls with the whole box, and carrying the corrected velocity
+// (vertical included) into the next piece. A mid-air wall bounce leaves the ship airborne rather
+// than "landing" sideways on a barrier's horizontal normal, which would be an obviously wrong
+// grounded state.
 //
 // Landing itself stays a point sweep along each piece of the arc: ground contact is deliberately
 // out of the OBB path's scope (docs/OBB_SHIP_COLLISION_PLAN.md), and it ends the step wherever it
@@ -252,9 +232,10 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
 
   const Vec3 vel = p.moveDir * p.speed;
 
-  if (p.airborne && simulation.obbWallCollisionEnabled()) {
-    // Hull-as-oriented-box wall collision in flight, the airborne counterpart of the grounded path
-    // below (see flyWithObbWalls). Landing stays the same one-sided road sweep either way.
+  if (p.airborne) {
+    // Wall contact in flight is the whole hull, flown along this step's arc (see flyWithObbWalls).
+    // Landing is still a one-sided road sweep: ground contact is a point probe by design
+    // (docs/OBB_SHIP_COLLISION_PLAN.md), only wall/obstacle collision is shape-based.
     p.verticalVel -= p.gravity * dt;
     const ObbFlightStep flight = flyWithObbWalls(ship, bvh, vel, dt, probeAxis);
     p.groundPos = flight.position;
@@ -265,117 +246,18 @@ StepResult stepMeshPhysics(Ship& ship, const Simulation& simulation, double dt, 
       applyLandingImpact(ship, impactSpeed);
       surfaceNormal = flight.landing->normal;
     } else {
-      // Never a wall's normal, for the reason spelled out in the point-probe branch below: this
-      // value becomes the next frame's ground-probe axis.
-      surfaceNormal = UP;
-    }
-  } else if (p.airborne) {
-    p.verticalVel -= p.gravity * dt;
-    const Vec3 fullVel(vel.x, p.verticalVel, vel.z);
-    const Vec3 nextPos = p.groundPos + fullVel * dt;
-    // Landing is a one-sided road query (you land on the road's driven face, not its underside),
-    // but a rail struck mid-air still has to block -- and rails need the same two-sided treatment
-    // here as on the ground, or a ship sails through whichever rail faces away. Take whichever
-    // contact happens first along this step's motion.
-    const auto landing = bvh.sweep(p.groundPos, nextPos);
-    // Lifted like the grounded probe below: a ship skimming along at road level would otherwise
-    // graze the rails' bottom edge and pass under them.
-    const Vec3 airProbeLift = UP * MESH_WALL_PROBE_HEIGHT;
-    const auto wallHit = bvh.sweepWall(p.groundPos + airProbeLift, nextPos + airProbeLift);
-    const bool wallFirst = wallHit && (!landing || wallHit->t < landing->t);
-    if (const auto hit = wallFirst ? wallHit : landing) {
-      if (!wallFirst) {
-        // An upward-facing road surface: a real landing.
-        const double impactSpeed = std::max(0.0, -p.verticalVel);
-        landOnSurface(ship, hit->normal);
-        applyLandingImpact(ship, impactSpeed);
-      } else {
-        // A wall/rail hit mid-air -- bounce off it and stay airborne, rather than "landing"
-        // sideways on its near-horizontal normal (an obviously wrong grounded state).
-        const double into = glm::dot(fullVel, hit->normal);
-        if (into < 0) {
-          const Vec3 bounced = fullVel + hit->normal * (-into * (1 + weightRestitution(p)));
-          addImpactJolt(p, -into);
-          p.verticalVel = bounced.y;
-          const double horizMag = std::hypot(bounced.x, bounced.z);
-          p.speed = horizMag;
-          if (horizMag > 1e-6) p.moveDir = Vec3(bounced.x / horizMag, 0.0, bounced.z / horizMag);
-        }
-      }
-      // The wall probe ran in lifted space, so undo the lift before this becomes the ship's
-      // position -- otherwise every mid-air rail graze would ratchet the ship upward.
-      p.groundPos = wallFirst ? hit->position - airProbeLift : hit->position;
-      surfaceRenderPos = p.groundPos;
-      // Only a landing surface may become the reported surface normal. A wall's normal is
-      // horizontal, and this value is what GameSession feeds back into ship.renderNormal -- which
-      // is this function's ground-probe axis. Reporting a wall normal here therefore left the ship
-      // probing for ground *sideways* on every subsequent frame, so it never found ground again,
-      // fell, and respawned: exactly one such event per lap in the headless drive test.
-      surfaceNormal = wallFirst ? UP : hit->normal;
-    } else {
-      p.groundPos = nextPos;
-      surfaceRenderPos = nextPos;
+      // Deliberately never a wall's normal: this value is what GameSession feeds back into
+      // ship.renderNormal, which is this function's ground-probe axis. Reporting a wall's
+      // (horizontal) normal here left the ship probing for ground sideways on every subsequent
+      // frame, so it never found ground again, fell, and respawned -- once per lap in the headless
+      // drive test.
       surfaceNormal = UP;
     }
   } else if (hasTranslation) {
-    Vec3 intended = p.groundPos + Vec3(vel.x, 0, vel.z) * dt;
-    if (simulation.obbWallCollisionEnabled()) {
-      // Hull-as-oriented-box wall collision, in place of the point sweep below (see resolveObbWalls
-      // and docs/OBB_SHIP_COLLISION_PLAN.md). Ground contact below is untouched by this: it stays a
-      // vertical point probe either way, and the airborne branch above still uses the point sweep
-      // for the walls it meets mid-flight.
-      intended = resolveObbWalls(ship, bvh, vel, dt, probeAxis);
-    } else {
-      // Lateral/wall probe, run horizontally across this step's motion.
-      //
-      // It starts a COLLISION_WALL_MARGIN behind groundPos (along the direction of travel) rather
-      // than at groundPos itself: once the ship is already resting against a wall, a segment starting
-      // exactly at the contact point barely crosses the surface at all, so contact stops being
-      // reported and nothing keeps the ship from creeping through frame after frame. Starting the
-      // probe slightly behind keeps resting contact detected every frame -- the same purpose
-      // COLLISION_WALL_MARGIN already serves for the analytic corridor/rail wall checks.
-      //
-      // It is also lifted MESH_WALL_PROBE_HEIGHT off the surface: see that constant -- at ground
-      // level the probe grazes the rails' own bottom edge and slides underneath them.
-      const Vec3 horizontalVel(vel.x, 0.0, vel.z);
-      const double horizontalSpeed = std::hypot(horizontalVel.x, horizontalVel.z);
-      const Vec3 sweepFrom = horizontalSpeed > 1e-6
-                                 ? p.groundPos - (horizontalVel / horizontalSpeed) * TrackCore::COLLISION_WALL_MARGIN
-                                 : p.groundPos;
-      const Vec3 probeLift = probeAxis * MESH_WALL_PROBE_HEIGHT;
-      // sweepWall(), not sweep(): wall contact must be two-sided and floor-filtered. A one-sided
-      // sweep passes straight through whichever of the track's two edge rails happens to be baked
-      // facing away from the ship, and it also reports the drivable road surface itself as a "wall"
-      // wherever a fixed-height horizontal probe clips through a banked/graded section. sweepWall
-      // handles both, and hands back a contact normal already oriented against travel.
-      if (const auto wall = bvh.sweepWall(sweepFrom + probeLift, intended + probeLift)) {
-        const Vec3 wallN = wall->normal;
-        const double into = glm::dot(vel, wallN);
-        if (into < 0) {
-          Vec3 bounced = vel + wallN * (-into * (1 + weightRestitution(p)));
-          addImpactJolt(p, -into);
-          // Gear-preserving, as every other wall bounce in this file: a plain length/normalize
-          // decomposition is always non-negative and forces the car into forward gear on contact.
-          const double gear = p.speed < 0.0 ? -1.0 : 1.0;
-          const double mag = glm::length(bounced);
-          p.speed = gear * mag * weightSpeedRetain(p);
-          if (mag > 1e-6) p.moveDir = normalizeSafe(bounced * gear);
-          // Slide along the wall using this frame's corrected (into-wall component removed)
-          // velocity, rather than snapping to the exact contact point. A snap left position pinned
-          // to the same spot every frame while grip kept re-aiming moveDir at `forward` (never
-          // corrected here) back into the wall, so the ship re-hit and re-snapped to that same point
-          // indefinitely instead of sliding along the wall like the analytic corridor/rail code does.
-          intended = p.groundPos + Vec3(bounced.x, 0, bounced.z) * dt;
-        }
-        // Keep the ship on the inside of the wall regardless of which branch ran. The velocity
-        // correction alone doesn't stop it creeping past the plane over repeated frames at a shallow
-        // approach angle (each frame's `forward` still points partly into the wall, so grip
-        // re-introduces a small into-wall component before the next contact is detected) -- same
-        // idea as the corridor's finalS lateral clamp.
-        const double penetration = glm::dot((intended + probeLift) - wall->position, wallN);
-        if (penetration < MESH_WALL_CLEARANCE) intended += wallN * (MESH_WALL_CLEARANCE - penetration);
-      }
-    }
+    // Wall collision is the ship's whole hull as an oriented box, resolved against the collision
+    // BVH (see resolveObbWalls). Ground contact below is a separate concern and stays a vertical
+    // point probe.
+    Vec3 intended = resolveObbWalls(ship, bvh, vel, dt, probeAxis);
     auto groundAt = [&](const Vec3& at) {
       return bvh.nearestAlongAxis(Vec3(at.x, p.groundPos.y, at.z), probeAxis, 4.0);
     };

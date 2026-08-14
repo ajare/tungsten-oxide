@@ -659,12 +659,6 @@ void StatePlayTungstenMonoxide::_renderImGui(float frameTime, void* imGuiCtx, vo
         if (ImGui::Checkbox("Mesh Physics", &mMeshPhysicsDebug) && mGameSession)
           mGameSession->setMeshPhysicsEnabled(mMeshPhysicsDebug);
         ImGui::EndDisabled();
-        // Only mesh physics reads this, so offering it while analytic mode is selected would be a
-        // control that silently does nothing.
-        ImGui::BeginDisabled(!mMeshPhysicsDebug);
-        if (ImGui::Checkbox("OBB Wall Collision", &mObbWallCollisionDebug) && mGameSession)
-          mGameSession->setObbWallCollisionEnabled(mObbWallCollisionDebug);
-        ImGui::EndDisabled();
         if (ImGui::Checkbox("Show Physics Ghost", &mShowPhysicsGhost)) {
           // Resync on enable so the comparison always starts from "right now", not wherever the
           // ghost last happened to be (e.g. left behind from the last time this was toggled on).

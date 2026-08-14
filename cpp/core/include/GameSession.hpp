@@ -63,9 +63,6 @@ public:
   // Forwards to Simulation::setMeshPhysicsEnabled -- the debug UI's entry point for the
   // mesh-vs-analytic physics toggle, without exposing broader mutable access to simulation_.
   void setMeshPhysicsEnabled(bool enabled) { simulation_.setMeshPhysicsEnabled(enabled); }
-  // Forwards to Simulation::setObbWallCollisionEnabled -- the debug UI's entry point for the
-  // hull-OBB-vs-point-probe wall collision toggle (docs/OBB_SHIP_COLLISION_PLAN.md).
-  void setObbWallCollisionEnabled(bool enabled) { simulation_.setObbWallCollisionEnabled(enabled); }
   // Forwards to Simulation::meshPhysicsForced -- lets the debug UI hide/disable its toggle for a
   // track with drivable mesh objects (DRIVABLE_MESH_OBJECTS_PLAN.md Milestone 8.1).
   bool meshPhysicsForced() const { return simulation_.meshPhysicsForced(); }

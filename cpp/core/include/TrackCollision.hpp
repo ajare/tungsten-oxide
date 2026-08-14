@@ -34,8 +34,8 @@ struct ObbContact {
   Vec3 normal;
   double depth{0.0};
   // The triangle's plane, with the normal flipped to point toward the box's centre -- the side the
-  // box is on, and so the side it must be kept on (the same convention sweepWall's returned normal
-  // follows). planeDepth is how far along planeNormal the box has to move to clear the plane.
+  // box is on, and so the side it must be kept on. planeDepth is how far along planeNormal the box
+  // has to move to clear the plane.
   //
   // This, not the MTV above, is what a wall/floor resolver should push along. On a wall built out
   // of many triangles, a box overlapping one triangle near its interior edge has a *shorter* way
@@ -74,19 +74,6 @@ public:
                                                 double maxDistance) const;
   // Earliest one-sided hit along the moving point's segment.
   std::optional<CollisionHit> sweep(const Vec3& from, const Vec3& to) const;
-  // Earliest *wall-like* hit along the moving point's segment, for lateral/barrier collision.
-  // Differs from sweep() in two ways that matter for walls:
-  //  - Two-sided. A wall blocks a ship regardless of which way its authored render normal happens
-  //    to face. A track's two edge rails are baked with the same world-space facing, so relative to
-  //    the track interior one faces inward and the other outward -- a one-sided test passes clean
-  //    through whichever rail faces away, which is exactly "the ship doesn't collide with the side
-  //    rails".
-  //  - Skips mostly-horizontal surfaces (|dot(normal, UP)| > 0.5): those are road/floor, not walls.
-  //    A horizontal probe at a fixed height clips through the drivable surface itself on any banked
-  //    or graded section, and treating that as a wall pins the ship in place.
-  // The returned normal is oriented to point back toward `from` -- the side the mover is on, and so
-  // the side it must be kept on -- so callers can use it directly as a contact normal.
-  std::optional<CollisionHit> sweepWall(const Vec3& from, const Vec3& to) const;
   // Every triangle an oriented box currently overlaps, as minimum-translation-vector contacts
   // (docs/OBB_SHIP_COLLISION_PLAN.md Milestone 2). Unlike the segment queries above this is a
   // *discrete* test at one fixed pose -- it reports the overlap a box already has, not the one it
@@ -109,13 +96,12 @@ public:  // exposed only so the translation unit's BVH slab helper can consume i
   };
 
 private:
-  // OneSidedAny: sweep()'s behavior -- only hits the segment moves *into* (dot(d, normal) < 0),
-  // any orientation. TwoSidedWall: sweepWall()'s -- orientation-agnostic, floors excluded, normal
-  // flipped to oppose travel. Both take the earliest hit along the segment.
-  enum class SegmentFilter { OneSidedAny, TwoSidedWall };
-
   int build(std::size_t begin, std::size_t end);
-  void querySegment(int nodeIndex, const Vec3& from, const Vec3& to, SegmentFilter filter,
+  // Earliest hit the segment moves *into* (dot(d, normal) < 0), of any orientation: sweep()'s
+  // behavior. A two-sided, floor-excluding wall variant lived here until hull-OBB collision
+  // replaced the ship's line-based wall probes outright (docs/OBB_SHIP_COLLISION_PLAN.md) --
+  // queryObb is what answers "what walls am I touching" now.
+  void querySegment(int nodeIndex, const Vec3& from, const Vec3& to,
                     std::optional<CollisionHit>& best) const;
   // upFilter == nullptr accepts a hit of any orientation; otherwise only hits whose interpolated
   // normal points into *upFilter (used by nearestAlongAxis's road-facing requirement).
