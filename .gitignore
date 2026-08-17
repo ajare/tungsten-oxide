@@ -19,9 +19,9 @@ cpp/core/build/
 cpp/applib/build/
 cpp/launcher/build/
 cpp/tungsten-monoxide/build/
-cpp/willpower/build/
+ext/willpower/build/
 # Per-library Visual Studio build trees (including .vs/IPCH caches).
-cpp/willpower/**/build/
+ext/willpower/**/build/
 
 # ImGui writes its window-layout settings file to the process's working
 # directory at runtime (track_editor doesn't override io.IniFilename yet).

@@ -10,9 +10,9 @@ A native C++ (CMake/MSVC) racing track editor and driving game engine, all under
 - `cpp/editor/` — `track_editor`, the native ImGui/SDL2/OpenGL track editor. See "Editor conventions" below and `EDITOR_CPP_PORT_PLAN.md`.
 - `cpp/app/` — `track_runner`, a headless CLI session host.
 - `cpp/launcher/`, `cpp/applib/`, `cpp/tungsten-monoxide/`, `cpp/model-tool/` — see `cpp/CMakeLists.txt`'s header comment for the full tree and each subproject's own docs.
-- `cpp/willpower/` — the Willpower geometry/math libraries (`Willpower.Common`, `Willpower.Geometry`, ...). `cpp/core` no longer uses `Willpower.Geometry` (its only use, mesh topology/triangulation, was removed with `MeshRegion` — `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2); it's still used by `cpp/applib`/`cpp/tungsten-monoxide`.
+- `ext/willpower/` — a submodule of [`ajare/willpower`](https://github.com/ajare/willpower), providing the Willpower geometry/math libraries (`Willpower.Common`, `Willpower.Geometry`, ...). Its nested `ext/massive-poly-pusher` submodule is the single MassivePolyPusher checkout used by all native targets.
 - `assets/` — bundled track textures (`assets/track/`, plus a loose `assets/test-1.png` fixture), read by `cpp/editor/src/TextureCache.cpp`'s `findAssetsDir()`. Stays at the repo root as a sibling of `cpp/`. Bundled `TextureAsset.path` values are stored relative to the repo root (e.g. `"assets/track/foo.png"`).
-- `ext/geoemetry-js/` — a git submodule (`@willpower/geometry`, https://github.com/ajare/geoemetry-js), a separate self-contained ES-module mesh/geometry library with its own `package.json`, tests, and a React/Vite editor. This is the one JavaScript codebase still in the repo; it is not part of the track app and has no bearing on `cpp/`. See `ext/geoemetry-js/README.md` for its own commands (`npm test`, `npm --prefix editor/ui run dev`, etc.) and codebase map. `cpp/willpower` references it only for vendored-copy provenance notes, not as a runtime dependency.
+- `ext/geoemetry-js/` — a git submodule (`@willpower/geometry`, https://github.com/ajare/geoemetry-js), a separate self-contained ES-module mesh/geometry library with its own `package.json`, tests, and a React/Vite editor. This is the one JavaScript codebase still in the repo; it is not part of the track app and has no bearing on `cpp/`. See `ext/geoemetry-js/README.md` for its own commands (`npm test`, `npm --prefix editor/ui run dev`, etc.) and codebase map. `ext/willpower` references it only for vendored-copy provenance notes, not as a runtime dependency.
 
 ## Editing
 
@@ -23,6 +23,9 @@ When making changes to C++ code, make sure that you adhere to the .clang-format 
 From an MSVC Developer prompt, **from the repo root**:
 
 ```
+cmake -S ext/willpower -B ext/willpower/build
+cmake --build ext/willpower/build --config Release
+cmake --build ext/willpower/build/_deps/massive-poly-pusher-build --config Release --target MppResourceParsers MppAppSupport assimp
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure

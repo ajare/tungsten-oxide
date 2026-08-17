@@ -41,7 +41,7 @@ endif()
 # Same SDL3 target as cpp/editor, pinned by MassivePolyPusher's nested submodule.
 if (NOT TARGET SDL3::SDL3)
   set(TOX_SDL_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/ext/sdl")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher/ext/sdl")
   if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
       "SDL3 submodule is missing; run: git submodule update --init --recursive")
@@ -94,8 +94,15 @@ target_compile_features(model_tool PRIVATE cxx_std_20)
 # ModelResources.hpp), not something this app calls directly -- matching
 # cpp/tungsten-monoxide/CMakeLists.txt's own link set, which also omits it.
 set(_model_tool_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
-set(_model_tool_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
-if (MODEL_TOOL_MPP_DIR STREQUAL _model_tool_legacy_mpp_dir)
+set(_model_tool_repository_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_model_tool_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_model_tool_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (MODEL_TOOL_MPP_DIR STREQUAL _model_tool_legacy_mpp_dir OR
+    MODEL_TOOL_MPP_DIR STREQUAL _model_tool_repository_mpp_dir OR
+    MODEL_TOOL_MPP_DIR STREQUAL _model_tool_cpp_willpower_mpp_dir)
   set(MODEL_TOOL_MPP_DIR "${_model_tool_mpp_dir}" CACHE PATH
     "Root of the MassivePolyPusher dependency" FORCE)
 else()
@@ -103,6 +110,8 @@ else()
     "Root of the MassivePolyPusher dependency")
 endif()
 unset(_model_tool_legacy_mpp_dir)
+unset(_model_tool_repository_mpp_dir)
+unset(_model_tool_cpp_willpower_mpp_dir)
 unset(_model_tool_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${MODEL_TOOL_MPP_DIR}")
@@ -132,11 +141,11 @@ target_link_libraries(model_tool PRIVATE
   # kept because this app still calls mpp directly for its viewport; AssImp's are not, because it
   # no longer calls AssImp at all.
   model_io_gltf
-  # Willpower::Common's XmlReader parses imported Resources.xml-shaped material files (see
+  # Willpower.Common's XmlReader parses imported Resources.xml-shaped material files (see
   # MaterialXmlImport.hpp) -- a real CMake IMPORTED-adjacent target (unlike the raw-lib-name mpp
   # libraries below), so $<TARGET_RUNTIME_DLLS:model_tool> picks up its DLL automatically.
-  Willpower::Common
-  # <Model> XML fragment schema (docs/adr/0003-model-xml-layer.md), also TinyXML2-via-Willpower::Common
+  Willpower.Common
+  # <Model> XML fragment schema (docs/adr/0003-model-xml-layer.md), also TinyXML2-via-Willpower.Common
   # under the hood -- shared with cpp/editor, see cpp/model-xml/CMakeLists.txt.
   model_xml
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>

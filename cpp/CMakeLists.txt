@@ -1,9 +1,9 @@
 # cpp/ — root CMake project tying together the independent C++ trees:
 #
-#   willpower/  the Willpower geometry/math libraries (Willpower.Common,
-#               Willpower.Geometry, ...) — see willpower/CMakeLists.txt.
-#   willpower/willpower.application/  Willpower's application/resource-system
-#               library — see willpower/willpower.application/CMakeLists.txt.
+#   ../ext/willpower/  the Willpower geometry/math libraries (Willpower.Common,
+#               Willpower.Geometry, ...) — see ../ext/willpower/CMakeLists.txt.
+#   ../ext/willpower/willpower.application/  Willpower's application/resource-system
+#               library — see ../ext/willpower/willpower.application/CMakeLists.txt.
 #   core/       the track-physics engine, checked against a committed golden fixture/trace
 #               corpus — see core/CMakeLists.txt.
 #   app/        track_runner, a headless CLI session host — see app/CMakeLists.txt.
@@ -28,14 +28,10 @@
 #   gltf-convert/ gltf_convert, the headless glTF -> .mppmodel converter — see
 #               gltf-convert/CMakeLists.txt.
 #
-# core links Willpower.Geometry for current-schema mesh topology validation and
-# triangulation. The target link establishes build order; explicit dependencies
-# below retain the intended ordering for all generators and executable targets.
-#
-# Each of core/ and willpower/ can also still be configured standalone (see
-# their own CMakeLists.txt header comments for those commands); this root
-# project is an additional, combined entry point — use a build directory
-# distinct from either of theirs to avoid a stale-cache mismatch:
+# Willpower and MassivePolyPusher are built separately under ../ext/willpower/build. This project
+# only creates imported targets for their prebuilt binaries. core/ can also be configured
+# standalone and uses the same imports; see README.md for the required dependency build commands.
+# Use a cpp build directory distinct from the dependency build tree:
 #   cmake -S cpp -B cpp/build-all -G Ninja
 #   cmake --build cpp/build-all
 cmake_minimum_required(VERSION 3.20)
@@ -44,7 +40,7 @@ project(TungstenOxideCpp C CXX)
 # Build SDL3 once from MassivePolyPusher's pinned source submodule. All cpp/
 # applications consume this target instead of carrying or fetching their own SDL copies.
 set(TOX_SDL_SOURCE_DIR
-  "${CMAKE_CURRENT_SOURCE_DIR}/../ext/massive-poly-pusher/ext/sdl")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../ext/willpower/ext/massive-poly-pusher/ext/sdl")
 if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
   message(FATAL_ERROR
     "SDL3 submodule is missing; run: git submodule update --init --recursive")
@@ -91,7 +87,9 @@ set(gtest_force_shared_crt ON CACHE BOOL "Use the shared MSVC runtime for Google
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ext/googletest"
                  "${CMAKE_CURRENT_BINARY_DIR}/googletest")
 
-add_subdirectory(willpower)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/WillpowerBuildTree.cmake")
+tox_import_willpower("${CMAKE_CURRENT_SOURCE_DIR}/../ext/willpower")
+
 add_subdirectory(core)
 add_subdirectory(app)
 add_subdirectory(applib)
@@ -109,18 +107,3 @@ add_subdirectory(gltf-convert)
 if (TARGET Launcher AND TARGET TungstenMonoxide)
   add_dependencies(Launcher TungstenMonoxide)
 endif()
-
-foreach(_willpower_target Willpower.Common Willpower.Application Willpower.Geometry)
-  if (TARGET ${_willpower_target})
-    add_dependencies(core ${_willpower_target})
-    if (TARGET parity)
-      add_dependencies(parity ${_willpower_target})
-    endif()
-    if (TARGET track_runner)
-      add_dependencies(track_runner ${_willpower_target})
-    endif()
-    if (TARGET track_editor)
-      add_dependencies(track_editor ${_willpower_target})
-    endif()
-  endif()
-endforeach()

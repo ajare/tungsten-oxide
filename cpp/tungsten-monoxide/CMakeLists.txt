@@ -68,8 +68,15 @@ set(TUNGSTEN_MONOXIDE_SOURCES
   src/TungstenPbrPackage.cpp)
 
 set(_tungsten_monoxide_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
-set(_tungsten_monoxide_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
-if (TUNGSTEN_MONOXIDE_MPP_DIR STREQUAL _tungsten_monoxide_legacy_mpp_dir)
+set(_tungsten_monoxide_repository_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_tungsten_monoxide_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_tungsten_monoxide_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (TUNGSTEN_MONOXIDE_MPP_DIR STREQUAL _tungsten_monoxide_legacy_mpp_dir OR
+    TUNGSTEN_MONOXIDE_MPP_DIR STREQUAL _tungsten_monoxide_repository_mpp_dir OR
+    TUNGSTEN_MONOXIDE_MPP_DIR STREQUAL _tungsten_monoxide_cpp_willpower_mpp_dir)
   set(TUNGSTEN_MONOXIDE_MPP_DIR "${_tungsten_monoxide_mpp_dir}" CACHE PATH
     "Root of the MassivePolyPusher dependency" FORCE)
 else()
@@ -77,6 +84,8 @@ else()
     "Root of the MassivePolyPusher dependency")
 endif()
 unset(_tungsten_monoxide_legacy_mpp_dir)
+unset(_tungsten_monoxide_repository_mpp_dir)
+unset(_tungsten_monoxide_cpp_willpower_mpp_dir)
 unset(_tungsten_monoxide_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${TUNGSTEN_MONOXIDE_MPP_DIR}")
@@ -112,9 +121,9 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../common/include"
   "${TUNGSTEN_MONOXIDE_APPLIB_DIR}/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.application/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.geometry/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.application/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.common/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.geometry/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-data/include"
   "${TUNGSTEN_MONOXIDE_MPP_DIR}/mpp-helper/include"
@@ -156,7 +165,7 @@ add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests
   tests/pbr_material_binding_mapping_tests.cpp)
 target_compile_features(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE cxx_std_20)
 target_include_directories(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.common/include")
 target_link_libraries(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE Willpower.Common yaml-cpp::yaml-cpp)
 add_test(NAME tungsten_monoxide_pbr_material_bindings
   COMMAND tungsten_monoxide_pbr_material_binding_mapping_tests

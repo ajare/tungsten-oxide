@@ -231,7 +231,7 @@ update)
   ran) — restored immediately via `git checkout -- cpp/test-data` before
   re-running; confirmed clean and unmodified afterward. Also noticed an
   untracked, pre-existing (dated before this session) duplicate at
-  `cpp/willpower/test-data/` — left alone as out of scope, flagged to the
+  `ext/willpower/test-data/` — left alone as out of scope, flagged to the
   user. No manual interactive Front/Side verification was possible in this
   environment (same constraint as 1.2's own note) — this remains the
   highest-value thing to actually eyeball in the real editor before trusting
@@ -903,7 +903,7 @@ after Milestone 4 lands.
     dependency of `MassivePolyPusher.dll`, not directly linked),
     `Utils(d).dll`, and two of `Utils.dll`'s own transitive dependencies,
     `glew32.dll` and `FreeImage.dll` — all copied post-build from
-    `ext/massive-poly-pusher/build/cmake/bin/<config>` (note: `bin/`
+    `cpp/build/_deps/massive-poly-pusher-build/bin/<config>` (note: `bin/`
     for the `.dll`, not `lib/` where the `.lib` import libs live).
   - Verified: built and ran clean in both Release and Debug configs. Ran
     against a freshly generated (schema-current, not a possibly-stale

@@ -4,14 +4,15 @@
 # document (bare <Model> root) or an already-located element embedded inside a Track resource's
 # <Definition><Models> list. Deliberately no mpp/AssImp/SDL dependency — mirrors cpp/core's own
 # "no heavyweight deps" posture. Shared by cpp/editor and cpp/model-tool, which both already link
-# Willpower::Common (for its vendored TinyXML2) and share a build closure; NOT linked into
+# Willpower.Common (for its vendored TinyXML2) and share a build closure; NOT linked into
 # cpp/tungsten-monoxide, which parses the same <Models> shape independently via wp::XmlNode
 # (see the plan's architecture notes on why that split is intentional).
 cmake_minimum_required(VERSION 3.20)
 project(model_xml CXX)
 
 if (NOT TARGET Willpower.Common)
-  add_subdirectory(../willpower ${CMAKE_CURRENT_BINARY_DIR}/willpower)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/WillpowerBuildTree.cmake")
+  tox_import_willpower("${CMAKE_CURRENT_LIST_DIR}/../../ext/willpower")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -28,7 +29,7 @@ add_library(model_xml STATIC
   include/ModelXml.hpp
   src/ModelXml.cpp)
 target_include_directories(model_xml PUBLIC include)
-target_link_libraries(model_xml PUBLIC Willpower::Common)
+target_link_libraries(model_xml PUBLIC Willpower.Common)
 
 add_executable(model_xml_tests tests/model_xml_tests.cpp)
 target_link_libraries(model_xml_tests PRIVATE model_xml)

@@ -2,7 +2,8 @@
 // (TRACK_MODEL_LIST_PLAN.md Milestone 4, docs/GLTF_IMPORT_PLAN.md M4): round-trips
 // MppModelExport.cpp's own non-indexed, 52-byte PBR output through the real
 // modelio::writeMppModelWithNamedMaterials/mpp::ModelSerializer pair; hand-writes minimal real
-// INDEXED .mppmodel files byte-for-byte per ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp's
+// INDEXED .mppmodel files byte-for-byte per
+// ext/willpower/ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp's
 // actual write*() functions, in both the 36-byte legacy and 52-byte PBR layouts, to prove
 // readMppModelGeometry's indexed/non-indexed detection (MppModelImport.cpp's mppModelIsIndexed) is
 // correct for both -- the one piece of this reader that isn't just "call

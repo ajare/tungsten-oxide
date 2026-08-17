@@ -20,9 +20,9 @@ This is an application migration, not a rewrite of AppLib's loading screens or a
 
 Follow these MassivePolyPusher components rather than creating a private package format:
 
-- Authoring and export: `ext/massive-poly-pusher/pipeline-editor/src/Main.cpp`
-- Runtime package loading: `ext/massive-poly-pusher/demo-suite/src/PackageScene.cpp`
-- Package extraction: `ext/massive-poly-pusher/demo-suite/src/Main.cpp`
+- Authoring and export: `ext/willpower/ext/massive-poly-pusher/pipeline-editor/src/Main.cpp`
+- Runtime package loading: `ext/willpower/ext/massive-poly-pusher/demo-suite/src/PackageScene.cpp`
+- Package extraction: `ext/willpower/ext/massive-poly-pusher/demo-suite/src/Main.cpp`
 - Pipeline runtime: `mpp::resource_parsers::PbrPipelineRuntime`
 - Pipeline parsing: `mpp::resource_parsers::PbrPipelineDocumentLoader`
 - Scene parsing: `mpp::resource_parsers::SceneParser`

@@ -1,6 +1,6 @@
 # cpp/editor — the native ImGui/SDL3/OpenGL track editor. Sits alongside cpp/core and
-# cpp/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
-# as a black box) and `Willpower::Common` directly for material catalog parsing.
+# ext/willpower and links both: `core` for schema-10/12 loading/baking/preview (reused unmodified
+# as a black box) and `Willpower.Common` directly for material catalog parsing.
 #
 # Dear ImGui (docking branch) and its SDL3/OpenGL3 backends are copied into include/ and src/ —
 # see the README-VENDORED.md file under include/imgui for exact provenance. SDL3 is built from
@@ -32,7 +32,7 @@ endif()
 # --- SDL3 (MassivePolyPusher source submodule) ------------------------------
 if (NOT TARGET SDL3::SDL3)
   set(TOX_SDL_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/ext/sdl")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher/ext/sdl")
   if (NOT EXISTS "${TOX_SDL_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
       "SDL3 submodule is missing; run: git submodule update --init --recursive")
@@ -62,7 +62,8 @@ set(IMGUI_SOURCES
 # headers pull in GLEW unconditionally, so a second independent loader in the same binary would be
 # a duplicate-symbol hazard -- see include/imgui/imconfig.h and docs/adr/0004-gltf-import.md D1.
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
-tox_resolve_mpp_build_tree("${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+tox_resolve_mpp_build_tree(
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
 
 # --- Shared .mppmodel/vertex-layout layer (docs/GLTF_IMPORT_PLAN.md, M3) + glTF import (M5) ------
 # model_io_gltf (which links model_io_core PUBLIC): M3 only needed model_io_core, since the editor
@@ -115,7 +116,7 @@ target_include_directories(track_editor PRIVATE
 
 target_link_libraries(track_editor PRIVATE
   core
-  Willpower::Common
+  Willpower.Common
   model_xml
   model_io_gltf
   SDL3::SDL3
@@ -131,11 +132,11 @@ add_executable(editor_track_resource_tests
 target_include_directories(editor_track_resource_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
-# model_io_core, not just core/Willpower::Common/model_xml: MppModelExport.cpp's export now goes
+# model_io_core, not just core/Willpower.Common/model_xml: MppModelExport.cpp's export now goes
 # through modelio::writeMppModelWithNamedMaterials (docs/GLTF_IMPORT_PLAN.md M4), so this target is
 # no longer mpp-free either -- see mpp_model_import_tests's own target comment below, which lost
 # the same property one milestone earlier.
-target_link_libraries(editor_track_resource_tests PRIVATE core Willpower::Common model_xml model_io_core)
+target_link_libraries(editor_track_resource_tests PRIVATE core Willpower.Common model_xml model_io_core)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/test-data/fixtures/path/curved-banked.json")
 model_io_deploy_runtime(editor_track_resource_tests)
@@ -152,7 +153,7 @@ add_executable(mpp_model_import_tests
 target_include_directories(mpp_model_import_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
-target_link_libraries(mpp_model_import_tests PRIVATE core Willpower::Common model_xml model_io_core)
+target_link_libraries(mpp_model_import_tests PRIVATE core Willpower.Common model_xml model_io_core)
 add_test(NAME mpp_model_import_tests COMMAND mpp_model_import_tests)
 model_io_deploy_runtime(mpp_model_import_tests)
 

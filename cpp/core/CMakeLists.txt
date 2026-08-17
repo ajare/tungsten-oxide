@@ -7,10 +7,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(core CXX)
 
-# A standalone core configure still consumes the repository-pinned Willpower
-# sources; the combined cpp/ configure has already created this target.
+# A standalone core configure imports the repository-pinned Willpower build tree;
+# the combined cpp/ configure has already created this target.
 if (NOT TARGET Willpower.Geometry)
-  add_subdirectory(../willpower ${CMAKE_CURRENT_BINARY_DIR}/willpower)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/WillpowerBuildTree.cmake")
+  tox_import_willpower("${CMAKE_CURRENT_LIST_DIR}/../../ext/willpower")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -34,7 +35,7 @@ endif()
 # than the old hand-rolled Vec3, so parity fixture tolerances were loosened accordingly — see
 # cpp/test-data/traces/README.md.
 #
-# cpp/tungsten-monoxide links MassivePolyPusher's libraries (ext/massive-poly-pusher), which
+# cpp/tungsten-monoxide links MassivePolyPusher's libraries from Willpower's nested submodule, which
 # vendor their own glm 0.9.6 copy and pass glm-typed values across that prebuilt ABI boundary. A
 # second, differently-versioned glm (e.g. a fresh FetchContent) produces a distinct
 # glm::tvec3<double, Q> type in translation units that see both copies, breaking ODR and failing to
@@ -42,7 +43,8 @@ endif()
 # present (the combined cpp/ configure, and any build alongside tungsten-monoxide) so exactly one
 # glm ABI exists in the whole binary; fall back to FetchContent only for a standalone core/editor
 # configure that never links tungsten-monoxide at all.
-set(TOX_VENDORED_GLM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher/vendor/include")
+set(TOX_VENDORED_GLM_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher/vendor/include")
 if (EXISTS "${TOX_VENDORED_GLM_DIR}/glm/glm.hpp")
   add_library(glm INTERFACE)
   add_library(glm::glm ALIAS glm)
@@ -91,7 +93,7 @@ add_library(core STATIC
   src/GameSession.cpp
   ${CORE_HEADERS})
 target_include_directories(core PUBLIC include PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
-target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower::Geometry)
+target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower.Geometry)
 
 # Headers carry no build step of their own, but listing them as sources (above)
 # surfaces them in IDE project views; group them under their own filter there

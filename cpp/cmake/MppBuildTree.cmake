@@ -3,9 +3,8 @@
 # Every cpp/ subproject that links mpp consumes its *build tree* directly rather than an installed
 # package: fetched headers under `_deps/`, import libraries under `lib/<CONFIG>/`, runtime DLLs
 # under `bin/<CONFIG>/`, and assimp's generated headers under `ext/assimp/include`. Where that tree
-# lands is the mpp builder's choice (`cmake -S . -B build/cmake` and `cmake -S . -B build` are both
-# in use and produce identical internal layouts), so probe for it instead of hardcoding one
-# spelling in six separate CMakeLists — a wrong guess otherwise surfaces much later as a
+# lands under Willpower's standalone build tree. Consumers may override TOX_MPP_BUILD_DIR, but all
+# native targets share that one prebuilt tree — a wrong path otherwise surfaces much later as a
 # "Cannot open include file: 'GL/glew.h'" from deep inside an mpp header, which names neither mpp
 # nor the path that was actually looked for.
 #
@@ -17,28 +16,14 @@ include_guard(GLOBAL)
 #   TOX_MPP_BUILD_DIR         the resolved build tree root
 #   TOX_MPP_GLEW_INCLUDE_DIR  the fetched GLEW's include directory inside it
 function(tox_resolve_mpp_build_tree mpp_source_dir)
-  set(_default "${mpp_source_dir}/build/cmake")
-  set(_build_dir "")
-  foreach(_candidate "${_default}" "${mpp_source_dir}/build")
-    # CMakeCache.txt, not just the directory: `build/` exists as the parent of `build/cmake` in the
-    # nested layout, so a plain EXISTS test would match it and resolve to an empty tree.
-    if (EXISTS "${_candidate}/CMakeCache.txt")
-      set(_build_dir "${_candidate}")
-      break()
-    endif()
-  endforeach()
-
-  if (_build_dir STREQUAL "")
-    # Not fatal: cpp/core and its golden-fixture test targets (the documented
-    # `ctest --test-dir cpp/build` suite) need nothing from mpp, and configuring for those alone is
-    # legitimate. Only the mpp-linked targets below will fail, and this says why up front.
-    set(_build_dir "${_default}")
-    message(WARNING
-      "MassivePolyPusher has no build tree under '${mpp_source_dir}/build/cmake' or "
-      "'${mpp_source_dir}/build'. Targets that link mpp (Willpower.Application, applib, launcher, "
-      "tungsten-monoxide, model_tool, mesh_physics_diag) will fail to compile against its headers "
-      "and libraries. Configure and build MassivePolyPusher first, or point this project's "
-      "*_MPP_DIR cache entry at a checkout that is already built.")
+  set(_default "${mpp_source_dir}/../../build/_deps/massive-poly-pusher-build")
+  set(TOX_MPP_BUILD_DIR "${_default}" CACHE PATH
+    "MassivePolyPusher build tree produced by the standalone Willpower build")
+  set(_build_dir "${TOX_MPP_BUILD_DIR}")
+  if (NOT EXISTS "${_build_dir}/CMakeCache.txt")
+    message(FATAL_ERROR
+      "MassivePolyPusher has not been configured at '${_build_dir}'. Build Willpower first, or "
+      "set TOX_MPP_BUILD_DIR to its prebuilt MassivePolyPusher tree.")
   endif()
 
   # GLEW arrives through FetchContent, so its directory carries the fetched version number. Glob

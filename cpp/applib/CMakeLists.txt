@@ -71,8 +71,13 @@ set(APPLIB_SOURCES
   src/ThreadableLoadState.cpp)
 
 set(_applib_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
-set(_applib_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
-if (APPLIB_MPP_DIR STREQUAL _applib_legacy_mpp_dir)
+set(_applib_repository_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_applib_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_applib_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (APPLIB_MPP_DIR STREQUAL _applib_legacy_mpp_dir OR
+    APPLIB_MPP_DIR STREQUAL _applib_repository_mpp_dir OR
+    APPLIB_MPP_DIR STREQUAL _applib_cpp_willpower_mpp_dir)
   set(APPLIB_MPP_DIR "${_applib_mpp_dir}" CACHE PATH
     "Root of the MassivePolyPusher dependency" FORCE)
 else()
@@ -80,6 +85,8 @@ else()
     "Root of the MassivePolyPusher dependency")
 endif()
 unset(_applib_legacy_mpp_dir)
+unset(_applib_repository_mpp_dir)
+unset(_applib_cpp_willpower_mpp_dir)
 unset(_applib_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${APPLIB_MPP_DIR}")
@@ -112,9 +119,9 @@ set_target_properties(AppLib PROPERTIES DEBUG_POSTFIX d)
 target_include_directories(AppLib PUBLIC include)
 target_include_directories(AppLib PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include/applib"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.application/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.collide/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.application/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.common/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.collide/include"
   "${APPLIB_MPP_DIR}/mpp/include"
   "${APPLIB_MPP_DIR}/mpp-helper/include"
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
@@ -141,8 +148,8 @@ target_link_libraries(AppLib PRIVATE
 add_executable(applib_pbr_material_binding_tests tests/pbr_material_binding_tests.cpp)
 target_compile_features(applib_pbr_material_binding_tests PRIVATE cxx_std_23)
 target_include_directories(applib_pbr_material_binding_tests PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.application/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/willpower.common/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.application/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.common/include"
   "${APPLIB_MPP_DIR}/mpp/include"
   "${APPLIB_MPP_DIR}/mpp-mesh/include"
   "${APPLIB_MPP_DIR}/mpp-program/include"

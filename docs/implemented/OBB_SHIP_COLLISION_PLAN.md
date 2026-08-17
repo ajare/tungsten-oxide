@@ -41,7 +41,7 @@ core overview)
   public queries (`nearestAlongAxis`, `nearestAcrossAxis`, `sweep`,
   `sweepWall`) are point/segment-vs-triangle (Möller–Trumbore). There is no
   shape-vs-triangle test anywhere in the codebase, and no OBB type anywhere
-  in `cpp/core` or `cpp/willpower` (the latter's `BoundingBox`/
+  in `cpp/core` or `ext/willpower` (the latter's `BoundingBox`/
   `BoundingCircle` are 2D and axis-aligned, and aren't linked into
   `cpp/core`'s CMake target — not worth pulling in for this).
 - Analytic corridor mode's wall handling (`Simulation.cpp:49-81,188-189`,

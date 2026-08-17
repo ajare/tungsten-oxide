@@ -2,7 +2,7 @@
 // cpp/tungsten-monoxide/resources/Resources.xml uses) looking for <Resource type="Material">
 // entries, resolving each one's dependent "Texture" resource down to a real image file path.
 //
-// A standalone reader built directly on Willpower::Common's XmlReader, mirroring
+// A standalone reader built directly on Willpower.Common's XmlReader, mirroring
 // cpp/editor/src/MaterialCatalog.cpp's approach (also documented there: this deliberately does
 // NOT go through willpower.application::ResourceManager's own XML-driven resource loading --
 // that layer has no single-file entry point, silently overwrites same-named resources instead of

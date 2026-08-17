@@ -156,7 +156,7 @@ Not verified here: DemoSuite's GPU material tests (see Risks).
   Plus a small dedicated `.pipeline.yaml` so the tests do not couple to
   `TungstenMonoxide.pipeline.yaml`, and `legacy-rse3.mppmodel`, a frozen
   pre-`RSE4` model guarding the stream-format compatibility path.
-- The `RSE4` stream-format change in `ext/massive-poly-pusher`
+- The `RSE4` stream-format change in `ext/willpower/ext/massive-poly-pusher`
   (`mpp/src/ResourceStreamSerializer.cpp`), covered by a colour-space round-trip
   test and the legacy-read test above.
 

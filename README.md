@@ -8,8 +8,9 @@ Build from an MSVC Developer prompt, from the repo root:
 
 ```sh
 git submodule update --init --recursive
-cmake -S ext/massive-poly-pusher -B ext/massive-poly-pusher/build/cmake
-cmake --build ext/massive-poly-pusher/build/cmake --config Release --target MppHelper
+cmake -S ext/willpower -B ext/willpower/build
+cmake --build ext/willpower/build --config Release
+cmake --build ext/willpower/build/_deps/massive-poly-pusher-build --config Release --target MppResourceParsers MppAppSupport assimp
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
@@ -44,7 +45,7 @@ Track files record a schema `version`. Schema 5 doubled the world's unit scale �
 - `cpp/editor/` — the native track editor: state, undo/redo, canvas rendering and interaction. See `docs/editor.md`.
 - `cpp/model-tool/` — standalone 3D-model import/preview/`.mppmodel`-save utility, unrelated to mesh regions above. See `docs/model-tool.md`.
 - `cpp/tungsten-monoxide/` — the playable driving game runtime. See `docs/tungsten-monoxide.md`.
-- `cpp/willpower/` — embedded C++ Willpower topology/triangulation dependency used by the native loader.
+- `ext/willpower/` — the [Willpower](https://github.com/ajare/willpower) submodule; its nested MassivePolyPusher checkout supplies rendering dependencies to every native app.
 - `assets/` (bundled textures) is shared across the native subprojects and stays at the repo root, as does the `ext/geoemetry-js` submodule.
 - `ext/geoemetry-js/` — a git submodule ([`@willpower/geometry`](https://github.com/ajare/geoemetry-js)), a standalone geometry/mesh library with its own tests and React editor, and the only JavaScript codebase in this repo. It has no bearing on `cpp/` at runtime.
 
@@ -54,7 +55,7 @@ See `CLAUDE.md` for a deeper dive into the track data model and editor/game conv
 
 The C++20 core independently loads complete current-schema track JSON, bakes spline paths and placed mesh assets, exposes graphics-API-neutral geometry, and simulates the full corridor/mesh physics. Schema version 10 is the oldest accepted; older schemas are not migrated.
 
-The combined build uses the embedded `cpp/willpower` sources and copies required Willpower DLLs next to test executables. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md`.
+The combined build imports the prebuilt `ext/willpower/build` libraries and their MassivePolyPusher build tree; it does not build either dependency. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md`.
 
 ## Tests
 

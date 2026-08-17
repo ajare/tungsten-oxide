@@ -22,8 +22,15 @@ endif()
 # TungstenMonoxide DLL target itself, which is a Windows application DLL wired to the willpower
 # resource system/AppLib and not meant to be a library dependency of anything else.
 set(_mesh_physics_diag_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
-set(_mesh_physics_diag_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
-if (MESH_PHYSICS_DIAG_MPP_DIR STREQUAL _mesh_physics_diag_legacy_mpp_dir)
+set(_mesh_physics_diag_repository_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_mesh_physics_diag_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_mesh_physics_diag_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (MESH_PHYSICS_DIAG_MPP_DIR STREQUAL _mesh_physics_diag_legacy_mpp_dir OR
+    MESH_PHYSICS_DIAG_MPP_DIR STREQUAL _mesh_physics_diag_repository_mpp_dir OR
+    MESH_PHYSICS_DIAG_MPP_DIR STREQUAL _mesh_physics_diag_cpp_willpower_mpp_dir)
   set(MESH_PHYSICS_DIAG_MPP_DIR "${_mesh_physics_diag_mpp_dir}" CACHE PATH
     "Root of the MassivePolyPusher dependency (mesh_physics_diag)" FORCE)
 else()
@@ -31,6 +38,8 @@ else()
     "Root of the MassivePolyPusher dependency (mesh_physics_diag)")
 endif()
 unset(_mesh_physics_diag_legacy_mpp_dir)
+unset(_mesh_physics_diag_repository_mpp_dir)
+unset(_mesh_physics_diag_cpp_willpower_mpp_dir)
 unset(_mesh_physics_diag_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${MESH_PHYSICS_DIAG_MPP_DIR}")

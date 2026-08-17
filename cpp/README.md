@@ -1,7 +1,7 @@
 # Native C++ track engine
 
 `cpp/core` is a C++20 static library that independently loads and runs complete
-schema-10 through schema-12 tracks. `cpp/willpower` provides the embedded Willpower.Common library.
+schema-10 through schema-12 tracks. `ext/willpower` is the repository-pinned Willpower submodule.
 
 ## Capabilities
 
@@ -25,18 +25,18 @@ Use an x64 MSVC Developer prompt (or run `vcvars64.bat` first):
 
 ```text
 git submodule update --init --recursive
-cmake -S ext/massive-poly-pusher -B ext/massive-poly-pusher/build/cmake
-cmake --build ext/massive-poly-pusher/build/cmake --config Release --target MppHelper
+cmake -S ext/willpower -B ext/willpower/build
+cmake --build ext/willpower/build --config Release
+cmake --build ext/willpower/build/_deps/massive-poly-pusher-build --config Release --target MppResourceParsers MppAppSupport assimp
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
-The combined build compiles the repository-pinned Willpower sources and consumes the
-MassivePolyPusher libraries from its build tree. It copies shared-library runtime dependencies next
-to their executables. The MassivePolyPusher build directory above is a suggestion, not a
-requirement: `cpp/cmake/MppBuildTree.cmake` accepts either `ext/massive-poly-pusher/build/cmake` or
-`ext/massive-poly-pusher/build`, and warns at configure time when it finds neither.
+The `cpp` build imports Willpower from `ext/willpower/build` and MassivePolyPusher from
+`ext/willpower/build/_deps/massive-poly-pusher-build`; it never builds either dependency. Set
+`TOX_WILLPOWER_BUILD_DIR` or `TOX_MPP_BUILD_DIR` to use prebuilt trees elsewhere. Shared-library
+runtime dependencies are copied next to their executables.
 Single-config generators work too:
 
 ```text
@@ -45,8 +45,8 @@ cmake --build cpp/build
 ctest --test-dir cpp/build --output-on-failure
 ```
 
-`cpp/core` can also be configured directly; it imports sibling `cpp/willpower`
-when `Willpower::Geometry` does not already exist:
+`cpp/core` can also be configured directly; it imports the prebuilt `ext/willpower/build`
+libraries when `Willpower.Geometry` does not already exist:
 
 ```text
 cmake -S cpp/core -B cpp/build-core
@@ -126,5 +126,4 @@ Release measurements against the committed golden trace corpus:
 - surface IDs, rail hits and all other discrete state compare exactly.
 
 Do not reorder parity-sensitive vector/math operations casually. Run
-clang-format only on project C++ files, never indiscriminately on embedded
-upstream Willpower code.
+clang-format only on project C++ files, never on the `ext/willpower` submodule.

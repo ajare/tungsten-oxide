@@ -27,8 +27,23 @@ if (MSVC)
   add_compile_options(/W3 /EHsc)
 endif()
 
-set(MODEL_IO_MPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher" CACHE PATH
-  "Root of the MassivePolyPusher dependency")
+set(_model_io_repository_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_model_io_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_model_io_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (MODEL_IO_MPP_DIR STREQUAL _model_io_repository_mpp_dir OR
+    MODEL_IO_MPP_DIR STREQUAL _model_io_cpp_willpower_mpp_dir)
+  set(MODEL_IO_MPP_DIR "${_model_io_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency" FORCE)
+else()
+  set(MODEL_IO_MPP_DIR "${_model_io_mpp_dir}" CACHE PATH
+    "Root of the MassivePolyPusher dependency")
+endif()
+unset(_model_io_repository_mpp_dir)
+unset(_model_io_cpp_willpower_mpp_dir)
+unset(_model_io_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${MODEL_IO_MPP_DIR}")
 

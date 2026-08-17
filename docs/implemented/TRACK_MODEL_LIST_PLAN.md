@@ -181,7 +181,7 @@ next step.
 
 **2.1 — New CMake target** — done
 - Files: `cpp/model-xml/CMakeLists.txt` (new static lib, TinyXML2 via
-  `Willpower::Common` — no vendored TinyXML2 copy of its own, no mpp/AssImp/
+  `Willpower.Common` — no vendored TinyXML2 copy of its own, no mpp/AssImp/
   SDL, mirroring `cpp/core`'s "no heavyweight deps" posture), `cpp/CMakeLists.txt`
   (added `add_subdirectory(model-xml)` ahead of `editor`/`model-tool`, plus a
   header-comment entry).
@@ -215,7 +215,7 @@ next step.
 **3.1 — Link `cpp/model-xml`** — done
 - File: `cpp/model-tool/CMakeLists.txt` (`model_tool` and `model_tool_tests`
   both link `model_xml`). It turned out `model-tool` already linked
-  `Willpower::Common` (for `MaterialXmlImport.hpp`'s XmlReader), so this
+  `Willpower.Common` (for `MaterialXmlImport.hpp`'s XmlReader), so this
   added no new third-party dependency, just the new fragment-schema lib.
 
 **3.2 — Retire `CollidableFlag.hpp`'s name-suffix encoding** — done
@@ -278,7 +278,7 @@ next step.
   `MppModelExport.cpp`'s existing from-scratch *writer*), new
   `tests/mpp_model_import_tests.cpp` target.
 - The on-disk format was verified field-for-field against the real
-  `ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp` write*()/read*()
+  `ext/willpower/ext/massive-poly-pusher/mpp/src/ModelSerializer.cpp` write*()/read*()
   functions directly (`MPPMODEL_EXPORT_SPEC.md` isn't present in-repo, so
   that vendored source is the actual ground truth) rather than inferred from
   `MppModelExport.cpp`'s writer alone. Reads vertex positions/normals/UVs

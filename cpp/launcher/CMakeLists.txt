@@ -45,8 +45,13 @@ set(LAUNCHER_SOURCES
 # The launcher consumes prebuilt MassivePolyPusher and Utils libraries. SDL3
 # comes from MassivePolyPusher's pinned source submodule.
 set(_launcher_legacy_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massivepolypusher")
-set(_launcher_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
-if (LAUNCHER_MPP_DIR STREQUAL _launcher_legacy_mpp_dir)
+set(_launcher_repository_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/massive-poly-pusher")
+set(_launcher_cpp_willpower_mpp_dir
+  "${CMAKE_CURRENT_SOURCE_DIR}/../willpower/ext/massive-poly-pusher")
+set(_launcher_mpp_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/ext/massive-poly-pusher")
+if (LAUNCHER_MPP_DIR STREQUAL _launcher_legacy_mpp_dir OR
+    LAUNCHER_MPP_DIR STREQUAL _launcher_repository_mpp_dir OR
+    LAUNCHER_MPP_DIR STREQUAL _launcher_cpp_willpower_mpp_dir)
   set(LAUNCHER_MPP_DIR "${_launcher_mpp_dir}" CACHE PATH
     "Root of the MassivePolyPusher dependency" FORCE)
 else()
@@ -54,6 +59,8 @@ else()
     "Root of the MassivePolyPusher dependency")
 endif()
 unset(_launcher_legacy_mpp_dir)
+unset(_launcher_repository_mpp_dir)
+unset(_launcher_cpp_willpower_mpp_dir)
 unset(_launcher_mpp_dir)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MppBuildTree.cmake")
 tox_resolve_mpp_build_tree("${LAUNCHER_MPP_DIR}")
