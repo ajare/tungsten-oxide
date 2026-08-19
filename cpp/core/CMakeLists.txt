@@ -101,18 +101,27 @@ target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower.Geometry)
 source_group("Header Files" FILES ${CORE_HEADERS})
 
 add_executable(parity tests/parity_main.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(parity)
+endif()
 target_include_directories(parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(parity PRIVATE core)
 
 # Focused loader, bake, topology, render-geometry, and mesh-query tests without
 # making the existing baked-world parity replayer responsible for everything.
 add_executable(track_tests tests/track_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(track_tests)
+endif()
 target_include_directories(track_tests PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(track_tests PRIVATE core)
 
 # Cross-language renderer-neutral geometry parity over deterministic randomly
 # generated current-schema JSON tracks.
 add_executable(random_geometry_parity tests/random_geometry_parity_main.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(random_geometry_parity)
+endif()
 target_include_directories(random_geometry_parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(random_geometry_parity PRIVATE core)
 
@@ -120,6 +129,9 @@ target_link_libraries(random_geometry_parity PRIVATE core)
 # initialization and GameSession frame-stepping/events, independently from
 # schema-10 JSON plus scripted controls only.
 add_executable(raw_session_parity tests/raw_session_parity_main.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(raw_session_parity)
+endif()
 target_include_directories(raw_session_parity PRIVATE "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
 target_link_libraries(raw_session_parity PRIVATE core)
 

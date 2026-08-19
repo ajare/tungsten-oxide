@@ -107,12 +107,13 @@ unset(_tungsten_monoxide_third_party_dir)
 set(TUNGSTEN_MONOXIDE_LIB_ARCH x64 CACHE STRING "Architecture used by the TungstenMonoxide SDK libraries")
 
 add_library(TungstenMonoxide SHARED ${TUNGSTEN_MONOXIDE_SOURCES} ${TUNGSTEN_MONOXIDE_HEADERS})
+tox_add_mpp_supplemental_dependency(TungstenMonoxide)
 source_group("Header Files" FILES ${TUNGSTEN_MONOXIDE_HEADERS})
 target_compile_features(TungstenMonoxide PRIVATE cxx_std_23)
 target_compile_definitions(TungstenMonoxide PRIVATE
   APPLICATION_DLL_EXPORT
   WP_USE_ASSERT_TRACE
-  $<$<CONFIG:Debug>:WP_USE_MEMLEAK_TRACKING>)
+  $<$<OR:$<CONFIG:Debug>,$<CONFIG:MemCheck>>:WP_USE_MEMLEAK_TRACKING>)
 set_target_properties(TungstenMonoxide PROPERTIES DEBUG_POSTFIX d)
 
 target_include_directories(TungstenMonoxide PRIVATE
@@ -163,6 +164,9 @@ target_link_libraries(TungstenMonoxide PRIVATE
 # Guard stable embedded material-key mappings without creating a renderer.
 add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests
   tests/pbr_material_binding_mapping_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(tungsten_monoxide_pbr_material_binding_mapping_tests)
+endif()
 target_compile_features(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE cxx_std_20)
 target_include_directories(tungsten_monoxide_pbr_material_binding_mapping_tests PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.common/include")
@@ -175,6 +179,9 @@ add_test(NAME tungsten_monoxide_pbr_material_bindings
 add_executable(tungsten_monoxide_pbr_vertex_conversion_tests
   tests/pbr_vertex_conversion_tests.cpp
   src/PbrVertexConversion.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(tungsten_monoxide_pbr_vertex_conversion_tests)
+endif()
 target_compile_features(tungsten_monoxide_pbr_vertex_conversion_tests PRIVATE cxx_std_20)
 target_include_directories(tungsten_monoxide_pbr_vertex_conversion_tests PRIVATE
   include

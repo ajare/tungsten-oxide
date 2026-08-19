@@ -84,6 +84,9 @@ add_executable(model_tool
   main.cpp
   ${MODEL_TOOL_SOURCES}
   ${IMGUI_SOURCES})
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(model_tool)
+endif()
 
 target_compile_features(model_tool PRIVATE cxx_std_20)
 
@@ -205,7 +208,7 @@ if (WIN32)
   add_custom_command(TARGET model_tool POST_BUILD
     COMMAND ${CMAKE_COMMAND}
       "-DOUTPUT_DIR=$<TARGET_FILE_DIR:model_tool>"
-      "-DCONFIG=$<IF:$<CONFIG:Debug>,Debug,Release>"
+      "-DCONFIG=$<CONFIG>"
       -P "${CMAKE_CURRENT_BINARY_DIR}/CopyModelToolRuntime.cmake"
     COMMAND_EXPAND_LISTS)
 endif()
@@ -221,6 +224,9 @@ add_executable(model_tool_tests
   src/NormalSmoothing.cpp
   src/ObjSmoothingGroups.cpp
   src/OpenTarget.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(model_tool_tests)
+endif()
 target_include_directories(model_tool_tests PRIVATE include)
 target_compile_features(model_tool_tests PRIVATE cxx_std_20)
 # AssImpImport.cpp is now an adapter over model_io_gltf, so this target links it and gains the

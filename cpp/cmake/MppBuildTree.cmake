@@ -40,3 +40,21 @@ function(tox_resolve_mpp_build_tree mpp_source_dir)
   set(TOX_MPP_BUILD_DIR "${_build_dir}" PARENT_SCOPE)
   set(TOX_MPP_GLEW_INCLUDE_DIR "${_glew_include}" PARENT_SCOPE)
 endfunction()
+
+# Willpower's external-project build produces only the MPP libraries Willpower itself consumes.
+# The combined cpp build also needs the resource parsers, app support, and Assimp. Make those
+# supplemental libraries an actual build-graph dependency instead of requiring a one-time manual
+# build before Visual Studio can link the first cpp target.
+function(tox_add_mpp_supplemental_dependency target)
+  if (NOT TARGET tox_mpp_supplemental_dependencies)
+    add_custom_target(tox_mpp_supplemental_dependencies
+      COMMAND "${CMAKE_COMMAND}" --build "${TOX_MPP_BUILD_DIR}"
+        --config "$<CONFIG>" --parallel
+        --target MppResourceParsers MppAppSupport assimp
+      COMMENT "Building supplemental MassivePolyPusher dependencies"
+      VERBATIM)
+    set_target_properties(tox_mpp_supplemental_dependencies PROPERTIES FOLDER Dependencies)
+  endif()
+
+  add_dependencies(${target} tox_mpp_supplemental_dependencies)
+endfunction()

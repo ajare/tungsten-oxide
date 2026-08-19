@@ -3,6 +3,9 @@
 # handling, the real-time frame loop, and console input, and links `core` for
 # everything else (loading, baking, geometry, session, physics).
 add_executable(track_runner main.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(track_runner)
+endif()
 target_compile_features(track_runner PRIVATE cxx_std_20)
 target_link_libraries(track_runner PRIVATE core)
 
@@ -46,6 +49,9 @@ tox_resolve_mpp_build_tree("${MESH_PHYSICS_DIAG_MPP_DIR}")
 add_executable(mesh_physics_diag
   tools/mesh_physics_diag.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/src/TrackCollisionBuild.cpp")
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(mesh_physics_diag)
+endif()
 target_compile_features(mesh_physics_diag PRIVATE cxx_std_20)
 target_include_directories(mesh_physics_diag PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/include"

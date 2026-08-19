@@ -86,6 +86,9 @@ endif()
 # entry point. This executable is Windows-specific because it loads game DLLs with
 # LoadLibrary/GetProcAddress.
 add_executable(Launcher WIN32 ${LAUNCHER_SOURCES} ${LAUNCHER_HEADERS} ${_launcher_resources})
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(Launcher)
+endif()
 target_compile_features(Launcher PRIVATE cxx_std_20)
 # AppLib is not a link dependency of Launcher, but its DLL is loaded by the
 # application DLL and must sit beside Launcher at runtime.
@@ -98,10 +101,10 @@ else()
   set(LAUNCHER_CMAKE_RUNTIME_FILES $<TARGET_RUNTIME_DLLS:Launcher>)
 endif()
 # Match the Debugging settings from the legacy Visual Studio launcher project.
-# Generator expressions leave these settings blank for non-Debug configurations.
+# Start every configuration from its own output directory.
 set_target_properties(Launcher PROPERTIES
-  VS_DEBUGGER_WORKING_DIRECTORY "$<$<CONFIG:Debug>:$(OutDir)>"
-  VS_DEBUGGER_COMMAND_ARGUMENTS "$<$<CONFIG:Debug>:TungstenMonoxide.yaml>")
+  VS_DEBUGGER_WORKING_DIRECTORY "$(OutDir)"
+  VS_DEBUGGER_COMMAND_ARGUMENTS "$<$<OR:$<CONFIG:Debug>,$<CONFIG:MemCheck>>:Game.yaml>")
 source_group("Header Files" FILES ${LAUNCHER_HEADERS})
 
 target_include_directories(Launcher PRIVATE
@@ -156,10 +159,13 @@ if (NOT DEFINED OUTPUT_DIR OR NOT DEFINED CONFIG)
   message(FATAL_ERROR "OUTPUT_DIR and CONFIG are required")
 endif()
 
+if (NOT DEFINED MPP_CONFIG)
+  set(MPP_CONFIG "${CONFIG}")
+endif()
 set(_runtime_roots
   "@LAUNCHER_SUPPORT_ROOT@/${CONFIG}"
   "@LAUNCHER_THIRD_PARTY_DIR@/bin/vs2026/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@TOX_MPP_BUILD_DIR@/bin/${CONFIG}")
+  "@TOX_MPP_BUILD_DIR@/bin/${MPP_CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 foreach(_runtime_root IN LISTS _runtime_roots)
@@ -173,12 +179,11 @@ foreach(_runtime_root IN LISTS _runtime_roots)
   endif()
 endforeach()
 
-# One checked-in TungstenMonoxide launcher config per build type (support/), deployed under the
-# name Main.cpp actually looks for -- see CMakeLists.txt's VS_DEBUGGER_COMMAND_ARGUMENTS, which
-# passes "TungstenMonoxide.yaml" explicitly when debugging the Debug configuration.
+# One checked-in Game launcher config per build type (support/), deployed under the name Main.cpp
+# looks for -- see CMakeLists.txt's VS_DEBUGGER_COMMAND_ARGUMENTS.
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "@CMAKE_CURRENT_SOURCE_DIR@/support/TungstenMonoxide.${CONFIG}.yaml" "${OUTPUT_DIR}/TungstenMonoxide.yaml"
+    "@CMAKE_CURRENT_SOURCE_DIR@/support/Game.${CONFIG}.yaml" "${OUTPUT_DIR}/Game.yaml"
   COMMAND_ERROR_IS_FATAL ANY)
 ]=])
 file(CONFIGURE
@@ -197,7 +202,8 @@ if (WIN32)
     # from the support/vendor/MPP directories that do exist for this config.
     COMMAND ${CMAKE_COMMAND}
       "-DOUTPUT_DIR=$<TARGET_FILE_DIR:Launcher>"
-      "-DCONFIG=$<IF:$<CONFIG:Debug>,Debug,Release>"
+      "-DCONFIG=$<IF:$<OR:$<CONFIG:Debug>,$<CONFIG:MemCheck>>,Debug,Release>"
+      "-DMPP_CONFIG=$<CONFIG>"
       -P "${CMAKE_CURRENT_BINARY_DIR}/CopyLauncherRuntime.cmake"
     COMMAND_EXPAND_LISTS)
 endif()

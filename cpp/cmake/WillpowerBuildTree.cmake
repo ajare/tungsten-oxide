@@ -19,11 +19,15 @@ function(tox_import_willpower willpower_source_dir)
   function(_tox_import_willpower_library target directory)
     add_library(${target} SHARED IMPORTED GLOBAL)
     set_target_properties(${target} PROPERTIES
-      IMPORTED_CONFIGURATIONS "Debug;Release"
+      IMPORTED_CONFIGURATIONS "Debug;Release;MemCheck"
       IMPORTED_IMPLIB_DEBUG
         "${TOX_WILLPOWER_BUILD_DIR}/lib/Debug/${target}/${target}d.lib"
       IMPORTED_LOCATION_DEBUG
         "${TOX_WILLPOWER_BUILD_DIR}/bin/Debug/${target}/${target}d.dll"
+      IMPORTED_IMPLIB_MEMCHECK
+        "${TOX_WILLPOWER_BUILD_DIR}/lib/MemCheck/${target}/${target}.lib"
+      IMPORTED_LOCATION_MEMCHECK
+        "${TOX_WILLPOWER_BUILD_DIR}/bin/MemCheck/${target}/${target}.dll"
       IMPORTED_IMPLIB_RELEASE
         "${TOX_WILLPOWER_BUILD_DIR}/lib/Release/${target}/${target}.lib"
       IMPORTED_LOCATION_RELEASE

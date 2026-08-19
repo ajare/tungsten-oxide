@@ -29,13 +29,75 @@
 #               gltf-convert/CMakeLists.txt.
 #
 # Willpower and MassivePolyPusher are built separately under ../ext/willpower/build. This project
-# only creates imported targets for their prebuilt binaries. core/ can also be configured
-# standalone and uses the same imports; see README.md for the required dependency build commands.
+# imports their Debug, Release, and MemCheck binaries and builds the supplemental MPP targets that Willpower does not consume
+# before their first cpp consumer. core/ can also be configured standalone and uses the same
+# imports; see README.md for the required dependency build commands.
 # Use a cpp build directory distinct from the dependency build tree:
 #   cmake -S cpp -B cpp/build-all -G Ninja
 #   cmake --build cpp/build-all
 cmake_minimum_required(VERSION 3.20)
 project(TungstenOxideCpp C CXX)
+
+# MemCheck is a Debug variant instrumented with MSVC AddressSanitizer. Keep its
+# base flags and runtime library aligned with Debug, except /RTC1 and incremental
+# linking, which MSVC ASan does not support. Dependencies imported below provide
+# matching MemCheck binaries from the standalone Willpower build tree.
+if (MSVC AND CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_CONFIGURATION_TYPES "Debug;Release;MemCheck" CACHE STRING
+    "Semicolon separated list of supported configuration types" FORCE)
+
+  string(REPLACE "/RTC1" "" TOX_MEMCHECK_CXX_FLAGS "${CMAKE_CXX_FLAGS_DEBUG}")
+  string(REPLACE "/RTC1" "" TOX_MEMCHECK_C_FLAGS "${CMAKE_C_FLAGS_DEBUG}")
+  set(CMAKE_CXX_FLAGS_MEMCHECK "${TOX_MEMCHECK_CXX_FLAGS} /fsanitize=address" CACHE STRING
+    "Flags used by the C++ compiler for MemCheck builds" FORCE)
+  set(CMAKE_C_FLAGS_MEMCHECK "${TOX_MEMCHECK_C_FLAGS} /fsanitize=address" CACHE STRING
+    "Flags used by the C compiler for MemCheck builds" FORCE)
+
+  string(REPLACE "/INCREMENTAL" "" TOX_MEMCHECK_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS_DEBUG}")
+  string(REPLACE "/INCREMENTAL" "" TOX_MEMCHECK_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}")
+  string(REPLACE "/INCREMENTAL" "" TOX_MEMCHECK_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS_DEBUG}")
+  set(CMAKE_EXE_LINKER_FLAGS_MEMCHECK "${TOX_MEMCHECK_EXE_LINKER_FLAGS} /INCREMENTAL:NO" CACHE STRING
+    "Flags used to link an executable for MemCheck builds" FORCE)
+  set(CMAKE_SHARED_LINKER_FLAGS_MEMCHECK "${TOX_MEMCHECK_SHARED_LINKER_FLAGS} /INCREMENTAL:NO" CACHE STRING
+    "Flags used by the shared library linker for MemCheck builds" FORCE)
+  set(CMAKE_MODULE_LINKER_FLAGS_MEMCHECK "${TOX_MEMCHECK_MODULE_LINKER_FLAGS} /INCREMENTAL:NO" CACHE STRING
+    "Flags used by the module linker for MemCheck builds" FORCE)
+  unset(TOX_MEMCHECK_CXX_FLAGS)
+  unset(TOX_MEMCHECK_C_FLAGS)
+  unset(TOX_MEMCHECK_EXE_LINKER_FLAGS)
+  unset(TOX_MEMCHECK_SHARED_LINKER_FLAGS)
+  unset(TOX_MEMCHECK_MODULE_LINKER_FLAGS)
+  mark_as_advanced(
+    CMAKE_CXX_FLAGS_MEMCHECK
+    CMAKE_C_FLAGS_MEMCHECK
+    CMAKE_EXE_LINKER_FLAGS_MEMCHECK
+    CMAKE_SHARED_LINKER_FLAGS_MEMCHECK
+    CMAKE_MODULE_LINKER_FLAGS_MEMCHECK)
+
+  set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreaded$<$<OR:$<CONFIG:Debug>,$<CONFIG:MemCheck>>:Debug>DLL")
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+    "$<$<CONFIG:Debug,MemCheck>:ProgramDatabase>")
+
+  # The MSVC ASan runtime is not normally on PATH outside a developer prompt.
+  # Deploy it beside every MemCheck executable below, as Willpower does.
+  get_filename_component(TOX_ASAN_RUNTIME_DIR "${CMAKE_LINKER}" DIRECTORY)
+  set(TOX_ASAN_DLL "${TOX_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+  set(TOX_ASAN_PDB "${TOX_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.pdb")
+  if (NOT EXISTS "${TOX_ASAN_DLL}")
+    message(WARNING "Could not find the MSVC ASan runtime DLL at ${TOX_ASAN_DLL}; MemCheck executables may fail to start.")
+  endif()
+endif()
+
+function(tox_copy_asan_runtime target)
+  if (NOT DEFINED TOX_ASAN_DLL)
+    return()
+  endif()
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND "$<$<CONFIG:MemCheck>:${CMAKE_COMMAND};-E;copy_if_different;${TOX_ASAN_DLL};${TOX_ASAN_PDB};$<TARGET_FILE_DIR:${target}>>"
+    COMMAND_EXPAND_LISTS
+    VERBATIM)
+endfunction()
 
 # Build SDL3 once from MassivePolyPusher's pinned source submodule. All cpp/
 # applications consume this target instead of carrying or fetching their own SDL copies.

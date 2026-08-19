@@ -32,6 +32,9 @@ target_include_directories(model_xml PUBLIC include)
 target_link_libraries(model_xml PUBLIC Willpower.Common)
 
 add_executable(model_xml_tests tests/model_xml_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(model_xml_tests)
+endif()
 target_link_libraries(model_xml_tests PRIVATE model_xml)
 add_test(NAME model_xml_tests COMMAND model_xml_tests)
 

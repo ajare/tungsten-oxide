@@ -10,7 +10,6 @@ Build from an MSVC Developer prompt, from the repo root:
 git submodule update --init --recursive
 cmake -S ext/willpower -B ext/willpower/build
 cmake --build ext/willpower/build --config Release
-cmake --build ext/willpower/build/_deps/massive-poly-pusher-build --config Release --target MppResourceParsers MppAppSupport assimp
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
@@ -55,7 +54,7 @@ See `CLAUDE.md` for a deeper dive into the track data model and editor/game conv
 
 The C++20 core independently loads complete current-schema track JSON, bakes spline paths and placed mesh assets, exposes graphics-API-neutral geometry, and simulates the full corridor/mesh physics. Schema version 10 is the oldest accepted; older schemas are not migrated.
 
-The combined build imports the prebuilt `ext/willpower/build` libraries and their MassivePolyPusher build tree; it does not build either dependency. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md`.
+The combined build imports the prebuilt `ext/willpower/build` libraries and their MassivePolyPusher build tree. It builds the supplemental MassivePolyPusher targets needed only by this project (`MppResourceParsers`, `MppAppSupport`, and `assimp`) on demand. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md`.
 
 ## Tests
 

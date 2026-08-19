@@ -21,6 +21,9 @@ if (NOT TARGET model_io_gltf)
 endif()
 
 add_executable(gltf_convert main.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(gltf_convert)
+endif()
 target_compile_features(gltf_convert PRIVATE cxx_std_20)
 target_link_libraries(gltf_convert PRIVATE model_io_gltf)
 

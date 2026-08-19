@@ -146,6 +146,9 @@ target_link_libraries(AppLib PRIVATE
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
 add_executable(applib_pbr_material_binding_tests tests/pbr_material_binding_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(applib_pbr_material_binding_tests)
+endif()
 target_compile_features(applib_pbr_material_binding_tests PRIVATE cxx_std_23)
 target_include_directories(applib_pbr_material_binding_tests PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../ext/willpower/willpower.application/include"

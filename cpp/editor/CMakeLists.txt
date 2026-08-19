@@ -107,6 +107,9 @@ add_executable(track_editor
   main.cpp
   ${EDITOR_SOURCES}
   ${IMGUI_SOURCES})
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(track_editor)
+endif()
 
 target_include_directories(track_editor PRIVATE
   include
@@ -129,6 +132,9 @@ add_executable(editor_track_resource_tests
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/FileDialog.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(editor_track_resource_tests)
+endif()
 target_include_directories(editor_track_resource_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")
@@ -150,6 +156,9 @@ add_executable(mpp_model_import_tests
   tests/mpp_model_import_tests.cpp
   src/MppModelImport.cpp
   src/MppModelExport.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(mpp_model_import_tests)
+endif()
 target_include_directories(mpp_model_import_tests PRIVATE
   include
   "${TOX_SHARED_THIRD_PARTY_INCLUDE_DIR}")

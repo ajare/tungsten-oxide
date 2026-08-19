@@ -1,3 +1,12 @@
+#if defined(__SANITIZE_ADDRESS__)
+// Launcher is a GUI application, so send MemCheck reports to a durable file.
+// The Visual Studio debugger starts every configuration in $(OutDir), making
+// this resolve to the active configuration's output directory.
+extern "C" const char* __asan_default_options() {
+  return "log_path=Launcher.asan";
+}
+#endif
+
 #include "Platform.h"
 
 #if APP_PLATFORM == APP_PLATFORM_WINDOWS
@@ -344,7 +353,7 @@ void updateImGui(float frameTime) {
 // Entry point
 //
 int main(int argc, char** argv) {
-  string configFile = "Launcher.yaml";
+  string configFile = "Game.yaml";
   if (argc > 1) {
     configFile = string(argv[1]);
   }

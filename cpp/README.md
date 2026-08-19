@@ -27,16 +27,25 @@ Use an x64 MSVC Developer prompt (or run `vcvars64.bat` first):
 git submodule update --init --recursive
 cmake -S ext/willpower -B ext/willpower/build
 cmake --build ext/willpower/build --config Release
-cmake --build ext/willpower/build/_deps/massive-poly-pusher-build --config Release --target MppResourceParsers MppAppSupport assimp
 cmake -S cpp -B cpp/build
 cmake --build cpp/build --config Release
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```
 
 The `cpp` build imports Willpower from `ext/willpower/build` and MassivePolyPusher from
-`ext/willpower/build/_deps/massive-poly-pusher-build`; it never builds either dependency. Set
-`TOX_WILLPOWER_BUILD_DIR` or `TOX_MPP_BUILD_DIR` to use prebuilt trees elsewhere. Shared-library
-runtime dependencies are copied next to their executables.
+`ext/willpower/build/_deps/massive-poly-pusher-build`. It builds the supplemental MassivePolyPusher
+targets that Willpower itself does not need (`MppResourceParsers`, `MppAppSupport`, and `assimp`)
+on demand before their first consumer. Set `TOX_WILLPOWER_BUILD_DIR` or `TOX_MPP_BUILD_DIR` to use
+prebuilt trees elsewhere. Shared-library runtime dependencies are copied next to their executables.
+
+For an ASan-instrumented Debug-equivalent build, build both trees' `MemCheck` configuration:
+
+```text
+cmake --build ext/willpower/build --config MemCheck
+cmake --build cpp/build --config MemCheck
+ctest --test-dir cpp/build -C MemCheck --output-on-failure
+```
+
 Single-config generators work too:
 
 ```text

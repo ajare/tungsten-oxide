@@ -66,6 +66,7 @@ add_library(model_io_core STATIC
   core/src/PipelineMaterial.cpp
   core/src/Tangents.cpp
   core/src/VertexPacking.cpp)
+tox_add_mpp_supplemental_dependency(model_io_core)
 
 target_compile_features(model_io_core PUBLIC cxx_std_20)
 target_include_directories(model_io_core PUBLIC
@@ -161,7 +162,7 @@ function(model_io_deploy_runtime target)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND}
         "-DOUTPUT_DIR=$<TARGET_FILE_DIR:${target}>"
-        "-DCONFIG=$<IF:$<CONFIG:Debug>,Debug,Release>"
+        "-DCONFIG=$<CONFIG>"
         -P "${MODEL_IO_RUNTIME_SCRIPT}"
       COMMAND_EXPAND_LISTS)
   endif()
@@ -170,6 +171,9 @@ endfunction()
 # --- Tests -------------------------------------------------------------------------------------
 enable_testing()
 add_executable(model_io_tests tests/model_io_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(model_io_tests)
+endif()
 target_link_libraries(model_io_tests PRIVATE model_io_gltf)
 target_compile_definitions(model_io_tests PRIVATE
   "MODEL_IO_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../test-data/fixtures/gltf\"")
