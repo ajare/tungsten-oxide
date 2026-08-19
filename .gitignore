@@ -12,13 +12,13 @@ node_modules/
 dist/
 npm-debug.log*
 
-# C++ build output (CMake/Ninja, or an IDE auto-configuring cpp/core/). The
+# C++ build output (CMake/Ninja, or an IDE auto-configuring src/core/). The
 # vendored nlohmann header and sources are tracked; build trees are not.
-cpp/build/
-cpp/core/build/
-cpp/applib/build/
-cpp/launcher/build/
-cpp/tungsten-monoxide/build/
+build/
+src/core/build/
+src/applib/build/
+src/launcher/build/
+src/tungsten-monoxide/build/
 ext/willpower/build/
 # Per-library Visual Studio build trees (including .vs/IPCH caches).
 ext/willpower/**/build/

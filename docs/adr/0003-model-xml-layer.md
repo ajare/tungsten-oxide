@@ -30,7 +30,7 @@ list), edit each mesh's `Type`/`Visible` metadata, and save back to whichever
 shape it was opened from. Every other decision in `0001-model-tool.md` (D2–D11)
 is unaffected and stands as written.
 
-The editor (`cpp/editor`) gains the same `<Model>` fragment read/write
+The editor (`src/editor`) gains the same `<Model>` fragment read/write
 capability, plus the ability to parse/write a whole Track resource's `<Models>`
 list (already partially true via `TrackResourceDocument.cpp`/
 `TrackResourceSave.cpp`, extended here) and to load and render the geometry
@@ -41,10 +41,10 @@ note for the editor specifically (`core` itself is untouched — see
 
 ### Scope: a fragment schema, not a willpower Resource
 
-The new `cpp/model-xml` library (`docs/TRACK_MODEL_LIST_PLAN.md` Milestone 2)
+The new `src/model-xml` library (`docs/TRACK_MODEL_LIST_PLAN.md` Milestone 2)
 is a small TinyXML2-based reader/writer for exactly the `<Model>` fragment
 shape — it does not wrap a Model as a willpower `Resource`/`Definition` the
-way `cpp/tungsten-monoxide`'s `Map` does for a Track. D1's original reasoning
+way `src/tungsten-monoxide`'s `Map` does for a Track. D1's original reasoning
 ("the willpower Resource/XML layer exists to let a *game* declare its asset
 graph ahead of time; a load-preview-save utility has no such graph to
 declare") still holds at that larger scope — `model-tool` remains a
@@ -57,7 +57,7 @@ and write, not a general resource-declaration system.
 
 `model-tool` already links the full MassivePolyPusher SDK (`0001-model-tool.md`
 D2/D5/D9) and uses the real `mpp::ModelSerializer` for its authoritative save
-path — that doesn't change. `cpp/editor` links no part of that SDK today, and
+path — that doesn't change. `src/editor` links no part of that SDK today, and
 pulling it in solely to render placement geometry would be a far larger,
 riskier dependency addition than this feature needs (a GL loader conflict
 `MppModelExport.hpp`'s own header comment already documents avoiding once).
@@ -79,9 +79,9 @@ linking `mpp::ModelSerializer`. See `docs/TRACK_MODEL_LIST_PLAN.md` Milestone 4.
 - Two independent `<Models>`-list XML parsers now exist (editor: TinyXML2 in
   `TrackResourceDocument.cpp`; host: `wp::XmlNode` in
   `MapTungstenMonoxideDefinitionFactory.cpp`), matching the pre-existing split
-  for `<TrackData>`/`<ModelFile>` — `cpp/model-xml` is shared only between
+  for `<TrackData>`/`<ModelFile>` — `src/model-xml` is shared only between
   `model-tool` and the editor, which already share a TinyXML2 dependency and
-  build closure; it is not linked into `cpp/tungsten-monoxide`.
+  build closure; it is not linked into `src/tungsten-monoxide`.
 - The editor's "no mpp SDK dependency" property is preserved even though it
   now renders real model geometry — worth extra scrutiny in review, since a
   from-scratch binary-format reader is new, unproven code (mirroring the

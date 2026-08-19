@@ -17,7 +17,7 @@ is a different problem (ride height, banking, landing) with its own working
 model; only wall/obstacle collision is point-probe-shaped in a way that
 actually causes clipping bugs.
 
-## Current state (for orientation — see `cpp/core/CLAUDE.md` for the physics
+## Current state (for orientation — see `src/core/CLAUDE.md` for the physics
 core overview)
 
 - `Ship::Physics` (`Ship.hpp:17-51`) has no width/length/height — collision
@@ -41,9 +41,9 @@ core overview)
   public queries (`nearestAlongAxis`, `nearestAcrossAxis`, `sweep`,
   `sweepWall`) are point/segment-vs-triangle (Möller–Trumbore). There is no
   shape-vs-triangle test anywhere in the codebase, and no OBB type anywhere
-  in `cpp/core` or `ext/willpower` (the latter's `BoundingBox`/
+  in `src/core` or `ext/willpower` (the latter's `BoundingBox`/
   `BoundingCircle` are 2D and axis-aligned, and aren't linked into
-  `cpp/core`'s CMake target — not worth pulling in for this).
+  `src/core`'s CMake target — not worth pulling in for this).
 - Analytic corridor mode's wall handling (`Simulation.cpp:49-81,188-189`,
   clamping a lateral offset `s` to `[sLeft, sRight] ± COLLISION_WALL_MARGIN`)
   is untouched by this plan — it's a different, still-valid abstraction for
@@ -65,15 +65,15 @@ core overview)
   alongside the existing point-probe path in mesh-physics mode, gets
   validated against the disabled `raw/*-rail` fixtures (`raw-corner-rail`,
   `raw-glancing-rail`, `raw-head-on-rail`, `raw-airborne-clears-rail`,
-  `raw-airborne-outside-below-rail` — see `cpp/test-data/traces/raw/`,
-  currently disabled per `cpp/core/CLAUDE.md` pending Milestone 7 mesh-mode
+  `raw-airborne-outside-below-rail` — see `src/test-data/traces/raw/`,
+  currently disabled per `src/core/CLAUDE.md` pending Milestone 7 mesh-mode
   traces) before becoming default. Re-baking the 4 active parity traces
   (`boost-circuit`, `open-curve`, `recovery-run`, `starter-circle`) is
   deferred to the point where OBB collision actually becomes the default —
   don't touch them earlier.
 
 Work one step at a time. After each step: build, run `ctest --test-dir
-cpp/build -C Release --output-on-failure`, and commit before moving to the
+build -C Release --output-on-failure`, and commit before moving to the
 next step.
 
 ---
@@ -81,7 +81,7 @@ next step.
 ## Milestone 1 — OBB math primitive (inert, no gameplay wiring)
 
 **1.1 — `Obb` type + SAT overlap/MTV against a triangle**
-- New files: `cpp/core/include/Obb.hpp`, `cpp/core/src/Obb.cpp`.
+- New files: `src/core/include/Obb.hpp`, `src/core/src/Obb.cpp`.
 - `struct Obb { Vec3 center; Vec3 axes[3]; Vec3 halfExtents; };` — axes are
   assumed orthonormal (caller's responsibility; `Ship::Physics::right/up/
   -forward` already are).
@@ -90,12 +90,12 @@ next step.
   cross-products), returning the minimum-translation-vector normal/depth on
   overlap. This is the one genuinely new piece of geometry math in the
   codebase; keep it self-contained (`glm::dvec3`-based, matching `Vec3.hpp`)
-  rather than reaching for `Willpower.Geometry`, per `cpp/core`'s existing
+  rather than reaching for `Willpower.Geometry`, per `src/core`'s existing
   "no `Willpower.Geometry` dependency" posture (root `CLAUDE.md`).
 - `bool overlapsAabb(const Obb&, const TrackCollisionSurface::Bounds&)` —
   cheaper OBB-vs-AABB SAT (box axes + 3 world axes only, no triangle-normal/
   edge-cross terms), used for Milestone 2's BVH node pruning.
-- Test: new unit tests in `cpp/core/tests/` (or extend `track_tests.cpp`)
+- Test: new unit tests in `src/core/tests/` (or extend `track_tests.cpp`)
   covering axis-aligned overlap/no-overlap, corner-only contact depth,
   edge-edge contact (the case face-normal-only SAT gets wrong), and a couple
   of hand-computed depth/normal values. Commit.
@@ -103,7 +103,7 @@ next step.
 ## Milestone 2 — BVH OBB query
 
 **2.1 — `TrackCollisionSurface::queryObb`**
-- File: `cpp/core/include/TrackCollision.hpp` / `src/TrackCollision.cpp`.
+- File: `src/core/include/TrackCollision.hpp` / `src/TrackCollision.cpp`.
 - Add `std::vector<CollisionHit> queryObb(const Obb&) const` (or an
   out-vector to avoid per-call allocation on the hot path — decide based on
   what `stepMeshPhysics` needs in 3.x): descend the BVH pruning by
@@ -176,8 +176,8 @@ next step.
 ## Milestone 5 — Validation against rail fixtures
 
 **5.1 — Re-enable and compare against `raw/*-rail` fixtures**
-- Files: `cpp/core/CMakeLists.txt` (currently-commented `add_test` calls for
-  `raw_parity` etc.), `cpp/test-data/traces/raw/*-rail*.json`.
+- Files: `src/core/CMakeLists.txt` (currently-commented `add_test` calls for
+  `raw_parity` etc.), `src/test-data/traces/raw/*-rail*.json`.
 - These fixtures are disabled today because they predate Milestone 7 of
   `MESH_PHYSICS_PLAN.md` (mesh-mode-appropriate replacement traces), not
   because of this work — re-enabling them is itself a prerequisite this plan
@@ -200,11 +200,11 @@ next step.
   default from analytic to mesh once validated).
 - The 4 active parity traces (`boost-circuit`, `open-curve`, `recovery-run`,
   `starter-circle`) pin their `Simulation` to analytic mode explicitly per
-  `cpp/core/CLAUDE.md`, so they should be unaffected by this default flip —
+  `src/core/CLAUDE.md`, so they should be unaffected by this default flip —
   verify that's still true rather than assuming it.
 - If any mesh-mode-default trace/fixture exists by this point (from
   Milestone 5's work or elsewhere), re-bake it now — this is the append-only
-  golden-fixture corpus (`cpp/test-data/`), so treat re-baking as a
+  golden-fixture corpus (`src/test-data/`), so treat re-baking as a
   deliberate, reviewed step per root `CLAUDE.md`, not an incidental diff.
 - Test: full `ctest` suite green. Commit.
 
@@ -215,7 +215,7 @@ next step.
 - **Milestones 1-4 and 6: landed.** `Obb.hpp`/`.cpp` (13-axis SAT + conservative
   OBB/AABB), `TrackCollisionSurface::queryObb`, `Physics::hullHalf*` +
   `hullObb`, and the wall-resolution path in `stepMeshPhysics`, each with
-  unit/scenario coverage in `cpp/core/tests/track_tests.cpp`.
+  unit/scenario coverage in `src/core/tests/track_tests.cpp`.
 - **The hull OBB is now the only mesh-mode wall collision there is.** The
   feature flag (`Simulation::obbWallCollisionEnabled_`), its `GameSession`
   forwarder, its debug-overlay checkbox and `mesh_physics_diag --obb-walls`
@@ -269,7 +269,7 @@ next step.
   `raw-corner-rail` errors out before stepping). That is the pre-existing
   blocker this plan anticipated; `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 7
   owns replacing them. Validation instead used the tunnel/ramp validation asset
-  (`cpp/test-data/fixtures/mesh-object/tunnel-validation/`), the one mesh-mode
+  (`src/test-data/fixtures/mesh-object/tunnel-validation/`), the one mesh-mode
   fixture that still loads and has walls: 900 frames with the flag on gave the
   same four gameplay events and same 22 airborne frames as the point probe, no
   respawn, no tunneling, no NaN, byte-identical reruns, and the ship holding

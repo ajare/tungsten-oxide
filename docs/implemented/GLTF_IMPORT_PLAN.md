@@ -17,7 +17,7 @@ Two consumers:
 - `gltf_convert`, a new headless console tool analogous to MassivePolyPusher's
   own `ModelConvert`.
 
-Both sit on a shared pair of libraries under `cpp/model-io/`.
+Both sit on a shared pair of libraries under `src/model-io/`.
 
 This supersedes the requirements-analysis pass recorded in the grilling session
 on 2026-08-13; all open decisions from that pass are resolved below and are not
@@ -27,7 +27,7 @@ re-litigated here.
 
 **In scope.** glTF → `.mppmodel` + embedded `PbrMaterial`; the two libraries;
 the console tool; the editor's import UI; the consequential changes to
-`cpp/editor`, `cpp/model-tool` and `cpp/tungsten-monoxide` that fall out of
+`src/editor`, `src/model-tool` and `src/tungsten-monoxide` that fall out of
 those decisions.
 
 **Explicitly out of scope, at the time this plan was written.** The reverse
@@ -43,13 +43,13 @@ only, not re-litigated for the CLI tool.
 ## Decisions locked in
 
 - **`track_editor` links mpp.** Its long-standing no-mpp posture (recorded in
-  `cpp/editor/include/MppModelExport.hpp` and `docs/adr/0003-model-xml-layer.md`)
+  `src/editor/include/MppModelExport.hpp` and `docs/adr/0003-model-xml-layer.md`)
   is reversed. See ADR 0004.
 - **`track_editor` migrates from vendored gl3w to GLEW**, exactly as
-  `cpp/model-tool` already does, rather than firewalling mpp behind GL-free
+  `src/model-tool` already does, rather than firewalling mpp behind GL-free
   headers. One GL loader per process.
 - **Two library targets, split on dependencies.** `model_io_core` is free of
-  AssImp and of GL; `model_io_gltf` adds AssImp. `cpp/tungsten-monoxide` links
+  AssImp and of GL; `model_io_gltf` adds AssImp. `src/tungsten-monoxide` links
   only the core, so AssImp never enters the shipped game DLL's dependency
   closure.
 - **The pipeline supplies the contract; the caller names one material.**
@@ -94,7 +94,7 @@ only, not re-litigated for the CLI tool.
   to an error.
 - **The editor's track export moves to the 52-byte PBR layout with baked
   tangents**, and `Map.cpp` accepts both 36- and 52-byte strides.
-- **`cpp/model-tool` is refactored onto the new libraries**, accepting that its
+- **`src/model-tool` is refactored onto the new libraries**, accepting that its
   scene flattening behaviour changes (meshes are no longer merged by material).
   Its `ImportedModel` view model is kept rather than replaced by `ModelData` —
   see M2 for why.
@@ -103,9 +103,9 @@ only, not re-litigated for the CLI tool.
 
 | Target | Path | Links | Consumed by |
 | --- | --- | --- | --- |
-| `model_io_core` | `cpp/model-io/core` | `MppMesh`, `MppResourceParsers`, `MassivePolyPusher`, `Utils` — no AssImp, no GL loader | `track_editor`, `model_tool`, `tungsten-monoxide`, `gltf_convert` |
-| `model_io_gltf` | `cpp/model-io/gltf` | `model_io_core` + AssImp | `track_editor`, `model_tool`, `gltf_convert` |
-| `gltf_convert` | `cpp/gltf-convert` | both | — |
+| `model_io_core` | `src/model-io/core` | `MppMesh`, `MppResourceParsers`, `MassivePolyPusher`, `Utils` — no AssImp, no GL loader | `track_editor`, `model_tool`, `tungsten-monoxide`, `gltf_convert` |
+| `model_io_gltf` | `src/model-io/gltf` | `model_io_core` + AssImp | `track_editor`, `model_tool`, `gltf_convert` |
+| `gltf_convert` | `src/gltf-convert` | both | — |
 
 `model_io_core` owns:
 
@@ -113,7 +113,7 @@ only, not re-litigated for the CLI tool.
   and every consumer;
 - the vertex-layout contract — the 52-byte PBR and 36-byte legacy layouts, and
   tangent generation. `mono::gameMeshSpecification` and `mono::addPbrTangents`
-  move here from `cpp/tungsten-monoxide`;
+  move here from `src/tungsten-monoxide`;
 - `MeshSpecification`-driven packing/unpacking and `.mppmodel` read/write via
   `mpp::ModelSerializer`;
 - embedded `PbrMaterial` construction and the diagnostics report type.
@@ -128,7 +128,7 @@ Each milestone is independently revertible.
 
 **Status: complete.** `model_io_core`, `model_io_gltf`, `gltf_convert` and
 `model_io_tests` are in and green, alongside the existing suite —
-`ctest --test-dir cpp/build -C Release` passes 12/12. Verified end-to-end against
+`ctest --test-dir build -C Release` passes 12/12. Verified end-to-end against
 the real `TungstenMonoxide.pipeline.yaml`: material listing, conversion against
 `Ship.Surface`, and `--strict` correctly refusing a model that needs synthesis.
 
@@ -143,13 +143,13 @@ colour-space gap was found — see "Decisions locked in" and ADR D5a.
 
 Not verified here: DemoSuite's GPU material tests (see Risks).
 
-- `cpp/model-io/` with both targets and their public headers.
-- `cpp/gltf-convert/` — `gltf_convert`, import-only:
+- `src/model-io/` with both targets and their public headers.
+- `src/gltf-convert/` — `gltf_convert`, import-only:
   `--in model.gltf --pipeline X.pipeline.yaml --material Ship.Surface
   --out model.mppmodel`, plus `--strict` and `--validate-only`.
 - `model_io_tests`, a ctest target covering the validation matrix and a
   round-trip of the written `.mppmodel` back through `mpp::ModelSerializer`.
-- Fixtures under `cpp/test-data/fixtures/gltf/`: a `.gltf` with an external
+- Fixtures under `src/test-data/fixtures/gltf/`: a `.gltf` with an external
   texture; one lacking `COLOR_0` and `TANGENT`; one with no UVs at all; a
   multi-node hierarchy with non-identity transforms; one with an inlined image,
   asserted to be rejected; one using `KHR_materials_transmission`, likewise.
@@ -160,8 +160,8 @@ Not verified here: DemoSuite's GPU material tests (see Risks).
   (`mpp/src/ResourceStreamSerializer.cpp`), covered by a colour-space round-trip
   test and the legacy-read test above.
 
-Apart from the submodule's serializer, nothing outside `cpp/model-io/`,
-`cpp/gltf-convert/` and `cpp/test-data/` is touched by M1, and no existing
+Apart from the submodule's serializer, nothing outside `src/model-io/`,
+`src/gltf-convert/` and `src/test-data/` is touched by M1, and no existing
 target changes behaviour.
 
 ### M2 — `model_tool` refactor
@@ -234,8 +234,8 @@ two agree wherever both end up in one process.
 **M3.2 — `track_editor` links `model_io_core`** (not `model_io_gltf`: the editor
 reads and writes `.mppmodel` files and shares the vertex-layout contract, but
 imports no assets, so it has no reason to pull in AssImp). The mpp runtime DLL
-set is deployed via `model_io_deploy_runtime`, shared with `cpp/model-tool` and
-`cpp/gltf-convert`.
+set is deployed via `model_io_deploy_runtime`, shared with `src/model-tool` and
+`src/gltf-convert`.
 
 **M3.3 — `mpp_model_import_tests` links `model_io_core`** for a bridge
 assertion: the editor's from-scratch writer and reader each hard-code a 36-byte
@@ -263,7 +263,7 @@ script globs the directory rather than resolving per-target dependencies.
 **Status: complete.** `MppModelImport.cpp`/`MppModelExport.cpp` are now thin
 wrappers over `model_io_core`'s `mpp::ModelSerializer`-backed reader/writer;
 `buildTrackResourceXmlForName`/`buildModelsXml` were untouched, as planned.
-`ctest --test-dir cpp/build -C Release` passes 12/12, and `track_editor.exe`
+`ctest --test-dir build -C Release` passes 12/12, and `track_editor.exe`
 was launched directly to confirm its startup smoke checks (including the
 `.mppmodel` structural self-check) still pass against the new writer's real
 output.
@@ -305,7 +305,7 @@ output.
   the same way position/normal are) for both the primary track mesh loop and
   drivable mesh object placements, replacing the hard `stride != 36`
   rejections. Committed 36-byte models under
-  `cpp/tungsten-monoxide/resources/` keep loading unchanged.
+  `src/tungsten-monoxide/resources/` keep loading unchanged.
 - `Map.cpp` prefers an embedded material when a mesh's material name matches
   one of the model's own embedded materials (`ModelSerializer::getMaterialNames()`),
   declaring it into the `ResourceManager` once per model file (and rebasing
@@ -348,14 +348,14 @@ present but untriggered (it's lazy — see below).
 - The pipeline XML path lives in `editor.ini`'s new `[GltfImport]
   PipelinePath` key (resolved relative to the executable's directory, like
   `[Resources] Path`), defaulting to
-  `cpp/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.yaml` via a repo-root
+  `src/tungsten-monoxide/pbr/TungstenMonoxide.pipeline.yaml` via a repo-root
   walk (`defaultGltfPipelinePath`, the same technique
   `findEditorResourceFile` already used) when the key is absent. The target
   material is remembered across imports for the running session
   (`lastGltfImportMaterial`, a local -- not persisted back to `editor.ini`,
   since `EditorIni` is read-only).
 - Verified end-to-end against the real `TungstenMonoxide.pipeline.yaml` and a
-  fixture from `cpp/test-data/fixtures/gltf/` via `gltf_convert` (the
+  fixture from `src/test-data/fixtures/gltf/` via `gltf_convert` (the
   headless twin calling the identical `modelio::convertGltf`/
   `PbrPipelineDocumentLoader` API the modal now calls) — `--validate-only`
   and a real write both succeed, confirming the plumbing the modal drives.
@@ -373,7 +373,7 @@ excluded — they have no renderable mesh of their own to export.
   on import but has no write support for it at all in its glTF2 exporter —
   neither upstream nor this vendored commit implements it. Explicitly
   dropped rather than patching vendored AssImp source for this feature.
-- `cpp/model-io/gltf` gained `AssetExport.hpp`/`.cpp` — the inverse of
+- `src/model-io/gltf` gained `AssetExport.hpp`/`.cpp` — the inverse of
   `AssetImport.hpp`: builds an `aiScene` from a `modelio::ModelData` and
   writes it with `Assimp::Exporter::Export(..., "gltf2"|"glb2", ...)`,
   already registered and compiled into the vendored AssImp with zero build
@@ -381,7 +381,7 @@ excluded — they have no renderable mesh of their own to export.
   `AI_MATKEY_*` keys `AssetImport.cpp` reads on the way in. Textures are
   external files copied beside the output for `.gltf`, embedded via
   `aiScene::mTextures` for `.glb`.
-- `cpp/model-io/core` gained `PbrMaterialRead.hpp`/`.cpp` — the inverse of
+- `src/model-io/core` gained `PbrMaterialRead.hpp`/`.cpp` — the inverse of
   `PbrMaterialBuild.hpp`: `mpp::PbrMaterialStream::getPbrSurface()` is a
   field-for-field match with `modelio::MaterialData`, so an embedded
   `PbrMaterial` (the M4 gltf-import path already produces exactly these)
@@ -394,7 +394,7 @@ excluded — they have no renderable mesh of their own to export.
   to a material *by name* get a name plus whatever texture is locally known,
   since neither is resolvable to real PBR values without the game's runtime
   package, which `track_editor` does not and should not link.
-- `cpp/editor/src/ExportAll.cpp` (new) walks the user's checklist selection
+- `src/editor/src/ExportAll.cpp` (new) walks the user's checklist selection
   — baked `tox::GeometryBatch` entries of kind `PathSurface`/`PathShell`/
   `PathRail` (the only kinds `TrackBake.cpp` actually emits real triangle
   data for), plus `TrackDefinition::meshObjects` placements, each read
@@ -439,7 +439,7 @@ excluded — they have no renderable mesh of their own to export.
 - **M3 is unrelated risk.** The GLEW migration touches the editor's GL bootstrap
   for reasons that have nothing to do with this feature.
 - **Embedded materials revisit known-buggy machinery.**
-  `cpp/model-tool/include/MppSave.hpp` documents four distinct
+  `src/model-tool/include/MppSave.hpp` documents four distinct
   `ResourceStreamSerializer` bugs that caused material embedding to be abandoned
   once before. The `PbrMaterial` write/read paths are a different code path, but
   this must be proven by round-trip tests, not assumed — and the missing

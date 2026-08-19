@@ -125,14 +125,14 @@ Remove legacy `setAmbientColour`, `setLightCount`, and `setLight1Colour` calls f
 Keep editable source and the runtime export separate:
 
 ```text
-cpp/tungsten-monoxide/pbr/
+src/tungsten-monoxide/pbr/
   TungstenMonoxide.pipeline.yaml
   TungstenMonoxidePreview.scene.yaml
   TungstenMonoxideMaterials.xml
   textures/...
   environment/...
 
-cpp/tungsten-monoxide/resources/
+src/tungsten-monoxide/resources/
   TungstenMonoxide.mpppackage
 ```
 
@@ -165,9 +165,9 @@ Exit criteria: the visual and data baseline is checked in or linked from this pl
 
 ### Milestone 1 — PBR package authoring spike
 
-**Status: complete.** The authored workspace is under `cpp/tungsten-monoxide/pbr/`, the standard PipelineEditor export is `cpp/tungsten-monoxide/resources/TungstenMonoxide.mpppackage`, and `pbr/validate_package.py` guards its self-contained binding and geometry contract. PipelineEditor validation, package export, and DemoSuite `--package-smoke-test` pass.
+**Status: complete.** The authored workspace is under `src/tungsten-monoxide/pbr/`, the standard PipelineEditor export is `src/tungsten-monoxide/resources/TungstenMonoxide.mpppackage`, and `pbr/validate_package.py` guards its self-contained binding and geometry contract. PipelineEditor validation, package export, and DemoSuite `--package-smoke-test` pass.
 
-Files: `cpp/tungsten-monoxide/pbr/**`, temporary package-validation test.
+Files: `src/tungsten-monoxide/pbr/**`, temporary package-validation test.
 
 - Create the pipeline workspace in PipelineEditor from the Shadows template.
 - Author all eight bindings and representative preview objects.
@@ -184,23 +184,23 @@ Exit criteria: DemoSuite can load the package with `--package`, preview all bind
 
 New files (names may be adjusted to project conventions):
 
-- `cpp/tungsten-monoxide/include/TungstenPbrPackage.h`
-- `cpp/tungsten-monoxide/src/TungstenPbrPackage.cpp`
+- `src/tungsten-monoxide/include/TungstenPbrPackage.h`
+- `src/tungsten-monoxide/src/TungstenPbrPackage.cpp`
 
 Modified files:
 
-- `cpp/tungsten-monoxide/CMakeLists.txt`
-- `cpp/tungsten-monoxide/include/TungstenMonoxideModel.h`
-- `cpp/tungsten-monoxide/src/DLL.cpp`
-- `cpp/tungsten-monoxide/include/StateControllerTungstenMonoxide.h`
-- `cpp/tungsten-monoxide/src/StateControllerTungstenMonoxide.cpp`
+- `src/tungsten-monoxide/CMakeLists.txt`
+- `src/tungsten-monoxide/include/TungstenMonoxideModel.h`
+- `src/tungsten-monoxide/src/DLL.cpp`
+- `src/tungsten-monoxide/include/StateControllerTungstenMonoxide.h`
+- `src/tungsten-monoxide/src/StateControllerTungstenMonoxide.cpp`
 - Launcher Debug/Release configuration or a documented default package path
 
 Work:
 
 - Build/link MPP's `MppResourceParsers` and `MppAppSupport` libraries and include their headers.
 - Deploy the `MppResourceParsers` runtime DLL beside Launcher; `MppAppSupport` supplies manifest/ZIP support.
-- Add a configurable `PbrPackage` DLL argument, defaulting to `cpp/tungsten-monoxide/resources/TungstenMonoxide.mpppackage` through the active resource configuration.
+- Add a configurable `PbrPackage` DLL argument, defaulting to `src/tungsten-monoxide/resources/TungstenMonoxide.mpppackage` through the active resource configuration.
 - Extract into `mpp::app::createUniqueTemporaryDirectory`, read and validate `manifest.xml`, and keep the directory alive for the service lifetime.
 - Reproduce DemoSuite's ordering: parse documents; validate; declare/load/create `RenderGraphStream`; rebuild `PbrPipelineRuntime`; configure imports, outputs, environment, bloom, and shadows; create `XmlGraphPbrForward`; prepare external outputs; then accept the runtime generation.
 - Validate the complete required-binding set and resource type (`mpp::PbrMaterial`).
@@ -214,18 +214,18 @@ Exit criteria: Launcher reaches MapLoad with the package pipeline and all materi
 
 New files:
 
-- `cpp/applib/include/applib/PbrMaterialBinding.h`
-- `cpp/applib/src/PbrMaterialBinding.cpp`
+- `src/applib/include/applib/PbrMaterialBinding.h`
+- `src/applib/src/PbrMaterialBinding.cpp`
 - corresponding resource/definition factory files and tests
 
 Modified files:
 
-- `cpp/applib/CMakeLists.txt`
-- `cpp/tungsten-monoxide/src/DLL.cpp`
-- `cpp/tungsten-monoxide/resources/Resources.yaml`
-- `cpp/tungsten-monoxide/src/Map.cpp`
-- `cpp/tungsten-monoxide/include/Game.h`
-- `cpp/tungsten-monoxide/src/GameDefinitionFactory.cpp`
+- `src/applib/CMakeLists.txt`
+- `src/tungsten-monoxide/src/DLL.cpp`
+- `src/tungsten-monoxide/resources/Resources.yaml`
+- `src/tungsten-monoxide/src/Map.cpp`
+- `src/tungsten-monoxide/include/Game.h`
+- `src/tungsten-monoxide/src/GameDefinitionFactory.cpp`
 
 Work:
 
@@ -244,16 +244,16 @@ Exit criteria: generated track and ship model streams reference package-owned `P
 
 New shared files:
 
-- `cpp/tungsten-monoxide/include/PbrMeshSpecification.h`
-- `cpp/tungsten-monoxide/src/PbrMeshSpecification.cpp`
-- `cpp/tungsten-monoxide/include/PbrVertexConversion.h`
-- `cpp/tungsten-monoxide/src/PbrVertexConversion.cpp`
+- `src/tungsten-monoxide/include/PbrMeshSpecification.h`
+- `src/tungsten-monoxide/src/PbrMeshSpecification.cpp`
+- `src/tungsten-monoxide/include/PbrVertexConversion.h`
+- `src/tungsten-monoxide/src/PbrVertexConversion.cpp`
 - focused unit tests
 
 Modified files:
 
-- `cpp/tungsten-monoxide/src/Map.cpp`
-- `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
+- `src/tungsten-monoxide/src/Map.cpp`
+- `src/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
 
 Work:
 
@@ -271,14 +271,14 @@ Exit criteria: every rendered game mesh satisfies its PBR material specification
 
 Modified files:
 
-- `cpp/applib/include/applib/State.h`
-- `cpp/applib/src/State.cpp`
-- `cpp/launcher/include/ImGuiDataProvider.h`
-- `cpp/tungsten-monoxide/include/StatePlayTungstenMonoxide.h`
-- `cpp/tungsten-monoxide/include/TungstenPbrPackage.h`
-- `cpp/tungsten-monoxide/pbr/validate_package.py`
-- `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
-- `cpp/tungsten-monoxide/src/TungstenPbrPackage.cpp`
+- `src/applib/include/applib/State.h`
+- `src/applib/src/State.cpp`
+- `src/launcher/include/ImGuiDataProvider.h`
+- `src/tungsten-monoxide/include/StatePlayTungstenMonoxide.h`
+- `src/tungsten-monoxide/include/TungstenPbrPackage.h`
+- `src/tungsten-monoxide/pbr/validate_package.py`
+- `src/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
+- `src/tungsten-monoxide/src/TungstenPbrPackage.cpp`
 
 Work:
 
@@ -298,23 +298,23 @@ Exit criteria: the bundled race renders entirely through `XmlGraphPbrForward`; H
 
 Modified files:
 
-- `cpp/applib/CMakeLists.txt`
-- `cpp/applib/include/applib/TrackMaterial*.h` (removed)
-- `cpp/applib/src/TrackMaterial*.cpp` (removed)
-- `cpp/editor/include/MaterialCatalog.hpp`
-- `cpp/editor/include/MppModelExport.hpp`
-- `cpp/editor/main.cpp`
-- `cpp/editor/src/MaterialCatalog.cpp`
-- `cpp/editor/src/MppModelExport.cpp`
-- `cpp/tungsten-monoxide/include/Map.h`
-- `cpp/tungsten-monoxide/resources/Resources.yaml`
-- `cpp/tungsten-monoxide/resources/images/**` (represented legacy images removed)
-- `cpp/tungsten-monoxide/resources/model.xml` (removed)
-- `cpp/tungsten-monoxide/resources/shaders/**` (removed)
-- `cpp/tungsten-monoxide/src/DLL.cpp`
-- `cpp/tungsten-monoxide/src/Map.cpp`
-- `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
-- `cpp/tungsten-monoxide/tests/pbr_material_binding_mapping_tests.cpp`
+- `src/applib/CMakeLists.txt`
+- `src/applib/include/applib/TrackMaterial*.h` (removed)
+- `src/applib/src/TrackMaterial*.cpp` (removed)
+- `src/editor/include/MaterialCatalog.hpp`
+- `src/editor/include/MppModelExport.hpp`
+- `src/editor/main.cpp`
+- `src/editor/src/MaterialCatalog.cpp`
+- `src/editor/src/MppModelExport.cpp`
+- `src/tungsten-monoxide/include/Map.h`
+- `src/tungsten-monoxide/resources/Resources.yaml`
+- `src/tungsten-monoxide/resources/images/**` (represented legacy images removed)
+- `src/tungsten-monoxide/resources/model.xml` (removed)
+- `src/tungsten-monoxide/resources/shaders/**` (removed)
+- `src/tungsten-monoxide/src/DLL.cpp`
+- `src/tungsten-monoxide/src/Map.cpp`
+- `src/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp`
+- `src/tungsten-monoxide/tests/pbr_material_binding_mapping_tests.cpp`
 - `docs/tungsten-monoxide.md`
 
 Work:
@@ -331,10 +331,10 @@ Exit criteria: repository search finds no TungstenMonoxide 3D model reference to
 
 Run all of the following before merging:
 
-1. `cmake -S cpp -B cpp/build`
+1. `cmake -S . -B build`
 2. Build MPP dependencies including `MppResourceParsers` and `MppAppSupport` in Release.
-3. `cmake --build cpp/build --config Release`
-4. `ctest --test-dir cpp/build -C Release --output-on-failure`
+3. `cmake --build build --config Release`
+4. `ctest --test-dir build -C Release --output-on-failure`
 5. DemoSuite package load and package smoke test against the committed `.mpppackage`.
 6. Launcher startup with threaded loading both enabled and disabled.
 7. Launcher resize/minimize/restore and clean shutdown (temporary extraction directory removed).

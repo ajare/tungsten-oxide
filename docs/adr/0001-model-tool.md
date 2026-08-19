@@ -5,11 +5,11 @@ Date: 2026-07-28
 
 ## Context
 
-We want a new native app, `model-tool`, living alongside `cpp/editor`, `cpp/app`,
-`cpp/launcher`, `cpp/applib`, etc. It should let a user import a 3D model file
+We want a new native app, `model-tool`, living alongside `src/editor`, `src/app`,
+`src/launcher`, `src/applib`, etc. It should let a user import a 3D model file
 (OBJ, FBX, USD, or glTF), preview it in a live 3D viewport, and save it out as
 MassivePolyPusher's `.mppmodel` format — the same binary format
-`MPPMODEL_EXPORT_SPEC.md` documents and `cpp/editor`'s `MppModelExport.cpp`
+`MPPMODEL_EXPORT_SPEC.md` documents and `src/editor`'s `MppModelExport.cpp`
 already writes (for baked track geometry, a different source domain).
 
 Two existing things in the repo look superficially similar but solve different
@@ -22,16 +22,16 @@ problems, and neither one fits whole:
   transforms into mesh vertices (no `aiProcess_PreTransformVertices`, no manual
   matrix walk) — it only works correctly for scenes whose meshes already sit at
   the scene root.
-- `cpp/editor`'s `MppModelExport.cpp` writes `.mppmodel` bytes from scratch
+- `src/editor`'s `MppModelExport.cpp` writes `.mppmodel` bytes from scratch
   specifically to avoid linking `mpp::ModelSerializer` (and therefore GLEW,
-  `mpp::RenderSystem`'s GL loader), because `cpp/editor` never needed to render
+  `mpp::RenderSystem`'s GL loader), because `src/editor` never needed to render
   anything through mpp — it only ever needed to *emit* the file format. It also
   deliberately never embeds real materials (name-only references, `Resources.yaml`
   supplies the rest by hand) and always writes non-indexed triangle soups,
   because that's what baked track geometry always is.
 
 `model-tool` needs a live embedded mpp viewport (so it must link real
-`mpp::RenderSystem` anyway, unlike `cpp/editor`) and needs to preserve a source
+`mpp::RenderSystem` anyway, unlike `src/editor`) and needs to preserve a source
 mesh's real shared-vertex indexing and embed real extracted materials (unlike
 the track exporter, which has neither of those things to preserve). So neither
 existing precedent's constraints apply, and copying either wholesale would
@@ -54,7 +54,7 @@ builds `mpp::Model`/`mpp::Material`/`mpp::Texture` objects programmatically at
 runtime (mirroring `ext/willpower/ext/massive-poly-pusher/demo-suite`'s `ModelScene` and
 `StatePlayTungstenMonoxide::createTorusModel()`), rather than wrapping the
 loaded model as a willpower `Resource`/`Definition` the way
-`cpp/tungsten-monoxide`'s `Map` does.
+`src/tungsten-monoxide`'s `Map` does.
 
 Why: `model-tool` has no declarative resource files to author (no
 `Resources.yaml`-equivalent) — it loads whatever file the user picks at runtime.
@@ -63,18 +63,18 @@ graph ahead of time; a load-preview-save utility has no such graph to declare.
 
 ### D2 — SDL2 + Dear ImGui docking branch, GLEW as the GL loader
 
-Window/UI shell copies `cpp/editor`'s exact bootstrap (SDL2,
+Window/UI shell copies `src/editor`'s exact bootstrap (SDL2,
 `imgui_impl_sdl2` + `imgui_impl_opengl3`, docking branch, menubar/toolbar/
 statusbar/dockspace layout) — but the OpenGL3 ImGui backend is initialized
-against **GLEW**, not the `gl3w` loader `cpp/editor` vendors.
+against **GLEW**, not the `gl3w` loader `src/editor` vendors.
 
 Why: `mpp::RenderSystem`'s headers pull in GLEW as *its* GL loader
-unconditionally (see `MppModelExport.hpp`'s header comment on why `cpp/editor`
+unconditionally (see `MppModelExport.hpp`'s header comment on why `src/editor`
 avoids linking `mpp::ModelSerializer` at all, specifically to dodge a
 GLEW-vs-gl3w duplicate-loader conflict). `model-tool` must link real
 `mpp::RenderSystem` for its viewport (D5), so it inherits GLEW regardless —
 and since `model-tool` is its own fresh process, there is no cross-process
-conflict with `cpp/editor`'s independent gl3w choice. One GL loader per
+conflict with `src/editor`'s independent gl3w choice. One GL loader per
 process; GLEW is the one already forced on us.
 
 ### D3 — Bespoke fixed-layout AssImp converter, not `AssImpModelLoader` reuse
@@ -101,7 +101,7 @@ visibly wrong.
 Vertex color defaults to opaque white when a mesh has no `mColors[0]`; UV
 defaults to `(0,0)` when a mesh has no texture-coordinate channel — both
 matching the existing `RenderVertex`/`GeometryBatch` conventions in
-`cpp/core`.
+`src/core`.
 
 ### D4 — Materials: diffuse/base-color texture only, ignore all shading constants
 
@@ -131,7 +131,7 @@ indices, materials) is both:
   `addMaterial()` for "Save as .mppmodel" — no separate export-time
   reconversion, no from-scratch byte writer.
 
-This differs from `cpp/editor`'s `MppModelExport.cpp`, which writes bytes
+This differs from `src/editor`'s `MppModelExport.cpp`, which writes bytes
 directly without linking `mpp::ModelSerializer` at all. That constraint doesn't
 apply here: `model-tool` links real mpp fully anyway (D2), so using the real
 serializer is strictly simpler than reimplementing it, and it can embed real
@@ -194,7 +194,7 @@ A single File → "Import..." menu item opens a file dialog with a combined
 filter across OBJ/FBX/USD/glTF (plus an "All supported" option), rather than
 one menu item per format. AssImp dispatches by file content/extension
 internally regardless of how the dialog got invoked, so separate menu items
-would only duplicate UI for no behavioral difference — matching `cpp/editor`'s
+would only duplicate UI for no behavioral difference — matching `src/editor`'s
 existing single "Import JSON..."/"Export USD..." pattern.
 
 ## Consequences
@@ -209,13 +209,13 @@ existing single "Import JSON..."/"Export USD..." pattern.
   may import as the default-white fallback. This should be visible to the user
   (status bar / material list, not silent).
 - Because `model-tool` links `mpp::ModelSerializer` for real (D5), unlike
-  `cpp/editor`, it does **not** inherit the upstream `updateDirectoryEntry()`
+  `src/editor`, it does **not** inherit the upstream `updateDirectoryEntry()`
   offset bug `MPPMODEL_EXPORT_SPEC.md` documents working around — that bug
   only matters to a from-scratch writer imitating the on-disk layout by hand.
   Using the real serializer sidesteps it by construction, the same as it would
   for any other real `mpp::ModelSerializer::save()` caller.
 - No willpower.application Resource system involvement (D1) means
-  `model-tool` cannot reuse `cpp/tungsten-monoxide`'s existing texture-cache/
+  `model-tool` cannot reuse `src/tungsten-monoxide`'s existing texture-cache/
   material-cache resource lifecycle; it manages its own `mpp::ResourceManager`
   lifetime directly, same as `demo-suite` does.
 

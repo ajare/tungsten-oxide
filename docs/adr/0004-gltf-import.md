@@ -12,21 +12,21 @@ console tool analogous to MassivePolyPusher's `ModelConvert`.
 
 Three existing arrangements stand in the way.
 
-**`cpp/editor` deliberately does not link mpp.** Its `.mppmodel` reader and
+**`src/editor` deliberately does not link mpp.** Its `.mppmodel` reader and
 writer (`MppModelImport.cpp`, `MppModelExport.cpp`) are from-scratch byte-level
 implementations, written that way specifically to avoid a GLEW-vs-gl3w GL-loader
-conflict — `cpp/model-tool` links real mpp and therefore uses GLEW, while the
+conflict — `src/model-tool` links real mpp and therefore uses GLEW, while the
 editor vendors gl3w. `MppModelExport.hpp` and `0003-model-xml-layer.md` both
 record this as intentional.
 
 **Materials are referenced by name, never embedded.** Both writers in this
 codebase leave the `.mppmodel` `MaterialNames`/`Materials` sections empty.
-`cpp/model-tool/include/MppSave.hpp` documents that embedding was implemented
+`src/model-tool/include/MppSave.hpp` documents that embedding was implemented
 once and reverted after four distinct `ResourceStreamSerializer` defects.
 
 **Two runtimes disagree about materials.** `mpp::MppModelStream` consumes
 embedded material streams as child resources
-(`mpp/src/MppModelStream.cpp:37-79`), whereas `cpp/tungsten-monoxide/src/Map.cpp`
+(`mpp/src/MppModelStream.cpp:37-79`), whereas `src/tungsten-monoxide/src/Map.cpp`
 drives `mpp::ModelSerializer` directly and resolves each mesh's material *by
 name* through `getDependentResource` → `PbrMaterialBinding` → package binding.
 An embedded material in a track model is ignored by the game today.
@@ -42,7 +42,7 @@ headless, context-free mpp + AssImp converter is viable.
 
 The editor's no-mpp posture is reversed. It links the mpp stack and AssImp, and
 replaces its vendored gl3w loader with GLEW so that one GL loader serves the
-process, exactly as `cpp/model-tool` already does.
+process, exactly as `src/model-tool` already does.
 
 A narrower option existed — keep gl3w and firewall mpp behind GL-free headers,
 since `glewInit()` is called in exactly one place (`mpp/src/RenderSystem.cpp:331`)
@@ -56,15 +56,15 @@ editor's reader only supports the fixed 36-byte layout and throws otherwise, so
 it could not display the 52-byte PBR models this feature produces.
 `buildTrackResourceXmlForName`/`buildModelsXml` are pure XML and survive.
 
-### D2 — a two-target `cpp/model-io/` layer, split on dependencies
+### D2 — a two-target `src/model-io/` layer, split on dependencies
 
 `model_io_core` is free of AssImp and of any GL loader; `model_io_gltf` adds
-AssImp. `cpp/tungsten-monoxide` links only the core, so AssImp, Draco and zlib
+AssImp. `src/tungsten-monoxide` links only the core, so AssImp, Draco and zlib
 never enter the shipped game DLL's dependency closure.
 
 `model_io_core` becomes the single definition of the vertex-layout contract:
 `mono::gameMeshSpecification` and `mono::addPbrTangents` move there from
-`cpp/tungsten-monoxide`, where they are today unreachable by the editor, which
+`src/tungsten-monoxide`, where they are today unreachable by the editor, which
 now needs them to bake 52-byte tracks.
 
 ### D3 — the caller names one pipeline material; validation is feature-derived
@@ -129,7 +129,7 @@ pre-`RSE4` texture keeps the `Linear` default. Only `RSE4` is written.
 This modifies the MassivePolyPusher submodule, which this work otherwise treats
 as upstream and untouched; it is a deliberate, explicitly requested exception.
 The alternative was shipping an importer that silently produces wrongly-shaded
-models. `cpp/test-data/fixtures/gltf/legacy-rse3.mppmodel` freezes a pre-change
+models. `src/test-data/fixtures/gltf/legacy-rse3.mppmodel` freezes a pre-change
 model so the compatibility path stays covered independently of the submodule's
 own assets, which may be re-exported at any time.
 
@@ -162,7 +162,7 @@ export, which typically carries neither `COLOR_0` nor `TANGENT`.
 Tracks are written as `gameMeshSpecification(false, true)` with tangents baked at
 save time, and `Map.cpp` accepts stride 36 (synthesising tangents, as today) or
 52 (passing through), rejecting anything else. Committed 36-byte models under
-`cpp/tungsten-monoxide/resources/` must keep loading.
+`src/tungsten-monoxide/resources/` must keep loading.
 
 ## Scope
 
@@ -182,7 +182,7 @@ the editor has no reason to stand up.
 - `model_tool`'s scene flattening changes: meshes are no longer merged by
   material. This fixes a latent name-loss bug but is a visible behaviour change.
 - The vertex-layout contract has one home instead of being duplicated between
-  `cpp/tungsten-monoxide` and the editor.
+  `src/tungsten-monoxide` and the editor.
 - Every resource stream written from now on is `RSE4`, including those produced
   by MassivePolyPusher's own tools (PipelineEditor package export, ModelConvert,
   DemoSuite). Older readers cannot load them. Committed `RSE3` assets are

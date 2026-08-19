@@ -1,12 +1,12 @@
-# cpp/editor — the native track editor (`track_editor`)
+# src/editor — the native track editor (`track_editor`)
 
-`cpp/editor` is a native ImGui/SDL2/OpenGL application (Windows/MSVC only) for authoring the tracks `cpp/core` loads. It links `core` and reuses it as a black box for baking and validation — the editor never re-implements spline evaluation or physics itself; where it needs baked data (e.g. to draw a ribbon), it either reads `core`'s output or, where core keeps something private (like the spline `Evaluator`), accepts a documented, editor-zoom-appropriate approximation.
+`src/editor` is a native ImGui/SDL2/OpenGL application (Windows/MSVC only) for authoring the tracks `src/core` loads. It links `core` and reuses it as a black box for baking and validation — the editor never re-implements spline evaluation or physics itself; where it needs baked data (e.g. to draw a ribbon), it either reads `core`'s output or, where core keeps something private (like the spline `Evaluator`), accepts a documented, editor-zoom-appropriate approximation.
 
-Domain vocabulary as in `UBIQUITOUS_LANGUAGE.md`/`glossary.md` (both in this directory). See `cpp/editor/CLAUDE.md` for line-level UI-gesture conventions and `cpp/editor/main.cpp:1-34` for a milestone-by-milestone feature history (M0–M10).
+Domain vocabulary as in `UBIQUITOUS_LANGUAGE.md`/`glossary.md` (both in this directory). See `src/editor/CLAUDE.md` for line-level UI-gesture conventions and `src/editor/main.cpp:1-34` for a milestone-by-milestone feature history (M0–M10).
 
 ## Intended use
 
-Author and edit complete tracks — paths, reservations, zones, triggers, texture/material assignment — then save them as a Track Resource (a schema-12 JSON + generated `.mppmodel` pair registered in a Resources XML) that `cpp/tungsten-monoxide` can load and play. It is an authoring tool only: it never runs gameplay simulation, and there is no in-editor 3D preview (see [Limitations](#limitations)).
+Author and edit complete tracks — paths, reservations, zones, triggers, texture/material assignment — then save them as a Track Resource (a schema-12 JSON + generated `.mppmodel` pair registered in a Resources XML) that `src/tungsten-monoxide` can load and play. It is an authoring tool only: it never runs gameplay simulation, and there is no in-editor 3D preview (see [Limitations](#limitations)).
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Zones (`velocityChange`/boost, `jump`, `startGrid`) and triggers (dummy/checkpoi
 
 ### Texture assets and materials
 
-The texture-*asset* authoring UI (add/browse/tile-size) has been removed; `EditorState`'s texture-asset methods survive with no UI driving them. What remains is `src/MaterialsPanel.cpp` — a read-only list of `TrackMaterial`s loaded from the Resources YAML named in `editor.ini`, each shown with its first texture's thumbnail; clicking one assigns it to the current path. `cpp/editor/src/TextureCache.cpp` resolves a relative texture path against the repo root (found by walking up from the working directory for `assets/track/manifest.json`), so the exe can be launched from anywhere and still find the same on-disk texture.
+The texture-*asset* authoring UI (add/browse/tile-size) has been removed; `EditorState`'s texture-asset methods survive with no UI driving them. What remains is `src/MaterialsPanel.cpp` — a read-only list of `TrackMaterial`s loaded from the Resources YAML named in `editor.ini`, each shown with its first texture's thumbnail; clicking one assigns it to the current path. `src/editor/src/TextureCache.cpp` resolves a relative texture path against the repo root (found by walking up from the working directory for `assets/track/manifest.json`), so the exe can be launched from anywhere and still find the same on-disk texture.
 
 ### Self-intersection detection
 
@@ -67,7 +67,7 @@ Design of record: `docs/adr/0002-track-resource-save-load.md` ("Accepted and imp
 - **Save** (`TrackResourceSave.hpp`) has two hard preconditions: the track must currently bake, and every path's material must resolve in the catalog. It builds a `TrackSavePlan` performing no writes (all three destination byte-contents computed up front), then commits XML + JSON + `.mppmodel` as one rollback-capable transaction — on any failure, pre-existing files are restored and nothing is left half-written.
 - **Safe relative paths**: a stored `<ModelFile>`/`<TrackData>` reference must be non-absolute and stay under the XML's own directory after normalization (no `..` escape); an unsafe or missing reference is repaired to a resource-name-derived sidecar name on save.
 - **Fingerprints** detect out-of-editor changes to the bound resource and JSON sidecar, surfacing a Save Conflict modal (Reload / Save As / Cancel) rather than silently overwriting.
-- **`.mppmodel` export** (`src/MppModelExport.cpp`) is a from-scratch native writer of the format documented in `MPPMODEL_EXPORT_SPEC.md` — it deliberately avoids linking `mpp::ModelSerializer` (which would pull in GLEW alongside the editor's own gl3w loader) and, as a side effect, avoids a documented upstream offset bug in that serializer's directory-entry update path. Materials are referenced by name only; the target MPP project must define the fixed `Tracks/Default*` material names the exporter writes (kept in sync with `cpp/core/src/TrackBake.cpp`'s hardcoded material keys).
+- **`.mppmodel` export** (`src/MppModelExport.cpp`) is a from-scratch native writer of the format documented in `MPPMODEL_EXPORT_SPEC.md` — it deliberately avoids linking `mpp::ModelSerializer` (which would pull in GLEW alongside the editor's own gl3w loader) and, as a side effect, avoids a documented upstream offset bug in that serializer's directory-entry update path. Materials are referenced by name only; the target MPP project must define the fixed `Tracks/Default*` material names the exporter writes (kept in sync with `src/core/src/TrackBake.cpp`'s hardcoded material keys).
 - Also available: JSON export/import, USD export (`src/USDExport.cpp`, walks `core`'s baked renderer-neutral geometry batches — not a from-scratch derivation).
 
 ## Limitations

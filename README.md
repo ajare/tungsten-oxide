@@ -10,14 +10,14 @@ Build from an MSVC Developer prompt, from the repo root:
 git submodule update --init --recursive
 cmake -S ext/willpower -B ext/willpower/build
 cmake --build ext/willpower/build --config Release
-cmake -S cpp -B cpp/build
-cmake --build cpp/build --config Release
-ctest --test-dir cpp/build -C Release --output-on-failure
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-- **`cpp/editor`** builds `track_editor`, the native ImGui/SDL3/OpenGL track editor: author tracks in a top-down + elevation view, export/import as JSON. `E`/`C`/`R` switch between Edit, Create and Rails modes.
-- **`cpp/tungsten-monoxide`** builds the playable driving game.
-- **`cpp/app`** builds `track_runner`, a headless CLI session host for a compiled track.
+- **`src/editor`** builds `track_editor`, the native ImGui/SDL3/OpenGL track editor: author tracks in a top-down + elevation view, export/import as JSON. `E`/`C`/`R` switch between Edit, Create and Rails modes.
+- **`src/tungsten-monoxide`** builds the playable driving game.
+- **`src/app`** builds `track_runner`, a headless CLI session host for a compiled track.
 
 ### Mesh regions
 
@@ -40,13 +40,12 @@ Track files record a schema `version`. Schema 5 doubled the world's unit scale �
 
 ## How it's structured
 
-- `cpp/core/` — native C++20 track engine: strict schema-10/11 loading, spline/mesh baking, renderer-neutral geometry and complete physics. See `docs/core.md`.
-- `cpp/editor/` — the native track editor: state, undo/redo, canvas rendering and interaction. See `docs/editor.md`.
-- `cpp/model-tool/` — standalone 3D-model import/preview/`.mppmodel`-save utility, unrelated to mesh regions above. See `docs/model-tool.md`.
-- `cpp/tungsten-monoxide/` — the playable driving game runtime. See `docs/tungsten-monoxide.md`.
+- `src/core/` — native C++20 track engine: strict schema-10/11 loading, spline/mesh baking, renderer-neutral geometry and complete physics. See `docs/core.md`.
+- `src/editor/` — the native track editor: state, undo/redo, canvas rendering and interaction. See `docs/editor.md`.
+- `src/model-tool/` — standalone 3D-model import/preview/`.mppmodel`-save utility, unrelated to mesh regions above. See `docs/model-tool.md`.
+- `src/tungsten-monoxide/` — the playable driving game runtime. See `docs/tungsten-monoxide.md`.
 - `ext/willpower/` — the [Willpower](https://github.com/ajare/willpower) submodule; its nested MassivePolyPusher checkout supplies rendering dependencies to every native app.
-- `assets/` (bundled textures) is shared across the native subprojects and stays at the repo root, as does the `ext/geoemetry-js` submodule.
-- `ext/geoemetry-js/` — a git submodule ([`@willpower/geometry`](https://github.com/ajare/geoemetry-js)), a standalone geometry/mesh library with its own tests and React editor, and the only JavaScript codebase in this repo. It has no bearing on `cpp/` at runtime.
+- `assets/` (bundled textures) is shared across the native subprojects and stays at the repo root.
 
 See `CLAUDE.md` for a deeper dive into the track data model and editor/game conventions, and `docs/core.md`/`docs/editor.md`/`docs/model-tool.md`/`docs/tungsten-monoxide.md` for module-by-module feature and physics documentation.
 
@@ -54,15 +53,15 @@ See `CLAUDE.md` for a deeper dive into the track data model and editor/game conv
 
 The C++20 core independently loads complete current-schema track JSON, bakes spline paths and placed mesh assets, exposes graphics-API-neutral geometry, and simulates the full corridor/mesh physics. Schema version 10 is the oldest accepted; older schemas are not migrated.
 
-The combined build imports the prebuilt `ext/willpower/build` libraries and their MassivePolyPusher build tree. It builds the supplemental MassivePolyPusher targets needed only by this project (`MppResourceParsers`, `MppAppSupport`, and `assimp`) on demand. A standalone `cmake -S cpp/core ...` configuration is also supported. See `cpp/README.md`.
+The combined build imports the prebuilt `ext/willpower/build` libraries and their MassivePolyPusher build tree. It builds the supplemental MassivePolyPusher targets needed only by this project (`MppResourceParsers`, `MppAppSupport`, and `assimp`) on demand. A standalone `cmake -S src/core ...` configuration is also supported. See `src/README.md`.
 
 ## Tests
 
 ```sh
-ctest --test-dir cpp/build -C Release --output-on-failure
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-The committed physics corpus (`cpp/test-data/`) has two layers: byte-identical baked-world traces that isolate runtime math, and raw schema-10 tracks independently loaded and baked. A separate seeded-random corpus compares complete renderer-neutral track geometry from generated JSON. See `cpp/test-data/traces/raw/README.md` and `cpp/test-data/fixtures/random-track-mesh/README.md`.
+The committed physics corpus (`src/test-data/`) has two layers: byte-identical baked-world traces that isolate runtime math, and raw schema-10 tracks independently loaded and baked. A separate seeded-random corpus compares complete renderer-neutral track geometry from generated JSON. See `src/test-data/traces/raw/README.md` and `src/test-data/fixtures/random-track-mesh/README.md`.
 
 ### Cloning with the submodule
 

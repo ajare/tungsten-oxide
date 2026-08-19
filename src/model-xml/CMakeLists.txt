@@ -1,0 +1,46 @@
+# src/model-xml — a small, focused static library owning exactly the <Model> XML fragment schema
+# (docs/adr/0003-model-xml-layer.md, docs/TRACK_MODEL_LIST_PLAN.md Milestone 2): id/ModelFile/
+# TrackData/per-mesh Type+Visible metadata, parsed/written via TinyXML2, either as a standalone
+# document (bare <Model> root) or an already-located element embedded inside a Track resource's
+# <Definition><Models> list. Deliberately no mpp/AssImp/SDL dependency — mirrors src/core's own
+# "no heavyweight deps" posture. Shared by src/editor and src/model-tool, which both already link
+# Willpower.Common (for its vendored TinyXML2) and share a build closure; NOT linked into
+# src/tungsten-monoxide, which parses the same <Models> shape independently via wp::XmlNode
+# (see the plan's architecture notes on why that split is intentional).
+cmake_minimum_required(VERSION 3.20)
+project(model_xml CXX)
+
+if (NOT TARGET Willpower.Common)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/WillpowerBuildTree.cmake")
+  tox_import_willpower("${CMAKE_CURRENT_LIST_DIR}/../../ext/willpower")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+if (MSVC)
+  add_compile_options(/W3 /EHsc)
+endif()
+
+add_library(model_xml STATIC
+  include/ModelXml.hpp
+  src/ModelXml.cpp)
+target_include_directories(model_xml PUBLIC include)
+target_link_libraries(model_xml PUBLIC Willpower.Common)
+
+add_executable(model_xml_tests tests/model_xml_tests.cpp)
+if (COMMAND tox_copy_asan_runtime)
+  tox_copy_asan_runtime(model_xml_tests)
+endif()
+target_link_libraries(model_xml_tests PRIVATE model_xml)
+add_test(NAME model_xml_tests COMMAND model_xml_tests)
+
+# Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
+# `ctest` can actually launch it, mirroring src/editor's track_editor post-build copy.
+add_custom_command(TARGET model_xml_tests POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_RUNTIME_DLLS:model_xml_tests> $<TARGET_FILE_DIR:model_xml_tests>
+  COMMAND_EXPAND_LISTS)

@@ -65,13 +65,13 @@ and are not re-litigated here.
 
 ## Architecture notes (decided while starting this plan)
 
-**Models never enter `cpp/core`.** `<Models>`/per-mesh `Type`/`Visible` is an
+**Models never enter `src/core`.** `<Models>`/per-mesh `Type`/`Visible` is an
 outer-XML-only concept, parsed independently by the editor
 (`TrackResourceDocument.cpp`, TinyXML2) and the host
 (`MapTungstenMonoxideDefinitionFactory.cpp`, `wp::XmlNode`) — the same "two
 independent consumers, one documented format" split `DRIVABLE_MESH_OBJECTS_PLAN.md`
 already established for the collidable-flag convention, now extended to the
-whole `<Models>` shape. `cpp/core` keeps treating a placement's `modelId` as
+whole `<Models>` shape. `src/core` keeps treating a placement's `modelId` as
 an opaque authored string (architecture note in that plan: "`modelId` plus
 its 6-DOF transform... nothing else") — only its *meaning* changes (an
 embedded-Model id instead of a path), which is invisible to `core`. So `core`
@@ -90,10 +90,10 @@ avoids inventing a second, compiled-level merge path.
 
 **Editor gets a lightweight *reader*, not the full mpp engine.** The grilled
 decision requires the editor to parse and render embedded `.mppmodel`
-geometry — but `cpp/editor` links no part of the MassivePolyPusher SDK today
+geometry — but `src/editor` links no part of the MassivePolyPusher SDK today
 (`model-tool`'s `mpp::ModelSerializer` route pulls in `mpp`/`mpp-helper`/
 `mpp-mesh` prebuilt libs and a GPU shader pipeline the editor has no other use
-for). `cpp/editor/src/MppModelExport.cpp` already proves a real *writer* can
+for). `src/editor/src/MppModelExport.cpp` already proves a real *writer* can
 be built from scratch with zero mpp dependency; this plan adds the mirror
 image — a from-scratch, read-only `.mppmodel` parser (vertex/index/mesh-name
 data only, no materials/shaders) — rather than linking the mpp engine into
@@ -103,17 +103,17 @@ needs. `model-tool` keeps using the real `mpp::ModelSerializer` for its own
 authoritative save path; the editor's reader only ever needs to be
 byte-compatible with what that writer/serializer already produces.
 
-**A new shared library, `cpp/model-xml`,** holds the `<Model>` fragment's
+**A new shared library, `src/model-xml`,** holds the `<Model>` fragment's
 schema types and TinyXML2 read/write functions (`ModelXmlDefinition`,
 `MeshMetadataXmlDefinition`, `parseModelXml`/`writeModelXml`), linked by both
-`cpp/editor` and `cpp/model-tool` so the standalone-vs-embedded fragment
+`src/editor` and `src/model-tool` so the standalone-vs-embedded fragment
 format has exactly one implementation between the two tools that both read
 and write it (unlike the editor/host XML split above, these two *do* already
 share a build closure and a TinyXML2 dependency, so there's no reason to
 duplicate this one).
 
 Work one step at a time. After each step: build, run `ctest --test-dir
-cpp/build -C Release --output-on-failure`, and commit before moving to the
+build -C Release --output-on-failure`, and commit before moving to the
 next step.
 
 ---
@@ -127,20 +127,20 @@ next step.
   note, matching how schema version bumps are handled elsewhere).
 - Also records why the editor gets its own from-scratch, no-mpp-dependency
   `.mppmodel` reader (Milestone 4) instead of linking `mpp::ModelSerializer`,
-  and that `cpp/model-xml` is a narrow fragment schema, not a full willpower
+  and that `src/model-xml` is a narrow fragment schema, not a full willpower
   Resource system — D1's "no declarative resource files" reasoning still
   applies at that larger scope.
 
 ---
 
-## Milestone 1 — `cpp/core`: placement rename + multi-source union
+## Milestone 1 — `src/core`: placement rename + multi-source union
 
 **1.1 — Rename `DrivableMeshObjectPlacementDefinition` → `ModelPlacementDefinition`** — done (`46af74e`)
-- Files: `cpp/core/include/TrackDefinition.hpp`, `cpp/editor/include/EditorTrackDefinition.hpp`,
+- Files: `src/core/include/TrackDefinition.hpp`, `src/editor/include/EditorTrackDefinition.hpp`,
   every call site (`TrackLoader.cpp`, `TrackBake.cpp`, `EditorTrackDefinition.cpp`,
   `EditorState.hpp`, `PropertiesPanel.cpp`, `TopDownCanvas.cpp`, and
   `tungsten-monoxide/{src,include}/TrackCollisionBuild.{cpp,h}`, found via
-  `grep -rl DrivableMeshObjectPlacementDefinition cpp/`). `main.cpp`/`Map.cpp`
+  `grep -rl DrivableMeshObjectPlacementDefinition src/`). `main.cpp`/`Map.cpp`
   turned out to have no direct references (only through the renamed type).
 - Field/comment update only, as planned — `modelId`'s type/role stayed a
   plain authored string; both structs' doc comments now say `modelId` will
@@ -152,7 +152,7 @@ next step.
   Commit.
 
 **1.2 — Multi-source TrackData union** — done (`69dfbb4`)
-- Files: `cpp/core/include/Track.hpp`, `cpp/core/src/TrackLoader.cpp` (added
+- Files: `src/core/include/Track.hpp`, `src/core/src/TrackLoader.cpp` (added
   directly here, in the same translation unit as the anonymous-namespace
   `normalize()` it calls, rather than exposing `normalize()` through a new
   header).
@@ -177,12 +177,12 @@ next step.
 
 ---
 
-## Milestone 2 — `cpp/model-xml`: shared `<Model>` fragment schema — done (`acfc972`)
+## Milestone 2 — `src/model-xml`: shared `<Model>` fragment schema — done (`acfc972`)
 
 **2.1 — New CMake target** — done
-- Files: `cpp/model-xml/CMakeLists.txt` (new static lib, TinyXML2 via
+- Files: `src/model-xml/CMakeLists.txt` (new static lib, TinyXML2 via
   `Willpower.Common` — no vendored TinyXML2 copy of its own, no mpp/AssImp/
-  SDL, mirroring `cpp/core`'s "no heavyweight deps" posture), `cpp/CMakeLists.txt`
+  SDL, mirroring `src/core`'s "no heavyweight deps" posture), `src/CMakeLists.txt`
   (added `add_subdirectory(model-xml)` ahead of `editor`/`model-tool`, plus a
   header-comment entry).
 - `include/ModelXml.hpp` matches the planned shape (`MeshType`,
@@ -191,7 +191,7 @@ next step.
   types don't need a TinyXML2 include.
 
 **2.2 — Parse/write functions** — done, folded into 2.1's commit
-- Files: `cpp/model-xml/src/ModelXml.cpp`, `tests/model_xml_tests.cpp` (new
+- Files: `src/model-xml/src/ModelXml.cpp`, `tests/model_xml_tests.cpp` (new
   CTest target `model_xml_tests`, plus a post-build `Willpower.Common.dll`
   copy step — needed here since, unlike `editor_track_resource_tests`, this
   target has no sibling executable already copying it into the same output
@@ -212,8 +212,8 @@ next step.
 
 ## Milestone 3 — `model-tool`: XML layer — done (`4447a1d`, `19a68a9`)
 
-**3.1 — Link `cpp/model-xml`** — done
-- File: `cpp/model-tool/CMakeLists.txt` (`model_tool` and `model_tool_tests`
+**3.1 — Link `src/model-xml`** — done
+- File: `src/model-tool/CMakeLists.txt` (`model_tool` and `model_tool_tests`
   both link `model_xml`). It turned out `model-tool` already linked
   `Willpower.Common` (for `MaterialXmlImport.hpp`'s XmlReader), so this
   added no new third-party dependency, just the new fragment-schema lib.
@@ -234,7 +234,7 @@ next step.
   by extension for `.mppmodel`, by parsed root element for `.xml` —
   `<Model>` vs `<Resources>` containing a `Definition[factory=Track]/Models`
   list, found via an independent re-walk rather than depending on
-  `cpp/editor`'s `TrackResourceDocument.cpp`), `main.cpp` (`doOpen`
+  `src/editor`'s `TrackResourceDocument.cpp`), `main.cpp` (`doOpen`
   dispatches via `classifyOpenTarget`; a multi-entry Track resource queues a
   new "Choose Model" picker modal, mirroring the existing Material Name
   Conflicts modal's `OpenPopup`/`BeginPopupModal` pattern).
@@ -271,8 +271,8 @@ next step.
 ## Milestone 4 — Editor: `.mppmodel` geometry reader — done (`7c11718`, `7ba6f49`)
 
 **4.1 — From-scratch read-only parser** — done
-- Files: `cpp/editor/include/MppModelImport.hpp`/`src/MppModelImport.cpp`
-  (new — distinct from `cpp/model-tool`'s own `MppModelImport.cpp`, a
+- Files: `src/editor/include/MppModelImport.hpp`/`src/MppModelImport.cpp`
+  (new — distinct from `src/model-tool`'s own `MppModelImport.cpp`, a
   *reimport-for-editing* path built on the real `mpp::ModelSerializer`; this
   one is a minimal geometry-only reader with zero mpp dependency, mirroring
   `MppModelExport.cpp`'s existing from-scratch *writer*), new
@@ -294,7 +294,7 @@ next step.
 
 **4.2 — Viewport rendering of embedded models** — done, scoped down (no
   OpenGL/mpp work needed at all)
-- File: `cpp/editor/src/TopDownCanvas.cpp` (plus `TopDownCanvas.hpp`/
+- File: `src/editor/src/TopDownCanvas.cpp` (plus `TopDownCanvas.hpp`/
   `main.cpp` for a new `modelBaseDir` parameter).
 - Turned out the editor's canvas has no real 3D OpenGL rendering pipeline in
   the first place — every shape on it (`drawBakedPath`, `drawZones`, the
@@ -343,9 +343,9 @@ resource XML shape changes to `<Models>`, and non-primary `<Model>` entries
 (Physical/Decorative props, Milestone 6's "Load Model") round-trip through
 the editor as opaque pass-through data it preserves but never edits.
 
-**5.1 — Link `cpp/model-xml`; parse `<Models>` list** — done
-- Files: `cpp/editor/CMakeLists.txt` (`track_editor` and both test targets
-  link `model_xml`), `cpp/editor/src/TrackResourceDocument.cpp`/
+**5.1 — Link `src/model-xml`; parse `<Models>` list** — done
+- Files: `src/editor/CMakeLists.txt` (`track_editor` and both test targets
+  link `model_xml`), `src/editor/src/TrackResourceDocument.cpp`/
   `include/TrackResourceDocument.hpp`.
 - `TrackResourceCandidate` gained `std::vector<modelxml::ModelXmlDefinition>
   models` plus `primaryModelIndex` — the existing `trackDataReference`/
@@ -367,7 +367,7 @@ the editor as opaque pass-through data it preserves but never edits.
 
 **5.3 — Save: write the `<Models>` list back** — done, landed together with
   5.1 in one commit
-- Files: `cpp/editor/src/TrackResourceSave.cpp`, `include/MppModelExport.hpp`/
+- Files: `src/editor/src/TrackResourceSave.cpp`, `include/MppModelExport.hpp`/
   `src/MppModelExport.cpp`.
 - `buildTrackResourceXmlForName` gained `primaryModelId`/`otherModels`
   parameters: it regenerates the primary Model fresh every save (a
@@ -409,7 +409,7 @@ the editor as opaque pass-through data it preserves but never edits.
 ## Milestone 6 — Editor: "Load Model" flow — done (`3896a98`)
 
 **6.1 — Replace "Place Drivable Mesh Object..." menu item** — done
-- Files: `cpp/editor/main.cpp`, `include/EditorTrackDefinition.hpp`
+- Files: `src/editor/main.cpp`, `include/EditorTrackDefinition.hpp`
   (`TrackDefinition` gains `models`, outer-XML-only, excluded from
   fromJson/toJson — see this milestone's own header note above),
   `include/EditorState.hpp` (`loadModel`/`findModel`/`editEmbeddedModel`/
@@ -418,7 +418,7 @@ the editor as opaque pass-through data it preserves but never edits.
   XML, classified by extension/parsed root element directly in `main.cpp`
   (reimplemented independently of `model-tool`'s own `OpenTarget.cpp`
   classification — the two apps don't share code at that layer, only the
-  `cpp/model-xml` fragment schema both link). `EditorState::loadModel`
+  `src/model-xml` fragment schema both link). `EditorState::loadModel`
   reuses an existing `track_.models` entry whose `ModelFile` already matches
   (dedup, per the locked-in decision) rather than duplicating it, or embeds
   a fresh entry with a freshly generated `"model"`-prefixed id otherwise —
@@ -433,7 +433,7 @@ the editor as opaque pass-through data it preserves but never edits.
 
 **6.2 — Properties panel: per-mesh metadata editing** — done, landed
   together with 6.1 in one commit
-- File: `cpp/editor/src/PropertiesPanel.cpp`.
+- File: `src/editor/src/PropertiesPanel.cpp`.
 - Alongside a placement's existing transform fields, a Type/Visible editor
   for its referenced embedded Model's meshes, backed by
   `EditorState::editEmbeddedModel` — editing it from one placement's panel
@@ -441,7 +441,7 @@ the editor as opaque pass-through data it preserves but never edits.
   with "embedded Model is the shared metadata set, placements only add a
   transform." A `Type=Track` selection shows an inline "requires a
   TrackData file on this Model" hint (the hard validation itself is
-  `cpp/model-xml`'s `validateModelDefinition`, enforced at Save time).
+  `src/model-xml`'s `validateModelDefinition`, enforced at Save time).
 - **Follow-on change to Milestone 5's save logic, made while implementing
   this**: `TrackResourceSave.cpp`'s `otherModels` (the non-primary `<Model>`
   entries written back on Save) now come from the in-session
@@ -461,10 +461,10 @@ the editor as opaque pass-through data it preserves but never edits.
 ## Milestone 7 — Host (`tungsten-monoxide`): `<Models>` list + Type-driven resolution — done (`5e43256`)
 
 **7.1 — Parse `<Models>` list (independent `wp::XmlNode` implementation)** — done
-- File: `cpp/tungsten-monoxide/src/MapTungstenMonoxideDefinitionFactory.cpp`.
+- File: `src/tungsten-monoxide/src/MapTungstenMonoxideDefinitionFactory.cpp`.
 - Landed as planned: independently reimplemented on `wp::XmlNode`
   (`getChild`/`getOptionalChild`/`getAttribute`/`getOptionalAttribute`/`next`/
-  `getValue`), not linking `cpp/model-xml`. Exactly one `<Model>` may carry a
+  `getValue`), not linking `src/model-xml`. Exactly one `<Model>` may carry a
   Type=Track mesh (mirroring the editor's own single-primary scope); every
   `<Model>`, including that primary, is kept on the new
   `Map::mEmbeddedModels` (`TrackCollisionBuild.h`'s new `EmbeddedModelRef`/
@@ -472,20 +472,20 @@ the editor as opaque pass-through data it preserves but never edits.
   any of them up by id. The old `<TrackMeshes>` parsing loop is deleted
   outright — see 7.3's note on why.
 - Test: `TungstenMonoxide.dll` builds clean; no CTest coverage lives in this
-  module (pre-existing gap, not new). `cpp/tungsten-monoxide/resources/Resources.yaml`
+  module (pre-existing gap, not new). `src/tungsten-monoxide/resources/Resources.yaml`
   (real bundled game content, not a test fixture) was updated to the new
   `<Models>` shape in the same commit — it would otherwise fail to load at
   all under this milestone's parser change. Commit.
 
 **7.2 — Multi-model load via `Track::fromTrackDataFiles`** — done
-- File: `cpp/tungsten-monoxide/src/Map.cpp`.
+- File: `src/tungsten-monoxide/src/Map.cpp`.
 - `tox::Track::fromFile(dataPath)` replaced with
   `tox::Track::fromTrackDataFiles({dataPath})` — a single-element,
   byte-identical call today (only one Type=Track Model is supported, per
   7.1's guard), but the correct entry point once that cap is ever lifted.
 
 **7.3 — Placement resolution by embedded-Model id, Type-driven collision** — done
-- Files: `cpp/tungsten-monoxide/src/Map.cpp`, `src/TrackCollisionBuild.cpp`/
+- Files: `src/tungsten-monoxide/src/Map.cpp`, `src/TrackCollisionBuild.cpp`/
   `include/TrackCollisionBuild.h`.
 - **Scope finding that simplified this step**: the old `<TrackMeshes>`
   list's selection was always *required* to exactly equal
@@ -507,7 +507,7 @@ the editor as opaque pass-through data it preserves but never edits.
   to Physical/visible, matching `model-tool`'s own default.
 - **`embeddedModels` defaults to empty and falls back to treating `modelId`
   as a literal relative path** when a placement's id isn't found in it (or
-  the list is empty) — this is what let `cpp/app/tools/mesh_physics_diag.cpp`
+  the list is empty) — this is what let `src/app/tools/mesh_physics_diag.cpp`
   (which loads a CLI-supplied TrackData JSON directly, no Resources XML/
   `<Models>` list at all) keep working with **zero changes**, rather than
   the originally-planned "extend its headless harness with a `<Models>`-list
@@ -529,15 +529,15 @@ the editor as opaque pass-through data it preserves but never edits.
 ## Milestone 8 — Fixtures, docs, cleanup — done
 
 **8.1 — Update/replace fixtures** — done, turned out to be a no-op
-- Checked `cpp/test-data/fixtures/mesh-object/basic-placement.json` and
-  every other fixture under `cpp/test-data/`/`cpp/editor/`'s own test
+- Checked `src/test-data/fixtures/mesh-object/basic-placement.json` and
+  every other fixture under `src/test-data/`/`src/editor/`'s own test
   assets: none is a Track resource *XML* file (the `<Models>`-list shape
   this plan changed) — `basic-placement.json` and its siblings are all
   TrackData JSON, an entirely different, unaffected schema layer (the
   `<Models>` list is outer-XML-only, per the plan's own architecture
   notes). `grep -rl "TrackMeshes\|<ModelFile>" --include=*.xml .` across
   the whole repo found exactly one hit outside `ext/`/`build/`:
-  `cpp/tungsten-monoxide/resources/Resources.yaml` — real bundled game
+  `src/tungsten-monoxide/resources/Resources.yaml` — real bundled game
   content, not a fixture, already migrated to `<Models>` as part of
   Milestone 7's own commit (`5e43256`). No new fixture mirroring
   `example_track_def.xml` was added as a committed file — the shape is
@@ -554,8 +554,8 @@ the editor as opaque pass-through data it preserves but never edits.
   their still-accurate underlying principles (JSON-is-authoritative,
   per-Resource-element replace-and-preserve) — historical-record style,
   matching `DRIVABLE_MESH_OBJECTS_PLAN.md`'s own precedent elsewhere.
-- `cpp/core/CLAUDE.md` (new `Track::fromTrackDataFiles` bullet),
-  `cpp/editor/CLAUDE.md` (new bullet on the `<Models>` list/`loadModel`/
+- `src/core/CLAUDE.md` (new `Track::fromTrackDataFiles` bullet),
+  `src/editor/CLAUDE.md` (new bullet on the `<Models>` list/`loadModel`/
   placement rendering), `docs/UBIQUITOUS_LANGUAGE.md` (added **Model**,
   **Model placement** to the Track-structure glossary table plus a
   Relationships line), `docs/core.md` and `docs/tungsten-monoxide.md`
@@ -568,14 +568,14 @@ the editor as opaque pass-through data it preserves but never edits.
   (light note on `DrivableMeshObjectPlacementDefinition`'s later rename,
   historical text otherwise left untouched). Root `CLAUDE.md` needed no
   change — its subproject list already just points at
-  `cpp/CMakeLists.txt`'s own header comment, which Milestone 2 already
-  updated with a `cpp/model-xml` entry.
+  `src/CMakeLists.txt`'s own header comment, which Milestone 2 already
+  updated with a `src/model-xml` entry.
 
 **8.3 — Full regression pass** — done
-- `cmake --build cpp/build --config Release` (the whole workspace, no
+- `cmake --build build --config Release` (the whole workspace, no
   target filter) — zero errors, only pre-existing benign warnings
   (`std::float_denorm_style` deprecation, unused-parameter). `ctest
-  --test-dir cpp/build -C Release --output-on-failure` — 6/6 suites green
+  --test-dir build -C Release --output-on-failure` — 6/6 suites green
   (`parity`, `track_tests`, `model_xml_tests`, `editor_track_resources`,
   `mpp_model_import_tests`, `model_tool_tests`). A `track_editor.exe`
   smoke launch reported 22 `OK` self-checks and zero `MISMATCH`/`FAIL`.

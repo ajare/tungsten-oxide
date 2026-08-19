@@ -66,7 +66,7 @@ formatting is not part of the contract.
 per-`<Model>` granularity within the `<Models>` list, not the whole `Definition` — Save regenerates
 only the primary Model fresh every time; every other `<Model>` entry (Physical/Decorative props,
 Milestone 6's "Load Model") is sourced from the in-session `TrackDefinition::models` and written back
-via `cpp/model-xml`'s `writeModelFragment`, completely unedited by the save path itself.
+via `src/model-xml`'s `writeModelFragment`, completely unedited by the save path itself.
 
 An existing malformed XML document or one whose root is not `<Resources>` is never overwritten.
 A nonexistent or empty destination is initialized as a Resources document. A same-name non-Track

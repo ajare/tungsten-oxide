@@ -35,7 +35,7 @@ re-litigated here.
 - **Mesh source storage.** Drivable mesh object geometry lives in an
   external `.mppmodel` resource, referenced by id from track JSON — never
   embedded in track JSON.
-- **Import pipeline.** `model-tool` (`cpp/model-tool`) gains a track-aware
+- **Import pipeline.** `model-tool` (`src/model-tool`) gains a track-aware
   export mode that is the single source of truth for a sub-mesh's collision
   flag. The editor does not get its own per-sub-mesh flag inspector.
 - **Collision flag representation.** A per-named-sub-mesh **orthogonal**
@@ -76,7 +76,7 @@ re-litigated here.
 - **Performance.** No triangle budget set now; measure against real
   content once it exists, no enforcement added this branch.
 - **Regression.** Add mesh-mode golden-trace fixtures to
-  `cpp/test-data/traces` as part of this work — mesh mode has had zero
+  `src/test-data/traces` as part of this work — mesh mode has had zero
   regression coverage since `mesh-based-ship-physics`, and this branch
   makes it load-bearing for a headline feature, not just a debug toggle.
 - **All physics testing is headless.** Never validate ground/wall/airborne
@@ -88,7 +88,7 @@ re-litigated here.
   builds the collision BVH exactly as `Map::load` would, drives a ship
   through `GameSession` with scripted throttle/steer input, and logs
   position/speed/airborne state every frame — no window, no GUI, no manual
-  input, fully reproducible. That tool (`cpp/app/tools/mesh_physics_diag.cpp`)
+  input, fully reproducible. That tool (`src/app/tools/mesh_physics_diag.cpp`)
   was written as a throwaway and removed afterward; this branch needs the
   same capability repeatedly (Milestones 6–8) and should make it a
   permanent fixture rather than reinventing it each time — see Milestone
@@ -96,16 +96,16 @@ re-litigated here.
 
 ## Architecture note added when starting Milestone 3: `.mppmodel` loading is host-only, never in `core`
 
-`cpp/core` has no renderer, no image loader, and (confirmed while starting
+`src/core` has no renderer, no image loader, and (confirmed while starting
 Milestone 3.2) no model-loading dependency of any kind — the only existing
 way to read a `.mppmodel` file is `mpp::ModelSerializer`, a MassivePolyPusher
 engine class coupled to `mpp::ResourceManager`; linking that into `core`
 would contradict its documented design. There is also no lightweight
 from-scratch `.mppmodel` *reader* anywhere in the repo to reuse instead
-(`cpp/editor/src/MppModelExport.cpp` is a from-scratch *writer* only).
+(`src/editor/src/MppModelExport.cpp` is a from-scratch *writer* only).
 
 Rather than build a new native reader, this branch keeps `.mppmodel` loading
-exactly where it already lives: `cpp/tungsten-monoxide/src/Map.cpp`, the only
+exactly where it already lives: `src/tungsten-monoxide/src/Map.cpp`, the only
 place any `.mppmodel` is loaded today, and the same place that already
 populates `Track::collisionSurface` for every gameplay-relevant triangle on
 the track — every other consumer (`core`, the editor, `track_runner`, this
@@ -141,7 +141,7 @@ scoped — the collidable/decorative flag lives entirely in the *referenced*
 of introducing an unused `GeometryKind` value.
 
 Work one step at a time. After each step: build, run `ctest --test-dir
-cpp/build -C Release --output-on-failure`, and commit before moving to the
+build -C Release --output-on-failure`, and commit before moving to the
 next step.
 
 ---
@@ -153,7 +153,7 @@ lands first, as `MESH_PHYSICS_PLAN.md` front-loaded its own collision-surface
 invariant milestone before the physics-mode work.
 
 **1.1 — Add `ProjectionMode` state** — done (`a07878f`)
-- Files: `cpp/editor/include/EditorState.hpp`, `cpp/editor/main.cpp` (toolbar
+- Files: `src/editor/include/EditorState.hpp`, `src/editor/main.cpp` (toolbar
   combo + `1`/`2`/`3` shortcuts live alongside `E`/`C`/`R`'s existing wiring
   here, not in `TopDownCanvas.cpp`).
 - Added `enum class ProjectionMode { TopDown, Front, Side }` alongside the
@@ -164,10 +164,10 @@ invariant milestone before the physics-mode work.
 
 **1.2 — Generalize drag-to-move math** — done (see commit after this plan
 update)
-- Files: `cpp/editor/include/EditorState.hpp` (`planeCoords`/`setPlaneCoords`,
+- Files: `src/editor/include/EditorState.hpp` (`planeCoords`/`setPlaneCoords`,
   generalizing `withinPick`/`hitTestPosition`/`selectPositionAt`/
   `hoverTestPosition`/`dragSelectedTo` to read/write the active
-  `projectionMode_`'s two axes instead of hardcoded x/z), `cpp/editor/src/TopDownCanvas.cpp`
+  `projectionMode_`'s two axes instead of hardcoded x/z), `src/editor/src/TopDownCanvas.cpp`
   (a matching free `planeCoords` used by `drawAuthoredPositionPoints` so
   rendering stays in step with hit-testing/dragging).
 - `TopDown` → (X, Z) as today, `Front` → (X, Y), `Side` → (Y, Z); the third
@@ -193,7 +193,7 @@ update)
   had moved, so they floated disconnected from everything else. Explicitly
   scoped up to "full canvas generalization" (vs. road-only or render-only)
   after asking the user.
-- Files: `cpp/editor/src/TopDownCanvas.cpp` (the bulk of it), `cpp/editor/include/EditorState.hpp`
+- Files: `src/editor/src/TopDownCanvas.cpp` (the bulk of it), `src/editor/include/EditorState.hpp`
   (`createModeClick`/`extendOpenPathFromEndpoint`/`hitTestOpenEndpoint` now
   route through `planeCoords`/`setPlaneCoords` too, closing the gap 1.2 left
   in weld/join-drag and Create-mode point placement).
@@ -226,9 +226,9 @@ update)
 - Test: `ctest` (all 7 suites green) and a smoke launch of `track_editor.exe`
   confirming every one of its ~20 built-in self-checks still reports `OK`
   with zero `MISMATCH`. While investigating a first ctest run's total
-  failure, found `cpp/test-data/` deleted from the working tree by something
+  failure, found `src/test-data/` deleted from the working tree by something
   outside this session's own actions (not a `rm`/`git` command this session
-  ran) — restored immediately via `git checkout -- cpp/test-data` before
+  ran) — restored immediately via `git checkout -- src/test-data` before
   re-running; confirmed clean and unmodified afterward. Also noticed an
   untracked, pre-existing (dated before this session) duplicate at
   `ext/willpower/test-data/` — left alone as out of scope, flagged to the
@@ -239,7 +239,7 @@ update)
 
 **1.2 follow-up 2 — Side view axis orientation** — done, user-reported bug
   after the above landed
-- Files: `cpp/editor/src/TopDownCanvas.cpp` and `cpp/editor/include/EditorState.hpp`
+- Files: `src/editor/src/TopDownCanvas.cpp` and `src/editor/include/EditorState.hpp`
   (both `planeCoords`/`setPlaneCoords` copies).
 - Two bugs in one: (1) Side's plane was `(y, z)` — height (Y) landed on the
   HORIZONTAL screen axis, not vertical, so Side didn't read as a side
@@ -264,10 +264,10 @@ update)
   Committed.
 
 **1.3 — Generalize shift+drag-to-rotate** — done
-- Files: `cpp/editor/src/TopDownCanvas.cpp` (`rotateAngleDeg`, a mode-aware
+- Files: `src/editor/src/TopDownCanvas.cpp` (`rotateAngleDeg`, a mode-aware
   wrapper around the existing `angleFromOriginDeg` that feeds it
   `planeCoords()`-projected origin/cursor positions instead of raw x/z),
-  `cpp/editor/include/EditorState.hpp` (`rotateGestureActive`/
+  `src/editor/include/EditorState.hpp` (`rotateGestureActive`/
   `beginRotateGesture`/`dragRotateGestureTo`/`endRotateGesture`: entity-
   agnostic angle bookkeeping, tracked but not yet applied to anything).
 - Today's Mesh-region-only rotate gesture (`meshRotating_`,
@@ -289,12 +289,12 @@ update)
   change). Committed.
 
 **1.4 — Retire `ElevationView`** — done
-- Files: `cpp/editor/src/ElevationView.cpp`/`cpp/editor/include/ElevationView.hpp`
-  (deleted), `cpp/editor/CMakeLists.txt` (source list), `cpp/editor/main.cpp`
+- Files: `src/editor/src/ElevationView.cpp`/`src/editor/include/ElevationView.hpp`
+  (deleted), `src/editor/CMakeLists.txt` (source list), `src/editor/main.cpp`
   (include, header comment, dock layout simplified to left panel + Top-Down
   View filling the rest, `elevationVisible`/the "Elevation Profile" window
-  removed, M6 smoke check rewritten), `cpp/editor/src/PropertiesPanel.cpp`
-  (stale comment reference only), `cpp/editor/include/EditorState.hpp`
+  removed, M6 smoke check rewritten), `src/editor/src/PropertiesPanel.cpp`
+  (stale comment reference only), `src/editor/include/EditorState.hpp`
   (`dragSelectedElevationTo`/`dragSelectedMeshElevationTo` removed -- dead
   code once `ElevationView.cpp`, their only callers, is gone).
 - Front canvas mode already reaches position-point height editing end to
@@ -324,7 +324,7 @@ update)
   startup/dock crash and the rewritten check printing `OK`. Committed.
 
 **1.5 — Update editor conventions doc** — done, Milestone 1 complete
-- File: `cpp/editor/CLAUDE.md`.
+- File: `src/editor/CLAUDE.md`.
 - Added bullets for `ProjectionMode` (toolbar/shortcuts, default, the
   drop-in-flight-gesture-on-switch behavior), the generalized drag-to-move/
   rotate math (`planeCoords`/`setPlaneCoords`, `rotateAngleDeg`, and what's
@@ -426,19 +426,19 @@ schema/codebase simultaneously.
   version-number check (mirrors how schema 10→11 kept the version check
   a loose range separate from any specific-field validation).
 - Test added per the plan's own instruction: `track_tests.cpp` now loads
-  `cpp/test-data/fixtures/mesh/concave-railed-pad.json` (an old fixture
+  `src/test-data/fixtures/mesh/concave-railed-pad.json` (an old fixture
   that authors `meshAssets`/`meshes`) and asserts the load fails with an
-  error containing "Mesh regions". This is why `cpp/test-data/fixtures/
+  error containing "Mesh regions". This is why `src/test-data/fixtures/
   mesh/` was NOT deleted in 2.6 below — it's still load-bearing as the
   hard-break check's input.
 
 **2.6 — Update fixtures and docs** — done
-- `cpp/test-data/fixtures/mesh/` and `cpp/test-data/fixtures/
+- `src/test-data/fixtures/mesh/` and `src/test-data/fixtures/
   random-track-mesh/` were left in place rather than deleted: the former
   is now the hard-break test's input fixture (2.5), and both corpora
   feed CTest targets (`raw_parity`/`raw_session_init_parity`/
   `raw_session_step_parity`/`random_geometry_parity`) that are disabled
-  (`add_test` commented out in `cpp/core/CMakeLists.txt`, with a comment
+  (`add_test` commented out in `src/core/CMakeLists.txt`, with a comment
   explaining why) rather than deleted — per the user's confirmed
   decision (`AskUserQuestion`) to disable-and-note rather than
   re-author replacement fixtures now. This went beyond `raw_parity`
@@ -454,9 +454,9 @@ schema/codebase simultaneously.
   updated **Host surface**/**Track**/**Track surface**/**Airborne** and
   the "Rail"/"Mesh" flagged-ambiguity notes to drop mesh-region
   references.
-- Updated `docs/core.md`, `docs/editor.md`, `cpp/core/CLAUDE.md`,
-  `cpp/editor/CLAUDE.md`, `cpp/README.md`, root `CLAUDE.md`, and the
-  `cpp/test-data/fixtures/random-track-mesh/README.md`/`traces/raw/
+- Updated `docs/core.md`, `docs/editor.md`, `src/core/CLAUDE.md`,
+  `src/editor/CLAUDE.md`, `src/README.md`, root `CLAUDE.md`, and the
+  `src/test-data/fixtures/random-track-mesh/README.md`/`traces/raw/
   README.md` fixture READMEs to remove `TrackMesh.hpp`/`MeshRegion`/
   Rails-mode/mesh-section references and note the schema-12 hard break
   and disabled test suites.
@@ -468,7 +468,7 @@ schema/codebase simultaneously.
 
 Revised per the architecture note above: `core` only ever carries placements
 as authored data (3.1/3.2/3.5/3.6); all `.mppmodel` loading/transform/merge
-work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
+work is host-side (3.3/3.4), inside `src/tungsten-monoxide`, not `src/core`.
 
 **3.1 — Authored placement type** — done (`99bcaef`); renamed to
   `ModelPlacementDefinition`/`ModelPlacement` by `TRACK_MODEL_LIST_PLAN.md`
@@ -476,8 +476,8 @@ work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
   instances, not just drivable ones — every reference to
   `DrivableMeshObjectPlacementDefinition` below is that old name, left as
   written at the time.
-- Files: `cpp/core/include/TrackDefinition.hpp`,
-  `cpp/editor/include/EditorTrackDefinition.hpp`.
+- Files: `src/core/include/TrackDefinition.hpp`,
+  `src/editor/include/EditorTrackDefinition.hpp`.
 - New type, `DrivableMeshObjectPlacementDefinition { id; modelId;
   position{x,y,z}; rotation{yaw,pitch,roll}; scale{x,y,z} }` (mirrored in
   both places, same split every other authored type already uses),
@@ -488,7 +488,7 @@ work is host-side (3.3/3.4), inside `cpp/tungsten-monoxide`, not `cpp/core`.
 - Test: `ctest` (schema addition only, unused elsewhere yet). Commit.
 
 **3.2 — Confirm the host can reach placements with no compile step** — done, no code change
-- File: `cpp/core/include/Track.hpp`.
+- File: `src/core/include/Track.hpp`.
 - No geometry compile happens here by design (see architecture note) —
   confirmed by inspection: `TrackLoader.cpp:458` does `track.definition =
   normalize(data, ...)`, a direct unfiltered assignment of the whole
@@ -512,7 +512,7 @@ content and collidable-flag metadata 3.3 needs to point at. 3.3/3.4 resume
 after Milestone 4 lands.
 
 **3.3 — Host-side collision-mesh resolution** — done
-- File: `cpp/tungsten-monoxide/src/Map.cpp`.
+- File: `src/tungsten-monoxide/src/Map.cpp`.
 - **Turned out simpler than the reordering note above assumed**: no new
   `Resource` subclass or `<DependentResource>` XML wiring was needed after
   all. `modelId` is resolved the same way `mModelFileName`/
@@ -531,7 +531,7 @@ after Milestone 4 lands.
   track's own model), decodes each sub-mesh's collidable/decorative flag by
   reading `model-tool`'s naming-convention marker directly off the mesh
   name (`meshNameIsCollidable()` — reimplements
-  `cpp/model-tool/include/CollidableFlag.hpp`'s exact convention
+  `src/model-tool/include/CollidableFlag.hpp`'s exact convention
   independently, since model-tool and tungsten-monoxide share no code, only
   the file-format convention itself, same "two independent consumers, one
   documented format" precedent as `gameplayKind()`'s own lock-step comment
@@ -556,7 +556,7 @@ after Milestone 4 lands.
   `ctest` (unaffected suites still green). Commit.
 
 **3.4 — Host-side rendering** — done
-- File: `cpp/tungsten-monoxide/src/Map.cpp`.
+- File: `src/tungsten-monoxide/src/Map.cpp`.
 - Not true GPU instancing (`mpp::ProgrammaticModelStream` doesn't expose a
   per-instance-transform API this app found) — instead, each placement's
   every sub-mesh (both collidable and decorative; a decorative sub-mesh
@@ -591,7 +591,7 @@ after Milestone 4 lands.
   `meshObjectId`/`localPosition`(/`localYaw` for zones only)),
   `TrackLoader.cpp`, `TrackBake.cpp` (new `placementTransformPosition`/
   `placementTransformDirection` helpers, mirroring
-  `cpp/tungsten-monoxide/src/Map.cpp`'s own — reimplemented independently,
+  `src/tungsten-monoxide/src/Map.cpp`'s own — reimplemented independently,
   not shared, since core and the host don't share code), `Simulation.cpp`
   (`detectZoneTriggers` gains a `z.kind == "meshObject"` branch: a
   world-space rectangle test against `p.groundPos`, restoring the old
@@ -621,7 +621,7 @@ after Milestone 4 lands.
   Commit.
 
 **3.6 — Loader fixtures** — done
-- File: `cpp/test-data/fixtures/mesh-object/basic-placement.json` (new).
+- File: `src/test-data/fixtures/mesh-object/basic-placement.json` (new).
 - One placement, one meshObject-hosted zone, one meshObject-hosted
   trigger, plus an ordinary path and its auto-finish checkpoint —
   validates 3.1/3.5's schema/round-trip and host-surface resolution via
@@ -639,7 +639,7 @@ after Milestone 4 lands.
 ## Milestone 4 — `model-tool` track-aware export
 
 **4.1 — Track-aware export mode** — done, folded into 4.3 (no separate "mode")
-- Files: `cpp/model-tool/include/AssImpImport.hpp`/`src/AssImpImport.cpp`,
+- Files: `src/model-tool/include/AssImpImport.hpp`/`src/AssImpImport.cpp`,
   `include/CollidableFlag.hpp`/`src/CollidableFlag.cpp` (new),
   `src/MppSave.cpp`, `src/MppModelImport.cpp`.
 - No separate export "mode" was added — `ImportedMesh` always carries a
@@ -653,7 +653,7 @@ after Milestone 4 lands.
   Commit.
 
 **4.2 — Normal recomputation** — done, at import time (not export), later revised to be smoothing-group-aware
-- Files: `cpp/model-tool/include/NormalSmoothing.hpp`/`src/NormalSmoothing.cpp`,
+- Files: `src/model-tool/include/NormalSmoothing.hpp`/`src/NormalSmoothing.cpp`,
   `include/PositionKey.hpp` (new, shared quantization helper),
   `include/ObjSmoothingGroups.hpp`/`src/ObjSmoothingGroups.cpp` (new) —
   all deliberately AssImp/mpp-free.
@@ -704,7 +704,7 @@ after Milestone 4 lands.
   suites). Commit.
 
 **4.3 — Flag authoring surface** — done
-- Files: `cpp/model-tool/include/CollidableFlag.hpp`/`src/CollidableFlag.cpp`
+- Files: `src/model-tool/include/CollidableFlag.hpp`/`src/CollidableFlag.cpp`
   (new), `src/MppSave.cpp`, `src/MppModelImport.cpp`, `main.cpp` (Meshes
   panel checkbox), `include/Viewport.hpp` (new `mutableBuiltModel()`
   accessor).
@@ -728,7 +728,7 @@ after Milestone 4 lands.
 ## Milestone 5 — Editor placement UI
 
 **5.1 — Asset library / picker** — done, scoped down (no library, a plain picker)
-- Files: `cpp/editor/include/EditorState.hpp` (new "Drivable mesh object
+- Files: `src/editor/include/EditorState.hpp` (new "Drivable mesh object
   placements" section: `selectedMeshObjectId_`/`selectMeshObject`/
   `clearMeshObjectSelection`/`addMeshObjectPlacement`/
   `editMeshObjectPlacement`/`deleteSelectedMeshObjectPlacement`/
@@ -737,7 +737,7 @@ after Milestone 4 lands.
   4-way again — every joint reset site updated; `pruneStaleReferences()`
   fixed to check a zone/trigger's actual host kind instead of assuming
   path-hosted, which would otherwise have wrongly deleted every
-  meshObject-hosted zone/trigger 3.5 added), `cpp/editor/main.cpp` (a
+  meshObject-hosted zone/trigger 3.5 added), `src/editor/main.cpp` (a
   "Place Drivable Mesh Object..." File-menu item).
 - **No asset library** (no `MeshPanel.cpp`-successor panel, no
   thumbnail/browse-by-`modelId` list): the editor never loads a
@@ -757,7 +757,7 @@ after Milestone 4 lands.
   3.3/3.4's host-side work. Commit.
 
 **5.2 — Placement via canvas projection modes** — done
-- File: `cpp/editor/src/TopDownCanvas.cpp`.
+- File: `src/editor/src/TopDownCanvas.cpp`.
 - Wired into Milestone 1's generalized drag-to-move (1.2, via
   `dragSelectedMeshObjectTo`/`setPlaneCoords`) and shift+drag-to-rotate
   (1.3, via `beginRotateGesture`/`dragRotateGestureTo`/`endRotateGesture`,
@@ -791,7 +791,7 @@ after Milestone 4 lands.
   Commit.
 
 **5.3 — Selected-mesh rendering in Front/Side modes** — done, folded into 5.2
-- File: `cpp/editor/src/TopDownCanvas.cpp`.
+- File: `src/editor/src/TopDownCanvas.cpp`.
 - Turned out to need no separate work: `drawMeshObjectPlacements` (5.2)
   was written from the start on top of `worldToScreenPlane`/`planeCoords`,
   the same ProjectionMode-generalized primitives every other on-canvas
@@ -808,7 +808,7 @@ after Milestone 4 lands.
   environment (no display). Commit.
 
 **5.4 — Properties panel fields** — done
-- File: `cpp/editor/src/PropertiesPanel.cpp`.
+- File: `src/editor/src/PropertiesPanel.cpp`.
 - `drawMeshObjectFields`, shown (in `DrawPropertiesPanel`'s existing
   selection branch, alongside the point-fields/"no point selected" cases)
   whenever `state.selectedMeshObjectId()` has a value: id (read-only),
@@ -819,8 +819,8 @@ after Milestone 4 lands.
 - Test: `ctest` (all 4 suites green). Commit.
 
 **5.5 — Undo/redo integration** — done; caught and fixed a real bug along the way
-- File: `cpp/editor/include/EditorState.hpp` (new
-  `dragSelectedMeshObjectRotationTo`), `cpp/editor/src/TopDownCanvas.cpp`
+- File: `src/editor/include/EditorState.hpp` (new
+  `dragSelectedMeshObjectRotationTo`), `src/editor/src/TopDownCanvas.cpp`
   (5.2's rotate branch switched to call it).
 - **Bug found while implementing this step**: 5.2's shift-drag rotate
   branch called the generic `editMeshObjectPlacement` once per dragged
@@ -843,16 +843,16 @@ after Milestone 4 lands.
 ## Milestone 6 — Mesh-mode physics robustness for arbitrary geometry
 
 **6.0 — Permanent headless physics diagnostic tool**
-- Files: new, e.g. `cpp/app/tools/mesh_physics_diag.cpp` (revive/rebuild the
+- Files: new, e.g. `src/app/tools/mesh_physics_diag.cpp` (revive/rebuild the
   removed `mesh-based-ship-physics`-branch tool of the same name, permanent
-  this time), wired into `cpp/app/CMakeLists.txt`.
+  this time), wired into `src/app/CMakeLists.txt`.
 - Loads a real track resource (`.mppmodel` + JSON), builds
   `TrackCollisionSurface` exactly as `Map::load` does (note: `track_runner`
   deliberately leaves `Track::collisionSurface` null and stays
   analytical-only, per `docs/core.md`'s "Limitations" section — this tool
   cannot just be `track_runner` as it stands today; either extend
   `track_runner` itself to optionally populate the collision surface, or
-  keep this as a separate `cpp/app/tools` binary that links the same
+  keep this as a separate `src/app/tools` binary that links the same
   `Map.cpp` BVH-building code path), drives a ship through `GameSession`
   with scripted throttle/steer input (a simple fixed or file-driven input
   script is sufficient — no interactive input, no window), and logs
@@ -862,17 +862,17 @@ after Milestone 4 lands.
   mesh mode, confirm output is stable/reproducible run-to-run. `ctest`
   (build only — this tool has no ctest target of its own unless folded into
   7.2). Commit.
-- **Done.** Went with the "separate `cpp/app/tools` binary" option: `Map.cpp`'s
+- **Done.** Went with the "separate `src/app/tools` binary" option: `Map.cpp`'s
   BVH-building free functions (`buildCollisionTriangles`,
   `buildMeshObjectCollisionTriangles`, `loadMeshObjectModel`,
   `safeRelativePath`, the placement transforms, the raw `.mppmodel`
   index-stream reader) were extracted into
-  `cpp/tungsten-monoxide/include/TrackCollisionBuild.h` +
+  `src/tungsten-monoxide/include/TrackCollisionBuild.h` +
   `src/TrackCollisionBuild.cpp` — a `Map*`/`ResourceException`-free module
   (plain `std::runtime_error`) so it has no willpower-resource-system
   dependency at all. `Map.cpp` now calls into it and wraps its exceptions
   back into `ResourceException(this, ...)`, unchanged behavior. The new
-  `cpp/app/tools/mesh_physics_diag.cpp` compiles that same
+  `src/app/tools/mesh_physics_diag.cpp` compiles that same
   `TrackCollisionBuild.cpp` directly as an extra source file (not by linking
   the `TungstenMonoxide` DLL, which is a Windows application DLL wired to
   AppLib/the willpower resource system and not meant to be a library
@@ -903,7 +903,7 @@ after Milestone 4 lands.
     dependency of `MassivePolyPusher.dll`, not directly linked),
     `Utils(d).dll`, and two of `Utils.dll`'s own transitive dependencies,
     `glew32.dll` and `FreeImage.dll` — all copied post-build from
-    `cpp/build/_deps/massive-poly-pusher-build/bin/<config>` (note: `bin/`
+    `build/_deps/massive-poly-pusher-build/bin/<config>` (note: `bin/`
     for the `.dll`, not `lib/` where the `.lib` import libs live).
   - Verified: built and ran clean in both Release and Debug configs. Ran
     against a freshly generated (schema-current, not a possibly-stale
@@ -911,7 +911,7 @@ after Milestone 4 lands.
     disabling `editor_track_resource_tests`' end-of-test `remove_all` long
     enough to copy its `%TEMP%` output, then reverting that test file
     change before committing (confirmed via `git diff` showing no residual
-    change) — via `mono::` on `cpp/test-data/fixtures/path/curved-banked.json`.
+    change) — via `mono::` on `src/test-data/fixtures/path/curved-banked.json`.
     600 scripted frames, two independent runs, byte-identical stdout
     (`Compare-Object` empty diff); no NaN/Inf in either run. `ctest` stayed
     green (4/4) throughout.
@@ -927,11 +927,11 @@ after Milestone 4 lands.
   Mesh region never produces (a single vertical probe now has two along-axis
   hits, floor and ceiling, not one), which is exactly what 6.2's `Ship.cpp`
   investigation needs to exercise.
-  - Files: `cpp/test-data/fixtures/mesh-object/tunnel-validation/tunnel.mppmodel`
+  - Files: `src/test-data/fixtures/mesh-object/tunnel-validation/tunnel.mppmodel`
     (the asset, 4 meshes/8 triangles, all collidable — no `~decorative`
     suffix needed) + `track.json` (a straight, flat, 240m/24m-wide path,
     structurally copied from the existing
-    `cpp/test-data/fixtures/mesh-object/basic-placement.json` fixture, with
+    `src/test-data/fixtures/mesh-object/basic-placement.json` fixture, with
     one `meshObjects` entry placing the tunnel at world `(0, 0, 48)`,
     identity rotation — local +Z already runs along the path's own +Z, so no
     rotation was needed for a first pass) + `track.mppmodel` (the road's own
@@ -947,7 +947,7 @@ after Milestone 4 lands.
       `tox::Track` with four hand-authored flat-quad `GeometryBatch`es (one
       per tunnel face, explicit per-vertex normals, no smoothing-recompute
       needed since each is already planar) and passed it straight to
-      `cpp/editor/src/MppModelExport.cpp`'s `exportTrackToMppModel` — that
+      `src/editor/src/MppModelExport.cpp`'s `exportTrackToMppModel` — that
       function only ever reads `Track::geometry`, so no baked path/spline
       data was needed to get a valid, spec-verified `.mppmodel` out.
     - `track.mppmodel`: obtained by temporarily disabling
@@ -969,7 +969,7 @@ after Milestone 4 lands.
     changes made in this step (per scope).
 
 **6.2 — Fix ground/wall/airborne issues found**
-- File: `cpp/core/src/Ship.cpp` (`stepMeshPhysics`).
+- File: `src/core/src/Ship.cpp` (`stepMeshPhysics`).
 - Drive the 6.1 asset through 6.0's headless tool with a scripted
   input pattern that exercises the new topology (steer across the tunnel/
   loop/overhang, not just straight through); `nearestAlongAxis`'s
@@ -988,7 +988,7 @@ after Milestone 4 lands.
     non-issue on inspection: `queryNearestSegment` does a full BVH
     traversal picking the geometrically nearest candidate by distance to
     `origin` (not a first-hit/early-exit), and separately, an existing test
-    (`cpp/core/tests/track_tests.cpp`, "BVH contact prefers/preserves the
+    (`src/core/tests/track_tests.cpp`, "BVH contact prefers/preserves the
     nearest stacked lower/upper surface") already covers two same-facing
     stacked surfaces. The floor/ceiling case specifically can never be
     ambiguous regardless of distance: `upFilter`'s
@@ -1008,7 +1008,7 @@ after Milestone 4 lands.
     wall with a correctly start-oriented normal, never reports the floor/
     ceiling as a wall even when a segment would otherwise cross it, and
     picks the nearer of two walls a segment crosses rather than an
-    arbitrary one. `cpp/core/tests/track_tests.cpp`, runs under the
+    arbitrary one. `src/core/tests/track_tests.cpp`, runs under the
     existing `track_tests` `ctest` target — no new target needed.
   - Empirical drive-through, `mesh_physics_diag` against the 6.1 asset: a
     temporary scripted-input variant (steer=0 to converge, then a hard
@@ -1059,7 +1059,7 @@ after Milestone 4 lands.
     correct for scraping along a flat road's side, but it left a ship no
     way to ever leave the ground via ramp momentum at all, contradicting
     this milestone's entire premise.
-  - Fix: `cpp/core/src/Ship.cpp` now checks `vel.y` before running that
+  - Fix: `src/core/src/Ship.cpp` now checks `vel.y` before running that
     recovery — a flat surface keeps a ship's `moveDir` (and so `vel.y`)
     exactly 0 every frame (`tangentize()` against a flat `(0,1,0)` normal
     forces it), while a genuinely sloped surface like a ramp produces a
@@ -1088,7 +1088,7 @@ after Milestone 4 lands.
 ## Milestone 7 — Mesh-mode regression coverage
 
 **7.1 — Golden trace fixture(s)**
-- File: `cpp/test-data/traces`.
+- File: `src/test-data/traces`.
 - Capture at least one trace covering a track with a drivable mesh object
   placement, driven in mesh mode (mandatory per the force-mesh-mode
   decision — Milestone 8.1 makes this the only mode such a track can run
@@ -1104,7 +1104,7 @@ after Milestone 4 lands.
   `Simulation::stepPhysics` (not `GameSession::step`, which sub-steps/
   clamps/collects gameplay events the existing replayer never exercises)
   and dumps a full raw-track-shaped JSON trace —
-  `cpp/test-data/traces/raw/raw-mesh-tunnel-ramp.json`, captured against
+  `src/test-data/traces/raw/raw-mesh-tunnel-ramp.json`, captured against
   Milestone 6.1's tunnel/ramp fixture with straight-throttle/zero-steer
   input (250 steps @ 1/60s): drives through the tunnel, launches off the
   ramp, lands on the platform beyond the gap. `meta.name` is
@@ -1129,14 +1129,14 @@ after Milestone 4 lands.
   - Verified reproducible: two captures, byte-identical output.
 
 **7.2 — Wire mesh-mode into the trace-replay test target**
-- File: `cpp/core/CMakeLists.txt` (`add_test()` entries).
+- File: `src/core/CMakeLists.txt` (`add_test()` entries).
 - Today's trace tests replay in whatever mode the trace was captured in;
   confirm mesh-mode traces are actually exercised (not skipped/ignored by
   a mode-specific filter) and fail loudly on divergence, same as analytic
   traces.
-- Test: `ctest --test-dir cpp/build -C Release --output-on-failure`. Commit.
+- Test: `ctest --test-dir build -C Release --output-on-failure`. Commit.
 - **Done — a real bug found and fixed along the way, in addition to the
-  wiring.** `cpp/core/tests/parity_main.cpp` now reads a trace's
+  wiring.** `src/core/tests/parity_main.cpp` now reads a trace's
   `meshMode` flag (default `false`, so every existing analytic trace is
   unaffected): true means `sim.setMeshPhysicsEnabled(true)` instead of the
   previous unconditional `false`, and the trace's own
@@ -1174,7 +1174,7 @@ after Milestone 4 lands.
     line `GameSession::step()` already has.
   - Verified the wiring actually catches regressions, not just green by
     construction: temporarily swapped in the pre-Milestone-6.3 `Ship.cpp`
-    (via `git show <parent-commit>:cpp/core/src/Ship.cpp`), rebuilt, and
+    (via `git show <parent-commit>:src/core/src/Ship.cpp`), rebuilt, and
     confirmed `parity` fails loudly and specifically — `BOOL MISMATCH ...
     step 152 airborne: got 0 want 1`, `FREE-RUN TOO SHORT`, worst ratio
     `6.98e+12` — then restored the real fix (confirmed via `git diff`
@@ -1187,8 +1187,8 @@ after Milestone 4 lands.
 ## Milestone 8 — Force-mesh-mode enforcement & end-to-end validation
 
 **8.1 — Force mesh mode for tracks with drivable mesh objects**
-- Files: `cpp/core/src/Simulation.cpp`/`GameSession.cpp` (load path),
-  `cpp/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp` (debug toggle).
+- Files: `src/core/src/Simulation.cpp`/`GameSession.cpp` (load path),
+  `src/tungsten-monoxide/src/StatePlayTungstenMonoxide.cpp` (debug toggle).
 - At load, if `Track` contains any drivable mesh object placement, force
   `meshPhysicsEnabled = true` and disable/hide the debug checkbox for that
   session (per the FR5 decision — no silent fall-through, no reject-at-load).
@@ -1236,7 +1236,7 @@ after Milestone 4 lands.
 - **Done — no `Ship.cpp`/`Simulation.cpp` fix needed; one real bug found and
   fixed in the headless tool itself.** No editor GUI available (no display
   in this environment, same constraint as Milestone 6.1), so the track was
-  extended non-interactively again: `cpp/test-data/fixtures/mesh-object/
+  extended non-interactively again: `src/test-data/fixtures/mesh-object/
   tunnel-validation/track.json` (Milestone 6.1's tunnel+ramp fixture) grew
   a third drivable mesh object (`barrier-1`, a simple two-sided wall
   standing in for a central-reservation-replacement, generated the same
@@ -1318,7 +1318,7 @@ after Milestone 4 lands.
   mesh objects unaffected; new mesh-mode traces (Milestone 7) green.
 - Commit (likely doc/plan cleanup only, unless 8.2 surfaced fixes not yet
   committed).
-- **Done.** `ctest --test-dir cpp/build -C Release --output-on-failure`:
+- **Done.** `ctest --test-dir build -C Release --output-on-failure`:
   4/4 green (`parity` -- every analytic-mode golden trace plus Milestone
   7's mesh-mode `raw-mesh-tunnel-ramp.json`, `track_tests`, including
   Milestone 8.1's new `meshPhysicsForced()` coverage,

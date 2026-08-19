@@ -1,6 +1,6 @@
-# cpp/core — the track-physics engine
+# src/core — the track-physics engine
 
-`cpp/core` is a self-contained C++20 static library (target `core`) that loads a schema-10/12 track, bakes its authored spline data into runtime geometry, and runs the corridor/mesh driving simulation. It has no renderer, no image loader, and no platform/input dependency — see `cpp/README.md` for the build-level contract and public data-flow example. This document is the feature- and physics-level companion to that README: what a track can *contain*, and exactly how the simulation resolves it frame to frame, with pointers into the code.
+`src/core` is a self-contained C++20 static library (target `core`) that loads a schema-10/12 track, bakes its authored spline data into runtime geometry, and runs the corridor/mesh driving simulation. It has no renderer, no image loader, and no platform/input dependency — see `src/README.md` for the build-level contract and public data-flow example. This document is the feature- and physics-level companion to that README: what a track can *contain*, and exactly how the simulation resolves it frame to frame, with pointers into the code.
 
 Domain vocabulary (Track, Path, Control point, Zone, Trigger/Checkpoint, Reservation, etc.) is defined once in `UBIQUITOUS_LANGUAGE.md` and `glossary.md` (both in this directory) — this document uses those terms without redefining them. Mesh regions (placed mesh assets, plus the synthetic mesh region a central reservation used to compile to) were removed entirely in `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2, with no interim replacement; "mesh mode" below refers only to the BVH-based `stepMeshPhysics` ship-physics mode, which never used `MeshRegion` and is unaffected.
 
@@ -8,16 +8,16 @@ Domain vocabulary (Track, Path, Control point, Zone, Trigger/Checkpoint, Reserva
 
 `core` is meant to be embedded by a host that supplies input, rendering, and timing:
 
-- `cpp/tungsten-monoxide` is the real playable host (see `docs/tungsten-monoxide.md`) — it drives `core` through `GameSession`.
-- `cpp/app`'s `track_runner` is a minimal headless session/timing smoke host (no rendering, no input, idle ships).
-- `cpp/editor` reuses `core` as a black box purely for baking/validation — it never touches simulation.
+- `src/tungsten-monoxide` is the real playable host (see `docs/tungsten-monoxide.md`) — it drives `core` through `GameSession`.
+- `src/app`'s `track_runner` is a minimal headless session/timing smoke host (no rendering, no input, idle ships).
+- `src/editor` reuses `core` as a black box purely for baking/validation — it never touches simulation.
 - The `parity`/`track_tests` CTest targets replay a committed golden-trace corpus against it (see [Numeric contracts and golden-trace testing](#numeric-contracts-and-golden-trace-testing) below). `raw_parity`/`raw_session_init_parity`/`raw_session_step_parity`/`random_geometry_parity` are currently disabled — every one of their fixtures references the removed `meshAssets`/`meshes` and now hard-fails to load (`DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2); Milestone 7 plans new mesh-mode-appropriate golden traces to restore this coverage.
 
-`core` accepts **schema 10 through 12** JSON and always normalizes/writes schema 12 (`TrackCore::TRACK_SCHEMA_VERSION = 12`, `TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10`, both in `cpp/core/include/TrackCore.hpp`). Schema 10 support exists solely because the golden-trace corpus is permanently pinned at schema 10. A track that still authors `meshAssets`/`meshes` (removed in schema 12) fails to load with an explicit error rather than silently dropping them — see `TrackLoader.cpp`.
+`core` accepts **schema 10 through 12** JSON and always normalizes/writes schema 12 (`TrackCore::TRACK_SCHEMA_VERSION = 12`, `TrackCore::TRACK_SCHEMA_VERSION_MIN_SUPPORTED = 10`, both in `src/core/include/TrackCore.hpp`). Schema 10 support exists solely because the golden-trace corpus is permanently pinned at schema 10. A track that still authors `meshAssets`/`meshes` (removed in schema 12) fails to load with an explicit error rather than silently dropping them — see `TrackLoader.cpp`.
 
 ## Track-design features
 
-Authored data lives in `TrackDefinition` (`cpp/core/include/TrackDefinition.hpp`), deliberately kept separate from the compiled runtime record (`Track.hpp`) — see that header's own opening comment.
+Authored data lives in `TrackDefinition` (`src/core/include/TrackDefinition.hpp`), deliberately kept separate from the compiled runtime record (`Track.hpp`) — see that header's own opening comment.
 
 ### Track
 
@@ -104,7 +104,7 @@ This is the part of the codebase where "analytical" and "geometry/mesh-based" ge
 |---|---|---|
 | Render/collision triangle batches | `TrackBake.cpp:800`–`1015`, `1418`–`1663` | `GeometryBatch`/`GeometryKind` (`TrackGeometry.hpp:20`). The road surface uses smooth per-vertex analytical normals (`triSmooth`); everything else (rails, shell, zones, triggers) uses flat per-triangle normals (`triNormal`). |
 | Reservation void carve | `carveQuad`, `TrackBake.cpp:784` | Corner-wise strict-interior test against each ring's gap band, shared by the top surface and the shell underside so both holes agree exactly — the void is always an open shaft now (the Capped-interior curved-floor case was removed with `MeshRegion`, `DRIVABLE_MESH_OBJECTS_PLAN.md` Milestone 2). |
-| Exported collision mesh | `TrackCollision.cpp` | A BVH (median split, ≤8 triangles/leaf) over exported triangles, with Möller–Trumbore ray intersection and barycentric-interpolated vertex normals. **Populated only by the game host** — `cpp/tungsten-monoxide/src/Map.cpp` builds it from a `.mppmodel`; JSON-only consumers (the editor, `track_runner`, this library's own tests) leave `Track::collisionSurface` null and physics stays fully analytical. |
+| Exported collision mesh | `TrackCollision.cpp` | A BVH (median split, ≤8 triangles/leaf) over exported triangles, with Möller–Trumbore ray intersection and barycentric-interpolated vertex normals. **Populated only by the game host** — `src/tungsten-monoxide/src/Map.cpp` builds it from a `.mppmodel`; JSON-only consumers (the editor, `track_runner`, this library's own tests) leave `Track::collisionSurface` null and physics stays fully analytical. |
 
 ### Collision BVH: construction and consumers
 
@@ -114,7 +114,7 @@ This is the part of the codebase where "analytical" and "geometry/mesh-based" ge
 2. **Load-time invariant** (`Map.cpp:197`–`202`) — `Map::load` throws if the resulting triangle list is empty; a drivable track is required to export at least one collidable batch (enforced earlier too, at editor export time in `TrackResourceSave.cpp`).
 3. **BVH build** (`TrackCollisionSurface::build`, `TrackCollision.cpp:84`) — recursive median-split: each node's triangles are bounded (`Bounds`, both vertex-extent and centroid-extent), splitting stops and the node becomes a leaf once it holds ≤8 triangles, otherwise it splits along whichever of x/y/z has the **largest centroid extent** (not a fixed or round-robin axis) via `std::nth_element` on the centroid coordinate — an unbalanced-but-cheap median split, not a full SAH build.
 
-**Consumers: physics only, not rendering.** The BVH is read in exactly one place outside its own file: `cpp/core/src/Ship.cpp`, via `nearestAlongAxis`/`nearestAcrossAxis`/`sweep`/`queryObb` — the collision-surface pre-probe in analytic mode (§3 below) and the entirety of mesh-mode grounding/wall/airborne resolution (`stepMeshPhysics`), gated on `simulation.track().collisionSurface` being non-null. Wall/obstacle collision is the one shape query: `queryObb` tests the ship's whole hull as an oriented box (`Obb.hpp`, `docs/OBB_SHIP_COLLISION_PLAN.md`), and replaced -- and removed -- the two-sided `sweepWall` segment probe it used to use. Ground contact remains a point probe. **There is no renderer-side consumer.** Nothing in this codebase uses `TrackCollisionSurface` (or any other spatial structure) for view-frustum or occlusion culling — every `GeometryBatch` `TrackBake.cpp` produces is handed to the renderer and drawn unconditionally, whether or not it's currently visible. If per-triangle or per-batch visibility culling is wanted, it would need to be built new; the collision BVH's Möller–Trumbore/segment-bounds queries (`querySegment`) are ray/segment-shaped and `queryObb`'s is box-shaped, neither of them frustum-shaped, so it isn't a drop-in fit for that purpose even if reused.
+**Consumers: physics only, not rendering.** The BVH is read in exactly one place outside its own file: `src/core/src/Ship.cpp`, via `nearestAlongAxis`/`nearestAcrossAxis`/`sweep`/`queryObb` — the collision-surface pre-probe in analytic mode (§3 below) and the entirety of mesh-mode grounding/wall/airborne resolution (`stepMeshPhysics`), gated on `simulation.track().collisionSurface` being non-null. Wall/obstacle collision is the one shape query: `queryObb` tests the ship's whole hull as an oriented box (`Obb.hpp`, `docs/OBB_SHIP_COLLISION_PLAN.md`), and replaced -- and removed -- the two-sided `sweepWall` segment probe it used to use. Ground contact remains a point probe. **There is no renderer-side consumer.** Nothing in this codebase uses `TrackCollisionSurface` (or any other spatial structure) for view-frustum or occlusion culling — every `GeometryBatch` `TrackBake.cpp` produces is handed to the renderer and drawn unconditionally, whether or not it's currently visible. If per-triangle or per-batch visibility culling is wanted, it would need to be built new; the collision BVH's Möller–Trumbore/segment-bounds queries (`querySegment`) are ray/segment-shaped and `queryObb`'s is box-shaped, neither of them frustum-shaped, so it isn't a drop-in fit for that purpose even if reused.
 
 ### Self-intersection detection and collapse
 
@@ -125,7 +125,7 @@ This is the part of the codebase where "analytical" and "geometry/mesh-based" ge
 
 ## Physics
 
-`Ship::step` (`cpp/core/src/Ship.cpp:11`) is the whole per-frame algorithm — one call per fixed sub-step (see [GameSession](#gamesession--shipfactory--startgrid) below for how sub-stepping works). Every branch is annotated below with whether it's analytical (closed-form corridor/cross-section math) or geometry-based (consults exported/baked triangles).
+`Ship::step` (`src/core/src/Ship.cpp:11`) is the whole per-frame algorithm — one call per fixed sub-step (see [GameSession](#gamesession--shipfactory--startgrid) below for how sub-stepping works). Every branch is annotated below with whether it's analytical (closed-form corridor/cross-section math) or geometry-based (consults exported/baked triangles).
 
 ### Per-frame flow
 
@@ -167,16 +167,16 @@ The native session layer a real host drives, above raw `Ship::step`:
 
 ## Numeric contracts and golden-trace testing
 
-`cpp/test-data/` (a sibling of `core/`) is a fixed, committed regression corpus with **no in-repo regeneration tool** — treat it as append-only. Two layers, replayed by the `parity`/`raw_parity`/`track_tests`/`random_geometry_parity` CTest targets:
+`src/test-data/` (a sibling of `core/`) is a fixed, committed regression corpus with **no in-repo regeneration tool** — treat it as append-only. Two layers, replayed by the `parity`/`raw_parity`/`track_tests`/`random_geometry_parity` CTest targets:
 
 - **Baked-world traces** (`traces/`) — 4000 steps of pure runtime math, `atol=rtol=1e-12`, observed worst deviation ~1 ULP.
 - **Raw-track traces** (`traces/raw/`, `traces/raw-session/`) — 1116 steps that force independent load/bake/compile in C++, looser tolerance (ratio gate 0.1). Discrete state (surface IDs, rail hits, airborne/boost/trigger/checkpoint/lap/respawn) must match **exactly**.
 
-Practical effect: several functions are pinned to a specific formula *because of this corpus*, not purely for correctness (e.g. `TrackCore::clamp`'s exact boundary behavior, `Evaluator::eval`'s zero-offset bypass). Reordering floating-point operations in the corridor math is a breaking change; see `cpp/core/CLAUDE.md` before touching any of it.
+Practical effect: several functions are pinned to a specific formula *because of this corpus*, not purely for correctness (e.g. `TrackCore::clamp`'s exact boundary behavior, `Evaluator::eval`'s zero-offset bypass). Reordering floating-point operations in the corridor math is a breaking change; see `src/core/CLAUDE.md` before touching any of it.
 
 ## Limitations
 
-- **The exported-collision-mesh contact model is opt-in and host-supplied.** Only `cpp/tungsten-monoxide` populates `Track::collisionSurface`; every other consumer (editor, `track_runner`, this library's own tests) runs on the fully analytical corridor model. The two are close but not identical — see `docs/tungsten-monoxide.md`.
+- **The exported-collision-mesh contact model is opt-in and host-supplied.** Only `src/tungsten-monoxide` populates `Track::collisionSurface`; every other consumer (editor, `track_runner`, this library's own tests) runs on the fully analytical corridor model. The two are close but not identical — see `docs/tungsten-monoxide.md`.
 - **The collision BVH is not used for rendering.** It exists solely for physics (see "Collision BVH: construction and consumers" above); there is no view-frustum or occlusion culling anywhere in this codebase, against the BVH or otherwise. Every baked `GeometryBatch` is rendered unconditionally.
 - **`physics.up` is frozen at spawn.** Written only by `placeShipAtPose` and never updated during a run (a deliberate, golden-trace-pinned characteristic — verified bit-identical across a full run in the fixture corpus). `Ship::renderNormal` exists as a live, per-frame-correct substitute for renderers; see `Ship.hpp`.
 - **`sampleTrack` has no spatial index** — a full scan of every segment of every path, per call, up to 3 calls per `Ship::step`. Cost scales with total track length × ship count.

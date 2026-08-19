@@ -6,7 +6,7 @@ try to re-document things that are self-evident from file/class names.
 
 ## model-tool (see `docs/adr/0001-model-tool.md`)
 
-- **model-tool** — new native app (`cpp/model-tool`, CMake target
+- **model-tool** — new native app (`src/model-tool`, CMake target
   `model_tool`) for importing a 3D model file (OBJ/FBX/USD/glTF) via AssImp,
   previewing it in a live mpp viewport, and saving it as `.mppmodel`.
 - **mppmodel** — MassivePolyPusher's binary model file format (magic `MPPM`),
@@ -23,7 +23,7 @@ try to re-document things that are self-evident from file/class names.
   layout. Not reused by model-tool (ADR 0001, D3).
 - **Fixed vertex layout** — model-tool's one hardcoded interleaved vertex
   format: position (float×3), normal (float×3), uv (float×2), colour
-  (unorm8×4) — 36 bytes/vertex. The same stride/shape `cpp/editor`'s
+  (unorm8×4) — 36 bytes/vertex. The same stride/shape `src/editor`'s
   `MppModelExport.cpp` uses for track geometry, though the two are otherwise
   independent implementations for different source domains.
 - **`__mpp_tex_none__`** — mpp's built-in sentinel texture name for "no real
@@ -62,7 +62,7 @@ try to re-document things that are self-evident from file/class names.
 
 - **willpower.application Resource system** — the declarative,
   `Resources.yaml`-driven asset-graph layer (`Resource`/`ResourceManager`/
-  `DependentResources`/`Definition` factories) `cpp/tungsten-monoxide` builds
+  `DependentResources`/`Definition` factories) `src/tungsten-monoxide` builds
   on. Distinct from bare `mpp::ResourceManager`, which just tracks/loads
   individual GPU-side resources with no declarative file format involved.
 - **`ProgrammaticModelStream` / `ProgrammaticMaterialStream`** — mpp's
@@ -71,7 +71,7 @@ try to re-document things that are self-evident from file/class names.
   runtime without an on-disk resource definition. See
   `StatePlayTungstenMonoxide::createTorusModel()`/`createTorusMaterial()` for
   the established usage pattern.
-- **`GeometryBatch` / `RenderVertex`** (`cpp/core/include/TrackGeometry.hpp`)
+- **`GeometryBatch` / `RenderVertex`** (`src/core/include/TrackGeometry.hpp`)
   — the track engine's own renderer-neutral geometry record (double-precision
   position/normal/uv/rgba, always-unshared triangle-soup indices). Not the
   same thing as model-tool's fixed vertex layout, though the two share the
