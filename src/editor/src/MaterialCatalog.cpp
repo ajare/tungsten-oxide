@@ -4,7 +4,7 @@
 #include <map>
 #include <stdexcept>
 
-#include <yaml-src/yaml.h>
+#include <yaml-cpp/yaml.h>
 
 #include "FileDialog.hpp"
 

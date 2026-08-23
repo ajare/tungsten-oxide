@@ -11,7 +11,7 @@ Configuration:
     ResourceLocations:
       ResourceLocation:
         type: Directory
-        path: ../../../tungsten-monoxide/resources/
+        path: ../../../../src/tungsten-monoxide/resources/
         definition: Resources.yaml
     Debug:
       # Enable MPP's built-in FPS/memory overlay in debug builds.
@@ -21,7 +21,7 @@ Configuration:
         - name: ThreadedLoading
           value: false
         - name: PbrPackage
-          value: ../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage
+          value: ../../../../src/tungsten-monoxide/resources/TungstenMonoxide.mpppackage
   Audio:
     Enabled: true
     Channels: 1024

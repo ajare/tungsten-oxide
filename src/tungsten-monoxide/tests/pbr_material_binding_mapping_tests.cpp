@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <yaml-src/yaml.h>
+#include <yaml-cpp/yaml.h>
 
 namespace {
 

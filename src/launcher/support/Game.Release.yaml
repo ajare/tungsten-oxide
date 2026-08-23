@@ -11,14 +11,14 @@ Configuration:
     ResourceLocations:
       ResourceLocation:
         type: Directory
-        path: ../../../tungsten-monoxide/resources/
+        path: ../../../../src/tungsten-monoxide/resources/
         definition: Resources.yaml
     Debug:
       InGame: disabled
     Arguments:
       Argument:
         name: PbrPackage
-        value: ../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage
+        value: ../../../../src/tungsten-monoxide/resources/TungstenMonoxide.mpppackage
   Audio:
     Enabled: true
     Channels: 1024
