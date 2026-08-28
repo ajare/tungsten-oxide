@@ -331,6 +331,7 @@ PbrPipeline:
       - name: "ShadowDepth"
         format: "DEPTH24"
         usage: "depthAttachment,sampled"
+        depthCompare: "true"
         import: "shadowDepth"
         external: "true"
         transient: "false"
