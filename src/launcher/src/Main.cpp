@@ -7,10 +7,10 @@ extern "C" const char* __asan_default_options() {
 }
 #endif
 
+#include <stdexcept>
 #include "Platform.h"
 
-#if APP_PLATFORM == APP_PLATFORM_WINDOWS
-
+#include <cstdint>
 #include <format>
 #include <iostream>
 
@@ -21,6 +21,7 @@ extern "C" const char* __asan_default_options() {
 // directly, matching every other GL-constant user in this codebase.
 #include <GL/glew.h>
 
+#if APP_PLATFORM == APP_PLATFORM_WINDOWS
 #include <windows.h>
 
 // Ask a hybrid-graphics laptop for its discrete GPU. Both vendors' drivers
@@ -33,6 +34,7 @@ extern "C" {
 __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
+#endif
 
 #include <willpower/common/Exceptions.h>
 #include <willpower/common/Logger.h>
@@ -166,7 +168,7 @@ ProgramOptions startup(string const& configFile) {
 
   gMppLogger = new mpp::Logger();
   if (!gMppLogger->initialise("mpp.log", mpp::Logger::Level::Debug)) {
-    throw exception("Could not create MPP logger!");
+    throw std::runtime_error("Could not create MPP logger!");
   }
 
   // Read in program options
@@ -182,8 +184,12 @@ ProgramOptions startup(string const& configFile) {
 
   application::ServiceLocator::provideApplicatonSettings(gAppSettings);
 
+#if defined(__linux__)
+  // MPP's pinned GLEW uses GLX, so SDL must not create a Wayland/EGL context.
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+#endif
   if (!SDL_Init(SDL_INIT_VIDEO)) {
-    throw exception("Could not initialise SDL subsystem!");
+    throw std::runtime_error("Could not initialise SDL subsystem!");
   }
 
   // Create timer
@@ -349,7 +355,11 @@ void updateImGui(float frameTime) {
 
     ImGui::GetAllocatorFunctions(&imGuiAllocFunc, &imGuiFreeFunc, &imGuiUserData);
 
-    gStateMgr->renderImGui(frameTime, imGuiCtx, imPlotCtx, imGuiAllocFunc, imGuiFreeFunc, imGuiUserData);
+    // Willpower's ABI intentionally carries allocator callbacks as opaque pointers. Convert via
+    // uintptr_t because standard C++ does not allow a direct function-pointer-to-void* conversion.
+    auto* allocOpaque = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(imGuiAllocFunc));
+    auto* freeOpaque = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(imGuiFreeFunc));
+    gStateMgr->renderImGui(frameTime, imGuiCtx, imPlotCtx, allocOpaque, freeOpaque, imGuiUserData);
 
     ImGui::EndFrame();
     ImGui::Render();
@@ -505,7 +515,3 @@ int main(int argc, char** argv) {
   shutdown();
   return exitCode;
 }
-
-#else
-#error "Launcher is supported only on Windows because it loads Windows application DLLs."
-#endif

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <exception>
+#include <stdexcept>
 #include <string>
 
-class ExitApplicationException : public std::exception
+class ExitApplicationException : public std::runtime_error
 {
 	int mExitCode;
 
@@ -12,7 +12,7 @@ class ExitApplicationException : public std::exception
 public:
 
 	ExitApplicationException(int exitCode, std::string message)
-		: std::exception(message.c_str())
+		: std::runtime_error(message)
 		, mExitCode(exitCode)
 		, mMessage(message)
 	{

@@ -1,7 +1,5 @@
 #include "Platform.h"
 
-#if MIM_PLATFORM == MIM_PLATFORM_WIN32
-
 #include <willpower/common/Logger.h>
 
 #include <willpower/application/StateFactory.h>
@@ -58,14 +56,20 @@ static StatePlayTungstenMonoxideFactory* statePlayTungstenMonoxideFactory = null
 static bool gThreadedLoading = true;
 static std::string gPbrPackage = "../../../tungsten-monoxide/resources/TungstenMonoxide.mpppackage";
 
+#if MIM_PLATFORM == MIM_PLATFORM_WIN32
+#define TOX_APPLICATION_EXPORT __declspec(dllexport)
+#else
+#define TOX_APPLICATION_EXPORT __attribute__((visibility("default")))
+#endif
+
 extern "C"
 {
-	__declspec(dllexport) char const* dllGetName()
+	TOX_APPLICATION_EXPORT char const* dllGetName()
 	{
 		return "TungstenMonoxide";
 	}
 
-	__declspec(dllexport) int dllSetArgument(char const* arg, char const* value)
+	TOX_APPLICATION_EXPORT int dllSetArgument(char const* arg, char const* value)
 	{
 		if (!strcmp(arg, "ThreadedLoading"))
 		{
@@ -96,7 +100,7 @@ extern "C"
 		return 0;
 	}
 
-	__declspec(dllexport) wp::application::StateFactory* dllGetNextStateFactory()
+	TOX_APPLICATION_EXPORT wp::application::StateFactory* dllGetNextStateFactory()
 	{
 		wp::application::StateFactory* stateFactory;
 		switch (nextStateFactory)
@@ -131,7 +135,7 @@ extern "C"
 		return stateFactory;
 	}
 
-	__declspec(dllexport) void dllOnEntry(wp::Logger* logger, wp::application::resourcesystem::ResourceManager* resourceMgr)
+	TOX_APPLICATION_EXPORT void dllOnEntry(wp::Logger* logger, wp::application::resourcesystem::ResourceManager* resourceMgr)
 	{
 		auto entityHandlerFactory = []()
 		{
@@ -163,7 +167,7 @@ extern "C"
 		resourceMgr->addResourceDefinitionFactory(new applib::PbrMaterialBindingDefaultDefinitionFactory());
 	}
 
-	__declspec(dllexport) void dllOnExit()
+	TOX_APPLICATION_EXPORT void dllOnExit()
 	{
 		// Memory allocators
 		// Destroy state factories
@@ -194,7 +198,3 @@ extern "C"
 	}
 
 }
-
-#else
-#error "The TungstenMonoxide application DLL is supported only on Windows."
-#endif

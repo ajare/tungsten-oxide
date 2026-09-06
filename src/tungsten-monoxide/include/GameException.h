@@ -1,17 +1,17 @@
 #pragma once
 
 #include <string>
-#include <exception>
+#include <stdexcept>
 
 #include "Platform.h"
 
 
-class GameException : public std::exception
+class GameException : public std::runtime_error
 {
 public:
 
 	explicit GameException(std::string const& msg)
-		: exception(msg.c_str())
+		: std::runtime_error(msg)
 	{
 	}
 };

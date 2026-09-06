@@ -1,6 +1,7 @@
 #include <willpower/application/Key.h>
 #include <willpower/application/MouseButton.h>
 
+#include <stdexcept>
 #include "sdl/WindowSDL.h"
 
 #include "ExitApplicationException.h"
@@ -146,27 +147,27 @@ void WindowSDL::create() {
   // Use OpenGL 3.2
   if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE)) {
     string err = SDL_GetError();
-    throw exception(("Could not set OpenGL attribute: " + err).c_str());
+    throw std::runtime_error(("Could not set OpenGL attribute: " + err).c_str());
   }
 
   if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3)) {
     string err = SDL_GetError();
-    throw exception(("Could not set OpenGL abbribute: " + err).c_str());
+    throw std::runtime_error(("Could not set OpenGL abbribute: " + err).c_str());
   }
 
   if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2)) {
     string err = SDL_GetError();
-    throw exception(("Could not set OpenGL abbribute: " + err).c_str());
+    throw std::runtime_error(("Could not set OpenGL abbribute: " + err).c_str());
   }
 
   if (!SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1)) {
     string err = SDL_GetError();
-    throw exception(("Could not set OpenGL abbribute: " + err).c_str());
+    throw std::runtime_error(("Could not set OpenGL abbribute: " + err).c_str());
   }
 
   if (!SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24)) {
     string err = SDL_GetError();
-    throw exception(("Could not set OpenGL abbribute: " + err).c_str());
+    throw std::runtime_error(("Could not set OpenGL abbribute: " + err).c_str());
   }
 
   // Create window
@@ -181,7 +182,7 @@ void WindowSDL::create() {
 
   if (!mWindow) {
     string err = SDL_GetError();
-    throw exception(("Could not create SDL window: " + err).c_str());
+    throw std::runtime_error(("Could not create SDL window: " + err).c_str());
   }
 
 #ifdef _DEBUG
@@ -191,24 +192,24 @@ void WindowSDL::create() {
   mContextGL = SDL_GL_CreateContext(mWindow);
   if (!mContextGL) {
     string err = SDL_GetError();
-    throw exception(("Could not create the OpenGL context: " + err).c_str());
+    throw std::runtime_error(("Could not create the OpenGL context: " + err).c_str());
   }
   if (!SDL_GL_MakeCurrent(mWindow, mContextGL)) {
-    throw exception("Could not set the OpenGL context.");
+    throw std::runtime_error("Could not set the OpenGL context.");
   }
 
   SDL_HideCursor();
 
   if (!SDL_SetWindowRelativeMouseMode(mWindow, true)) {
-    throw exception("Could not set relative mouse mode.");
+    throw std::runtime_error("Could not set relative mouse mode.");
   }
 
   if (!SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_CENTER, "1")) {
-    throw exception("Could not set hint: SDL_HINT_MOUSE_RELATIVE_MODE_CENTER");
+    throw std::runtime_error("Could not set hint: SDL_HINT_MOUSE_RELATIVE_MODE_CENTER");
   }
 
   if (!SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE, "0.3")) {
-    throw exception("Could not set hint: SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE");
+    throw std::runtime_error("Could not set hint: SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE");
   }
 
   if (!SDL_GL_SetSwapInterval(mVSync ? 1 : 0)) {

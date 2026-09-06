@@ -10,12 +10,15 @@ namespace applib
 
 	class Exception : public std::exception
 	{
-	public:
+		std::string message_;
 
+	public:
 		explicit Exception(std::string const& message)
-			: std::exception(message.c_str())
+			: message_(message)
 		{
 		}
+
+		const char* what() const noexcept override { return message_.c_str(); }
 	};
 
 	class NotImplementedException : public Exception

@@ -124,9 +124,13 @@ target_include_directories(model_io_gltf PUBLIC
   # Assimp's generated config header lives in the build tree; its public headers in the source tree.
   "${TOX_MPP_BUILD_DIR}/ext/assimp/include"
   "${MODEL_IO_MPP_DIR}/ext/assimp/include")
-target_link_libraries(model_io_gltf PUBLIC
-  model_io_core
-  $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>)
+target_link_libraries(model_io_gltf PUBLIC model_io_core)
+if (WIN32)
+  target_link_libraries(model_io_gltf PUBLIC
+    $<IF:$<CONFIG:Debug>,assimp-vc145-mtd,assimp-vc145-mt>)
+else()
+  target_link_libraries(model_io_gltf PUBLIC assimp)
+endif()
 
 # --- Runtime deployment ------------------------------------------------------------------------
 # mpp's libraries are linked by raw name through target_link_directories, not as CMake IMPORTED

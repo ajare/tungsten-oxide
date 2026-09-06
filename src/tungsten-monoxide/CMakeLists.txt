@@ -227,8 +227,4 @@ if (WIN32)
         "$<TARGET_FILE_DIR:Launcher>"
       COMMAND_EXPAND_LISTS)
   endif()
-else()
-  message(WARNING
-    "TungstenMonoxide is a Windows application DLL; its platform guards intentionally fail "
-    "compilation off Windows.")
 endif()

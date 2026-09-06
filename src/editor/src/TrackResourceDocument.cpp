@@ -1,6 +1,7 @@
 #include "TrackResourceDocument.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -184,7 +185,11 @@ bool parseResourcesDocument(const std::string& xml, XMLDocument& document, std::
 
 bool isSafeResourceRelativePath(const std::string& reference) {
   if (reference.empty()) return false;
-  const std::filesystem::path path = std::filesystem::path(utf8ToWide(reference));
+  std::string portable = reference;
+  std::replace(portable.begin(), portable.end(), '\\', '/');
+  // std::filesystem follows the host syntax, so explicitly reject a Windows drive path on Unix.
+  if (portable.size() >= 2 && std::isalpha(static_cast<unsigned char>(portable[0])) && portable[1] == ':') return false;
+  const std::filesystem::path path = std::filesystem::u8path(portable);
   if (path.empty() || path == "." || path.is_absolute() || path.has_root_name() || path.has_root_directory()) return false;
   for (const auto& part : path)
     if (part == "..") return false;

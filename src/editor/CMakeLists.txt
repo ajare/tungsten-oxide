@@ -20,11 +20,6 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-if (NOT WIN32)
-  message(WARNING
-    "src/editor is Windows-only; its platform guards intentionally fail compilation off Windows.")
-endif()
-
 if (MSVC)
   add_compile_options(/W3 /EHsc)
 endif()
@@ -123,6 +118,7 @@ target_link_libraries(track_editor PRIVATE
   model_xml
   model_io_gltf
   SDL3::SDL3
+  nfd::nfd
   yaml-cpp::yaml-cpp)
 
 add_executable(editor_track_resource_tests
@@ -142,7 +138,7 @@ target_include_directories(editor_track_resource_tests PRIVATE
 # through modelio::writeMppModelWithNamedMaterials (docs/GLTF_IMPORT_PLAN.md M4), so this target is
 # no longer mpp-free either -- see mpp_model_import_tests's own target comment below, which lost
 # the same property one milestone earlier.
-target_link_libraries(editor_track_resource_tests PRIVATE core Willpower.Common model_xml model_io_core)
+target_link_libraries(editor_track_resource_tests PRIVATE core Willpower.Common model_xml model_io_core nfd::nfd)
 add_test(NAME editor_track_resources
   COMMAND editor_track_resource_tests "${CMAKE_SOURCE_DIR}/src/test-data/fixtures/path/curved-banked.json")
 model_io_deploy_runtime(editor_track_resource_tests)
@@ -177,15 +173,21 @@ if (WIN32)
   # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h> and GLEW) collide with
   # std::min/std::max and Willpower/nlohmann headers; suppress them everywhere in this target.
   target_compile_definitions(track_editor PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+  find_package(OpenGL REQUIRED)
+  target_link_directories(track_editor PRIVATE "${TOX_MPP_OUTPUT_DIR}/lib/${CMAKE_BUILD_TYPE}")
+  target_link_libraries(track_editor PRIVATE GLEW OpenGL::GL ${CMAKE_DL_LIBS})
 endif()
 
 # SDL3 (and, with multi-config generators, Willpower) leaves shared-library
 # runtime dependencies in sibling output directories; copy them beside the
 # executable so a direct run/F5 works, matching src/app's track_runner.
-add_custom_command(TARGET track_editor POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:track_editor> $<TARGET_FILE_DIR:track_editor>
-  COMMAND_EXPAND_LISTS)
+if (WIN32)
+  add_custom_command(TARGET track_editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:track_editor> $<TARGET_FILE_DIR:track_editor>
+    COMMAND_EXPAND_LISTS)
+endif()
 
 # mpp's libraries (and GLEW, and AssImp) are linked by raw name against MassivePolyPusher's build
 # tree rather than as CMake IMPORTED targets, so $<TARGET_RUNTIME_DLLS:...> above cannot discover

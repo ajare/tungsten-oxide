@@ -1,17 +1,17 @@
 #pragma once
 
 #include <string>
-#include <exception>
+#include <stdexcept>
 
 #include "Platform.h"
 
 
-class MapException : public std::exception
+class MapException : public std::runtime_error
 {
 public:
 
 	explicit MapException(std::string const& msg)
-		: exception(msg.c_str())
+		: std::runtime_error(msg)
 	{
 	}
 };

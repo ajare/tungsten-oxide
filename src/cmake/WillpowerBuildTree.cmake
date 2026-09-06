@@ -1,4 +1,4 @@
-# Imports prebuilt Willpower libraries from the standalone ext/willpower build tree.
+# Imports Willpower libraries from its standalone build tree.
 include_guard(GLOBAL)
 
 function(tox_import_willpower willpower_source_dir)
@@ -18,20 +18,21 @@ function(tox_import_willpower willpower_source_dir)
 
   function(_tox_import_willpower_library target directory)
     add_library(${target} SHARED IMPORTED GLOBAL)
+    if (WIN32)
+      set_target_properties(${target} PROPERTIES
+        IMPORTED_CONFIGURATIONS "Debug;Release;MemCheck"
+        IMPORTED_IMPLIB_DEBUG "${TOX_WILLPOWER_BUILD_DIR}/lib/Debug/${target}/${target}d.lib"
+        IMPORTED_LOCATION_DEBUG "${TOX_WILLPOWER_BUILD_DIR}/bin/Debug/${target}/${target}d.dll"
+        IMPORTED_IMPLIB_MEMCHECK "${TOX_WILLPOWER_BUILD_DIR}/lib/MemCheck/${target}/${target}.lib"
+        IMPORTED_LOCATION_MEMCHECK "${TOX_WILLPOWER_BUILD_DIR}/bin/MemCheck/${target}/${target}.dll"
+        IMPORTED_IMPLIB_RELEASE "${TOX_WILLPOWER_BUILD_DIR}/lib/Release/${target}/${target}.lib"
+        IMPORTED_LOCATION_RELEASE "${TOX_WILLPOWER_BUILD_DIR}/bin/Release/${target}/${target}.dll")
+    else()
+      set_target_properties(${target} PROPERTIES
+        IMPORTED_LOCATION
+          "${TOX_WILLPOWER_BUILD_DIR}/bin/${CMAKE_BUILD_TYPE}/${target}/lib${target}.so")
+    endif()
     set_target_properties(${target} PROPERTIES
-      IMPORTED_CONFIGURATIONS "Debug;Release;MemCheck"
-      IMPORTED_IMPLIB_DEBUG
-        "${TOX_WILLPOWER_BUILD_DIR}/lib/Debug/${target}/${target}d.lib"
-      IMPORTED_LOCATION_DEBUG
-        "${TOX_WILLPOWER_BUILD_DIR}/bin/Debug/${target}/${target}d.dll"
-      IMPORTED_IMPLIB_MEMCHECK
-        "${TOX_WILLPOWER_BUILD_DIR}/lib/MemCheck/${target}/${target}.lib"
-      IMPORTED_LOCATION_MEMCHECK
-        "${TOX_WILLPOWER_BUILD_DIR}/bin/MemCheck/${target}/${target}.dll"
-      IMPORTED_IMPLIB_RELEASE
-        "${TOX_WILLPOWER_BUILD_DIR}/lib/Release/${target}/${target}.lib"
-      IMPORTED_LOCATION_RELEASE
-        "${TOX_WILLPOWER_BUILD_DIR}/bin/Release/${target}/${target}.dll"
       INTERFACE_INCLUDE_DIRECTORIES "${willpower_source_dir}/${directory}/include")
   endfunction()
 

@@ -40,7 +40,9 @@ add_test(NAME model_xml_tests COMMAND model_xml_tests)
 
 # Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
 # `ctest` can actually launch it, mirroring src/editor's track_editor post-build copy.
-add_custom_command(TARGET model_xml_tests POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:model_xml_tests> $<TARGET_FILE_DIR:model_xml_tests>
-  COMMAND_EXPAND_LISTS)
+if (WIN32)
+  add_custom_command(TARGET model_xml_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:model_xml_tests> $<TARGET_FILE_DIR:model_xml_tests>
+    COMMAND_EXPAND_LISTS)
+endif()

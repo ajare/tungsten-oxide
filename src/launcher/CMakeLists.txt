@@ -141,9 +141,9 @@ if (WIN32)
   # LoadLibrary macro resolve to LoadLibraryW for the std::wstring argument.
   target_compile_definitions(Launcher PRIVATE UNICODE _UNICODE)
 else()
-  message(WARNING
-    "Launcher uses Windows application DLL loading; its platform guards intentionally fail "
-    "compilation off Windows.")
+  find_package(OpenGL REQUIRED)
+  target_link_directories(Launcher PRIVATE "${TOX_MPP_OUTPUT_DIR}/lib/${CMAKE_BUILD_TYPE}")
+  target_link_libraries(Launcher PRIVATE GLEW OpenGL::GL ${CMAKE_DL_LIBS})
 endif()
 
 # Runtime deployment, converted from build/CopyWillpowerBinaries.bat. The
@@ -206,4 +206,9 @@ if (WIN32)
       "-DMPP_CONFIG=$<CONFIG>"
       -P "${CMAKE_CURRENT_BINARY_DIR}/CopyLauncherRuntime.cmake"
     COMMAND_EXPAND_LISTS)
+else()
+  add_custom_command(TARGET Launcher POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/support/Game.Linux.yaml"
+      "$<TARGET_FILE_DIR:Launcher>/Game.yaml")
 endif()

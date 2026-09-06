@@ -15,6 +15,7 @@ npm-debug.log*
 # C++ build output (CMake/Ninja, or an IDE auto-configuring src/core/). The
 # vendored nlohmann header and sources are tracked; build trees are not.
 build/
+build-linux/
 build-windows/
 src/core/build/
 src/applib/build/

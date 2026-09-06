@@ -3,8 +3,10 @@
 #include "Platform.h"
 
 #if APP_PLATFORM == APP_PLATFORM_WINDOWS
-
 #include <Windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -31,6 +33,8 @@ class ApplicationDLL {
 private:
 #if APP_PLATFORM == APP_PLATFORM_WINDOWS
   HINSTANCE mGetProcIDDLL;
+#else
+  void* mGetProcIDDLL;
 #endif
 
   std::string mFilepath;
@@ -81,7 +85,3 @@ public:
 
   void registerStateFactories(StateManager* stateMgr);
 };
-
-#else
-#error "Launcher application DLL loading is supported only on Windows."
-#endif

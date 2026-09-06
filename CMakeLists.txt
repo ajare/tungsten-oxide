@@ -40,6 +40,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(TungstenOxideCpp C CXX)
 
+if (NOT WIN32)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # MemCheck is a Debug variant instrumented with MSVC AddressSanitizer. Keep its
 # base flags and runtime library aligned with Debug, except /RTC1 and incremental
 # linking, which MSVC ASan does not support. Dependencies imported below provide
@@ -134,6 +138,9 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/ext/yaml-cpp" "${CMAKE_CURRENT_BIN
 # Make Native File Dialog Extended available from source in place of the old
 # prebuilt nfd libraries. Current applications retain their existing dialog
 # wrappers; the source-built target is available for consumers as nfd::nfd.
+if (UNIX AND NOT APPLE)
+  set(NFD_PORTAL ON CACHE BOOL "Use xdg-desktop-portal for Linux file dialogs" FORCE)
+endif()
 set(NFD_BUILD_TESTS OFF CACHE BOOL "Do not build Native File Dialog tests" FORCE)
 set(NFD_BUILD_SDL2_TESTS OFF CACHE BOOL "Do not build Native File Dialog SDL2 tests" FORCE)
 set(NFD_BUILD_GLFW3_TESTS OFF CACHE BOOL "Do not build Native File Dialog GLFW tests" FORCE)
@@ -153,6 +160,13 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/ext/googletest"
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/WillpowerBuildTree.cmake")
 tox_import_willpower("${CMAKE_CURRENT_SOURCE_DIR}/ext/willpower")
+
+if (NOT WIN32)
+  # MPP places Unix shared objects in bin/<config>; Windows import libraries live in lib/<config>.
+  link_directories(
+    "${CMAKE_CURRENT_SOURCE_DIR}/ext/willpower/ext/massive-poly-pusher/build/bin/${CMAKE_BUILD_TYPE}")
+  add_compile_definitions(GLEW_NO_GLU)
+endif()
 
 add_subdirectory(src/core)
 add_subdirectory(src/app)

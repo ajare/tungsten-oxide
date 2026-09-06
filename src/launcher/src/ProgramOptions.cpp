@@ -3,6 +3,7 @@
 #include <format>
 #include <memory>
 
+#include <stdexcept>
 #include "utils/StringUtils.h"
 #include "utils/YamlReader.h"
 #include "willpower/common/DataNode.h"
@@ -91,7 +92,7 @@ ProgramOptions parseProgramOptions(string const& filename) {
 
       if (enabled != "enabled" && enabled != "disabled") {
         string errMsg = "Could not load '" + filename + "'.  Value of /Configuration/Game/Debug/InGame must be either 'enabled' or 'disabled'.";
-        throw exception(errMsg.c_str());
+        throw std::runtime_error(errMsg.c_str());
       }
 
       pOpts.debugging.inGame = enabled == "enabled";

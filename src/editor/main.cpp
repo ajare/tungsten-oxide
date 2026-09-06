@@ -1597,6 +1597,10 @@ StartupMaterials loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext
 }
 
 int main(int, char**) {
+#if defined(__linux__)
+  // MPP's pinned GLEW uses GLX, so SDL must not create a Wayland/EGL context.
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+#endif
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
     return 1;

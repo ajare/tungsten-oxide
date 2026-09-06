@@ -1,19 +1,25 @@
 # tungsten-oxide
 
-A native C++ (CMake/MSVC) racing track editor and driving game engine.
+A native cross-platform C++ racing track editor and driving game engine.
 
 ## Running it
 
-Build from an MSVC Developer prompt, from the repo root:
+Build the complete dependency stack from the repository root:
 
 ```sh
-git submodule update --init --recursive
-cmake -S ext/willpower -B ext/willpower/build
-cmake --build ext/willpower/build --config Release
-cmake -S . -B build
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+# Linux
+./build_from_scratch.sh
+ctest --test-dir build-linux --output-on-failure
+
+# Windows (from an MSVC Developer prompt)
+build_from_scratch.bat
+ctest --test-dir build-windows -C Release --output-on-failure
 ```
+
+Both scripts support `--config CONFIG`, `--build-dir DIR`, and `--with-mpp-lfs`.
+The Linux build requires CMake, a C++20 compiler, pkg-config, D-Bus and Wayland development
+packages (for native file dialogs), and the usual X11/OpenGL development packages. The graphical
+programs use SDL3 with X11/GLX because MassivePolyPusher's pinned GLEW build is GLX-based.
 
 - **`src/editor`** builds `track_editor`, the native ImGui/SDL3/OpenGL track editor: author tracks in a top-down + elevation view, export/import as JSON. `E`/`C`/`R` switch between Edit, Create and Rails modes.
 - **`src/tungsten-monoxide`** builds the playable driving game.

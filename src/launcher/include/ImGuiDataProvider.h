@@ -126,7 +126,7 @@ public:
 
 				if (pcmd->UserCallback != nullptr)
 				{
-					throw std::exception("User callbacks not supported.");
+					throw std::runtime_error("User callbacks not supported.");
 				}
 				else
 				{

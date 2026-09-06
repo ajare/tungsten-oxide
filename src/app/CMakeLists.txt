@@ -61,7 +61,8 @@ target_include_directories(mesh_physics_diag PRIVATE
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-mesh/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/mpp-program/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/include"
-  "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include")
+  "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include"
+  "${TOX_MPP_GLEW_INCLUDE_DIR}")
 target_link_directories(mesh_physics_diag PRIVATE
   "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 target_link_libraries(mesh_physics_diag PRIVATE
@@ -69,11 +70,16 @@ target_link_libraries(mesh_physics_diag PRIVATE
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   $<IF:$<CONFIG:Debug>,MppHelperd,MppHelper>
   $<IF:$<CONFIG:Debug>,MppMeshd,MppMesh>
-  $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
+  $<IF:$<CONFIG:Debug>,Utilsd,Utils>
+  SDL3::SDL3)
 if (WIN32)
   # mpp::RenderSystem's constructor calls glewInit(), which needs a real (if invisible) GL context
   # -- see mesh_physics_diag.cpp's createHeadlessGLContext() for why and how.
   target_link_libraries(mesh_physics_diag PRIVATE opengl32 gdi32 user32)
+else()
+  find_package(OpenGL REQUIRED)
+  target_link_directories(mesh_physics_diag PRIVATE "${TOX_MPP_OUTPUT_DIR}/lib/${CMAKE_BUILD_TYPE}")
+  target_link_libraries(mesh_physics_diag PRIVATE GLEW OpenGL::GL ${CMAKE_DL_LIBS})
 endif()
 
 if (WIN32 AND (BUILD_SHARED_LIBS OR WILLPOWER_BUILD_SHARED_LIBS))

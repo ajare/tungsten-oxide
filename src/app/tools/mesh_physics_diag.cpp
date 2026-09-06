@@ -24,10 +24,6 @@
 // Not track_runner: track_runner (src/app/main.cpp) deliberately leaves Track::collisionSurface
 // null and only ever drives analytic-mode physics (see src/core/CLAUDE.md's "Limitations" section)
 // -- this tool exists specifically to exercise mesh-mode, which requires a real collision BVH.
-#if !defined(_WIN32)
-#error "mesh_physics_diag requires the Windows WGL headless OpenGL context implementation."
-#endif
-
 #include <cmath>
 #include <cstdio>
 #include <exception>
@@ -43,6 +39,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#else
+#include <GL/glew.h>
+#include <SDL3/SDL.h>
 #endif
 
 #include <mpp/Logger.h>
@@ -100,6 +99,30 @@ bool createHeadlessGLContext() {
   HGLRC hglrc = wglCreateContext(hdc);
   if (hglrc == nullptr) return false;
   return wglMakeCurrent(hdc, hglrc) == TRUE;
+}
+#else
+bool createHeadlessGLContext() {
+  static SDL_Window* window = nullptr;
+  static SDL_GLContext context = nullptr;
+  if (context != nullptr) return SDL_GL_MakeCurrent(window, context);
+  // MPP's pinned GLEW is GLX-based; force SDL away from Wayland/EGL on Linux.
+  if (!SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE)) return false;
+  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return false;
+  // GLEW 2.x needs a compatibility context unless the consumer enables its experimental path.
+  // This diagnostic performs no rendering, so SDL's default compatibility context is sufficient.
+  window = SDL_CreateWindow("mesh_physics_diag", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+  if (window == nullptr) return false;
+  context = SDL_GL_CreateContext(window);
+  if (context == nullptr || !SDL_GL_MakeCurrent(window, context)) return false;
+  glewExperimental = GL_TRUE;
+  const GLenum status = glewInit();
+  // GLEW may leave GL_INVALID_ENUM behind when probing a core context.
+  glGetError();
+  if (status != GLEW_OK) {
+    std::cerr << "GLEW initialisation failed: " << glewGetErrorString(status) << '\n';
+    return false;
+  }
+  return true;
 }
 #endif
 
@@ -258,12 +281,10 @@ int runCapture(const std::filesystem::path& outputPath, const std::string& trace
   }
   Track track = std::move(*loaded.track);
 
-#ifdef _WIN32
   if (!createHeadlessGLContext()) {
     std::cerr << "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires\n";
     return 1;
   }
-#endif
   mpp::Logger logger;
   logger.initialise("mesh_physics_diag.log", mpp::Logger::Level::Info);
   mpp::RenderSystem renderSystem(1, 1, &logger);
@@ -377,12 +398,10 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
 
   // Dummy render/resource plumbing -- see createHeadlessGLContext()'s comment above for why the GL
   // context is unavoidable; nothing here ever renders or uploads a GPU resource.
-#ifdef _WIN32
   if (!createHeadlessGLContext()) {
     std::cerr << "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires\n";
     return 1;
   }
-#endif
 
   mpp::Logger logger;
   logger.initialise("mesh_physics_diag.log", mpp::Logger::Level::Info);

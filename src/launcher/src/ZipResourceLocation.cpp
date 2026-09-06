@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include "utils/FileSystem.h"
 
 #include "miniz.c"
@@ -20,7 +21,7 @@ ZipResourceLocation::ZipResourceLocation(wp::Logger* logger, string const& file,
 		delete archive;
 
 		string errMsg = "Could not open zipfile '" + mRootPath + "'.";
-		throw exception(errMsg.c_str());
+		throw std::runtime_error(errMsg.c_str());
 	}
 
 	for (int i = 0; i < (int)mz_zip_reader_get_num_files(archive); ++i)
@@ -33,7 +34,7 @@ ZipResourceLocation::ZipResourceLocation(wp::Logger* logger, string const& file,
 			delete archive;
 
 			string errMsg = "Could not read zipfile entry for '" + mRootPath + "'.";
-			throw exception(errMsg.c_str());
+			throw std::runtime_error(errMsg.c_str());
 		}
 
 		FileEntry fe;
@@ -72,7 +73,7 @@ resourcesystem::DataStreamPtr ZipResourceLocation::getHardResourceDataStream(str
 
 resourcesystem::DataStreamPtr ZipResourceLocation::getHardResourceDataStreamProgressive(string const& file, string const& namesp, DataStreamFetchProgressCallback progress) const
 {
-	throw exception("ZipResourceLocation::getHardResourceDataStreamProgressive() not yet implemented.");
+	throw std::runtime_error("ZipResourceLocation::getHardResourceDataStreamProgressive() not yet implemented.");
 }
 */
 bool ZipResourceLocation::hardResourceExists(string const& file) const

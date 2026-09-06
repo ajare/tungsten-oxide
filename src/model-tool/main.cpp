@@ -85,6 +85,10 @@ public:
 }  // namespace
 
 int main(int argc, char** argv) {
+#if defined(__linux__)
+  // MPP's pinned GLEW uses GLX, so SDL must not create a Wayland/EGL context.
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
+#endif
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
     return 1;
@@ -1097,7 +1101,8 @@ int main(int argc, char** argv) {
           } else {
             ImGui::TextDisabled("    (no texture)");
           }
-          const std::wstring sourceFileName = std::filesystem::path(modeltool::utf8ToWide(material.sourceFile)).filename();
+          const std::wstring sourceFileName = modeltool::utf8ToWide(
+              modeltool::pathToUtf8(std::filesystem::path(material.sourceFile).filename()));
           ImGui::TextDisabled("    from %s", modeltool::wideToUtf8(sourceFileName).c_str());
           ImGui::PopID();
         }

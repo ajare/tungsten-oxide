@@ -20,12 +20,6 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-if (NOT WIN32)
-  message(WARNING
-    "src/model-tool is Windows-only; its platform guards intentionally fail compilation "
-    "off Windows.")
-endif()
-
 # --- Shared glTF/.mppmodel conversion layer (docs/GLTF_IMPORT_PLAN.md, M2) ----------------------
 # AssImpImport.cpp and MppSave.cpp are adapters over model_io now rather than their own AssImp walk
 # and ModelSerializer driving, and ModelResources.cpp takes the 36-byte layout from there too.
@@ -140,6 +134,7 @@ target_link_directories(model_tool PRIVATE
 
 target_link_libraries(model_tool PRIVATE
   SDL3::SDL3
+  nfd::nfd
   # Carries AssImp and the mpp include/link set transitively. The explicit mpp entries below are
   # kept because this app still calls mpp directly for its viewport; AssImp's are not, because it
   # no longer calls AssImp at all.
@@ -169,6 +164,10 @@ if (WIN32)
   # windows.h's min/max macros (pulled in transitively via <SDL3/SDL.h>/GLEW/mpp headers) collide with
   # std::min/std::max; suppress them everywhere in this target (same fix src/editor applies).
   target_compile_definitions(model_tool PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+else()
+  find_package(OpenGL REQUIRED)
+  target_link_directories(model_tool PRIVATE "${TOX_MPP_OUTPUT_DIR}/lib/${CMAKE_BUILD_TYPE}")
+  target_link_libraries(model_tool PRIVATE GLEW OpenGL::GL ${CMAKE_DL_LIBS})
 endif()
 
 # --- Runtime deployment: SDL3's own DLL, plus MassivePolyPusher/AssImp DLLs, none of which CMake's
@@ -200,11 +199,11 @@ file(CONFIGURE
   @ONLY)
 unset(_model_tool_copy_runtime_script)
 
-add_custom_command(TARGET model_tool POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:model_tool> $<TARGET_FILE_DIR:model_tool>
-  COMMAND_EXPAND_LISTS)
 if (WIN32)
+  add_custom_command(TARGET model_tool POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:model_tool> $<TARGET_FILE_DIR:model_tool>
+    COMMAND_EXPAND_LISTS)
   add_custom_command(TARGET model_tool POST_BUILD
     COMMAND ${CMAKE_COMMAND}
       "-DOUTPUT_DIR=$<TARGET_FILE_DIR:model_tool>"
@@ -241,7 +240,9 @@ model_io_deploy_runtime(model_tool_tests)
 
 # Willpower.Common is a shared library on multi-config generators; copy it beside the test exe so
 # `ctest` can actually launch it (OpenTarget.cpp/model_xml both use TinyXML2 now).
-add_custom_command(TARGET model_tool_tests POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:model_tool_tests> $<TARGET_FILE_DIR:model_tool_tests>
-  COMMAND_EXPAND_LISTS)
+if (WIN32)
+  add_custom_command(TARGET model_tool_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:model_tool_tests> $<TARGET_FILE_DIR:model_tool_tests>
+    COMMAND_EXPAND_LISTS)
+endif()
