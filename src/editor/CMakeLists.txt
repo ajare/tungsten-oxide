@@ -169,7 +169,7 @@ model_io_deploy_runtime(mpp_model_import_tests)
 if (WIN32)
   # The dynamic GLEW import library, from the same build tree its header came from. If mpp is ever
   # loaded into this process too, both must share GLEW's one function-pointer table.
-  target_link_directories(track_editor PRIVATE "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  target_link_directories(track_editor PRIVATE "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
   target_link_libraries(track_editor PRIVATE
     $<IF:$<CONFIG:Debug>,glew32d,glew32>
     opengl32 ole32 shell32 uuid)

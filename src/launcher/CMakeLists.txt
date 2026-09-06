@@ -121,7 +121,7 @@ target_include_directories(Launcher PRIVATE
 target_compile_definitions(Launcher PRIVATE USINGZ)
 
 target_link_directories(Launcher PRIVATE
-  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(Launcher PRIVATE
     "${LAUNCHER_THIRD_PARTY_DIR}/lib/vs2026/${LAUNCHER_LIB_ARCH}/$<CONFIG>")
@@ -165,7 +165,7 @@ endif()
 set(_runtime_roots
   "@LAUNCHER_SUPPORT_ROOT@/${CONFIG}"
   "@LAUNCHER_THIRD_PARTY_DIR@/bin/vs2026/@LAUNCHER_LIB_ARCH@/${CONFIG}"
-  "@TOX_MPP_BUILD_DIR@/bin/${MPP_CONFIG}")
+  "@TOX_MPP_OUTPUT_DIR@/bin/${MPP_CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 foreach(_runtime_root IN LISTS _runtime_roots)

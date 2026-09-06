@@ -32,11 +32,13 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The combined root build imports Willpower from `ext/willpower/build` and MassivePolyPusher from
-`ext/willpower/build/_deps/massive-poly-pusher-build`. It builds the supplemental MassivePolyPusher
-targets that Willpower itself does not need (`MppResourceParsers`, `MppAppSupport`, and `assimp`)
-on demand before their first consumer. Set `TOX_WILLPOWER_BUILD_DIR` or `TOX_MPP_BUILD_DIR` to use
-prebuilt trees elsewhere. Shared-library runtime dependencies are copied next to their executables.
+The combined root build imports Willpower from `ext/willpower/build`. MassivePolyPusher's CMake
+binary tree is `ext/willpower/build/_deps/massive-poly-pusher-build`, while its libraries and DLLs
+are deliberately written to `ext/willpower/ext/massive-poly-pusher/build`. It builds the supplemental
+MassivePolyPusher targets that Willpower itself does not need (`MppResourceParsers`, `MppAppSupport`,
+and `assimp`) on demand before their first consumer. Set `TOX_WILLPOWER_BUILD_DIR`,
+`TOX_MPP_BUILD_DIR`, or `TOX_MPP_OUTPUT_DIR` to use prebuilt trees elsewhere. Shared-library runtime
+dependencies are copied next to their executables.
 
 For an ASan-instrumented Debug-equivalent build, build both trees' `MemCheck` configuration:
 

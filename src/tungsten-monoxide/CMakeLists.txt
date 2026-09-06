@@ -137,7 +137,7 @@ target_include_directories(TungstenMonoxide PRIVATE
   "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/include")
 
 target_link_directories(TungstenMonoxide PRIVATE
-  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(TungstenMonoxide PRIVATE
     "${TUNGSTEN_MONOXIDE_THIRD_PARTY_DIR}/lib/vs2026/${TUNGSTEN_MONOXIDE_LIB_ARCH}/$<CONFIG>")

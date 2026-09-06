@@ -28,9 +28,11 @@
 #   src/gltf-convert/ gltf_convert, the headless glTF -> .mppmodel converter — see
 #               src/gltf-convert/CMakeLists.txt.
 #
-# Willpower and MassivePolyPusher are built separately under ext/willpower/build. This project
-# imports their Debug, Release, and MemCheck binaries and builds the supplemental MPP targets that Willpower does not consume
-# before their first native consumer. src/core can also be configured standalone and uses the same
+# Willpower and MassivePolyPusher are built separately under ext/willpower/build. MPP's CMake
+# binary tree lives there too, but MPP deliberately writes libraries and DLLs under its source-tree
+# build directory. This project imports their Debug, Release, and MemCheck binaries and builds the
+# supplemental MPP targets that Willpower does not consume before their first native consumer.
+# src/core can also be configured standalone and uses the same
 # imports; see README.md for the required dependency build commands.
 # Use a root build directory distinct from the dependency build tree:
 #   cmake -S . -B build-all -G Ninja

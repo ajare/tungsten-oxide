@@ -63,7 +63,7 @@ target_include_directories(mesh_physics_diag PRIVATE
   "${MESH_PHYSICS_DIAG_MPP_DIR}/vendor/include"
   "${MESH_PHYSICS_DIAG_MPP_DIR}/ext/utils/include")
 target_link_directories(mesh_physics_diag PRIVATE
-  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 target_link_libraries(mesh_physics_diag PRIVATE
   core
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
@@ -87,17 +87,17 @@ endif()
 if (WIN32)
   add_custom_command(TARGET mesh_physics_diag POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MassivePolyPusherd.dll,MassivePolyPusher.dll>"
       # MassivePolyPusher.dll now depends on MppData.dll (MassivePolyPusher's own
       # "Decouple public headers from implementation dependencies" migration); nothing here calls
       # MppData symbols directly, so it's not in target_link_libraries above, but the Windows
       # loader still needs it resolvable when MassivePolyPusher.dll loads.
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppDatad.dll,MppData.dll>"
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
-      "${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,glew32d.dll,glew32.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppDatad.dll,MppData.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppMeshd.dll,MppMesh.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppHelperd.dll,MppHelper.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,MppProgramd.dll,MppProgram.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,Utilsd.dll,Utils.dll>"
+      "${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>/$<IF:$<CONFIG:Debug>,glew32d.dll,glew32.dll>"
       $<TARGET_FILE_DIR:mesh_physics_diag>
     COMMAND_EXPAND_LISTS)
 endif()

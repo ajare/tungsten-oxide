@@ -136,7 +136,7 @@ target_include_directories(model_tool PRIVATE
   "${MODEL_TOOL_MPP_DIR}/ext/utils/include")
 
 target_link_directories(model_tool PRIVATE
-  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 
 target_link_libraries(model_tool PRIVATE
   SDL3::SDL3
@@ -182,7 +182,7 @@ endif()
 
 # The dependency's CMake build places Assimp, MassivePolyPusher, MppMesh, MppProgram, MppHelper,
 # Utils, and GLEW runtime DLLs together.
-set(_runtime_root "@TOX_MPP_BUILD_DIR@/bin/${CONFIG}")
+set(_runtime_root "@TOX_MPP_OUTPUT_DIR@/bin/${CONFIG}")
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 if (EXISTS "${_runtime_root}")

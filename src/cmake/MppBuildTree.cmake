@@ -1,25 +1,29 @@
 # MppBuildTree.cmake — shared resolution of MassivePolyPusher's build tree.
 #
-# Every src/ subproject that links mpp consumes its *build tree* directly rather than an installed
-# package: fetched headers under `_deps/`, import libraries under `lib/<CONFIG>/`, runtime DLLs
-# under `bin/<CONFIG>/`, and assimp's generated headers under `ext/assimp/include`. Where that tree
-# lands under Willpower's standalone build tree. Consumers may override TOX_MPP_BUILD_DIR, but all
-# native targets share that one prebuilt tree — a wrong path otherwise surfaces much later as a
-# "Cannot open include file: 'GL/glew.h'" from deep inside an mpp header, which names neither mpp
-# nor the path that was actually looked for.
+# Every src/ subproject that links mpp consumes its standalone build directly rather than an
+# installed package. MPP is configured below Willpower's build tree, which contains fetched and
+# generated headers, but deliberately writes libraries and DLLs below its own source tree. Keep
+# those locations separate, as BooleanWorld does: conflating them lets compilation succeed but
+# eventually fails at link time because the generated build tree has no lib/<CONFIG> directory.
+# Consumers may override either location, but all native targets share the same pair.
 #
 # Include with a source-relative path so each subproject keeps working when configured standalone
 # (see their own header comments), not only through src/CMakeLists.txt.
 include_guard(GLOBAL)
 
 # Sets, in the caller's scope:
-#   TOX_MPP_BUILD_DIR         the resolved build tree root
-#   TOX_MPP_GLEW_INCLUDE_DIR  the fetched GLEW's include directory inside it
+#   TOX_MPP_BUILD_DIR         the resolved CMake binary tree root
+#   TOX_MPP_OUTPUT_DIR        the resolved library and runtime output root
+#   TOX_MPP_GLEW_INCLUDE_DIR  the fetched GLEW's include directory inside the binary tree
 function(tox_resolve_mpp_build_tree mpp_source_dir)
-  set(_default "${mpp_source_dir}/../../build/_deps/massive-poly-pusher-build")
-  set(TOX_MPP_BUILD_DIR "${_default}" CACHE PATH
-    "MassivePolyPusher build tree produced by the standalone Willpower build")
+  set(_default_build_dir "${mpp_source_dir}/../../build/_deps/massive-poly-pusher-build")
+  set(_default_output_dir "${mpp_source_dir}/build")
+  set(TOX_MPP_BUILD_DIR "${_default_build_dir}" CACHE PATH
+    "MassivePolyPusher CMake binary tree produced by the standalone Willpower build")
+  set(TOX_MPP_OUTPUT_DIR "${_default_output_dir}" CACHE PATH
+    "MassivePolyPusher library and runtime output tree")
   set(_build_dir "${TOX_MPP_BUILD_DIR}")
+  set(_output_dir "${TOX_MPP_OUTPUT_DIR}")
   if (NOT EXISTS "${_build_dir}/CMakeCache.txt")
     message(FATAL_ERROR
       "MassivePolyPusher has not been configured at '${_build_dir}'. Build Willpower first, or "
@@ -38,6 +42,7 @@ function(tox_resolve_mpp_build_tree mpp_source_dir)
   endif()
 
   set(TOX_MPP_BUILD_DIR "${_build_dir}" PARENT_SCOPE)
+  set(TOX_MPP_OUTPUT_DIR "${_output_dir}" PARENT_SCOPE)
   set(TOX_MPP_GLEW_INCLUDE_DIR "${_glew_include}" PARENT_SCOPE)
 endfunction()
 

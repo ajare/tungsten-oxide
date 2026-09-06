@@ -89,7 +89,7 @@ target_include_directories(model_io_core PUBLIC
   # target compiles against is GL-free now).
   "${TOX_MPP_GLEW_INCLUDE_DIR}")
 
-target_link_directories(model_io_core PUBLIC "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+target_link_directories(model_io_core PUBLIC "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 target_link_libraries(model_io_core PUBLIC
   $<IF:$<CONFIG:Debug>,MassivePolyPusherd,MassivePolyPusher>
   # mpp::PbrPipelineDocument's PbrPipelineResourceDocument::definition is an mpp::data::
@@ -135,7 +135,7 @@ set(_model_io_copy_runtime_script [=[
 if (NOT DEFINED OUTPUT_DIR OR NOT DEFINED CONFIG)
   message(FATAL_ERROR "OUTPUT_DIR and CONFIG are required")
 endif()
-set(_runtime_root "@TOX_MPP_BUILD_DIR@/bin/${CONFIG}")
+set(_runtime_root "@TOX_MPP_OUTPUT_DIR@/bin/${CONFIG}")
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
 if (EXISTS "${_runtime_root}")
   file(GLOB _runtime_files LIST_DIRECTORIES false "${_runtime_root}/*.dll")

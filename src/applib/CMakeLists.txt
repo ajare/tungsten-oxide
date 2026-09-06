@@ -131,7 +131,7 @@ target_include_directories(AppLib PRIVATE
   "${APPLIB_THIRD_PARTY_DIR}/include")
 
 target_link_directories(AppLib PRIVATE
-  "${TOX_MPP_BUILD_DIR}/lib/$<CONFIG>")
+  "${TOX_MPP_OUTPUT_DIR}/lib/$<CONFIG>")
 if (WIN32)
   target_link_directories(AppLib PRIVATE
     "${APPLIB_THIRD_PARTY_DIR}/lib/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
@@ -164,7 +164,7 @@ target_link_libraries(applib_pbr_material_binding_tests PRIVATE
   Willpower.Common)
 add_test(NAME applib_pbr_material_binding COMMAND applib_pbr_material_binding_tests)
 set_property(TEST applib_pbr_material_binding PROPERTY ENVIRONMENT_MODIFICATION
-  "PATH=path_list_prepend:${TOX_MPP_BUILD_DIR}/bin/$<CONFIG>")
+  "PATH=path_list_prepend:${TOX_MPP_OUTPUT_DIR}/bin/$<CONFIG>")
 if (WIN32)
   set_property(TEST applib_pbr_material_binding APPEND PROPERTY ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${APPLIB_THIRD_PARTY_DIR}/bin/vs2026/${APPLIB_LIB_ARCH}/$<CONFIG>")
