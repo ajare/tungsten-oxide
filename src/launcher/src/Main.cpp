@@ -7,12 +7,13 @@ extern "C" const char* __asan_default_options() {
 }
 #endif
 
-#include <stdexcept>
-#include "Platform.h"
-
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <iostream>
+#include <stdexcept>
+
+#include "Platform.h"
 
 #include "utils/StringUtils.h"
 
@@ -52,13 +53,19 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #include <mpp/Logger.h>
 #include <mpp/BufferRenderer.h>
 
+#if APP_PLATFORM == APP_PLATFORM_WINDOWS
+#define SDL_MAIN_HANDLED
+#endif
 #include <SDL3/SDL.h>
+#if APP_PLATFORM == APP_PLATFORM_WINDOWS
 #include <SDL3/SDL_main.h>
+#endif
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
 #include "imgui/implot.h"
 
+#include "ExecutableRuntime.hpp"
 #include "ProgramOptions.h"
 #include "ApplicationDLL.h"
 #include "StateManager.h"
@@ -96,6 +103,21 @@ static mpp::RenderSystem* gRenderSystem = nullptr;
 static mpp::ResourceManager* gRenderSystemResourceMgr = nullptr;
 static shared_ptr<ImGuiDataProvider> gImGuiDataProvider;
 static mpp::BufferRenderer* gImGuiRenderer = nullptr;
+
+static bool gSdlInitialised = false;
+static bool gImGuiInitialised = false;
+static bool gRenderCoreResourcesInitialised = false;
+
+void logFatal(const string& message) noexcept {
+  tox::runtime::logError(message);
+  if (gLogger != nullptr) {
+    try {
+      gLogger->error(message);
+    } catch (...) {
+      // The process-wide fallback log above must remain usable even if the HTML logger failed.
+    }
+  }
+}
 
 void initialiseImGui(float contentScale) {
   ImGui::CreateContext();
@@ -156,6 +178,7 @@ void initialiseImGui(float contentScale) {
 
   ImGui::StyleColorsDark();
   ImGui::GetStyle().ScaleAllSizes(contentScale);
+  gImGuiInitialised = true;
 }
 
 //
@@ -191,6 +214,7 @@ ProgramOptions startup(string const& configFile) {
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     throw std::runtime_error("Could not initialise SDL subsystem!");
   }
+  gSdlInitialised = true;
 
   // Create timer
   gTimer = new TimerSDL();
@@ -205,6 +229,7 @@ ProgramOptions startup(string const& configFile) {
   gRenderSystem = new mpp::RenderSystem(gWindow->getWidth(), gWindow->getHeight(), gMppLogger);
   gRenderSystemResourceMgr = new mpp::ResourceManager(gRenderSystem, gMppLogger);
   gRenderSystem->createCoreResources(gRenderSystemResourceMgr);
+  gRenderCoreResourcesInitialised = true;
 
   // Audio
   gAudioSystem = options.audioEnabled ? new wp::application::AudioSystem(options.audio) : nullptr;
@@ -250,60 +275,54 @@ ProgramOptions startup(string const& configFile) {
 // Destroy all systems
 //
 void shutdown() {
-  // States own scenes, package runtimes, and resources backed by the systems below.
-  // Unwind them while every dependency and the application DLL are still alive.
+  // Every branch is null/initialisation-safe: startup failures can arrive after any one of these
+  // allocations, and error reporting must never be replaced by a second crash during cleanup.
   delete gStateMgr;
   gStateMgr = nullptr;
 
-  // ImGui
   delete gImGuiRenderer;
   gImGuiRenderer = nullptr;
+  gImGuiDataProvider.reset();
+  if (gImGuiInitialised) {
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    ImPlot::DestroyContext();
+    gImGuiInitialised = false;
+  }
 
-  ImGui_ImplSDL3_Shutdown();
-  ImGui::DestroyContext();
-  ImPlot::DestroyContext();
-
-  // Destroy resource manager
   delete gResourceMgr;
   gResourceMgr = nullptr;
-
-  // Destroy audio
   delete gAudioSystem;
   gAudioSystem = nullptr;
 
-  // Destroy render system
-  gRenderSystem->destroyCoreResources();
+  if (gRenderSystem != nullptr && gRenderCoreResourcesInitialised) {
+    gRenderSystem->destroyCoreResources();
+    gRenderCoreResourcesInitialised = false;
+  }
   delete gRenderSystem;
   gRenderSystem = nullptr;
 
-  gRenderSystemResourceMgr->dumpResources("final-resources.csv");
+  if (gRenderSystemResourceMgr != nullptr) gRenderSystemResourceMgr->dumpResources("final-resources.csv");
   delete gRenderSystemResourceMgr;
   gRenderSystemResourceMgr = nullptr;
 
   delete gMppLogger;
   gMppLogger = nullptr;
-
-  // Destroy window
   delete gWindow;
   gWindow = nullptr;
-
-  // Destroy timer
   delete gTimer;
   gTimer = nullptr;
 
-  // Shut down SDL
-  SDL_Quit();
+  if (gSdlInitialised) {
+    SDL_Quit();
+    gSdlInitialised = false;
+  }
 
-  // Destroy application
   delete gAppSettings;
   gAppSettings = nullptr;
   application::ServiceLocator::provideApplicatonSettings(nullptr);
-
-  // Destroy application DLL
   delete gDLL;
   gDLL = nullptr;
-
-  // Destroy logger
   delete gLogger;
   gLogger = nullptr;
 }
@@ -373,7 +392,7 @@ void updateImGui(float frameTime) {
 //
 // Entry point
 //
-int main(int argc, char** argv) {
+int launcherMain(int argc, char** argv) {
   string configFile = "Game.yaml";
   if (argc > 1) {
     configFile = string(argv[1]);
@@ -448,70 +467,46 @@ int main(int argc, char** argv) {
       gWindow->show();
     }
   } catch (ExitApplicationException& e) {
-    auto upt = totalTime / numFramesProcessed;
-    gLogger->info(format("Avg update time ms: {}", upt * 1000.0));
+    if (numFramesProcessed > 0 && gLogger != nullptr) {
+      gLogger->info(format("Avg update time ms: {}", totalTime / numFramesProcessed * 1000.0));
+      gLogger->info(format("Avg update time ms: {}", totalTimeNs / numFramesProcessed / 1000000.0));
+    }
 
-    auto uptNs = totalTimeNs / numFramesProcessed;
-    gLogger->info(format("Avg update time ms: {}", uptNs / 1000000.0));
-
-    gLogger->info(e.getMessage());
     exitCode = e.getExitCode();
+    if (exitCode == 0 && gLogger != nullptr)
+      gLogger->info(e.getMessage());
+    else
+      logFatal(e.getMessage());
   } catch (application::resourcesystem::ResourceException& e) {
-    auto res = e.getResource();
-    gLogger->error("Error in resource: " + res->getQualifiedName());
-    gLogger->error(e.what());
+    const auto resource = e.getResource();
+    logFatal(resource != nullptr ? "Error in resource '" + resource->getQualifiedName() + "': " + e.what()
+                                 : std::string("Resource error: ") + e.what());
     exitCode = 1;
-
-#ifdef _DEBUG
-    char const* msg = e.what();
-
-    size_t reqLength = ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), 0, 0);
-    wstring ret(reqLength, L'\0');
-
-    ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), &ret[0], (int)ret.length());
-    OutputDebugString(ret.c_str());
-#endif
   } catch (application::resourcesystem::ResourceSystemException& e) {
-    gLogger->error(e.what());
+    logFatal(std::string("Resource system error: ") + e.what());
     exitCode = 1;
-
-#ifdef _DEBUG
-    char const* msg = e.what();
-
-    size_t reqLength = ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), 0, 0);
-    wstring ret(reqLength, L'\0');
-
-    ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), &ret[0], (int)ret.length());
-    OutputDebugString(ret.c_str());
-#endif
   } catch (Exception& e) {
-    gLogger->error(e.what());
+    logFatal(e.what());
     exitCode = 1;
-
-#ifdef _DEBUG
-    char const* msg = e.what();
-
-    size_t reqLength = ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), 0, 0);
-    wstring ret(reqLength, L'\0');
-
-    ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), &ret[0], (int)ret.length());
-    OutputDebugString(ret.c_str());
-#endif
   } catch (exception& e) {
-    gLogger->error(e.what());
+    logFatal(e.what());
     exitCode = 1;
-
-#ifdef _DEBUG
-    char const* msg = e.what();
-
-    size_t reqLength = ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), 0, 0);
-    wstring ret(reqLength, L'\0');
-
-    ::MultiByteToWideChar(CP_UTF8, 0, msg, (int)strlen(msg), &ret[0], (int)ret.length());
-    OutputDebugString(ret.c_str());
-#endif
+  } catch (...) {
+    logFatal("Unknown fatal error");
+    exitCode = 1;
   }
 
   shutdown();
   return exitCode;
 }
+
+#if APP_PLATFORM == APP_PLATFORM_WINDOWS
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+  SDL_SetMainReady();
+  return tox::runtime::guardedMain([] { return launcherMain(__argc, __argv); });
+}
+#else
+int main(int argc, char** argv) {
+  return tox::runtime::guardedMain([&] { return launcherMain(argc, argv); });
+}
+#endif

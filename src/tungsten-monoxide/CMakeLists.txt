@@ -1,6 +1,10 @@
 # TungstenMonoxide — the Windows application DLL loaded by Launcher.
 # Converted from build/vs2026/TungstenMonoxide.vcxproj. It relies on AppLib,
 # Willpower, MassivePolyPusher, Utils, and yaml-cpp.
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(TUNGSTEN_MONOXIDE_HEADERS
   include/TungstenMonoxideModel.h
   include/DebugLineDataProvider.h
@@ -164,6 +168,7 @@ target_link_libraries(TungstenMonoxide PRIVATE
 # Guard stable embedded material-key mappings without creating a renderer.
 add_executable(tungsten_monoxide_pbr_material_binding_mapping_tests
   tests/pbr_material_binding_mapping_tests.cpp)
+tox_configure_executable(tungsten_monoxide_pbr_material_binding_mapping_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(tungsten_monoxide_pbr_material_binding_mapping_tests)
 endif()
@@ -179,6 +184,7 @@ add_test(NAME tungsten_monoxide_pbr_material_bindings
 add_executable(tungsten_monoxide_pbr_vertex_conversion_tests
   tests/pbr_vertex_conversion_tests.cpp
   src/PbrVertexConversion.cpp)
+tox_configure_executable(tungsten_monoxide_pbr_vertex_conversion_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(tungsten_monoxide_pbr_vertex_conversion_tests)
 endif()

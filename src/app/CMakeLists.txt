@@ -2,7 +2,12 @@
 # outside src/core per the plan's boundary: it owns track-file argument
 # handling, the real-time frame loop, and console input, and links `core` for
 # everything else (loading, baking, geometry, session, physics).
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 add_executable(track_runner main.cpp)
+tox_configure_executable(track_runner)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(track_runner)
 endif()
@@ -49,6 +54,7 @@ tox_resolve_mpp_build_tree("${MESH_PHYSICS_DIAG_MPP_DIR}")
 add_executable(mesh_physics_diag
   tools/mesh_physics_diag.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../tungsten-monoxide/src/TrackCollisionBuild.cpp")
+tox_configure_executable(mesh_physics_diag)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(mesh_physics_diag)
 endif()

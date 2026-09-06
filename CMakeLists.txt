@@ -95,6 +95,8 @@ if (MSVC AND CMAKE_CONFIGURATION_TYPES)
   endif()
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/ExecutableRuntime.cmake")
+
 function(tox_copy_asan_runtime target)
   if (NOT DEFINED TOX_ASAN_DLL)
     return()
@@ -125,6 +127,18 @@ add_subdirectory("${TOX_SDL_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl3" EXCL
 # CTestTestfile.cmake, so the documented `ctest --test-dir build` command
 # discovers core's parity and focused track tests.
 enable_testing()
+
+# Verify that both a thrown exception and a CRT abort terminate promptly, write a clear logfile,
+# and never wait on an OS/CRT modal dialog.
+add_executable(executable_runtime_probe
+  src/runtime/tests/ExecutableRuntimeProbe.cpp)
+tox_configure_executable(executable_runtime_probe)
+tox_copy_asan_runtime(executable_runtime_probe)
+add_test(NAME executable_runtime_failures
+  COMMAND ${CMAKE_COMMAND}
+    "-DEXECUTABLE=$<TARGET_FILE:executable_runtime_probe>"
+    "-DTEST_SEH=${WIN32}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/tests/VerifyExecutableRuntime.cmake")
 
 # Build yaml-cpp from the repository submodule instead of carrying a duplicate
 # header set and prebuilt libraries under third_party.

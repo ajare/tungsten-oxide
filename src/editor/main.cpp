@@ -73,6 +73,7 @@
 
 #include "Clipboard.hpp"
 #include "EditorHistory.hpp"
+#include "ExecutableRuntime.hpp"
 #include "EditorIni.hpp"
 #include "EditorState.hpp"
 #include "EditorTrackDefinition.hpp"
@@ -1516,7 +1517,7 @@ std::filesystem::path findEditorResourceFile(const std::string& filename) {
 // catalog. A single TrackMaterial with a broken dependency chain is NOT structural (see
 // MaterialCatalog::load) and does not reach this path.
 [[noreturn]] void failStartup(SDL_Window* window, SDL_GLContext glContext, const std::string& message) {
-  std::fprintf(stderr, "%s\n", message.c_str());
+  tox::runtime::reportError(message);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL3_Shutdown();
   ImGui::DestroyContext();
@@ -1596,15 +1597,13 @@ StartupMaterials loadMaterialCatalog(SDL_Window* window, SDL_GLContext glContext
   }
 }
 
-int main(int, char**) {
+int run() {
 #if defined(__linux__)
   // MPP's pinned GLEW uses GLX, so SDL must not create a Wayland/EGL context.
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
 #endif
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
-    std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-    return 1;
-  }
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    return tox::runtime::reportError(std::string("SDL_Init failed: ") + SDL_GetError());
 
   const char* glslVersion = "#version 130";
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
@@ -1619,17 +1618,17 @@ int main(int, char**) {
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Window* window = SDL_CreateWindow("track_editor", 1280, 800, windowFlags);
   if (window == nullptr) {
-    std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+    const std::string message = std::string("SDL_CreateWindow failed: ") + SDL_GetError();
     SDL_Quit();
-    return 1;
+    return tox::runtime::reportError(message);
   }
 
   SDL_GLContext glContext = SDL_GL_CreateContext(window);
   if (glContext == nullptr) {
-    std::fprintf(stderr, "SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+    const std::string message = std::string("SDL_GL_CreateContext failed: ") + SDL_GetError();
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 1;
+    return tox::runtime::reportError(message);
   }
   SDL_GL_MakeCurrent(window, glContext);
   SDL_GL_SetSwapInterval(1);  // vsync
@@ -1641,11 +1640,12 @@ int main(int, char**) {
   glewExperimental = GL_TRUE;
   const GLenum glewStatus = glewInit();
   if (glewStatus != GLEW_OK) {
-    std::fprintf(stderr, "glewInit failed: %s\n", reinterpret_cast<const char*>(glewGetErrorString(glewStatus)));
+    const std::string message =
+        std::string("glewInit failed: ") + reinterpret_cast<const char*>(glewGetErrorString(glewStatus));
     SDL_GL_DestroyContext(glContext);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 1;
+    return tox::runtime::reportError(message);
   }
   // glewExperimental makes GLEW probe entry points that a core profile rejects, which leaves a
   // GL_INVALID_ENUM queued. Drain it so the first real glGetError() of the frame is not this one.
@@ -3258,4 +3258,8 @@ int main(int, char**) {
   SDL_DestroyWindow(window);
   SDL_Quit();
   return 0;
+}
+
+int main() {
+  return tox::runtime::guardedMain(run);
 }

@@ -17,6 +17,7 @@
 
 #include <mpp/resource-parsers/PbrPipelineDocumentLoader.h>
 
+#include "ExecutableRuntime.hpp"
 #include "modelio/Diagnostics.hpp"
 #include "modelio/GltfConvert.hpp"
 #include "modelio/PipelineMaterial.hpp"
@@ -53,7 +54,7 @@ bool parseArguments(int argc, char** argv, Arguments& out) {
     const std::string flag = argv[i];
     const bool needsValue = flag == "--in" || flag == "--out" || flag == "--pipeline" || flag == "--material";
     if (needsValue && i + 1 >= argc) {
-      std::cerr << "gltf_convert: " << flag << " requires a value\n";
+      tox::runtime::reportError("gltf_convert: " + flag + " requires a value", 2);
       return false;
     }
 
@@ -71,30 +72,31 @@ bool parseArguments(int argc, char** argv, Arguments& out) {
       out.validateOnly = true;
     else if (flag == "--list-materials")
       out.listMaterials = true;
-    else if (flag == "--help" || flag == "-h")
+    else if (flag == "--help" || flag == "-h") {
+      tox::runtime::reportError("gltf_convert: --help must be used alone", 2);
       return false;
-    else {
-      std::cerr << "gltf_convert: unrecognised argument '" << flag << "'\n";
+    } else {
+      tox::runtime::reportError("gltf_convert: unrecognised argument '" + flag + "'", 2);
       return false;
     }
   }
 
   if (out.pipeline.empty()) {
-    std::cerr << "gltf_convert: --pipeline is required\n";
+    tox::runtime::reportError("gltf_convert: --pipeline is required", 2);
     return false;
   }
   if (out.listMaterials) return true;
 
   if (out.input.empty()) {
-    std::cerr << "gltf_convert: --in is required\n";
+    tox::runtime::reportError("gltf_convert: --in is required", 2);
     return false;
   }
   if (out.material.empty()) {
-    std::cerr << "gltf_convert: --material is required\n";
+    tox::runtime::reportError("gltf_convert: --material is required", 2);
     return false;
   }
   if (out.output.empty() && !out.validateOnly) {
-    std::cerr << "gltf_convert: --out is required unless --validate-only is given\n";
+    tox::runtime::reportError("gltf_convert: --out is required unless --validate-only is given", 2);
     return false;
   }
   return true;
@@ -102,7 +104,12 @@ bool parseArguments(int argc, char** argv, Arguments& out) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
+  if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+    printUsage();
+    return 0;
+  }
+
   Arguments arguments;
   if (!parseArguments(argc, argv, arguments)) {
     printUsage();
@@ -113,9 +120,8 @@ int main(int argc, char** argv) {
   try {
     pipeline = mpp::resource_parsers::PbrPipelineDocumentLoader::fromFile(arguments.pipeline.string());
   } catch (const std::exception& error) {
-    std::cerr << "gltf_convert: could not load pipeline '" << arguments.pipeline.string() << "': " << error.what()
-              << "\n";
-    return 1;
+    return tox::runtime::reportError("gltf_convert: could not load pipeline '" + arguments.pipeline.string() +
+                                     "': " + error.what());
   }
 
   if (arguments.listMaterials) {
@@ -135,18 +141,15 @@ int main(int argc, char** argv) {
   try {
     succeeded = modelio::convertGltf(pipeline, options, report);
   } catch (const std::exception& error) {
-    std::cerr << "gltf_convert: " << error.what() << "\n";
-    return 1;
+    return tox::runtime::reportError(std::string("gltf_convert: ") + error.what());
   }
 
   const std::string formatted = report.format();
   if (!formatted.empty()) std::cerr << formatted << "\n";
 
-  if (!succeeded) {
-    std::cerr << "gltf_convert: failed (" << report.errorCount() << " error(s), " << report.warningCount()
-              << " warning(s))\n";
-    return 1;
-  }
+  if (!succeeded)
+    return tox::runtime::reportError("gltf_convert: failed (" + std::to_string(report.errorCount()) + " error(s), " +
+                                     std::to_string(report.warningCount()) + " warning(s))");
 
   if (arguments.validateOnly)
     std::cout << "gltf_convert: validation passed (" << report.warningCount() << " warning(s))\n";
@@ -154,4 +157,8 @@ int main(int argc, char** argv) {
     std::cout << "gltf_convert: wrote " << arguments.output.string() << " (" << report.warningCount()
               << " warning(s))\n";
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return tox::runtime::guardedMain([&] { return run(argc, argv); });
 }

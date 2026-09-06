@@ -10,6 +10,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(model_xml CXX)
 
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 if (NOT TARGET Willpower.Common)
   include("${CMAKE_CURRENT_LIST_DIR}/../cmake/WillpowerBuildTree.cmake")
   tox_import_willpower("${CMAKE_CURRENT_LIST_DIR}/../../ext/willpower")
@@ -32,6 +36,7 @@ target_include_directories(model_xml PUBLIC include)
 target_link_libraries(model_xml PUBLIC Willpower.Common)
 
 add_executable(model_xml_tests tests/model_xml_tests.cpp)
+tox_configure_executable(model_xml_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(model_xml_tests)
 endif()

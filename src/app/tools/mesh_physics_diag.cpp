@@ -51,6 +51,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include "ExecutableRuntime.hpp"
 #include "GameSession.hpp"
 #include "ShipFactory.hpp"
 #include "Simulation.hpp"
@@ -273,43 +274,34 @@ std::string surfaceLabel(const Simulation& simulation, const Ship& ship) {
 }
 
 int runCapture(const std::filesystem::path& outputPath, const std::string& traceName, const std::filesystem::path& trackPath,
-              const std::filesystem::path& modelPath, int steps, double dt) {
+               const std::filesystem::path& modelPath, int steps, double dt) {
   TrackLoadResult loaded = Track::fromFile(trackPath);
-  if (!loaded) {
-    std::cerr << "failed to load '" << trackPath.string() << "': " << loaded.error << "\n";
-    return 1;
-  }
+  if (!loaded)
+    return tox::runtime::reportError("failed to load '" + trackPath.string() + "': " + loaded.error);
   Track track = std::move(*loaded.track);
 
-  if (!createHeadlessGLContext()) {
-    std::cerr << "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires\n";
-    return 1;
-  }
+  if (!createHeadlessGLContext())
+    return tox::runtime::reportError(
+        "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires");
   mpp::Logger logger;
-  logger.initialise("mesh_physics_diag.log", mpp::Logger::Level::Info);
+  logger.initialise("mesh_physics_diag_mpp.log", mpp::Logger::Level::Info);
   mpp::RenderSystem renderSystem(1, 1, &logger);
   mpp::ResourceManager resourceMgr(&renderSystem, &logger);
   mpp::ModelSerializer serializer(&resourceMgr);
   try {
     serializer.load(modelPath.string());
   } catch (std::exception const& error) {
-    std::cerr << "failed to load ModelFile '" << modelPath.string() << "': " << error.what() << "\n";
-    return 1;
+    return tox::runtime::reportError("failed to load ModelFile '" + modelPath.string() + "': " + error.what());
   }
 
   std::string buildError;
-  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, track, buildError)) {
-    std::cerr << buildError << "\n";
-    return 1;
-  }
+  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, track, buildError))
+    return tox::runtime::reportError(buildError);
 
   Simulation simulation(track);
   simulation.setMeshPhysicsEnabled(true);
   const std::vector<Pose> gridPoses = StartGrid::startingGridPoses(simulation, track, 1);
-  if (gridPoses.empty()) {
-    std::cerr << "could not compute a starting-grid pose\n";
-    return 1;
-  }
+  if (gridPoses.empty()) return tox::runtime::reportError("could not compute a starting-grid pose");
   Ship ship = ShipFactory::makeShip(simulation, track, gridPoses.front());
 
   std::ifstream sourceTrackFile(trackPath, std::ios::binary);
@@ -357,8 +349,10 @@ int runCapture(const std::filesystem::path& outputPath, const std::string& trace
   trace["steps"] = stepsArr;
 
   std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
+  if (!out) return tox::runtime::reportError("could not open trace output '" + outputPath.string() + "'");
   out << trace.dump();
   out.close();
+  if (!out) return tox::runtime::reportError("failed to write trace output '" + outputPath.string() + "'");
   std::cout << "wrote " << steps << " step(s), " << collisionTrianglesJson.size() << " collision triangle(s) to " << outputPath.string()
             << "\n";
   return 0;
@@ -390,21 +384,18 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
     if (!warning.objectId.empty()) std::cerr << " (" << warning.objectId << ")";
     std::cerr << "\n";
   }
-  if (!loaded) {
-    std::cerr << "failed to load '" << trackPath.string() << "': " << loaded.error << "\n";
-    return 1;
-  }
+  if (!loaded)
+    return tox::runtime::reportError("failed to load '" + trackPath.string() + "': " + loaded.error);
   auto track = std::make_shared<Track>(std::move(*loaded.track));
 
   // Dummy render/resource plumbing -- see createHeadlessGLContext()'s comment above for why the GL
   // context is unavoidable; nothing here ever renders or uploads a GPU resource.
-  if (!createHeadlessGLContext()) {
-    std::cerr << "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires\n";
-    return 1;
-  }
+  if (!createHeadlessGLContext())
+    return tox::runtime::reportError(
+        "failed to create the throwaway hidden GL context mpp::RenderSystem's constructor requires");
 
   mpp::Logger logger;
-  logger.initialise("mesh_physics_diag.log", mpp::Logger::Level::Info);
+  logger.initialise("mesh_physics_diag_mpp.log", mpp::Logger::Level::Info);
   mpp::RenderSystem renderSystem(1, 1, &logger);
   mpp::ResourceManager resourceMgr(&renderSystem, &logger);
 
@@ -412,15 +403,12 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
   try {
     serializer.load(modelPath.string());
   } catch (std::exception const& error) {
-    std::cerr << "failed to load ModelFile '" << modelPath.string() << "': " << error.what() << "\n";
-    return 1;
+    return tox::runtime::reportError("failed to load ModelFile '" + modelPath.string() + "': " + error.what());
   }
 
   std::string buildError;
-  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, *track, buildError)) {
-    std::cerr << buildError << "\n";
-    return 1;
-  }
+  if (!buildCollisionSurface(trackPath, resourceMgr, serializer, *track, buildError))
+    return tox::runtime::reportError(buildError);
 
   GameSession session(track);
   session.setMeshPhysicsEnabled(true);
@@ -455,11 +443,11 @@ int runDrive(const std::filesystem::path& trackPath, const std::filesystem::path
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
   if (argc >= 2 && std::string(argv[1]) == "--capture-trace") {
     if (argc < 6) {
-      std::cerr << "usage: mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
-      return 2;
+      return tox::runtime::reportError(
+          "usage: mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]", 2);
     }
     const std::filesystem::path outputPath(argv[2]);
     const std::string traceName = argv[3];
@@ -474,8 +462,8 @@ int main(int argc, char** argv) {
   // validationScriptedInput's comment.
   if (argc >= 2 && std::string(argv[1]) == "--validate") {
     if (argc < 4) {
-      std::cerr << "usage: mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]\n";
-      return 2;
+      return tox::runtime::reportError(
+          "usage: mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]", 2);
     }
     const std::filesystem::path trackPath(argv[2]);
     const std::filesystem::path modelPath(argv[3]);
@@ -484,15 +472,19 @@ int main(int argc, char** argv) {
     return runDrive(trackPath, modelPath, steps, dt, validationScriptedInput);
   }
 
-  if (argc < 3) {
-    std::cerr << "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n";
-    std::cerr << "       mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n";
-    std::cerr << "       mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]\n";
-    return 2;
-  }
+  if (argc < 3)
+    return tox::runtime::reportError(
+        "usage: mesh_physics_diag <track.json> <model.mppmodel> [steps] [dt]\n"
+        "       mesh_physics_diag --capture-trace <output.json> <trace-name> <track.json> <model.mppmodel> [steps] [dt]\n"
+        "       mesh_physics_diag --validate <track.json> <model.mppmodel> [steps] [dt]",
+        2);
   const std::filesystem::path trackPath(argv[1]);
   const std::filesystem::path modelPath(argv[2]);
   const int steps = argc > 3 ? std::atoi(argv[3]) : 600;
   const double dt = argc > 4 ? std::atof(argv[4]) : 1.0 / 60.0;
   return runDrive(trackPath, modelPath, steps, dt);
+}
+
+int main(int argc, char** argv) {
+  return tox::runtime::guardedMain([&] { return run(argc, argv); });
 }

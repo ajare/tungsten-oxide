@@ -2,6 +2,10 @@
 # Converted from build/vs2026/AppLib.vcxproj. Several original Willpower
 # feature libraries (Collide, Firepower, Serialization and Viz) remain external
 # to this checkout and are retained as prebuilt-library link dependencies.
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(APPLIB_HEADERS
   include/applib/Entity.h
   include/applib/EntityFacadeFactory.h
@@ -146,6 +150,7 @@ target_link_libraries(AppLib PRIVATE
   $<IF:$<CONFIG:Debug>,Utilsd,Utils>)
 
 add_executable(applib_pbr_material_binding_tests tests/pbr_material_binding_tests.cpp)
+tox_configure_executable(applib_pbr_material_binding_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(applib_pbr_material_binding_tests)
 endif()

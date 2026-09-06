@@ -38,7 +38,10 @@ are deliberately written to `ext/willpower/ext/massive-poly-pusher/build`. It bu
 MassivePolyPusher targets that Willpower itself does not need (`MppResourceParsers`, `MppAppSupport`,
 and `assimp`) on demand before their first consumer. Set `TOX_WILLPOWER_BUILD_DIR`,
 `TOX_MPP_BUILD_DIR`, or `TOX_MPP_OUTPUT_DIR` to use prebuilt trees elsewhere. Shared-library runtime
-dependencies are copied next to their executables.
+dependencies are copied next to their executables. Every repository executable installs the
+shared non-interactive fatal-error policy from `src/runtime`: fatal diagnostics are appended to
+`<executable>.log` beside the executable, Windows/CRT crash dialogs are disabled, and the process
+exits non-zero. Command-line applications also report ordinary fatal errors to stderr.
 
 For an ASan-instrumented Debug-equivalent build, build both trees' `MemCheck` configuration:
 

@@ -36,6 +36,7 @@
 #include <mpp/ResourceManager.h>
 #include <mpp/ResourceWrangler.h>
 
+#include "ExecutableRuntime.hpp"
 #include "FileDialog.hpp"
 #include "MaterialLibrary.hpp"
 #include "MaterialXmlImport.hpp"
@@ -84,15 +85,13 @@ public:
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
 #if defined(__linux__)
   // MPP's pinned GLEW uses GLX, so SDL must not create a Wayland/EGL context.
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11", SDL_HINT_OVERRIDE);
 #endif
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
-    std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-    return 1;
-  }
+  if (!SDL_Init(SDL_INIT_VIDEO))
+    return tox::runtime::reportError(std::string("SDL_Init failed: ") + SDL_GetError());
 
   // No SDL_GL_CONTEXT_PROFILE_MASK (compatibility profile) and GL 3.2, matching src/launcher's own
   // proven-working combination for hosting mpp::RenderSystem -- unlike src/editor's explicit 3.0
@@ -106,17 +105,17 @@ int main(int argc, char** argv) {
       static_cast<SDL_WindowFlags>(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   SDL_Window* window = SDL_CreateWindow("model_tool", 1280, 800, windowFlags);
   if (window == nullptr) {
-    std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+    const std::string message = std::string("SDL_CreateWindow failed: ") + SDL_GetError();
     SDL_Quit();
-    return 1;
+    return tox::runtime::reportError(message);
   }
 
   SDL_GLContext glContext = SDL_GL_CreateContext(window);
   if (glContext == nullptr) {
-    std::fprintf(stderr, "SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+    const std::string message = std::string("SDL_GL_CreateContext failed: ") + SDL_GetError();
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 1;
+    return tox::runtime::reportError(message);
   }
   SDL_GL_MakeCurrent(window, glContext);
   SDL_GL_SetSwapInterval(1);  // vsync
@@ -1215,4 +1214,8 @@ int main(int argc, char** argv) {
   SDL_DestroyWindow(window);
   SDL_Quit();
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return tox::runtime::guardedMain([&] { return run(argc, argv); });
 }

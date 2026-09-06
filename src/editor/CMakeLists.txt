@@ -13,6 +13,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(track_editor C CXX)
 
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(TOX_SHARED_THIRD_PARTY_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/include")
@@ -102,6 +106,7 @@ add_executable(track_editor
   main.cpp
   ${EDITOR_SOURCES}
   ${IMGUI_SOURCES})
+tox_configure_executable(track_editor)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(track_editor)
 endif()
@@ -128,6 +133,7 @@ add_executable(editor_track_resource_tests
   src/TrackResourceDocument.cpp
   src/TrackResourceSave.cpp
   src/FileDialog.cpp)
+tox_configure_executable(editor_track_resource_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(editor_track_resource_tests)
 endif()
@@ -152,6 +158,7 @@ add_executable(mpp_model_import_tests
   tests/mpp_model_import_tests.cpp
   src/MppModelImport.cpp
   src/MppModelExport.cpp)
+tox_configure_executable(mpp_model_import_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(mpp_model_import_tests)
 endif()

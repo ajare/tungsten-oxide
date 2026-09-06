@@ -14,6 +14,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(model_tool C CXX)
 
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -78,6 +82,7 @@ add_executable(model_tool
   main.cpp
   ${MODEL_TOOL_SOURCES}
   ${IMGUI_SOURCES})
+tox_configure_executable(model_tool)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(model_tool)
 endif()
@@ -223,6 +228,7 @@ add_executable(model_tool_tests
   src/NormalSmoothing.cpp
   src/ObjSmoothingGroups.cpp
   src/OpenTarget.cpp)
+tox_configure_executable(model_tool_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(model_tool_tests)
 endif()

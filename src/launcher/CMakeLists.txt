@@ -1,5 +1,9 @@
 # Launcher — the Windows SDL3 host executable for a Willpower application DLL.
 # Converted from build/vs2026/Launcher.vcxproj.
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(LAUNCHER_HEADERS
   include/ApplicationDLL.h
   include/ExitApplicationException.h
@@ -86,6 +90,7 @@ endif()
 # entry point. This executable is Windows-specific because it loads game DLLs with
 # LoadLibrary/GetProcAddress.
 add_executable(Launcher WIN32 ${LAUNCHER_SOURCES} ${LAUNCHER_HEADERS} ${_launcher_resources})
+tox_configure_executable(Launcher)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(Launcher)
 endif()

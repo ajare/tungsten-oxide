@@ -17,6 +17,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(model_io CXX)
 
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -175,6 +179,7 @@ endfunction()
 # --- Tests -------------------------------------------------------------------------------------
 enable_testing()
 add_executable(model_io_tests tests/model_io_tests.cpp)
+tox_configure_executable(model_io_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(model_io_tests)
 endif()

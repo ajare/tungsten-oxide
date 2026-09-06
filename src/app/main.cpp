@@ -22,6 +22,7 @@
 #include <conio.h>
 #endif
 
+#include "ExecutableRuntime.hpp"
 #include "GameSession.hpp"
 #include "Ship.hpp"
 #include "Track.hpp"
@@ -53,11 +54,8 @@ bool escapePressed() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "usage: track_runner <track.json>\n";
-    return 2;
-  }
+int run(int argc, char** argv) {
+  if (argc < 2) return tox::runtime::reportError("usage: track_runner <track.json>", 2);
 
   TrackLoadResult loaded = Track::fromFile(argv[1]);
   for (const TrackWarning& warning : loaded.warnings) {
@@ -65,10 +63,8 @@ int main(int argc, char** argv) {
     if (!warning.objectId.empty()) std::cerr << " (" << warning.objectId << ")";
     std::cerr << "\n";
   }
-  if (!loaded) {
-    std::cerr << "failed to load '" << argv[1] << "': " << loaded.error << "\n";
-    return 1;
-  }
+  if (!loaded)
+    return tox::runtime::reportError("failed to load '" + std::string(argv[1]) + "': " + loaded.error);
 
   auto track = std::make_shared<Track>(std::move(*loaded.track));
   std::cout << "loaded '" << track->definition.name << "': " << track->paths.size() << " path(s), "
@@ -104,4 +100,8 @@ int main(int argc, char** argv) {
 
   std::cout << "shutting down" << std::endl;
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return tox::runtime::guardedMain([&] { return run(argc, argv); });
 }

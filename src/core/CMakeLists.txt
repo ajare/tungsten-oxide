@@ -7,6 +7,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(core CXX)
 
+if (NOT COMMAND tox_configure_executable)
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ExecutableRuntime.cmake")
+endif()
+
 # A standalone core configure imports the repository-pinned Willpower build tree;
 # the combined src/ configure has already created this target.
 if (NOT TARGET Willpower.Geometry)
@@ -101,6 +105,7 @@ target_link_libraries(core PUBLIC glm::glm PRIVATE Willpower.Geometry)
 source_group("Header Files" FILES ${CORE_HEADERS})
 
 add_executable(parity tests/parity_main.cpp)
+tox_configure_executable(parity)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(parity)
 endif()
@@ -110,6 +115,7 @@ target_link_libraries(parity PRIVATE core)
 # Focused loader, bake, topology, render-geometry, and mesh-query tests without
 # making the existing baked-world parity replayer responsible for everything.
 add_executable(track_tests tests/track_tests.cpp)
+tox_configure_executable(track_tests)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(track_tests)
 endif()
@@ -119,6 +125,7 @@ target_link_libraries(track_tests PRIVATE core)
 # Cross-language renderer-neutral geometry parity over deterministic randomly
 # generated current-schema JSON tracks.
 add_executable(random_geometry_parity tests/random_geometry_parity_main.cpp)
+tox_configure_executable(random_geometry_parity)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(random_geometry_parity)
 endif()
@@ -129,6 +136,7 @@ target_link_libraries(random_geometry_parity PRIVATE core)
 # initialization and GameSession frame-stepping/events, independently from
 # schema-10 JSON plus scripted controls only.
 add_executable(raw_session_parity tests/raw_session_parity_main.cpp)
+tox_configure_executable(raw_session_parity)
 if (COMMAND tox_copy_asan_runtime)
   tox_copy_asan_runtime(raw_session_parity)
 endif()
