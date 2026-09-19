@@ -26,16 +26,15 @@ std::string scalar(const YAML::Node& node, const char* key) {
   return value && value.IsScalar() ? value.as<std::string>() : std::string{};
 }
 
-void scanResourceElement(const YAML::Node& parent, const std::string& namesp, NamespaceMap& out) {
-  YAML::Node resources = parent["Resource"];
-  if (!resources) return;
-  if (!resources.IsSequence()) {
-    YAML::Node sequence(YAML::NodeType::Sequence);
-    sequence.push_back(resources);
-    resources = sequence;
-  }
+YAML::Node sequence(const YAML::Node& node) {
+  if (!node || node.IsSequence()) return node;
+  YAML::Node result(YAML::NodeType::Sequence);
+  result.push_back(node);
+  return result;
+}
 
-  for (const YAML::Node& resource : resources) {
+void scanResourceElement(const YAML::Node& parent, const std::string& namesp, NamespaceMap& out) {
+  for (const YAML::Node& resource : sequence(parent["Resource"])) {
     std::string name = scalar(resource, "name");
     const std::string location = scalar(resource, "location");
     if (name.empty()) name = location;
@@ -53,15 +52,8 @@ void scanResourceElement(const YAML::Node& parent, const std::string& namesp, Na
 
 NamespaceMap scanResources(const YAML::Node& root) {
   NamespaceMap namespaces;
-  YAML::Node namespaceNodes = root["Namespace"];
-  if (namespaceNodes) {
-    if (!namespaceNodes.IsSequence()) {
-      YAML::Node sequence(YAML::NodeType::Sequence);
-      sequence.push_back(namespaceNodes);
-      namespaceNodes = sequence;
-    }
-    for (const YAML::Node& namesp : namespaceNodes) scanResourceElement(namesp, scalar(namesp, "name"), namespaces);
-  }
+  for (const YAML::Node& namesp : sequence(root["Namespace"]))
+    scanResourceElement(namesp, scalar(namesp, "name"), namespaces);
   scanResourceElement(root, "", namespaces);
   return namespaces;
 }
